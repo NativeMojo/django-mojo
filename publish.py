@@ -3,6 +3,7 @@
 import subprocess
 import re
 import sys
+import json
 from datetime import datetime
 CHANGELOG_FILE = "CHANGELOG.md"
 
@@ -25,8 +26,9 @@ def update_changelog(notes):
     with open(CHANGELOG_FILE, 'w') as f:
         f.write("\n".join(lines))
 
-# Update the version using poetry
-run_command("poetry version patch")
+if '--nobump' not in sys.argv:
+    # Update the version using poetry
+    run_command("poetry version patch")
 
 # Extract the new version from pyproject.toml
 with open("pyproject.toml", "r") as file:
@@ -65,8 +67,10 @@ with open(init_file, "w") as file:
     file.write(new_init_content)
 
 # Build and publish using poetry
-run_command("poetry build", capture_output=False)
-run_command("poetry publish", capture_output=False)
+if '--nopypi' not in sys.argv:
+    run_command("poetry build", capture_output=False)
+    run_command("poetry publish", capture_output=False)
+
 run_command("git add .", capture_output=False)
 git_command = ["git", "commit"]
 for line in notes:
@@ -74,3 +78,18 @@ for line in notes:
         git_command.extend(["-m", f'"{line}"'])
 run_command(" ".join(git_command), capture_output=False)
 run_command("git push", capture_output=False)
+
+if '--norelease' not in sys.argv:
+    # Create GitHub release
+    release_notes = "\n".join([note for note in notes if note and len(note) > 1])
+    release_data = {
+        "tag_name": f"v{version}",
+        "name": f"v{version}",
+        "body": release_notes,
+        "draft": False,
+        "prerelease": False
+    }
+
+    # Use GitHub CLI to create release
+    gh_command = f'gh release create v{version} --title "v{version}" --notes "{release_notes}"'
+    run_command(gh_command, capture_output=False)

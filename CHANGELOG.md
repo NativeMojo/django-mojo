@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.3 - May 29, 2025
+
+  ADDED: more robust publishing, including github releases
+
+
 
   CLEANUP: moved django apps into apps folder to be more readable
   ADDED: more utility functions and trying to use more builting functions and less custom
