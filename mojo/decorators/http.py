@@ -9,7 +9,7 @@ from django.http import JsonResponse
 from functools import wraps
 from mojo.helpers.request import parse_request_data
 from mojo.helpers import modules
-from mojo.base.models import rest
+from mojo.models import rest
 
 logger = logit.get_logger("error", "error.log")
 # logger.info("created")
@@ -25,11 +25,11 @@ def dispatcher(request, *args, **kwargs):
     """
     Dispatches incoming requests to the appropriate registered URL method.
     """
-    base.ACTIVE_REQUEST = request
+    rest.ACTIVE_REQUEST = request
     key = kwargs.pop('__mojo_rest_key__', None)
     request.DATA = parse_request_data(request)
     if "group" in request.DATA:
-        request.group = modules.get_model_instance("authit", "Group", int(request.DATA.group))
+        request.group = modules.get_model_instance("account", "Group", int(request.DATA.group))
     logger.info(request.DATA)
     if key in URLPATTERN_METHODS:
         return dispatch_error_handler(URLPATTERN_METHODS[key])(request, *args, **kwargs)
@@ -87,9 +87,10 @@ def _register_route(method="ALL"):
                 pattern_used = pattern if pattern_used.endswith("/") else f"{pattern_used}/"
 
             # Register view in URL mapping
-            app_name = module.__name__
-            key = f"{module.__name__}__{pattern_used}__{method}"
-            print(key)
+            app_name = module.__name__.split(".")[-1]
+            # print(f"{module.__name__}.urlpatterns")
+            key = f"{app_name}__{pattern_used}__{method}"
+            # print(f"{app_name} -> {pattern_used} -> {key}")
             URLPATTERN_METHODS[key] = view_func
 
             # Determine whether to use path() or re_path()

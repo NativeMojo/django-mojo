@@ -35,3 +35,51 @@ def parse_request_data(request):
             data["files"][key] = files_list if len(files_list) > 1 else files_list[0]
 
     return data
+
+
+def get_referer(request):
+    return request.META.get('HTTP_REFERER')
+
+
+def get_remote_ip(request):
+    x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+    if x_forwarded_for:
+        ip = x_forwarded_for.split(',')[0]
+    else:
+        ip = request.META.get('REMOTE_ADDR')
+    return ip
+
+
+def get_user_agent(request):
+    return request.META.get("HTTP_USER_AGENT", "")
+
+
+def parse_user_agent(text):
+    """
+    returns:
+        {
+          'user_agent': {
+            'family': 'Mobile Safari',
+            'major': '13',
+            'minor': '5',
+            'patch': None
+          },
+          'os': {
+            'family': 'iOS',
+            'major': '13',
+            'minor': '5',
+            'patch': None,
+            'patch_minor': None
+          },
+          'device': {
+            'family': 'iPhone',
+            'brand': None,
+            'model': None
+          },
+          'string': '...original UA string...'
+        }
+    """
+    if not isinstance(text, str):
+        text = get_user_agent(text)
+    from ua_parser import user_agent_parser
+    return objict.from_dict(user_agent_parser.Parse(text))

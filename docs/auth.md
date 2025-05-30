@@ -17,12 +17,12 @@ MOJO is a Django-based authentication library that extends Django's built-in aut
 ## Installation
 
 
-1. Add `mojo.auth` to your Django project's `INSTALLED_APPS` in `settings.py`:
+1. Add `mojo.account` to your Django project's `INSTALLED_APPS` in `settings.py`:
    ```python
    INSTALLED_APPS = [
        ...
        'mojo.base',
-       'mojo.auth',
+       'mojo.account',
        'mojo.files'
        ...
    ]
@@ -30,15 +30,15 @@ MOJO is a Django-based authentication library that extends Django's built-in aut
 
 2. Apply the migrations to set up your database:
    ```bash
-   python manage.py migrate mojo.auth
+   python manage.py migrate mojo.account
    ```
 
 3. Add the necessary middleware in your `settings.py`:
    ```python
    MIDDLEWARE = [
        ...
-       'mojo.auth.middleware.JWTAuthenticationMiddleware',
-       'mojo.auth.middleware.LoggerMiddleware',
+       'mojo.account.middleware.JWTAuthenticationMiddleware',
+       'mojo.account.middleware.LoggerMiddleware',
        ...
    ]
    ```
@@ -127,7 +127,7 @@ Tokens are validated using the `JWTAuthenticationMiddleware`, ensuring the token
 ### Example: Creating a User
 
 ```python
-from mojo.auth.models import User
+from mojo.account.models import User
 
 user = User.objects.create_user(email="test@example.com", password="password123")
 user.save()
@@ -136,7 +136,7 @@ user.save()
 ### Example: JWT Token Usage
 
 ```python
-from mojo.auth.utils.jwtoken import JWToken
+from mojo.account.utils.jwtoken import JWToken
 
 user = User.objects.get(email="test@example.com")
 token_manager = JWToken(key=user.auth_key)

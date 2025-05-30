@@ -1,8 +1,52 @@
-from django.conf import settings as django_settings
 import importlib
 from typing import Any, Union
 
 UNKNOWN = Ellipsis
+
+
+def load_settings_profile(context):
+    from mojo.helpers import modules, paths
+    # Set default profile
+    profile = "local"
+    # Check if a profile file exists and override profile
+    profile_file = paths.VAR_ROOT / "profile"
+    if profile_file.exists():
+        with open(profile_file, 'r') as file:
+            profile = file.read().strip()
+    modules.load_module_to_globals("settings.defaults", context)
+    modules.load_module_to_globals(f"settings.{profile}", context)
+
+
+def load_settings_config(context):
+    # Load config from django.conf file
+    from mojo.helpers import paths
+    config_path = paths.VAR_ROOT / "django.conf"
+    if not config_path.exists():
+        raise Exception(f"Required configuration file not found: {config_path}")
+    with open(config_path, 'r') as file:
+        for line in file:
+            if '=' in line:
+                key, value = line.strip().split('=', 1)
+                value = value.strip()
+                if value.startswith('"') and value.endswith('"'):
+                    value = value[1:-1]
+                elif value.startswith("'") and value.endswith("'"):
+                    value = value[1:-1]
+                if value.startswith('f"') or value.startswith("f'"):
+                    value = eval(value)
+                elif value.lower() == 'true':
+                    value = True
+                elif value.lower() == 'false':
+                    value = False
+                else:
+                    try:
+                        if '.' in value:
+                            value = float(value)
+                        else:
+                            value = int(value)
+                    except ValueError:
+                        pass
+                context[key.strip()] = value
 
 
 class SettingsHelper:
@@ -13,7 +57,7 @@ class SettingsHelper:
     - Dictionary-style (`settings["KEY"]`) and attribute-style (`settings.KEY`) access.
     """
 
-    def __init__(self, root_settings: Union[dict, object], defaults: Union[dict, object, None] = None):
+    def __init__(self, root_settings=None, defaults=None):
         """
         Initialize the settings helper.
 
@@ -23,6 +67,10 @@ class SettingsHelper:
         self.root = root_settings
         self.defaults = defaults
         self._app_cache = {}
+
+    def load_settings(self):
+        from django.conf import settings as django_settings
+        self.root = django_settings
 
     def get_app_settings(self, app_name: str) -> "SettingsHelper":
         """
@@ -52,6 +100,8 @@ class SettingsHelper:
         :param default: The default value if the setting is not found.
         :return: The setting value or the provided default.
         """
+        if self.root is None:
+            self.load_settings()
         if isinstance(self.root, dict):
             value = self.root.get(name, UNKNOWN)
         else:
@@ -86,4 +136,4 @@ class SettingsHelper:
 
 
 # Create a global settings helper for accessing Django settings
-settings = SettingsHelper(django_settings)
+settings = SettingsHelper()

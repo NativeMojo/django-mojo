@@ -19,6 +19,9 @@ def load_module_to_globals(module, memory=None):
     if memory is None:
         memory = globals()
 
+    if isinstance(module, str):
+        module = load_module(module, module)
+
     # Extract only variables that are ALL CAPS (Django convention for settings)
     memory.update({key: value for key, value in vars(module).items() if key.isupper()})
 
@@ -43,7 +46,7 @@ def load_module(module_name, package=__name__, ignore_errors=True):
         return None
     return importlib.import_module(module_name, package=package)
 
-def get_root_module(func):
+def get_root_module(func, app_root=True):
     """
     Get the root (top-level) module of a function.
 
@@ -62,18 +65,31 @@ def get_root_module(func):
     if module_name not in sys.modules:
         return None  # The module is not loaded
 
-    # Extract the root module (top-level package)
-    root_module = module_name.split('.')[0]
+    parts = module_name.split('.')
 
-    return sys.modules.get(root_module, None)  # Return the module object or None
+    if app_root:
+        # Try to find a module that contains 'models' submodule
+        for i in range(len(parts)-1, -1, -1):
+            potential_root = '.'.join(parts[:i+1])
+            try:
+                if module_exists(f"{potential_root}.models"):
+                    return sys.modules.get(potential_root)
+            except ImportError:
+                continue
+
+    # If no models module found or app_root is False, return top-level module
+    root_module = parts[0]
+    return sys.modules.get(root_module, None)
 
 
 def get_model(app_name, model_name):
-    # Import the module containing the models
-    models_module = importlib.import_module(f"{app_name}.models")
-    # Get the model class from the module
-    model = getattr(models_module, model_name)
-    return model
+    from django.apps import apps
+    return apps.get_model(app_name, model_name)
+    # # Import the module containing the models
+    # models_module = importlib.import_module(f"{app_name}.models")
+    # # Get the model class from the module
+    # model = getattr(models_module, model_name)
+    # return model
 
 def get_model_instance(app_name, model_name, pk):
     return get_model(app_name, model_name).objects.filter(id=pk).last()

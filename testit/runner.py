@@ -79,6 +79,18 @@ def run_test(opts, module, func_name, module_name, test_name):
             sys.exit(1)
 
 
+def run_setup(opts, module, func_name, module_name, test_name):
+    """Run a specific test function inside a module."""
+    test_key = f"{module_name}.{test_name}.{func_name}"
+    helpers.VERBOSE = opts.verbose
+    try:
+        getattr(module, func_name)(opts)
+    except Exception as err:
+        if opts.verbose:
+            print(f"⚠️ Setup Error: {err}")
+        if opts.stop:
+            sys.exit(1)
+
 
 def import_module_for_testing(module_name, test_name):
     """Dynamically import a test module."""
@@ -92,12 +104,43 @@ def import_module_for_testing(module_name, test_name):
         return None
 
 
-def run_module_tests(opts, module_name, test_name):
+def run_module_tests_by_name(opts, module_name, test_name):
     """Run all test functions in a specific test module in the order they appear."""
     module = import_module_for_testing(module_name, test_name)
     if not module:
         return
+    run_module_setup(opts, module, test_name, module_name)
+    run_module_tests(opts, module, test_name, module_name)
 
+
+def run_module_setup(opts, module, test_name, module_name):
+    opts.client = testit.client.RestClient(opts.host, logger=opts.logger)
+    test_key = f"{module_name}.{test_name}"
+    started = time.time()
+    prefix = "setup_"
+
+    # Get all functions in the module
+    functions = inspect.getmembers(module, inspect.isfunction)
+
+    # Preserve definition order by using inspect.getsourcelines()
+    functions = sorted(
+        functions,
+        key=lambda func: inspect.getsourcelines(func[1])[1]  # Sort by line number
+    )
+    setup_funcs = []
+    for func_name, func in functions:
+        if func_name.startswith(prefix):
+            setup_funcs.append((module, func_name))
+
+    if len(setup_funcs):
+        logit.color_print(f"\nRUNNING SETUP: {test_key}", logit.ConsoleLogger.BLUE)
+        for module, func_name in setup_funcs:
+            run_setup(opts, module, func_name, module_name, test_name)
+        duration = time.time() - started
+        print(f"{helpers.INDENT}---------\n{helpers.INDENT}run time: {duration:.2f}s")
+
+
+def run_module_tests(opts, module, test_name, module_name):
     opts.client = testit.client.RestClient(opts.host, logger=opts.logger)
     test_key = f"{module_name}.{test_name}"
     logit.color_print(f"\nRUNNING TEST: {test_key}", logit.ConsoleLogger.BLUE)
@@ -129,7 +172,7 @@ def run_tests_for_module(opts, module_name):
 
     for test_file in sorted(test_files):
         test_name = test_file.rsplit('.', 1)[0]  # Remove .py extension
-        run_module_tests(opts, module_name, test_name)
+        run_module_tests_by_name(opts, module_name, test_name)
 
 
 def setup_modules():
@@ -164,7 +207,7 @@ def main(opts):
 
     opts.logger = logit.get_logger("testit", "testit.log")
     if opts.module and opts.test:
-        run_module_tests(opts, opts.module, opts.test)
+        run_module_tests_by_name(opts, opts.module, opts.test)
     elif opts.module:
         run_tests_for_module(opts, opts.module)
     else:

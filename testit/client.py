@@ -24,7 +24,7 @@ class RestClient:
 
     def login(self, username, password):
         self.logout()
-        resp = self.post("/api/authit/login", dict(username=username, password=password))
+        resp = self.post("/api/login", dict(username=username, password=password))
         if resp.response.data and resp.response.data.access_token:
             self.is_authenticated = True
             self.access_token = resp.response.data.access_token
