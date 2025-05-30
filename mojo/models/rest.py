@@ -1,5 +1,7 @@
-from django.http import JsonResponse
+# from django.http import JsonResponse
+from mojo.helpers.response import JsonResponse
 from mojo.serializers.models import GraphSerializer
+from mojo.helpers import modules
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import transaction, models as dm
 import objict
@@ -488,6 +490,12 @@ class MojoModel:
         """
         with transaction.atomic():
             self.save()
+
+    def report_incident(self, description, category="error", **kwargs):
+        self.model_logit(ACTIVE_REQUEST, description, category)
+        Event = modules.get_model("incidents", "Event")
+        if Event is None:
+            Event.report(description, category, **kwargs)
 
     def model_logit(self, request, log, kind="model_log"):
         return self.class_logit(request, log, kind, self.id)

@@ -1,5 +1,6 @@
 from mojo import decorators as jd
-from django.http import JsonResponse
+# from django.http import JsonResponse
+from mojo.helpers.response import JsonResponse
 from mojo.helpers.settings import settings
 import mojo
 import django

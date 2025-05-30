@@ -1,6 +1,7 @@
 from mojo import decorators as jd
 from mojo.apps.account.utils.jwtoken import JWToken
-from django.http import JsonResponse
+# from django.http import JsonResponse
+from mojo.helpers.response import JsonResponse
 from mojo.apps.account.models.user import User
 import datetime
 

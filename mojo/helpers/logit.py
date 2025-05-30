@@ -137,15 +137,17 @@ class Logger:
 
     def exception(self, *args):
         exc_info = sys.exc_info()
+        err = None
         if exc_info:
-            pretty_trace = PrettyLogger.pretty_format({
+            err = {
                 "type": str(exc_info[0]),
                 "message": str(exc_info[1]),
                 "stack_trace": traceback.format_exception(*exc_info)
-            })
+            }
+            pretty_trace = PrettyLogger.pretty_format(err)
             args = (pretty_trace, *args)
         self.logger.exception(self._build_log(*args))
-
+        return err
 
 # Log Formatting with Colors
 class ColorFormatter(logging.Formatter):

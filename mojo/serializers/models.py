@@ -118,9 +118,7 @@ class GraphSerializer:
         else:
             data = dict(data=data, status=True, graph=self.graph)
         data.update(dict(kwargs))
-        logger.info(data)
         out = ujson.dumps(data)
-        # logger.info("RAW", out)
         return out
 
     def to_response(self, request, **kwargs):

@@ -206,6 +206,10 @@ def main(opts):
         return
 
     opts.logger = logit.get_logger("testit", "testit.log")
+
+    if opts.module and '.' in opts.module:
+        opts.module, opts.test = opts.module.split('.', 1)
+
     if opts.module and opts.test:
         run_module_tests_by_name(opts, opts.module, opts.test)
     elif opts.module:

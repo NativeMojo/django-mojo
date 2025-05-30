@@ -1,6 +1,6 @@
 [project]
 name = "django-mojo"
-version = "0.1.3"
+version = "0.1.4"
 description = ""
 authors = [{ name = "MOJO Dev Team", email = "gotmojo@nativemojo.com" }]
 readme = "README.md"

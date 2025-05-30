@@ -5,7 +5,8 @@ from mojo.helpers import modules as jm
 from mojo.helpers import logit
 import mojo.errors
 from django.urls import path, re_path
-from django.http import JsonResponse
+# from django.http import JsonResponse
+from mojo.helpers.response import JsonResponse
 from functools import wraps
 from mojo.helpers.request import parse_request_data
 from mojo.helpers import modules

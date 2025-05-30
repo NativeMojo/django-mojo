@@ -1,5 +1,6 @@
 from django.utils.deprecation import MiddlewareMixin
-from django.http import JsonResponse
+# from django.http import JsonResponse
+from mojo.helpers.response import JsonResponse
 from mojo.apps.account.utils.jwtoken import JWToken
 from mojo.apps.account.models.user import User
 from mojo.helpers import request as rhelper

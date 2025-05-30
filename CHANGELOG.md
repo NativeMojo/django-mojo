@@ -1,5 +1,11 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.4 - May 30, 2025
+
+  ADDED: lots of improvements to making metrics cleaner and passing all tests
+  ADDED: mojo JsonResponse to use ujson and ability to add future logic for custom handling of certain data
+
+
 ## v0.1.3 - May 29, 2025
 
   ADDED support to ignore github release and use tags

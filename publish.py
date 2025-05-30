@@ -3,7 +3,6 @@
 import subprocess
 import re
 import sys
-import json
 from datetime import datetime
 CHANGELOG_FILE = "CHANGELOG.md"
 

@@ -56,7 +56,7 @@ def generate_granularities(min_granularity=DEFAULT_MIN_GRANULARITY,
     return all_granularities[min_index:max_index + 1]
 
 
-def generate_slug(slug, date, granularity, *args):
+def generate_slug(slug, date, granularity, account="global", *args):
     """
     Generate a slug for a given date and granularity.
 
@@ -76,26 +76,26 @@ def generate_slug(slug, date, granularity, *args):
         raise ValueError("Invalid granularity for slug generation.")
     prefix = GRANULARITY_PREFIX_MAP.get(granularity)
     if granularity == 'minutes':
-        slug = date.strftime('%Y-%m-%dT%H:%M')
+        date_slug = date.strftime('%Y-%m-%dT%H:%M')
     elif granularity == 'hours':
-        slug = date.strftime('%Y-%m-%dT%H')
+        date_slug = date.strftime('%Y-%m-%dT%H')
     elif granularity == 'days':
-        slug = date.strftime('%Y-%m-%d')
+        date_slug = date.strftime('%Y-%m-%d')
     elif granularity == 'weeks':
-        slug = date.strftime('%Y-%U')
+        date_slug = date.strftime('%Y-%U')
     elif granularity == 'months':
-        slug = date.strftime('%Y-%m')
+        date_slug = date.strftime('%Y-%m')
     elif granularity == 'years':
-        slug = date.strftime('%Y')
+        date_slug = date.strftime('%Y')
     else:
         raise ValueError("Unhandled granularity.")
     arg_prefix = ':'.join(args)
     if arg_prefix:
-        prefix = f"mets:{prefix}:{arg_prefix}"
-    return f"mets:{prefix}:{slug}"
+        return f"mets:{account}:{arg_prefix}:{slug}:{prefix}:{date_slug}"
+    return f"mets:{account}:{slug}:{prefix}:{date_slug}"
 
 
-def generate_slugs_for_range(slug, dt_start, dt_end, granularity, account="global"):
+def generate_slugs_for_range(slug, dt_start, dt_end, granularity, account="global", *args):
     """
     Generate slugs for dates in a specified range with the given granularity.
 
@@ -120,24 +120,38 @@ def generate_slugs_for_range(slug, dt_start, dt_end, granularity, account="globa
         'years': 'years'
     }
 
+    granularity_end_map = {
+        'minutes': timedelta(minutes=29),
+        'hours': timedelta(hours=11),
+        'days': timedelta(days=11),
+        'weeks': timedelta(weeks=11),
+        'months': timedelta(days=12*30),
+        'years': timedelta(days=11*360)
+    }
+
     if granularity not in granularity_map:
         raise ValueError("Invalid granularity for slug generation.")
 
+    if dt_end is None:
+        dt_end = datetime.datetime.now()
+    if dt_start is None:
+        dt_start = dt_end - granularity_end_map[granularity]
     current = dt_start
+
     slugs = []
 
     if granularity in ['minutes', 'hours', 'days', 'weeks']:
         delta = granularity_map[granularity]
         while current <= dt_end:
-            slugs.append(generate_slug(slug, current, granularity, account))
+            slugs.append(generate_slug(slug, current, granularity, account, *args))
             current += delta
     elif granularity == 'months':
         while current <= dt_end:
-            slugs.append(generate_slug(slug, current, granularity, account))
+            slugs.append(generate_slug(slug, current, granularity, account, *args))
             current = datetime.datetime(current.year + (current.month // 12), ((current.month % 12) + 1), 1)
     elif granularity == 'years':
         while current <= dt_end:
-            slugs.append(generate_slug(slug, current, granularity, account))
+            slugs.append(generate_slug(slug, current, granularity, account, *args))
             current = datetime.datetime(current.year + 1, 1, 1)
     return slugs
 
@@ -154,4 +168,4 @@ def get_expires_at(granularity, slug, category=None):
     days = GRANULARITY_EXPIRES_DAYS.get(granularity, None)
     if days is None:
         return None
-    return time.time() + (days * 24 * 60 * 60)
+    return int(time.time() + (days * 24 * 60 * 60))
