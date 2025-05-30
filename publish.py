@@ -79,7 +79,11 @@ for line in notes:
 run_command(" ".join(git_command), capture_output=False)
 run_command("git push", capture_output=False)
 
-if '--norelease' not in sys.argv:
+if '--release' not in sys.argv:
+    run_command(f"git tag v{version}", capture_output=False)
+    run_command("git push --tags", capture_output=False)
+
+if '--release' in sys.argv:
     # Create GitHub release
     release_notes = "\n".join([note for note in notes if note and len(note) > 1])
     release_data = {

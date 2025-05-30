@@ -2,6 +2,11 @@
 ## v0.1.3 - May 29, 2025
 ## v0.1.3 - May 29, 2025
 
+  ADDED support to ignore github release and use tags
+
+
+## v0.1.3 - May 29, 2025
+
   ADDED: more robust publishing, including github releases
 
 
