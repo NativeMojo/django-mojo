@@ -7,6 +7,7 @@ from collections import OrderedDict
 from io import StringIO
 from typing import Optional
 import traceback
+import re
 # import traceback
 # import time
 # from datetime import datetime
@@ -44,6 +45,16 @@ def pretty_format(msg):
 def color_print(msg, color, end="\n"):
     ConsoleLogger.print_message(msg, color, end)
 
+
+# Mask sensitive data in the log
+def mask_sensitive_data(text):
+    sensitive_patterns = [
+        r'("?(password|pwd|secret|token|access_token|api_key|authorization)"?\s*[:=]\s*"?)[^",\s]+',
+        r'("?(ssn|credit_card|card_number|pin|cvv)"?\s*[:=]\s*"?)[^",\s]+',
+    ]
+    for pattern in sensitive_patterns:
+        text = re.sub(pattern, r'\1*****', text, flags=re.IGNORECASE)
+    return text
 
 # Utility: Thread-safe lock handler
 class ThreadSafeLock:

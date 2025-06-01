@@ -2,6 +2,7 @@
 from mojo.helpers.response import JsonResponse
 from mojo.serializers.models import GraphSerializer
 from mojo.helpers import modules
+from mojo.helpers.settings import settings
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import transaction, models as dm
 import objict
@@ -11,6 +12,7 @@ from mojo.helpers import dates, logit
 logger = logit.get_logger("debug", "debug.log")
 ACTIVE_REQUEST = None
 LOGGING_CLASS = None
+MOJO_APP_STATUS_200_ON_ERROR = settings.MOJO_APP_STATUS_200_ON_ERROR
 
 class MojoModel:
     """Base model class for REST operations with GraphSerializer integration."""
@@ -57,8 +59,11 @@ class MojoModel:
         """
         payload = dict(kwargs)
         payload["is_authenticated"] = request.user.is_authenticated
+        payload["status"] = False
         if "code" not in payload:
             payload["code"] = status
+        if MOJO_APP_STATUS_200_ON_ERROR:
+            status = 200
         return JsonResponse(payload, status=status)
 
     @classmethod
@@ -128,8 +133,8 @@ class MojoModel:
             if request.user is None or not request.user.is_authenticated:
                 return False
         if instance is not None:
-            if hasattr(instance, "on_rest_check_permission"):
-                return instance.on_rest_check_permission(perms, request)
+            if hasattr(instance, "check_edit_permission"):
+                return instance.check_edit_permission(perms, request)
             if "owner" in perms and getattr(instance, "user", None) is not None:
                 if instance.user.id == request.user.id:
                     return True
@@ -168,7 +173,7 @@ class MojoModel:
             JsonResponse representing the result of the save operation.
         """
         if cls.rest_check_permission(request, ["SAVE_PERMS", "VIEW_PERMS"], instance):
-            return instance.on_rest_save(request)
+            return instance.on_rest_save_and_respond(request)
         return cls.rest_error_response(request, 403, error=f"{request.method} permission denied: {cls.__name__}")
 
     @classmethod
@@ -218,7 +223,7 @@ class MojoModel:
         """
         if cls.rest_check_permission(request, ["SAVE_PERMS", "VIEW_PERMS"]):
             instance = cls()
-            return instance.on_rest_save(request)
+            return instance.on_rest_save_and_respond(request)
         return cls.rest_error_response(request, 403, error=f"CREATE permission denied: {cls.__name__}")
 
     @classmethod
@@ -269,7 +274,7 @@ class MojoModel:
         paged_queryset = queryset[page_start:page_end]
         graph = request.DATA.get("graph", "list")
         serializer = GraphSerializer(paged_queryset, graph=graph, many=True)
-        return serializer.to_response(request, count=queryset.count(), page=page_start, size=page_size)
+        return serializer.to_response(request, count=queryset.count(), start=page_start, size=page_size)
 
     @classmethod
     def on_rest_list_date_range_filter(cls, request, queryset):
@@ -404,7 +409,7 @@ class MojoModel:
             JsonResponse representing the newly created object.
         """
         instance = cls()
-        return instance.on_rest_save(request)
+        return instance.on_rest_save_and_respond(request)
 
     def on_rest_get(self, request):
         """
@@ -420,7 +425,7 @@ class MojoModel:
         serializer = GraphSerializer(self, graph=graph)
         return serializer.to_response(request)
 
-    def on_rest_save(self, request):
+    def on_rest_save(self, request, data_dict):
         """
         Create a model instance from a dictionary.
 
@@ -428,9 +433,8 @@ class MojoModel:
             request: Django HTTP request object.
 
         Returns:
-            JsonResponse representing the saved object.
+            None
         """
-        data_dict = request.DATA
         for field in self._meta.get_fields():
             field_name = field.name
             if field_name in data_dict:
@@ -439,18 +443,34 @@ class MojoModel:
                 if callable(set_field_method):
                     set_field_method(field_value, request)
                 elif field.is_relation and hasattr(field, 'related_model'):
-                    related_model = field.related_model
-                    try:
-                        related_instance = related_model.objects.get(pk=field_value)
-                        setattr(self, field_name, related_instance)
-                    except related_model.DoesNotExist:
-                        continue  # Skip invalid related instances
+                    self.on_rest_save_related_field(field, field_value, request)
                 elif field.get_internal_type() == "JSONField":
                     self.on_rest_update_jsonfield(field_name, field_value)
                 else:
                     setattr(self, field_name, field_value)
         self.atomic_save()
+
+    def on_rest_save_and_respond(self, request):
+        self.on_rest_save(request, request.DATA)
         return self.on_rest_get(request)
+
+    def on_rest_save_related_field(self, field, field_value, request):
+        if isinstance(field_value, dict):
+            # we want to check if we have an existing field and if so we will update it after security
+            related_instance = getattr(self, field.name)
+            if related_instance is None:
+                # skip None fields for now
+                # FUTURE look at creating a new instance
+                return
+            if hasattr(field.related_model, "rest_check_permission"):
+                if field.related_model.rest_check_permission(request, ["SAVE_PERMS", "VIEW_PERMS"], related_instance):
+                    related_instance.on_rest_save(request, field_value)
+            return
+        try:
+            related_instance = field.related_model.objects.get(pk=field_value)
+            setattr(self, field.name, related_instance)
+        except field.related_model.DoesNotExist:
+            pass  # Skip invalid related instances
 
     def on_rest_update_jsonfield(self, field_name, field_value):
         """helper to update jsonfield by merge in changes"""
@@ -491,11 +511,11 @@ class MojoModel:
         with transaction.atomic():
             self.save()
 
-    def report_incident(self, description, category="error", **kwargs):
-        self.model_logit(ACTIVE_REQUEST, description, category)
+    def report_incident(self, description, kind="error", level="critical", **kwargs):
+        self.model_logit(ACTIVE_REQUEST, description, kind=kind, level=level)
         Event = modules.get_model("incidents", "Event")
         if Event is None:
-            Event.report(description, category, **kwargs)
+            Event.report(description, kind, **kwargs)
 
     def model_logit(self, request, log, kind="model_log"):
         return self.class_logit(request, log, kind, self.id)

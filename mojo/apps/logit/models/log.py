@@ -1,16 +1,20 @@
 from mojo.models import MojoModel
 from django.db import models as dm
-# from mojo.helpers import logit
+from mojo.helpers import logit
 # logger = logit.get_logger("requests", "requests.log")
 
 
 class Log(dm.Model, MojoModel):
     created = dm.DateTimeField(auto_now_add=True, db_index=True)
+    level = dm.CharField(max_length=12, default="info", db_index=True)
     kind = dm.CharField(max_length=200, default=None, null=True, db_index=True)
     method = dm.CharField(max_length=200, default=None, null=True)
     path = dm.TextField(default=None, null=True, db_index=True)
+    payload = dm.TextField(default=None, null=True)
     ip = dm.CharField(max_length=32, default=None, null=True, db_index=True)
+    duid = dm.TextField(default=None, null=True)
     uid = dm.IntegerField(default=0, db_index=True)
+    username = dm.TextField(default=None, null=True)
     user_agent = dm.TextField(default=None, null=True)
     log = dm.TextField(default=None, null=True)
     model_name = dm.TextField(default=None, null=True, db_index=True)
@@ -18,19 +22,34 @@ class Log(dm.Model, MojoModel):
     # expires = dm.DateTimeField(db_index=True)
 
     @classmethod
-    def logit(cls, request, log, kind="log", model_name=None, model_id=0):
-        if isinstance(log, bytes):
-            log = log.decode("utf-8")
-        uid = request.user.id if request.user.is_authenticated else 0
-        path = request.get_full_path()
-        ip_address = request.ip
-        # logger.info(f"Logging {kind}: path={path}, ip={ip_address}, uid={uid}, model={model_name}.{model_id}\n{log}")
+    def logit(cls, request, log, kind="log", model_name=None, model_id=0, level="info", **kwargs):
+        if not isinstance(log, (bytes, str)):
+            log = f"INVALID LOG TYPE: attempting to log type: {type(log)}"
+        log = log.decode("utf-8") if isinstance(log, bytes) else log
+        log = logit.mask_sensitive_data(log)
+
+        uid, username, ip_address, path, method, duid = 0, None, None, None, None, None
+        if request:
+            username = request.user.username if request.user.is_authenticated else None
+            uid = request.user.pk if request.user.is_authenticated else 0
+            path = request.path
+            duid = request.duid
+            ip_address = request.ip
+            method = request.method
+
+        path = kwargs.get("path", path)
+        method = kwargs.get("method", method)
+        duid = kwargs.get("duid", duid)
+
         return cls.objects.create(
+            level=level,
             kind=kind,
-            method=request.method,
+            method=method,
             path=path,
             ip=ip_address,
             uid=uid,
+            duid=duid,
+            username=username,
             log=log,
             user_agent=request.user_agent,
             model_name=model_name,

@@ -1,4 +1,5 @@
 from functools import wraps
+import mojo.errors
 
 def requires_params(*required_params):
     def decorator(func):
@@ -7,7 +8,7 @@ def requires_params(*required_params):
             missing_params = [param for param in required_params if param not in request.DATA]
             if missing_params:
                 str_params = ', '.join(missing_params)
-                raise ValueError(f"Missing required parameters: {str_params}")
+                raise mojo.errors.ValueException(f"missing required parameters: {str_params}")
             return func(request, *args, **kwargs)
         return wrapper
     return decorator

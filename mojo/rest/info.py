@@ -1,16 +1,16 @@
-from mojo import decorators as jd
+from mojo import decorators as md
 # from django.http import JsonResponse
 from mojo.helpers.response import JsonResponse
 from mojo.helpers.settings import settings
 import mojo
 import django
 
-@jd.GET('version')
+@md.GET('version')
 def rest_version(request):
     return JsonResponse(dict(status=True, version=settings.VERSION, ip=request.ip))
 
 
-@jd.GET('versions')
+@md.GET('versions')
 def rest_versions(request):
     import sys
     return JsonResponse(dict(status=True, version={
@@ -21,6 +21,6 @@ def rest_versions(request):
     }))
 
 
-@jd.GET('myip')
+@md.GET('myip')
 def rest_my_ip(request):
     return JsonResponse(dict(status=True, ip=request.ip))

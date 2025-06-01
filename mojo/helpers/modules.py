@@ -72,7 +72,7 @@ def get_root_module(func, app_root=True):
         for i in range(len(parts)-1, -1, -1):
             potential_root = '.'.join(parts[:i+1])
             try:
-                if module_exists(f"{potential_root}.models"):
+                if module_exists(f"{potential_root}.models") or module_exists(f"{potential_root}.rest"):
                     return sys.modules.get(potential_root)
             except ImportError:
                 continue
