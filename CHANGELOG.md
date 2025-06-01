@@ -1,5 +1,15 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.8 - June 01, 2025
+
+  Updaing version info and tagging release
+
+
+## v0.1.7 - June 01, 2025
+
+   Updating version info and release
+
+
 ## v0.1.4 - May 30, 2025
 
   ADDED: lots of improvements to making metrics cleaner and passing all tests
