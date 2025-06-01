@@ -22,6 +22,29 @@ class MojoException(Exception):
         self.code = code
         self.status = status
 
+
+class ValueException(MojoException):
+    """
+    Exception raised for REST API value errors.
+
+    Attributes:
+        reason (str): The reason for the exception. Defaults to 'REST API Error'.
+        code (int): The error code associated with the exception. Defaults to 500.
+        status (int, optional): The HTTP status code. Defaults to 500.
+    """
+
+    def __init__(self, reason='REST API Error', code=400, status=400):
+        """
+        Initialize a RestErrorException instance.
+
+        Args:
+            reason (str, optional): The reason for the exception. Defaults to 'REST API Error'.
+            code (int, optional): The error code associated with the exception. Defaults to 500.
+            status (int, optional): The HTTP status code. Defaults to 500.
+        """
+        super().__init__(reason, code, status)
+
+
 class PermissionDeniedException(MojoException):
     """
     Exception raised for permission denied errors.

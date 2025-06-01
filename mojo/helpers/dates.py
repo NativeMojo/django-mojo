@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 import pytz
 import objict
+from .settings import settings
 
 
 def parse_datetime(value, timezone=None):
@@ -32,3 +33,20 @@ def get_local_time(timezone, dt_utc=None):
         dt_utc = pytz.UTC.localize(dt_utc)
     local_tz = pytz.timezone(timezone)
     return dt_utc.astimezone(local_tz)
+
+def utcnow():
+    """look at django setting to get proper datetime aware or not"""
+    if settings.USE_TZ:
+        return datetime.now(tz=pytz.UTC)
+    return datetime.utcnow()
+
+
+def has_time_elsapsed(when, seconds=None, minutes=None, hours=None, days=None):
+    now = utcnow()
+    elapsed_time = timedelta(
+        seconds=seconds or 0,
+        minutes=minutes or 0,
+        hours=hours or 0,
+        days=days or 0
+    )
+    return now >= when + elapsed_time

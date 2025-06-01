@@ -16,13 +16,13 @@ def load_settings_profile(context):
     modules.load_module_to_globals("settings.defaults", context)
     modules.load_module_to_globals(f"settings.{profile}", context)
 
-
 def load_settings_config(context):
     # Load config from django.conf file
     from mojo.helpers import paths
     config_path = paths.VAR_ROOT / "django.conf"
     if not config_path.exists():
         raise Exception(f"Required configuration file not found: {config_path}")
+
     with open(config_path, 'r') as file:
         for line in file:
             if '=' in line:
@@ -47,6 +47,10 @@ def load_settings_config(context):
                     except ValueError:
                         pass
                 context[key.strip()] = value
+
+    if context.get("ALLOW_ADMIN_SITE", True):
+        if "django.contrib.admin" not in context["INSTALLED_APPS"]:
+            context["INSTALLED_APPS"].insert(0, "django.contrib.admin")
 
 
 class SettingsHelper:
@@ -121,6 +125,9 @@ class SettingsHelper:
             return self.defaults.get(name, default)
 
         return getattr(self.defaults, name, default)
+
+    def is_app_installed(self, app_label):
+        return app_label in self.get("INSTALLED_APPS")
 
     def __getattr__(self, name: str) -> Any:
         """

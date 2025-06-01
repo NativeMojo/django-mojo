@@ -1,14 +1,14 @@
-from mojo import decorators as jd
+from mojo import decorators as md
 from mojo.helpers.response import JsonResponse
 # from django.http import JsonResponse
 import mojo.tasks
 
-@jd.URL('status')
+@md.URL('status')
 def api_status(request):
     tman = mojo.tasks.get_manager()
     return JsonResponse(tman.get_status())
 
-@jd.URL('pending')
+@md.URL('pending')
 def api_pending(request):
     tman = mojo.tasks.get_manager()
     pending = tman.get_all_pending()
@@ -21,7 +21,7 @@ def api_pending(request):
     }
     return JsonResponse(response)
 
-@jd.URL('completed')
+@md.URL('completed')
 def api_completed(request):
     tman = mojo.tasks.get_manager()
     completed = tman.get_all_completed()
@@ -34,7 +34,7 @@ def api_completed(request):
     }
     return JsonResponse(response)
 
-@jd.URL('running')
+@md.URL('running')
 def api_running(request):
     tman = mojo.tasks.get_manager()
     running = tman.get_all_running()
@@ -48,7 +48,7 @@ def api_running(request):
     return JsonResponse(response)
 
 
-@jd.URL('errors')
+@md.URL('errors')
 def api_errors(request):
     tman = mojo.tasks.get_manager()
     errors = tman.get_all_errors()

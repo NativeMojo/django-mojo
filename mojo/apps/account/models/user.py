@@ -3,10 +3,12 @@ from django.db import models
 from mojo.models import MojoModel
 from mojo.helpers.settings import settings
 from mojo import errors as merrors
-import datetime
+from mojo.helpers import dates
+from mojo.apps.account.utils.jwtoken import JWToken
 import uuid
 
 USER_PERMS_PROTECTION = settings.get("USER_PERMS_PROTECTION", {})
+USER_LAST_ACTIVITY_FREQ = settings.get("USER_LAST_ACTIVITY_FREQ", 300)
 
 class CustomUserManager(BaseUserManager):
     def create_user(self, email, password=None, **extra_fields):
@@ -78,7 +80,8 @@ class User(AbstractBaseUser, MojoModel):
                     'email',
                     'phone_number',
                     'last_login',
-                    'last_activity'
+                    'last_activity',
+                    'is_active'
                 ]
             },
             "default": {
@@ -91,7 +94,8 @@ class User(AbstractBaseUser, MojoModel):
                     'last_login',
                     'last_activity',
                     'permissions',
-                    'metadata'
+                    'metadata',
+                    'is_active'
                 ],
             },
         }
@@ -107,8 +111,10 @@ class User(AbstractBaseUser, MojoModel):
         return request.user.id == self.id
 
     def touch(self):
-        self.last_activity = datetime.datetime.utcnow()
-        self.atomic_save()
+        # can't subtract offset-naive and offset-aware datetimes
+        if self.last_activity is None or dates.has_time_elsapsed(self.last_activity, seconds=USER_LAST_ACTIVITY_FREQ):
+            self.last_activity = dates.utcnow()
+            self.atomic_save()
 
     def get_auth_key(self):
         if self.auth_key is None:
@@ -130,14 +136,6 @@ class User(AbstractBaseUser, MojoModel):
             else:
                 self.remove_permission(key)
 
-    def has_perm(self, perm, obj=None):
-        """Check both Django's permissions and custom JSON permissions."""
-        return True
-        #return self.has_permission(perm, True)
-        # if super().has_perm(perm, obj):
-        #     return True
-        # return self.permissions.get(perm, False)
-
     def has_module_perms(self, app_label):
         """Check if user has any permissions in a given app."""
         return True  # Or customize based on your `permissions` JSON
@@ -155,14 +153,27 @@ class User(AbstractBaseUser, MojoModel):
 
     def add_permission(self, perm_key, value=True):
         """Dynamically add a permission."""
-        self.permissions[perm_key] = value
+        if isinstance(perm_key, (list, set)):
+            for pk in perm_key:
+                self.permissions[pk] = value
+        else:
+            self.permissions[perm_key] = value
         self.save()
 
     def remove_permission(self, perm_key):
         """Remove a permission."""
-        if perm_key in self.permissions:
-            del self.permissions[perm_key]
-            self.save()
+        if isinstance(perm_key, (list, set)):
+            for pk in perm_key:
+                if pk in self.permissions:
+                    del self.permissions[pk]
+        else:
+            if perm_key in self.permissions:
+                del self.permissions[perm_key]
+        self.save()
+
+    def remove_all_permissions(self):
+        self.permissions = {}
+        self.save()
 
     def save_password(self, value):
         self.set_password(value)
@@ -175,7 +186,23 @@ class User(AbstractBaseUser, MojoModel):
             self.display_name = self.username
         super().save(*args, **kwargs)
 
-    def on_rest_check_permission(self, perms, request):
+    def check_edit_permission(self, perms, request):
         if "owner" in perms and self.is_request_user():
             return True
         return request.user.has_permission(perms)
+
+    @classmethod
+    def validate_jwt(cls, token):
+        token_manager = JWToken()
+        jwt_data = token_manager.decode(token, validate=False)
+        if jwt_data.uid is None:
+            return None, "Invalid token data"
+        user = User.objects.filter(id=jwt_data.uid).last()
+        if user is None:
+            return None, "Invalid token user"
+        token_manager.key = user.auth_key
+        if not token_manager.is_token_valid(token):
+            if token_manager.is_expired:
+                return user, "Token expired"
+            return user, "Token has invalid signature"
+        return user, None

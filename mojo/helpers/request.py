@@ -1,40 +1,31 @@
-import ujson
-from objict import objict
+from objict import objict, nobjict
+from .request_parser import RequestDataParser
+
+REQUEST_PARSER = RequestDataParser()
 
 def parse_request_data(request):
     """
-    Converts a Django request into a dictionary, handling all request methods,
-    form data, JSON body, query parameters, and file uploads.
-
-    :param request: Django HttpRequest object
-    :return: dict containing parsed request data
+    Consolidates all GET, POST, JSON body, and FILE data into one objict dict.
+    Handles dotted keys and repeated fields.
     """
-    data = objict()
+    return REQUEST_PARSER.parse(request)
 
-    # Include query parameters (GET)
-    data.update(request.GET.dict())
 
-    # Handle JSON Body (for POST, PUT, PATCH, DELETE)
-    if request.method in ["POST", "PUT", "PATCH", "DELETE"]:
-        if request.content_type == "application/json":
-            try:
-                json_data = ujson.loads(request.body.decode("utf-8"))
-                if isinstance(json_data, dict):  # Ensure it's a dictionary
-                    data.update(json_data)
-            except Exception:
-                pass  # Ignore if body isn't valid JSON
+# Additional helper function for debugging
+def debug_request_data(request):
+    """
+    Debug version that shows step-by-step processing
+    """
+    print("=== DEBUG REQUEST PARSING ===")
+    print(f"Method: {request.method}")
+    print(f"Content-Type: {getattr(request, 'content_type', 'Not set')}")
+    print(f"GET: {dict(request.GET)}")
+    print(f"POST: {dict(request.POST)}")
+    print(f"FILES: {list(request.FILES.keys())}")
 
-        # Handle Form Data (POST, PUT, PATCH, DELETE)
-        data.update(request.POST.dict())
-
-    # Handle File Uploads
-    if request.FILES:
-        data["files"] = {}
-        for key in request.FILES:
-            files_list = request.FILES.getlist(key)
-            data["files"][key] = files_list if len(files_list) > 1 else files_list[0]
-
-    return data
+    result = parse_request_data(request)
+    print(f"Final result: {result}")
+    return result
 
 
 def get_referer(request):
@@ -49,6 +40,19 @@ def get_remote_ip(request):
         ip = request.META.get('REMOTE_ADDR')
     return ip
 
+
+def get_device_id(request):
+    # Look for 'buid' or 'duid' in GET parameters
+    for key in ['__buid__', 'duid', "buid"]:
+        if key in request.GET:
+            return request.GET[key]
+
+    # Look for 'buid' or 'duid' in POST parameters
+    for key in ['buid', 'duid']:
+        if key in request.POST:
+            return request.POST[key]
+
+    return None
 
 def get_user_agent(request):
     return request.META.get("HTTP_USER_AGENT", "")

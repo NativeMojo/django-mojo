@@ -4,13 +4,17 @@ import time
 from objict import objict
 
 class JWToken:
-    def __init__(self, key=f"{time.time()}", access_token_expiry=21600, refresh_token_expiry=604800, alg="HS256"):
+    def __init__(self, key=f"{time.time()}", access_token_expiry=21600, refresh_token_expiry=604800, alg="HS256", token=None):
         self.key = key
         self.access_token_expiry = access_token_expiry
         self.refresh_token_expiry = refresh_token_expiry
         self.alg = alg
         self.is_expired = False
         self.invalid_sig = False
+        self.is_valid = False
+        self.payload = None
+        if token is not None:
+            self.is_valid, self.payload = self.decode(token)
 
     def decode(self, token, validate=True):
         payload = objict.fromdict(jwt.decode(token, self.key, algorithms=self.alg, options={"verify_signature":False}))

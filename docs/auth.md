@@ -37,9 +37,10 @@ MOJO is a Django-based authentication library that extends Django's built-in aut
    ```python
    MIDDLEWARE = [
        ...
-       'mojo.account.middleware.JWTAuthenticationMiddleware',
-       'mojo.account.middleware.LoggerMiddleware',
-       ...
+       'mojo.middleware.mojo.MojoMiddleware',
+       'mojo.middleware.logging.LoggerMiddleware',
+       'mojo.middleware.auth.AuthenticationMiddleware',
+       'mojo.middleware.logging.LoggerMiddleware',
    ]
    ```
 
@@ -78,7 +79,7 @@ Custom Django admin views for managing users, groups, and group members are avai
 
 ## Middleware
 
-### JWTAuthenticationMiddleware
+### AuthenticationMiddleware
 
 - Authenticates requests using a Bearer JWT Authentication scheme.
 - Recognizes users based on JWT tokens in the Authorization header.

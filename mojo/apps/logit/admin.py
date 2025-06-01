@@ -1,8 +1,14 @@
-from django.contrib import admin
 from mojo.apps.logit.models import Log
 import json
 from django.utils.safestring import mark_safe
 
+from django.contrib import admin
+
+# from django.contrib.sites.models import Site
+
+# Unregister Group and Site from admin
+# admin.site.unregister(Group)
+# admin.site.unregister(Site)
 
 @admin.register(Log)
 class LogAdmin(admin.ModelAdmin):
@@ -10,7 +16,7 @@ class LogAdmin(admin.ModelAdmin):
     list_display = ("created", "kind", "method", "path", "ip", "uid", "model_name", "model_id", "log_summary")
     list_filter = ("kind", "ip", "uid", "model_name", "model_id", "created")
     search_fields = ("log", "path", "ip", "model_name")
-    readonly_fields = ("formatted_log", "created", "kind", "path", "ip", "uid", "model_name", "model_id")
+    readonly_fields = ("created", "kind", "path", "ip", "uid", "model_name", "model_id", "user_agent", "method")
     date_hierarchy = "created"
     ordering = ("-created",)
 

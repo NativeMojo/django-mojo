@@ -8,9 +8,9 @@ from django.urls import path, re_path
 # from django.http import JsonResponse
 from mojo.helpers.response import JsonResponse
 from functools import wraps
-from mojo.helpers.request import parse_request_data
 from mojo.helpers import modules
 from mojo.models import rest
+from mojo.apps import metrics
 
 logger = logit.get_logger("error", "error.log")
 # logger.info("created")
@@ -21,19 +21,24 @@ URLPATTERN_METHODS = {}
 MOJO_API_MODULE = settings.get("MOJO_API_MODULE", "api")
 MOJO_APPEND_SLASH = settings.get("MOJO_APPEND_SLASH", False)
 
+API_METRICS = settings.get("API_METRICS", False)
+API_METRICS_GRANULARITY = settings.get("API_METRICS_GRANULARITY", "days")
+
 
 def dispatcher(request, *args, **kwargs):
     """
     Dispatches incoming requests to the appropriate registered URL method.
     """
     rest.ACTIVE_REQUEST = request
-    key = kwargs.pop('__mojo_rest_key__', None)
-    request.DATA = parse_request_data(request)
+    key = kwargs.pop('__mojo_rest_root_key__', None)
     if "group" in request.DATA:
         request.group = modules.get_model_instance("account", "Group", int(request.DATA.group))
-    logger.info(request.DATA)
-    if key in URLPATTERN_METHODS:
-        return dispatch_error_handler(URLPATTERN_METHODS[key])(request, *args, **kwargs)
+    method_key = f"{key}__{request.method}"
+    logger.info(request.path, key, kwargs.pop('__mojo_rest_key__', None), method_key, request.DATA)
+    if method_key not in URLPATTERN_METHODS:
+        method_key = f"{key}__ALL"
+    if method_key in URLPATTERN_METHODS:
+        return dispatch_error_handler(URLPATTERN_METHODS[method_key])(request, *args, **kwargs)
     return JsonResponse({"error": "Endpoint not found", "code": 404}, status=404)
 
 
@@ -45,13 +50,21 @@ def dispatch_error_handler(func):
     @wraps(func)
     def wrapper(request, *args, **kwargs):
         try:
+            if API_METRICS:
+                metrics.record("api_calls", category="mojo_api", min_granularity=API_METRICS_GRANULARITY)
             return func(request, *args, **kwargs)
         except mojo.errors.MojoException as err:
+            if API_METRICS:
+                metrics.record("api_errors", category="mojo_api", min_granularity=API_METRICS_GRANULARITY)
             return JsonResponse({"error": err.reason, "code": err.code}, status=err.status)
         except ValueError as err:
-            logger.exception(f"Error: {str(err)}, Path: {request.path}, IP: {request.META.get('REMOTE_ADDR')}")
+            if API_METRICS:
+                metrics.record("api_errors", category="mojo_api", min_granularity=API_METRICS_GRANULARITY)
+            logger.exception(f"ValueErrror: {str(err)}, Path: {request.path}, IP: {request.META.get('REMOTE_ADDR')}")
             return JsonResponse({"error": str(err), "code": 555 }, status=500)
         except Exception as err:
+            if API_METRICS:
+                metrics.record("api_errors", category="mojo_api", min_granularity=API_METRICS_GRANULARITY)
             # logger.exception(f"Unhandled REST Exception: {request.path}")
             logger.exception(f"Error: {str(err)}, Path: {request.path}, IP: {request.META.get('REMOTE_ADDR')}")
             return JsonResponse({"error": str(err) }, status=500)
@@ -66,7 +79,7 @@ def _register_route(method="ALL"):
 
     :param method: The HTTP method (GET, POST, etc.).
     """
-    def decorator(pattern=None):
+    def decorator(pattern=None, docs=None):
         def wrapper(view_func):
             module = jm.get_root_module(view_func)
             if not module:
@@ -86,11 +99,11 @@ def _register_route(method="ALL"):
 
             if MOJO_APPEND_SLASH:
                 pattern_used = pattern if pattern_used.endswith("/") else f"{pattern_used}/"
-
             # Register view in URL mapping
             app_name = module.__name__.split(".")[-1]
             # print(f"{module.__name__}.urlpatterns")
-            key = f"{app_name}__{pattern_used}__{method}"
+            root_key = f"{app_name}__{pattern_used}"
+            key = f"{root_key}__{method}"
             # print(f"{app_name} -> {pattern_used} -> {key}")
             URLPATTERN_METHODS[key] = view_func
 
@@ -101,10 +114,14 @@ def _register_route(method="ALL"):
             module.urlpatterns.append(url_func(
                 pattern_used, dispatcher,
                 kwargs={
+                    "__mojo_rest_root_key__": root_key,
                     "__mojo_rest_key__": key
                 }))
             # Attach metadata
+            view_func.__app_module_name__ = module.__name__
+            view_func.__app_name__ = app_name
             view_func.__url__ = (method, pattern_used)
+            view_func.__docs__ = docs or {}
             return view_func
         return wrapper
     return decorator

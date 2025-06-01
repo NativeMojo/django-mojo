@@ -88,6 +88,9 @@ class Group(models.Model, MojoModel):
         self.metadata = self.jsonfield_as_objict("metadata")
         return self.metadata
 
+    def get_member_for_user(self, user):
+        return self.members.filter(user=user).last()
+
     @classmethod
     def on_rest_handle_list(cls, request):
         if cls.rest_check_permission(request, "VIEW_PERMS"):
