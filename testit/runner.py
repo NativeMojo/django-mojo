@@ -61,7 +61,10 @@ def setup_parser():
                         help="Specify host for API tests")
     parser.add_argument("--setup", action="store_true",
                         help="Run setup before executing tests")
-
+    parser.add_argument("--nomojo", action="store_true",
+                        help="Do not run Mojo app tests")
+    parser.add_argument("--onlymojo", action="store_true",
+                        help="Only run Mojo app tests")
     return parser.parse_args()
 
 
@@ -164,9 +167,15 @@ def run_module_tests(opts, module, test_name, module_name):
     print(f"{helpers.INDENT}---------\n{helpers.INDENT}run time: {duration:.2f}s")
 
 
-def run_tests_for_module(opts, module_name):
+def run_tests_for_module(opts, module_name, test_root, parent_test_root=None):
     """Discover and run tests for a given module."""
-    module_path = os.path.join(TEST_ROOT, module_name)
+    module_path = os.path.join(test_root, module_name)
+    if not os.path.exists(module_path):
+        if parent_test_root is None:
+            raise FileNotFoundError(f"Module '{module_name}' not found")
+        module_path = os.path.join(parent_test_root, module_name)
+        if not os.path.exists(module_path):
+            raise FileNotFoundError(f"Module '{module_name}' not found")
     test_files = [f for f in os.listdir(module_path)
                   if f.endswith(".py") and f not in ["__init__.py", "setup.py"]]
 
@@ -210,15 +219,25 @@ def main(opts):
     if opts.module and '.' in opts.module:
         opts.module, opts.test = opts.module.split('.', 1)
 
+    parent_test_root = os.path.join(os.path.dirname(os.path.dirname(__file__)), "tests")
+    parent_test_modules = None
+    if os.path.exists(parent_test_root):
+        sys.path.insert(0, parent_test_root)
+        parent_test_modules = sorted([d for d in os.listdir(parent_test_root) if os.path.isdir(os.path.join(parent_test_root, d))])
+
     if opts.module and opts.test:
         run_module_tests_by_name(opts, opts.module, opts.test)
     elif opts.module:
-        run_tests_for_module(opts, opts.module)
+        run_tests_for_module(opts, opts.module, TEST_ROOT, parent_test_root)
     else:
         test_root = os.path.join(paths.APPS_ROOT, "tests")
         test_modules = sorted([d for d in os.listdir(test_root) if os.path.isdir(os.path.join(test_root, d))])
-        for module_name in test_modules:
-            run_tests_for_module(opts, module_name)
+        if parent_test_modules and not opts.nomojo:
+            for module_name in parent_test_modules:
+                run_tests_for_module(opts, module_name, parent_test_root)
+        if not opts.onlymojo:
+            for module_name in test_modules:
+                run_tests_for_module(opts, module_name, test_root)
 
     # Summary Output
     print("\n" + "=" * 80)
@@ -240,4 +259,4 @@ def main(opts):
 
 if __name__ == "__main__":
     opts = setup_parser()
-    main()
+    main(opts)
