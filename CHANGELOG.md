@@ -1,5 +1,15 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.9 - June 04, 2025
+
+   UPDATE moved mojo tests into mojo project root, but still require a django project to run
+   FIXED crypto encrypt,decrypt, and hash with proper tests
+   ADDED incident system for report events and having them trigger incidents, including rules engine
+   ADDED MojoSecrets which allows storing of secret encrypted data into a model
+   ADDED helper scripts for talking to godaddy api and automating SES setup
+   ADDED new mail handling system (work in progress)
+
+
 ## v0.1.8 - June 01, 2025
 
   Updaing version info and tagging release

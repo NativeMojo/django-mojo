@@ -34,7 +34,6 @@ def dispatcher(request, *args, **kwargs):
     if "group" in request.DATA:
         request.group = modules.get_model_instance("account", "Group", int(request.DATA.group))
     method_key = f"{key}__{request.method}"
-    logger.info(request.path, key, kwargs.pop('__mojo_rest_key__', None), method_key, request.DATA)
     if method_key not in URLPATTERN_METHODS:
         method_key = f"{key}__ALL"
     if method_key in URLPATTERN_METHODS:
@@ -114,8 +113,7 @@ def _register_route(method="ALL"):
             module.urlpatterns.append(url_func(
                 pattern_used, dispatcher,
                 kwargs={
-                    "__mojo_rest_root_key__": root_key,
-                    "__mojo_rest_key__": key
+                    "__mojo_rest_root_key__": root_key
                 }))
             # Attach metadata
             view_func.__app_module_name__ = module.__name__

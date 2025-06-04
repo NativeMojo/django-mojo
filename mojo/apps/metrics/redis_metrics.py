@@ -5,7 +5,7 @@ import datetime
 from objict import objict, nobjict
 
 
-def record(slug, when=None, count=1, group=None, category=None, account="global",
+def record(slug, when=None, count=1, category=None, account="global",
                    min_granularity="hours", max_granularity="years", timezone=None):
     """
     Records metrics in Redis by incrementing counters for various time granularities.
@@ -14,7 +14,6 @@ def record(slug, when=None, count=1, group=None, category=None, account="global"
         slug (str): The base identifier for the metric.
         when (datetime, optional): The time at which the event occurred. Defaults to current time if not provided.
         count (int, optional): The count to increment the metric by. Defaults to 1.
-        group (optional): An unused parameter for future categorization.
         category (str, optional): The category to which the metric belongs. Useful for grouping similar metrics.
         account (str, optional): The account under which the metric is recorded. Defaults to "global".
         min_granularity (str, optional): The minimum time granularity (e.g., "hours"). Defaults to "hours".

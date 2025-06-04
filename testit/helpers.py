@@ -151,3 +151,48 @@ def django_unit_test(name=None):
             _run_unit(func, name, *args, **kwargs)
         return wrapper
     return decorator
+
+
+def get_mock_request(user=None, ip="127.0.0.1", path='/', method='GET', META=None):
+    """
+    Creates a mock Django request object with a user and request.ip information.
+
+    Args:
+        user (User, optional): A mock user object. Defaults to None.
+        ip (str, optional): The IP address for the request. Defaults to "127.0.0.1".
+        path (str, optional): The path for the request. Defaults to '/'.
+        method (str, optional): The HTTP method for the request. Defaults to 'GET'.
+        META (dict, optional): Additional metadata for the request.
+                               Merges with default if provided. Defaults to None.
+
+    Returns:
+        objict: A mock request object with request.ip, request.user, and additional attributes.
+    """
+    request = objict()
+    request.ip = ip
+    request.user = user if user else get_mock_user()
+    default_META = {
+        'SERVER_PROTOCOL': 'HTTP/1.1',
+        'QUERY_STRING': '',
+        'HTTP_USER_AGENT': 'Mozilla/5.0',
+        'HTTP_HOST': 'localhost',
+    }
+    request.META = {**default_META, **(META or {})}
+    request.method = method
+    request.path = path
+    return request
+
+def get_mock_user():
+    """
+    Creates a mock user object.
+
+    Returns:
+        objict: A mock user object with basic attributes.
+    """
+    user = objict()
+    user.id = 1
+    user.username = "mockuser"
+    user.email = "mockuser@example.com"
+    user.is_authenticated = True
+    user.has_permission = lambda perm: True
+    return user

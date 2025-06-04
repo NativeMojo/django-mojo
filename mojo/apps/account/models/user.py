@@ -1,6 +1,6 @@
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager
 from django.db import models
-from mojo.models import MojoModel
+from mojo.models import MojoModel, MojoSecrets
 from mojo.helpers.settings import settings
 from mojo import errors as merrors
 from mojo.helpers import dates
@@ -29,7 +29,7 @@ class CustomUserManager(BaseUserManager):
         """Required for Django authentication"""
         return self.get(**{self.model.USERNAME_FIELD: username})
 
-class User(AbstractBaseUser, MojoModel):
+class User(MojoSecrets, AbstractBaseUser, MojoModel):
     """
     Full custom user model.
     """
@@ -58,6 +58,9 @@ class User(AbstractBaseUser, MojoModel):
     is_staff = models.BooleanField(default=False)  # Required for admin access
     is_superuser = models.BooleanField(default=False)
     date_joined = models.DateTimeField(auto_now_add=True)
+
+    is_email_verified = models.BooleanField(default=False)
+    is_phone_verified = models.BooleanField(default=False)
 
     USERNAME_FIELD = 'username'
     objects = CustomUserManager()

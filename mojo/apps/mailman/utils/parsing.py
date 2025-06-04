@@ -50,6 +50,7 @@ def parse_attachment(message_part):
         'read_date': None,
     })
 
+    dispositions = []
     if content_disposition:
         dispositions = content_disposition.strip().split(";")
         attachment['dispositions'] = dispositions

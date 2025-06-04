@@ -41,12 +41,29 @@ def utcnow():
     return datetime.utcnow()
 
 
-def has_time_elsapsed(when, seconds=None, minutes=None, hours=None, days=None):
-    now = utcnow()
+def add(when=None, seconds=None, minutes=None, hours=None, days=None):
+    if when is None:
+        when = utcnow()
     elapsed_time = timedelta(
         seconds=seconds or 0,
         minutes=minutes or 0,
         hours=hours or 0,
         days=days or 0
     )
-    return now >= when + elapsed_time
+    return when + elapsed_time
+
+
+def subtract(when=None, seconds=None, minutes=None, hours=None, days=None):
+    if when is None:
+        when = utcnow()
+    elapsed_time = timedelta(
+        seconds=seconds or 0,
+        minutes=minutes or 0,
+        hours=hours or 0,
+        days=days or 0
+    )
+    return when - elapsed_time
+
+
+def has_time_elsapsed(when, seconds=None, minutes=None, hours=None, days=None):
+    return utcnow() >= add(when, seconds, minutes, hours, days)

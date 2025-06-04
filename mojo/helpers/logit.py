@@ -37,6 +37,8 @@ def pretty_print(msg):
     out = PrettyLogger.pretty_format(msg)
     print(out)
 
+pp = pretty_print
+
 
 def pretty_format(msg):
     return PrettyLogger.pretty_format(msg)

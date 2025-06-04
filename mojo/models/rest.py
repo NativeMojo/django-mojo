@@ -504,6 +504,15 @@ class MojoModel:
         except Exception as e:
             return JsonResponse({"error": str(e)}, status=400)
 
+    def to_dict(self, graph="default"):
+        serializer = GraphSerializer(self, graph=graph)
+        return serializer.serialize()
+
+    @classmethod
+    def queryset_to_dict(cls, qset, graph="default"):
+        serializer = GraphSerializer(qset, graph=graph)
+        return serializer.serialize()
+
     def atomic_save(self):
         """
         Save the object atomically to the database.
@@ -517,10 +526,13 @@ class MojoModel:
         if Event is None:
             Event.report(description, kind, **kwargs)
 
-    def model_logit(self, request, log, kind="model_log"):
-        return self.class_logit(request, log, kind, self.id)
+    def log(self, log, kind="model_log", level="info", **kwargs):
+        return self.class_logit(ACTIVE_REQUEST, log, kind, self.id, level, **kwargs)
+
+    def model_logit(self, request, log, kind="model_log", level="info", **kwargs):
+        return self.class_logit(request, log, kind, self.id, level, **kwargs)
 
     @classmethod
-    def class_logit(cls, request, log, kind="cls_log", model_id=0):
+    def class_logit(cls, request, log, kind="cls_log", model_id=0, level="info", **kwargs):
         from mojo.apps.logit.models import Log
-        return Log.logit(request, log, kind, cls.__name__, model_id)
+        return Log.logit(request, log, kind, cls.__name__, model_id, level, **kwargs)
