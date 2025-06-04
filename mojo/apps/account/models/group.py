@@ -1,11 +1,10 @@
 from django.db import models
-from mojo.models import MojoModel
+from mojo.models import MojoModel, MojoSecrets
 from mojo.helpers import dates
-from datetime import datetime, timedelta
-import pytz
 
 
-class Group(models.Model, MojoModel):
+
+class Group(MojoSecrets, MojoModel):
     """
     Group model.
     """
