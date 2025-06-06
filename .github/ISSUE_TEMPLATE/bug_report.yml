@@ -1,0 +1,19 @@
+name: 🐛 Bug Report
+description: File a bug report
+title: "[BUG] "
+labels: [bug]
+body:
+    - type: textarea
+      attributes:
+          label: Describe the bug
+          description: What happened? What did you expect?
+      validations:
+          required: true
+    - type: textarea
+      attributes:
+          label: Steps to reproduce
+          description: List clear steps to reproduce the issue.
+    - type: input
+      attributes:
+          label: Django version
+          placeholder: "e.g. 4.2.3"
