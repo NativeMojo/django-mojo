@@ -11,7 +11,7 @@ except Exception:
     inliner = None
 
 
-class MailTemplate(models.Model, MojoModel):
+class NotifyTemplate(models.Model, MojoModel):
     created = models.DateTimeField(auto_now_add=True, editable=False)
     modified = models.DateTimeField(auto_now=True)
     group = models.ForeignKey("account.Group", blank=True, null=True, default=None,

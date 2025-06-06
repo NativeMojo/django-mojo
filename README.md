@@ -41,7 +41,7 @@ Django-MOJO is a collection of Django-based applications focused on authenticati
 ## Installation
 
 ```bash
-pip install django-mojo
+pip install django-nativemojo
 ```
 
 ## Detailed Documentation

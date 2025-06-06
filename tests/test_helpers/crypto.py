@@ -61,3 +61,13 @@ def test_crypto_hashing_dicts(opts):
     rval2 = dict(name="John", age=30, email="john@example.com", gender="male")
     hval2 = crypto.hash(rval2)
     assert hval1 != hval2, f"Expected {hval1} != {hval2}"
+
+
+@th.django_unit_test()
+def test_crypto_signing(opts):
+    from mojo.helpers import crypto
+
+    rval = dict(name="John", age=30, email="john@example.com")
+    sig = crypto.sign(rval)
+    assert crypto.verify(rval, sig), f"Expected signature to verify"
+    assert not crypto.verify(dict(name="John", age=30), sig), f"Expected signature to not verify"
