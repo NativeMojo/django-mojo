@@ -18,8 +18,8 @@ class MojoSecrets(models.Model):
     def set_secret(self, key, value):
         self.secrets[key] = value
 
-    def get_secret(self, key):
-        return self.secrets.get(key)
+    def get_secret(self, key, default=None):
+        return self.secrets.get(key, default)
 
     def clear_secrets(self):
         self.mojo_secrets = None

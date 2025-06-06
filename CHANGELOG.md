@@ -1,5 +1,15 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.10 - June 06, 2025
+
+   CHANGED license from MIT to Apache 2.0
+   ADDED to new fileman app with file storage
+   ADDED new notify framework that support mail, sms, etc
+   ADDED crypto support for hmac signing and verifying
+   ADDED more tests
+   NOTE framework is not ready for primetime yet, but soon
+
+
 ## v0.1.9 - June 04, 2025
 
    UPDATE moved mojo tests into mojo project root, but still require a django project to run
