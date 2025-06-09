@@ -61,11 +61,11 @@ class GroupMember(models.Model, MojoModel):
             return req_member.has_permission(["manage_group", "manage_members"])
         return False
 
-    def set_permissions(self, value, request):
+    def set_permissions(self, value):
             if not isinstance(value, dict):
                 return
             for perm, perm_value in value.items():
-                if not self.can_change_permission(perm, perm_value, request):
+                if not self.can_change_permission(perm, perm_value, self.active_request):
                     raise merrors.PermissionDeniedException()
                 if bool(perm_value):
                     self.add_permission(perm)

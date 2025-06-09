@@ -1,4 +1,4 @@
-import ujson
+from objict import objict
 from django.http import HttpResponse
 
 
@@ -10,5 +10,9 @@ class JsonResponse(HttpResponse):
                 'safe parameter to False.'
             )
         kwargs.setdefault('content_type', 'application/json')
-        data = ujson.dumps(data)
+        if not isinstance(data, objict):
+            data = objict.from_dict(data)
+        if "code" not in data:
+            data.code = status
+        data = data.to_json(as_string=True)
         super().__init__(content=data, status=status, **kwargs)

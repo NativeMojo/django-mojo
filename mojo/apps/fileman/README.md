@@ -103,8 +103,8 @@ const data = await response.json();
     "files": [
         {
             "id": 123,
-            "filename": "document_20231201_abc12345.pdf",
-            "original_filename": "document.pdf",
+            "storage_filename": "document_20231201_abc12345.pdf",
+            "filename": "document.pdf",
             "upload_token": "a1b2c3d4e5f6...",
             "upload_url": "https://s3.amazonaws.com/my-bucket/...",
             "method": "POST",
@@ -297,12 +297,12 @@ class FileUploader {
 
     async uploadFile(file, uploadData) {
         const formData = new FormData();
-        
+
         // Add fields for S3 or other backends
         Object.entries(uploadData.fields || {}).forEach(([key, value]) => {
             formData.append(key, value);
         });
-        
+
         formData.append('file', file);
 
         const response = await fetch(uploadData.upload_url, {
@@ -411,7 +411,7 @@ file_manager = FileManager.objects.create(
     allowed_extensions=["jpg", "jpeg", "png", "gif", "webp"],
     allowed_mime_types=[
         "image/jpeg",
-        "image/png", 
+        "image/png",
         "image/gif",
         "image/webp"
     ],
@@ -429,13 +429,13 @@ def validate_upload(request, file_data):
     # Custom business logic
     if file_data['filename'].startswith('temp_'):
         raise ValidationError('Temporary files not allowed')
-    
+
     # Check file size against user's quota
     user_files_size = File.objects.filter(
         uploaded_by=request.user,
         upload_status=File.COMPLETED
     ).aggregate(total=Sum('file_size'))['total'] or 0
-    
+
     if user_files_size + file_data['size'] > USER_QUOTA:
         raise ValidationError('Upload would exceed user quota')
 ```

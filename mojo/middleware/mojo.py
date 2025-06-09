@@ -1,6 +1,7 @@
 from mojo.helpers import request as rhelper
 import time
 from objict import objict
+from mojo.helpers.settings import settings
 
 ANONYMOUS_USER = objict(is_authenticated=False)
 
@@ -17,5 +18,9 @@ class MojoMiddleware:
         request.ip = rhelper.get_remote_ip(request)
         request.user_agent = rhelper.get_user_agent(request)
         request.duid = rhelper.get_device_id(request)
+        if settings.LOGIT_REQUEST_BODY:
+            request._raw_body = str(request.body)
+        else:
+            request._raw_body = None
         request.DATA = rhelper.parse_request_data(request)
         return self.get_response(request)

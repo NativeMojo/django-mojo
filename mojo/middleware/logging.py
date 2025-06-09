@@ -44,7 +44,7 @@ class LoggerMiddleware:
         if LOGIT_DB_ALL:
             request.request_log = Log.logit(request, request.DATA.to_json(as_string=True), "request")
         if LOGIT_FILE_ALL:
-            LOGGER.info(f"REQUEST - {request.method} - {request.ip} - {request.path}", request.body)
+            LOGGER.info(f"REQUEST - {request.method} - {request.ip} - {request.path}", request._raw_body)
 
     def log_response(self, request, response):
         if not self.can_log(request):
