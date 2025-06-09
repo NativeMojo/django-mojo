@@ -1,12 +1,7 @@
 from mojo import decorators as md
 from mojo import JsonResponse
+import mojo.errors
 from mojo.apps.fileman.models import File, FileManager
-from mojo.apps.fileman.utils.upload import (
-    initiate_upload,
-    finalize_upload,
-    direct_upload,
-    get_download_url
-)
 
 
 @md.POST('upload/initiate')
@@ -20,40 +15,35 @@ def on_upload_initiate(request):
             {
                 "filename": "document.pdf",
                 "content_type": "application/pdf",
-                "size": 1024000
+                "file_size": 1024000
             }
         ],
-        "file_manager_id": 123,  // optional
-        "group_id": 456,  // optional
+        "file_manager": 123,  // optional
+        "group": 456,  // optional
+        "user": 789,  // optional
         "metadata": {  // optional global metadata
             "source": "web_upload",
             "category": "documents"
         }
     }
     """
-    response_data = initiate_upload(request, request.DATA)
-    status_code = response_data.pop('status_code', 200)
-    return JsonResponse(response_data, status=status_code)
-
-
-@md.POST('upload/finalize')
-def on_upload_finalize(request):
-    """
-    Finalize a file upload
-
-    Request body format:
-    {
-        "upload_token": "abc123...",
-        "file_size": 1024000,  // optional
-        "checksum": "md5:abcdef...",  // optional
-        "metadata": {  // optional additional metadata
-            "processing_complete": true
-        }
-    }
-    """
-    response_data = finalize_upload(request, request.DATA)
-    status_code = response_data.pop('status_code', 200)
-    return JsonResponse(response_data, status=status_code)
+    # first we need to get the correct file manager
+    file_manager = FileManager.get_from_request(request)
+    if file_manager is None:
+        raise mojo.errors.ValueException("No file manager found")
+    # new lets create a new file
+    file = File(
+        filename=request.DATA['filename'],
+        content_type=request.DATA['content_type'],
+        file_size=request.DATA['file_size'],
+        file_manager=file_manager,
+        group=file_manager.group,
+        user=request.user)
+    file.on_rest_pre_save({}, True)
+    file.mark_as_uploading()
+    file.save()
+    file.request_upload_url()
+    return file.on_rest_get(request, "upload")
 
 
 @md.POST('upload/<str:upload_token>')

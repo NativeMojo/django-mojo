@@ -1,5 +1,13 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.13 - June 09, 2025
+
+   ADDED fileman app, a complete filemanager for django with rendition support and multiple backends and renderers
+   UPDATED simple serializer greatly improved and new advanced serializer with support for other output formats
+   UPDATED incidents subsystem for handling system events, rules and incidents
+   
+
+
 ## v0.1.10 - June 06, 2025
 
    CHANGED license from MIT to Apache 2.0

@@ -11,12 +11,18 @@ class MojoSecrets(models.Model):
 
     mojo_secrets = models.TextField(blank=True, null=True, default=None)
     _exposed_secrets = None
+    _secrets_changed = False
 
     def set_secrets(self, value):
+        self.debug("Setting secrets", repr(value))
+        if isinstance(value, str):
+            value = objict.from_json(value)
         self._exposed_secrets = merge_dicts(self.secrets, value)
+        self._secrets_changed = True
 
     def set_secret(self, key, value):
         self.secrets[key] = value
+        self._secrets_changed = True
 
     def get_secret(self, key, default=None):
         return self.secrets.get(key, default)
@@ -24,6 +30,7 @@ class MojoSecrets(models.Model):
     def clear_secrets(self):
         self.mojo_secrets = None
         self._exposed_secrets = objict()
+        self._secrets_changed = True
 
     @property
     def secrets(self):
@@ -44,10 +51,12 @@ class MojoSecrets(models.Model):
         return salt
 
     def save_secrets(self):
-        if self._exposed_secrets:
-            self.mojo_secrets = crypto.encrypt( self._exposed_secrets, self._get_secrets_password())
-        else:
-            self.mojo_secrets = None
+        if self._secrets_changed:
+            if self._exposed_secrets:
+                self.mojo_secrets = crypto.encrypt( self._exposed_secrets, self._get_secrets_password())
+            else:
+                self.mojo_secrets = None
+            self._secrets_changed = False
 
     def save(self, *args, **kwargs):
         if self.pk is not None:

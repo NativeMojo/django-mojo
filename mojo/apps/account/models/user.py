@@ -62,6 +62,9 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
     is_email_verified = models.BooleanField(default=False)
     is_phone_verified = models.BooleanField(default=False)
 
+    avatar = models.ForeignKey('fileman.File', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='+')
+
     USERNAME_FIELD = 'username'
     objects = CustomUserManager()
 
@@ -80,12 +83,13 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
                     'id',
                     'display_name',
                     'username',
-                    'email',
-                    'phone_number',
                     'last_login',
                     'last_activity',
                     'is_active'
-                ]
+                ],
+                "graphs": {
+                    "avatar": "basic"
+                }
             },
             "default": {
                 "fields": [
@@ -100,6 +104,9 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
                     'metadata',
                     'is_active'
                 ],
+                "graphs": {
+                    "avatar": "basic"
+                }
             },
         }
 
@@ -125,14 +132,14 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
             self.atomic_save()
         return self.auth_key
 
-    def set_permissions(self, value, request):
+    def set_permissions(self, value):
         if not isinstance(value, dict):
             return
         for key in value:
             if key in USER_PERMS_PROTECTION:
-                if not request.user.has_permission(USER_PERMS_PROTECTION[key]):
+                if not self.active_request.user.has_permission(USER_PERMS_PROTECTION[key]):
                     raise merrors.PermissionDeniedException()
-            elif not request.user.has_permission("manage_users"):
+            elif not self.active_request.user.has_permission("manage_users"):
                 raise merrors.PermissionDeniedException()
             if bool(value[key]):
                 self.add_permission(key)
@@ -145,7 +152,7 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
 
     def has_permission(self, perm_key):
         """Check if user has a specific permission in JSON field."""
-        if isinstance(perm_key, list):
+        if isinstance(perm_key, (list, set)):
             for pk in perm_key:
                 if self.has_permission(pk):
                     return True
