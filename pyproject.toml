@@ -1,6 +1,6 @@
 [project]
 name = "django-nativemojo"
-version = "0.1.10"
+version = "0.1.13"
 description = "A REST framework for DJANGO with some extra apps that make it easy to provide a secure robust graph like RESIT API."
 authors = [{ name = "MOJO Dev Team", email = "gotmojo@nativemojo.com" }]
 readme = "README.md"

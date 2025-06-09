@@ -65,11 +65,9 @@ class WebsocketConnection():
         self.on_authenticated()
 
     def on_auth_jwt(self, msg):
-        token = JWToken()
-        if token.payload is None:
-            raise Exception("invalid auth token")
+        # logger.info(f"{self.ip} authenticating with JWT")
         User = apps.get_model("account", "User")
-        user, error = User.validate_jwt(token)
+        user, error = User.validate_jwt(msg.token)
         if error is not None:
             raise Exception(error)
         self.credentials = objict(kind="user", instance=user, pk=user.pk, uuid=user.username)

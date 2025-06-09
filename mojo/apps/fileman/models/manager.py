@@ -1,5 +1,7 @@
+import os
 from django.db import models
 from mojo.models import MojoModel, MojoSecrets
+from urllib.parse import urlparse
 
 
 class FileManager(MojoSecrets, MojoModel):
@@ -11,7 +13,7 @@ class FileManager(MojoSecrets, MojoModel):
         CAN_SAVE = CAN_CREATE = True
         CAN_DELETE = True
         DEFAULT_SORT = "-id"
-        VIEW_PERMS = ["view_fileman"]
+        VIEW_PERMS = ["view_fileman", "manage_files"]
         SEARCH_FIELDS = ["name", "backend_type", "description"]
         SEARCH_TERMS = [
             "name", "backend_type", "description",
@@ -19,12 +21,19 @@ class FileManager(MojoSecrets, MojoModel):
 
         GRAPHS = {
             "default": {
+                "fields": [
+                    "created", "id", "name", "backend_type", "backend_url",
+                    "settings", "is_active", "is_default"],
                 "graphs": {
+                    "user": "basic",
                     "group": "basic"
                 }
             },
             "list": {
+                "fields": ["created", "id", "name", "backend_type",  "backend_url",
+                    "settings", "is_active", "is_default"],
                 "graphs": {
+                    "user": "basic",
                     "group": "basic"
                 }
             }
@@ -58,6 +67,16 @@ class FileManager(MojoSecrets, MojoModel):
         help_text="Group that owns this file manager configuration"
     )
 
+    user = models.ForeignKey(
+        "account.User",
+        related_name="file_managers",
+        null=True,
+        blank=True,
+        default=None,
+        on_delete=models.CASCADE,
+        help_text="User that owns this file manager configuration"
+    )
+
     name = models.CharField(
         max_length=255,
         db_index=True,
@@ -88,7 +107,7 @@ class FileManager(MojoSecrets, MojoModel):
     )
 
     max_file_size = models.BigIntegerField(
-        default=100 * 1024 * 1024,  # 100MB default
+        default=1000 * 1024 * 1024,  # 100MB default
         help_text="Maximum file size in bytes (0 for unlimited)"
     )
 
@@ -114,6 +133,19 @@ class FileManager(MojoSecrets, MojoModel):
         help_text="Whether this is the default file manager for the group or user"
     )
 
+    is_public = models.BooleanField(
+        default=True,
+        help_text="Whether this allows public access to the files"
+    )
+
+    parent = models.ForeignKey(
+        'self',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        help_text="Used if this file manager is a child of another file manager, and inherits settings from its parent"
+    )
+
     class Meta:
         unique_together = [
             ['group', 'name'],
@@ -131,15 +163,73 @@ class FileManager(MojoSecrets, MojoModel):
 
     def get_setting(self, key, default=None):
         """Get a specific setting value"""
-        return self.get_secret(key, default)
+        value = self.get_secret(key, default)
+        if value is None:
+            value = self.primary_parent.get_secret(key, default)
+        return value
 
     def set_setting(self, key, value):
         """Set a specific setting value"""
         self.set_secret(key, value)
 
+    def set_settings(self, value):
+        """Set a specific setting value"""
+        self.set_secrets(value)
+
+    def set_backend_url(self, url, *args):
+        """Set the backend URL"""
+        self.backend_url = os.path.join(url, *args)
+        self.backend_type = self.backend_url.split(':')[0]
+
+    def _update_default(self):
+        if self.is_default:
+            if self.pk is None:
+                FileManager.objects.filter(
+                    group=self.group,
+                    user=self.user,
+                    is_default=True
+                ).update(is_default=False)
+            else:
+                FileManager.objects.filter(
+                    group=self.group,
+                    user=self.user,
+                    is_default=True
+                ).exclude(pk=self.pk).update(is_default=False)
+
+    _backend = None
+
+    @property
+    def backend(self):
+        """Get the backend instance"""
+        from mojo.apps.fileman import backends
+        if not self._backend:
+            self._backend = backends.get_backend(self)
+        return self._backend
+
     @property
     def settings(self):
         return self.secrets
+
+    @property
+    def primary_settings(self):
+        return self.primary_parent.secrets
+
+    @property
+    def primary_parent(self):
+        parent = self
+        while parent.parent:
+            parent = parent.parent
+        return parent
+
+    @property
+    def root_path(self):
+        purl = urlparse(self.backend_url)
+        return purl.path.lstrip('/')
+
+    @property
+    def root_location(self):
+        purl = urlparse(self.backend_url)
+        return purl.netloc
 
     @property
     def is_file_system(self):
@@ -185,43 +275,83 @@ class FileManager(MojoSecrets, MojoModel):
             return True
         return mime_type.lower() in [mt.lower() for mt in self.allowed_mime_types]
 
-    def save(self, *args, **kwargs):
-        """Custom save to enforce only one default per group"""
-        if self.is_default:
-            # Set all other file managers in the same group to not default
-            FileManager.objects.filter(
-                group=self.group,
-                is_default=True
-            ).exclude(pk=self.pk).update(is_default=False)
+    def on_rest_created(self):
+        self._update_default()
 
-        super().save(*args, **kwargs)
+    def on_rest_pre_save(self, changed_fields, created):
+        self._update_default()
+        if not self.name:
+            self.name = self.generate_name()
+        if created or "is_default" in changed_fields:
+            self._update_default()
+
+    def on_rest_saved(self, changed_fields, created):
+        self._update_default()
+        if not self.name:
+            self.name = self.generate_name()
+        if "is_public" in changed_fields or created:
+            if self.is_public:
+                self.backend.make_path_public()
+            else:
+                self.backend.make_path_private()
+
+    def generate_name(self):
+        if self.user and self.group:
+            return f"{self.user.username}@{self.group.name}'s {self.backend_type} FileManager"
+        elif self.user:
+            return f"{self.user.username}'s {self.backend_type} FileManager"
+        elif self.group:
+            return f"{self.group.name}'s {self.backend_type} FileManager"
+        return f"{self.backend_type} FileManager"
 
     @classmethod
     def get_from_request(cls, request):
         """Get the file manager from the request"""
-        if request.DATA.fileman:
-            return cls.objects.get(pk=request.DATA.fileman)
-        if request.DATA.use_groups_fileman:
+        if request.DATA.get(["fileman", "filemanager"]):
+            return cls.objects.get(pk=request.DATA.get(["fileman", "filemanager"]))
+        if request.DATA.use_groups_fileman and request.group:
             return cls.get_for_user_group(group=request.group)
         return cls.get_for_user_group(user=request.user, group=request.group)
+
+    @classmethod
+    def get_for_user(cls, user, group=None):
+        file_manager = cls.objects.filter(
+            user=user, group=group, is_default=True, is_active=True
+        ).first()
+        if file_manager is None:
+            if group:
+                sys_manager = cls.get_for_group(group=group)
+            else:
+                sys_manager = cls.objects.filter(user=None, group=None, is_default=True, is_active=True).first()
+            if sys_manager is not None:
+                file_manager = cls(user=user, is_default=True, group=group, parent=sys_manager)
+                file_manager.set_backend_url(sys_manager.backend_url, user.uuid.hex)
+                file_manager.save()
+        return file_manager
+
+    @classmethod
+    def get_for_group(cls, group=None):
+        file_manager = cls.objects.filter(
+            user=None, group=group, is_default=True, is_active=True
+        ).first()
+        if file_manager is None:
+            sys_manager = cls.objects.filter(
+                user=None, group=None, is_default=True, is_active=True
+            ).first()
+            if sys_manager is not None:
+                file_manager = cls(group=group, is_default=True, user=None, parent=sys_manager)
+                file_manager.set_backend_url(sys_manager.backend_url, group.uuid.hex)
+                file_manager.save()
+        return file_manager
 
     @classmethod
     def get_for_user_group(cls, user=None, group=None):
         """Get the file manager from the user and/or group"""
         file_manager = None
-        if not file_manager and user:
-            file_manager = cls.objects.filter(
-                user=user, group=group, is_default=True
-            ).first()
-
-        if not file_manager and group:
-            file_manager = cls.objects.filter(
-                group=group, is_default=True
-            ).first()
-
-        if not file_manager:
-            file_manager = cls.objects.filter(
-                group=None, user=None, is_default=True
-            ).first()
-
+        if user and group is None:
+            file_manager = cls.get_for_user(user=user)
+        if not file_manager and group and user is None:
+            file_manager = cls.get_for_user_group(group=group)
+        if not file_manager and group and user:
+            file_manager = cls.get_for_user(user=user, group=group)
         return file_manager

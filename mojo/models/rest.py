@@ -1,6 +1,6 @@
 # from django.http import JsonResponse
 from mojo.helpers.response import JsonResponse
-from mojo.serializers.models import GraphSerializer
+from mojo.serializers.simple import GraphSerializer
 from mojo.helpers import modules
 from mojo.helpers.settings import settings
 from django.core.exceptions import ObjectDoesNotExist
@@ -223,7 +223,9 @@ class MojoModel:
         """
         if cls.rest_check_permission(request, ["SAVE_PERMS", "VIEW_PERMS"]):
             instance = cls()
-            return instance.on_rest_save_and_respond(request)
+            instance.on_rest_save(request, request.DATA)
+            instance.on_rest_created()
+            return instance.on_rest_get(request)
         return cls.rest_error_response(request, 403, error=f"CREATE permission denied: {cls.__name__}")
 
     @classmethod
@@ -397,8 +399,7 @@ class MojoModel:
             }
         return JsonResponse(response_payload)
 
-    @classmethod
-    def on_rest_create(cls, request):
+    def on_rest_created(self):
         """
         Handle the creation of an object.
 
@@ -406,12 +407,38 @@ class MojoModel:
             request: Django HTTP request object.
 
         Returns:
-            JsonResponse representing the newly created object.
+            None
         """
-        instance = cls()
-        return instance.on_rest_save_and_respond(request)
+        # Perform any additional actions after object creation
+        pass
 
-    def on_rest_get(self, request):
+    def on_rest_pre_save(self, changed_fields, created):
+        """
+        Handle the pre-save of an object.
+
+        Args:
+            created: Boolean indicating whether the object is being created.
+            changed_fields: Dictionary of fields that have changed.
+        Returns:
+            None
+        """
+        # Perform any additional actions before object save
+        pass
+
+    def on_rest_saved(self, changed_fields, created):
+        """
+        Handle the saving of an object.
+
+        Args:
+            created: Boolean indicating whether the object is being created.
+            changed_fields: Dictionary of fields that have changed.
+        Returns:
+            None
+        """
+        # Perform any additional actions after object creation
+        pass
+
+    def on_rest_get(self, request, graph="default"):
         """
         Handle the retrieval of a single object.
 
@@ -421,9 +448,18 @@ class MojoModel:
         Returns:
             JsonResponse representing the object.
         """
-        graph = request.GET.get("graph", "default")
+        graph = request.GET.get("graph", graph)
         serializer = GraphSerializer(self, graph=graph)
         return serializer.to_response(request)
+
+    def _set_field_change(self, key, old_value=None, new_value=None):
+        if not hasattr(self, "__changed_fields__"):
+            self.__changed_fields__ = objict.objict()
+        if old_value != new_value:
+            self.__changed_fields__[key] = old_value
+
+    def has_field_changed(self, key):
+        return key in self.__changed_fields__
 
     def on_rest_save(self, request, data_dict):
         """
@@ -431,24 +467,70 @@ class MojoModel:
 
         Args:
             request: Django HTTP request object.
+            data_dict: Dictionary containing the data to save.
 
         Returns:
             None
         """
-        for field in self._meta.get_fields():
-            field_name = field.name
-            if field_name in data_dict:
-                field_value = data_dict[field_name]
-                set_field_method = getattr(self, f'set_{field_name}', None)
-                if callable(set_field_method):
-                    set_field_method(field_value, request)
-                elif field.is_relation and hasattr(field, 'related_model'):
-                    self.on_rest_save_related_field(field, field_value, request)
-                elif field.get_internal_type() == "JSONField":
-                    self.on_rest_update_jsonfield(field_name, field_value)
-                else:
-                    setattr(self, field_name, field_value)
+        self.__changed_fields__ = objict.objict()
+        # Get fields that should not be saved
+        no_save_fields = self.get_rest_meta_prop("NO_SAVE_FIELDS", ["id", "pk", "created", "uuid"])
+
+        # Iterate through data_dict keys instead of model fields
+        for key, value in data_dict.items():
+            # Skip fields that shouldn't be saved
+            if key in no_save_fields:
+                continue
+
+            # First check for custom setter method
+            set_field_method = getattr(self, f'set_{key}', None)
+            if callable(set_field_method):
+                old_value = getattr(self, key, None)
+                set_field_method(value)
+                new_value = getattr(self, key, None)
+                self._set_field_change(key, old_value, new_value)
+                continue
+
+            # Check if this is a model field
+            field = self.get_model_field(key)
+            if field is None:
+                continue
+            if field.get_internal_type() == "ForeignKey":
+                self.on_rest_save_related_field(field, value, request)
+            elif field.get_internal_type() == "JSONField":
+                self.on_rest_update_jsonfield(key, value)
+            else:
+                self._set_field_change(key, getattr(self, key), value)
+                setattr(self, key, value)
+
+        created = self.pk is None
+        if created:
+            if request.user.is_authenticated and self.get_model_field("user"):
+                setattr(self, "user", request.user)
+            if request.group and self.get_model_field("group"):
+                setattr(self, "group", request.group)
+        self.on_rest_pre_save(self.__changed_fields__, created)
+        if "files" in data_dict:
+            self.on_rest_save_files(data_dict["files"])
         self.atomic_save()
+        self.on_rest_saved(self.__changed_fields__, created)
+
+    def on_rest_save_files(self, files):
+        for name, file in files.items():
+            self.on_rest_save_file(name, file)
+
+    def on_rest_save_file(self, name, file):
+        # Implement file saving logic here
+        self.debug("Finding file for field: %s", name)
+        field = self.get_model_field(name)
+        if field is None:
+            return
+        self.debug("Saving file for field: %s", name)
+        if field.related_model and hasattr(field.related_model, "create_from_file"):
+            self.debug("Found file for field: %s", name)
+            related_model = field.related_model
+            instance = related_model.create_from_file(file, name)
+            setattr(self, name, instance)
 
     def on_rest_save_and_respond(self, request):
         self.on_rest_save(request, request.DATA)
@@ -466,11 +548,12 @@ class MojoModel:
                 if field.related_model.rest_check_permission(request, ["SAVE_PERMS", "VIEW_PERMS"], related_instance):
                     related_instance.on_rest_save(request, field_value)
             return
-        try:
+        if hasattr(field.related_model, "on_rest_related_save"):
+            related_instance = getattr(self, field.name)
+            field.related_model.on_rest_related_save(self, field.name, field_value, related_instance)
+        elif isinstance(field_value, int):
             related_instance = field.related_model.objects.get(pk=field_value)
             setattr(self, field.name, related_instance)
-        except field.related_model.DoesNotExist:
-            pass  # Skip invalid related instances
 
     def on_rest_update_jsonfield(self, field_name, field_value):
         """helper to update jsonfield by merge in changes"""
@@ -487,6 +570,18 @@ class MojoModel:
             setattr(self, field_name, existing_value)
         return existing_value
 
+    def on_rest_pre_delete(self):
+        """
+        Handle the pre-deletion of an object.
+
+        Args:
+            request: Django HTTP request object.
+
+        Returns:
+            JsonResponse representing the result of the pre-delete operation.
+        """
+        pass
+
     def on_rest_delete(self, request):
         """
         Handle the deletion of an object.
@@ -498,9 +593,10 @@ class MojoModel:
             JsonResponse representing the result of the delete operation.
         """
         try:
+            self.on_rest_pre_delete()
             with transaction.atomic():
                 self.delete()
-            return JsonResponse({"status": "deleted"}, status=204)
+            return JsonResponse({"status": "deleted"}, status=200)
         except Exception as e:
             return JsonResponse({"error": str(e)}, status=400)
 
@@ -533,6 +629,20 @@ class MojoModel:
         return self.class_logit(request, log, kind, self.id, level, **kwargs)
 
     @classmethod
+    def debug(cls, log, *args):
+        return logger.info(log, *args)
+
+    @classmethod
     def class_logit(cls, request, log, kind="cls_log", model_id=0, level="info", **kwargs):
         from mojo.apps.logit.models import Log
         return Log.logit(request, log, kind, cls.__name__, model_id, level, **kwargs)
+
+    @classmethod
+    def get_model_field(cls, field_name):
+        """
+        Get a model field by name.
+        """
+        try:
+            return cls._meta.get_field(field_name)
+        except Exception:
+            return None

@@ -1,9 +1,16 @@
 from django.db import models
 from mojo.models import MojoModel
+from objict import objict
+import io
 import uuid
 import hashlib
+import base64
+import magic
 import mimetypes
 from datetime import datetime
+import os
+from mojo.apps.fileman import utils
+from mojo.apps.fileman.models import FileManager
 
 
 class File(models.Model, MojoModel):
@@ -15,25 +22,38 @@ class File(models.Model, MojoModel):
         CAN_SAVE = CAN_CREATE = True
         CAN_DELETE = True
         DEFAULT_SORT = "-created"
-        VIEW_PERMS = ["view_fileman"]
-        SEARCH_FIELDS = ["filename", "original_filename", "content_type"]
+        VIEW_PERMS = ["view_fileman", "manage_files"]
+        SEARCH_FIELDS = ["filename", "content_type"]
         SEARCH_TERMS = [
-            "filename", "original_filename", "content_type",
+            "filename",  "content_type",
             ("group", "group__name"),
             ("file_manager", "file_manager__name")]
 
         GRAPHS = {
-            "default": {
+            "upload": {
+                "fields": ["id", "filename", "content_type", "file_size", "upload_url"],
+            },
+            "detailed": {
+                "extra": ["url", "renditions"],
                 "graphs": {
                     "group": "basic",
                     "file_manager": "basic",
-                    "uploaded_by": "basic"
+                    "user": "basic"
                 }
             },
+            "basic": {
+                "fields": ["id", "filename", "content_type", "category"],
+                "extra": ["url", "renditions"],
+            },
+            "default": {
+                "extra": ["url", "renditions"],
+            },
             "list": {
+                "extra": ["url", "renditions"],
                 "graphs": {
                     "group": "basic",
-                    "file_manager": "basic"
+                    "file_manager": "basic",
+                    "user": "basic"
                 }
             }
         }
@@ -66,9 +86,9 @@ class File(models.Model, MojoModel):
         help_text="Group that owns this file"
     )
 
-    uploaded_by = models.ForeignKey(
+    user = models.ForeignKey(
         "account.User",
-        related_name="uploaded_files",
+        related_name="files",
         null=True,
         blank=True,
         default=None,
@@ -86,16 +106,26 @@ class File(models.Model, MojoModel):
     filename = models.CharField(
         max_length=255,
         db_index=True,
-        help_text="Final filename used for storage"
+        help_text="User-provided filename"
     )
 
-    original_filename = models.CharField(
+    storage_filename = models.CharField(
         max_length=255,
-        help_text="Original filename as uploaded by user"
+        help_text="Storage filename",
+        default=None,
+        blank=True,
+        null=True,
     )
 
-    file_path = models.TextField(
+    storage_file_path = models.TextField(
         help_text="Full path to file in storage backend"
+    )
+
+    download_url = models.TextField(
+        blank=True,
+        null=True,
+        default=None,
+        help_text="Persistent URL for downloading the file, (if allowed)"
     )
 
     file_size = models.BigIntegerField(
@@ -110,6 +140,15 @@ class File(models.Model, MojoModel):
         help_text="MIME type of the file"
     )
 
+    category = models.CharField(
+        max_length=255,
+        db_index=True,
+        default=None,
+        blank=True,
+        null=True,
+        help_text="A category for the file, like 'image', 'document', 'video', etc."
+    )
+
     checksum = models.CharField(
         max_length=128,
         blank=True,
@@ -119,7 +158,6 @@ class File(models.Model, MojoModel):
 
     upload_token = models.CharField(
         max_length=64,
-        unique=True,
         db_index=True,
         help_text="Unique token for tracking direct uploads"
     )
@@ -130,18 +168,6 @@ class File(models.Model, MojoModel):
         default=PENDING,
         db_index=True,
         help_text="Current status of the file upload"
-    )
-
-    upload_url = models.TextField(
-        blank=True,
-        default="",
-        help_text="Pre-signed URL for direct upload (temporary)"
-    )
-
-    upload_expires_at = models.DateTimeField(
-        null=True,
-        blank=True,
-        help_text="When the upload URL expires"
     )
 
     metadata = models.JSONField(
@@ -160,43 +186,64 @@ class File(models.Model, MojoModel):
         help_text="Whether this file can be accessed without authentication"
     )
 
+    upload_url = None
+
     class Meta:
         indexes = [
             models.Index(fields=['upload_status', 'created']),
             models.Index(fields=['file_manager', 'upload_status']),
             models.Index(fields=['group', 'is_active']),
             models.Index(fields=['content_type', 'is_active']),
-            models.Index(fields=['upload_expires_at']),
         ]
 
     def __str__(self):
-        return f"{self.original_filename} ({self.get_upload_status_display()})"
+        return f"{self.filename} ({self.get_upload_status_display()})"
 
-    def save(self, *args, **kwargs):
-        """Custom save to generate upload token and set defaults"""
-        if not self.upload_token:
-            self.upload_token = self.generate_upload_token()
+    def on_rest_pre_save(self, changed_fields, created):
+        if created:
+            if not hasattr(self, "file_manager") or self.file_manager is None:
+                self.file_manager = FileManager.get_from_request(self.active_request)
+            if not self.content_type:
+                self.content_type = mimetypes.guess_type(self.filename)[0] or 'application/octet-stream'
+            self.category = utils.get_file_category(self.content_type)
+            if not self.storage_filename:
+                self.generate_storage_filename()
 
-        if not self.filename:
-            self.filename = self.generate_unique_filename()
+    def on_rest_pre_delete(self):
+        # we need to handle the deletion of the file from storage
+        if self.storage_file_path:
+            name, ext = os.path.splitext(self.filename)
+            renditions_path = os.path.join(self.file_manager.root_path, name)
+            self.file_manager.backend.delete_folder(renditions_path)
+            self.file_manager.backend.delete(self.storage_file_path)
 
-        if not self.content_type:
-            self.content_type = mimetypes.guess_type(self.filename)[0] or 'application/octet-stream'
-
-        super().save(*args, **kwargs)
-
-    @classmethod
-    def generate_upload_token(cls):
+    def generate_upload_token(self, commit=False):
         """Generate a unique upload token"""
-        return hashlib.sha256(f"{uuid.uuid4()}{datetime.now()}".encode()).hexdigest()[:32]
+        self.upload_token = hashlib.sha256(f"{uuid.uuid4()}{datetime.now()}".encode()).hexdigest()[:32]
+        if commit:
+            self.save()
 
-    def generate_unique_filename(self):
+    def generate_storage_filename(self):
         """Generate a unique filename for storage"""
-        import os
-        name, ext = os.path.splitext(self.original_filename)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        name, ext = os.path.splitext(self.filename)
+        # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         unique_id = str(uuid.uuid4())[:8]
-        return f"{name}_{timestamp}_{unique_id}{ext}"
+        self.storage_filename = f"{name}_{unique_id}{ext}"
+        self.storage_file_path = os.path.join(self.file_manager.root_path, self.storage_filename)
+
+    def request_upload_url(self):
+        """Request a pre-signed URL for direct upload"""
+        if not self.file_manager.backend.supports_direct_upload:
+            self.generate_upload_token(True)
+            self.upload_url = f"/api/fileman/upload/{self.upload_token}"
+        else:
+            data = self.file_manager.backend.generate_upload_url(self.storage_file_path, self.content_type, self.file_size)
+            self.debug("request_upload_url", data)
+            if "url" in data:
+                self.upload_url = data['url']
+            else:
+                self.upload_url = data
+        return self.upload_url
 
     def get_metadata(self, key, default=None):
         """Get a specific metadata value"""
@@ -205,6 +252,13 @@ class File(models.Model, MojoModel):
     def set_metadata(self, key, value):
         """Set a specific metadata value"""
         self.metadata[key] = value
+
+    _renditions = None
+    @property
+    def renditions(self):
+        if self._renditions is None:
+            self._renditions = objict.from_dict({r.role: r.to_dict() for r in self.file_renditions.all()})
+        return self._renditions
 
     @property
     def is_pending(self):
@@ -233,26 +287,65 @@ class File(models.Model, MojoModel):
             return False
         return datetime.now() > self.upload_expires_at
 
-    def mark_as_uploading(self):
+    @property
+    def url(self):
+        return self.generate_download_url()
+
+    def generate_download_url(self):
+        if self.download_url:
+            return self.download_url
+        if self.file_manager.is_public:
+            self.download_url = self.file_manager.backend.get_url(self.storage_file_path)
+            return self.download_url
+        return self.file_manager.backend.get_url(self.storage_file_path, self.get_setting("urls_expire_in", 3600))
+
+    def set_action(self, action):
+        if action == "mark_as_completed":
+            self.mark_as_completed()
+        elif action == "mark_as_failed":
+            self.mark_as_failed()
+        elif action == "mark_as_uploading":
+            self.mark_as_uploading()
+
+    def set_filename(self, filename):
+        self.filename = filename
+        if not self.content_type:
+            self.content_type = mimetypes.guess_type(filename)[0]
+            self.category = utils.get_file_category(self.content_type)
+
+
+    def create_renditions(self):
+        """Create renditions for the file"""
+        from mojo.apps.fileman import renderer
+        renderer.create_all_renditions(self)
+
+    def mark_as_uploading(self, commit=False):
         """Mark file as currently being uploaded"""
         self.upload_status = self.UPLOADING
-        self.save(update_fields=['upload_status', 'modified'])
+        if commit:
+            self.atomic_save()
 
-    def mark_as_completed(self, file_size=None, checksum=None):
+    def mark_as_completed(self, file_size=None, checksum=None, commit=False):
         """Mark file upload as completed"""
-        self.upload_status = self.COMPLETED
         if file_size:
             self.file_size = file_size
         if checksum:
             self.checksum = checksum
-        self.save(update_fields=['upload_status', 'file_size', 'checksum', 'modified'])
+        if self.file_manager.backend.exists(self.storage_file_path):
+            self.upload_status = self.COMPLETED
+            self.create_renditions()
+        else:
+            self.upload_status = self.FAILED
+        if commit:
+            self.atomic_save()
 
-    def mark_as_failed(self, error_message=None):
+    def mark_as_failed(self, error_message=None, commit=False):
         """Mark file upload as failed"""
         self.upload_status = self.FAILED
         if error_message:
             self.set_metadata('error_message', error_message)
-        self.save(update_fields=['upload_status', 'metadata', 'modified'])
+        if commit:
+            self.atomic_save()
 
     def mark_as_expired(self):
         """Mark file upload as expired"""
@@ -262,7 +355,7 @@ class File(models.Model, MojoModel):
     def get_file_extension(self):
         """Get the file extension"""
         import os
-        return os.path.splitext(self.original_filename)[1].lower()
+        return os.path.splitext(self.filename)[1].lower()
 
     def get_human_readable_size(self):
         """Get human readable file size"""
@@ -290,3 +383,56 @@ class File(models.Model, MojoModel):
             return True
 
         return False
+
+    def on_rest_save_file(self, name, file):
+        self.content_type = file.content_type
+        self.category = utils.get_file_category(self.content_type)
+        self.set_filename(file.name)
+        self.file_manager = FileManager.get_from_request(self.active_request)
+        self.generate_storage_filename()
+        self.mark_as_uploading(True)
+        self.file_manager.backend.save(file, self.storage_file_path, self.content_type)
+        self.mark_as_completed(commit=True)
+
+    @classmethod
+    def create_from_file(cls, file, name, request=None, user=None, group=None):
+        """Create a new file instance from a file"""
+        if request:
+            file_manager = FileManager.get_from_request(request)
+        else:
+            file_manager = FileManager.get_for_user_group(user, group)
+        instance = cls()
+        instance.filename = file.name
+        instance.file_size = file.size
+        instance.file_manager = file_manager
+        instance.user = user
+        instance.group = group
+        instance.set_filename(file.name)
+        instance.category = utils.get_file_category(instance.content_type)
+        instance.on_rest_pre_save({}, True)
+        instance.save()
+
+        # now we need to upload the file
+        instance.on_rest_save_file(name, file)
+
+        return instance
+
+    @classmethod
+    def on_rest_related_save(cls, related_instance, related_field_name, field_value, current_instance=None):
+        # this allows us to handle json posts with inline base64 file data
+        if isinstance(field_value, str):
+            # assume base64 encoded data
+            file_bytes = base64.b64decode(field_value)
+            mime_type = magic.from_buffer(file_bytes, mime=True)
+            ext = mimetypes.guess_extension(mime_type)
+            file_obj = io.BytesIO(file_bytes)
+            file_obj.name = f"{related_field_name}{ext}"
+            file_obj.content_type = mime_type
+            file_obj.size = len(file_bytes)
+            # now we need to upload the file
+            instance = cls.create_from_file(file_obj, file_obj.name)
+            setattr(related_instance, related_field_name, instance)
+        elif isinstance(field_value, int):
+            # assume file id
+            instance = File.objects.get(id=field_value)
+            setattr(related_instance, related_field_name, instance)

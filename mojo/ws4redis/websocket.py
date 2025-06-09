@@ -140,8 +140,8 @@ class WebSocket(object):
 
     def validate_utf8(self, payload):
         # Make sure the frames are decodable independently
+        logger.info(repr(payload))
         self.utf8validate_last = self.utf8validator.validate(payload)
-
         if not self.utf8validate_last[0]:
             raise UnicodeError("Encountered invalid UTF-8 while processing "
                                "text message at payload octet index "
@@ -211,7 +211,7 @@ class WebSocket(object):
             logger.info('websocket.receive: WebSocketError {}'.format(e))
             self.close(1002)
         except Exception as e:
-            logger.info('websocket.receive: Unknown error {}'.format(e))
+            logger.exception('websocket.receive: Unknown error {}'.format(e))
             raise e
 
     def flush(self):

@@ -66,7 +66,7 @@ def dispatch_error_handler(func):
                 metrics.record("api_errors", category="mojo_api", min_granularity=API_METRICS_GRANULARITY)
             # logger.exception(f"Unhandled REST Exception: {request.path}")
             logger.exception(f"Error: {str(err)}, Path: {request.path}, IP: {request.META.get('REMOTE_ADDR')}")
-            return JsonResponse({"error": str(err) }, status=500)
+            return JsonResponse({"error": str(err), "code": 500 }, status=500)
 
     return wrapper
 

@@ -9,7 +9,7 @@ class Incident(models.Model, MojoModel):
     created = models.DateTimeField(auto_now_add=True, editable=False, db_index=True)
 
     priority = models.IntegerField(default=0, db_index=True)
-    state = models.IntegerField(default=0, db_index=True)
+    state = models.CharField(max_length=24, default=0, db_index=True)
     category = models.CharField(max_length=124, db_index=True)
     title = models.TextField(default=None, null=True)
     details = models.TextField(default=None, null=True)

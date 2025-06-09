@@ -1,11 +1,17 @@
 from mojo import decorators as md
-from mojo.apps.incident.models import Incident, Event, RuleSet, Rule
+from mojo.apps.incident.models import Incident, IncidentHistory, Event, RuleSet, Rule
 
 
 @md.URL('incident')
 @md.URL('incident/<int:pk>')
 def on_incident(request, pk=None):
     return Incident.on_rest_request(request, pk)
+
+@md.URL('incident/history')
+@md.URL('incident/<int:pk>/history')
+def on_incident_history(request, pk=None):
+    return IncidentHistory.on_rest_request(request, pk)
+
 
 @md.URL('event')
 @md.URL('event/<int:pk>')
