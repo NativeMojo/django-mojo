@@ -56,7 +56,6 @@ class RequestDataParser:
 
         # Skip if this is a JSON request
         content_type = getattr(request, 'content_type', '').lower()
-        print(content_type)
         if 'application/json' in content_type:
             return
 
@@ -92,7 +91,6 @@ class RequestDataParser:
     def _process_files(self, files_dict, target: 'objict') -> None:
         """Process uploaded files."""
         if not files_dict:
-            print("No files found")
             return
 
         files_obj = nobjict()
