@@ -68,7 +68,7 @@ class Group(MojoSecrets, MojoModel):
         return dates.get_local_time(self.timezone, dt_utc)
 
     def __str__(self):
-        return self.name
+        return str(self.name)
 
     def has_permission(self, user):
         from mojo.account.models.member import GroupMember

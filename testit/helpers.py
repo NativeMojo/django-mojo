@@ -131,8 +131,7 @@ def unit_test(name=None):
     return decorator
 
 
-# Test Decorator
-def django_unit_test(name=None):
+def django_unit_test(arg=None):
     """
     Decorator to track unit test execution.
 
@@ -148,9 +147,27 @@ def django_unit_test(name=None):
             import django
             os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'settings')
             django.setup()
-            _run_unit(func, name, *args, **kwargs)
+
+            test_name = getattr(wrapper, '_test_name', None)
+            if test_name is None:
+                # Strip 'test_' if it exists
+                test_name = func.__name__
+                if test_name.startswith('test_'):
+                    test_name = test_name[5:]
+
+            _run_unit(func, test_name, *args, **kwargs)
+
+        # Store the custom test name if provided
+        if isinstance(arg, str):
+            wrapper._test_name = arg
         return wrapper
-    return decorator
+
+    if callable(arg):
+        # Used as @django_unit_test with no arguments
+        return decorator(arg)
+    else:
+        # Used as @django_unit_test("name") or @django_unit_test()
+        return decorator
 
 
 def get_mock_request(user=None, ip="127.0.0.1", path='/', method='GET', META=None):

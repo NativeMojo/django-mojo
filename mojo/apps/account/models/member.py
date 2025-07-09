@@ -34,7 +34,6 @@ class GroupMember(models.Model, MojoModel):
             "default": {
                 "fields": [
                     'id',
-                    'name',
                     'created',
                     'modified',
                     'is_active',
