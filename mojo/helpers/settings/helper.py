@@ -1,5 +1,5 @@
 import importlib
-from typing import Any, Union
+from typing import Any
 
 UNKNOWN = Ellipsis
 
@@ -15,42 +15,6 @@ def load_settings_profile(context):
             profile = file.read().strip()
     modules.load_module_to_globals("settings.defaults", context)
     modules.load_module_to_globals(f"settings.{profile}", context)
-
-def load_settings_config(context):
-    # Load config from django.conf file
-    from mojo.helpers import paths
-    config_path = paths.VAR_ROOT / "django.conf"
-    if not config_path.exists():
-        raise Exception(f"Required configuration file not found: {config_path}")
-
-    with open(config_path, 'r') as file:
-        for line in file:
-            if '=' in line:
-                key, value = line.strip().split('=', 1)
-                value = value.strip()
-                if value.startswith('"') and value.endswith('"'):
-                    value = value[1:-1]
-                elif value.startswith("'") and value.endswith("'"):
-                    value = value[1:-1]
-                if value.startswith('f"') or value.startswith("f'"):
-                    value = eval(value)
-                elif value.lower() == 'true':
-                    value = True
-                elif value.lower() == 'false':
-                    value = False
-                else:
-                    try:
-                        if '.' in value:
-                            value = float(value)
-                        else:
-                            value = int(value)
-                    except ValueError:
-                        pass
-                context[key.strip()] = value
-
-    if context.get("ALLOW_ADMIN_SITE", True):
-        if "django.contrib.admin" not in context["INSTALLED_APPS"]:
-            context["INSTALLED_APPS"].insert(0, "django.contrib.admin")
 
 
 class SettingsHelper:

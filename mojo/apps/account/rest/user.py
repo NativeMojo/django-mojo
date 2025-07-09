@@ -3,7 +3,7 @@ from mojo.apps.account.utils.jwtoken import JWToken
 # from django.http import JsonResponse
 from mojo.helpers.response import JsonResponse
 from mojo.apps.account.models.user import User
-import datetime
+from mojo.helpers import dates
 
 @md.URL('user')
 @md.URL('user/<int:pk>')
@@ -41,7 +41,7 @@ def on_user_login(request):
         # Authentication successful
         user.report_incident(f"{user.username} enter an invalid password", "invalid_password")
         return JsonResponse(dict(status=False, error="Invalid username or password", code=401))
-    user.last_login = datetime.datetime.utcnow()
+    user.last_login = dates.utcnow()
     user.touch()
     token_package = JWToken(user.get_auth_key()).create(uid=user.id)
     return JsonResponse(dict(status=True, data=token_package))

@@ -1,16 +1,26 @@
 from mojo import decorators as md
 from mojo.helpers.response import JsonResponse
 # from django.http import JsonResponse
-import mojo.tasks
+from mojo.apps import tasks
 
-@md.URL('status')
+@md.GET('status')
 def api_status(request):
-    tman = mojo.tasks.get_manager()
-    return JsonResponse(tman.get_status())
+    tman = tasks.get_manager()
+    return JsonResponse(dict(status=True, data=tman.get_status()))
+
+
+@md.GET('runners')
+def api_task_runners(request):
+    tman = tasks.get_manager()
+    runners = [r for r in tman.get_active_runners().values()]
+    for r in runners:
+        r['id'] = r['hostname']
+    return JsonResponse(dict(status=True, data=runners, size=len(runners), count=len(runners)))
+
 
 @md.URL('pending')
 def api_pending(request):
-    tman = mojo.tasks.get_manager()
+    tman = tasks.get_manager()
     pending = tman.get_all_pending()
     size = len(pending)
     response = {
@@ -23,10 +33,11 @@ def api_pending(request):
 
 @md.URL('completed')
 def api_completed(request):
-    tman = mojo.tasks.get_manager()
+    tman = tasks.get_manager()
     completed = tman.get_all_completed()
     size = len(completed)
     response = {
+        'status': True,
         'count': size,
         'page': 0,
         'size': size,
@@ -36,7 +47,7 @@ def api_completed(request):
 
 @md.URL('running')
 def api_running(request):
-    tman = mojo.tasks.get_manager()
+    tman = tasks.get_manager()
     running = tman.get_all_running()
     size = len(running)
     response = {
@@ -50,7 +61,7 @@ def api_running(request):
 
 @md.URL('errors')
 def api_errors(request):
-    tman = mojo.tasks.get_manager()
+    tman = tasks.get_manager()
     errors = tman.get_all_errors()
     size = len(errors)
     response = {

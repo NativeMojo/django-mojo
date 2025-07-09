@@ -506,9 +506,11 @@ class MojoModel:
         created = self.pk is None
         if created:
             if request.user.is_authenticated and self.get_model_field("user"):
-                setattr(self, "user", request.user)
+                if getattr(self, "user", None) is None:
+                    self.user = request.user
             if request.group and self.get_model_field("group"):
-                setattr(self, "group", request.group)
+                if getattr(self, "group", None) is None:
+                    self.group = request.group
         self.on_rest_pre_save(self.__changed_fields__, created)
         if "files" in data_dict:
             self.on_rest_save_files(data_dict["files"])
