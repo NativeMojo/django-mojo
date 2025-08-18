@@ -335,7 +335,7 @@ class MojoModel:
     @classmethod
     def on_rest_list_search(cls, request, queryset):
         """
-        Search queryset based on 'q' param in the request for fields defined in 'SEARCH_FIELDS'.
+        Search queryset based on 'search' param in the request for fields defined in 'SEARCH_FIELDS'.
 
         Args:
             request: Django HTTP request object.
@@ -344,7 +344,7 @@ class MojoModel:
         Returns:
             The filtered queryset based on the search criteria.
         """
-        search_query = request.GET.get('q', None)
+        search_query = request.GET.get('search', None)
         if not search_query:
             return queryset
 
@@ -553,7 +553,12 @@ class MojoModel:
         if hasattr(field.related_model, "on_rest_related_save"):
             related_instance = getattr(self, field.name)
             field.related_model.on_rest_related_save(self, field.name, field_value, related_instance)
-        elif isinstance(field_value, int):
+        elif isinstance(field_value, int) or (isinstance(field_value, str) and field_value.isnumeric()):
+            # self.debug(f"Related Model: {field.related_model.__name__}, Field Value: {field_value}")
+            field_value = int(field_value)
+            if (self.pk == field_value):
+                self.debug("Skipping self-reference")
+                return
             related_instance = field.related_model.objects.get(pk=field_value)
             setattr(self, field.name, related_instance)
 

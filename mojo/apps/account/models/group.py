@@ -50,11 +50,12 @@ class Group(MojoSecrets, MojoModel):
                     'kind',
                     'parent',
                     'metadata'
-                ]
+                ],
+                "graphs": {
+                    "parent": "basic"
+                }
             },
-            "graphs": {
-                "parent": "basic"
-            }
+
         }
 
     @property
@@ -94,5 +95,7 @@ class Group(MojoSecrets, MojoModel):
     def on_rest_handle_list(cls, request):
         if cls.rest_check_permission(request, "VIEW_PERMS"):
             return cls.on_rest_list(request)
-        group_ids = request.user.members.values_list('group__id', flat=True)
-        return cls.on_rest_list(request, cls.objects.filter(id__in=group_ids))
+        if getattr(request.user, 'members') is not None:
+            group_ids = request.user.members.values_list('group__id', flat=True)
+            return cls.on_rest_list(request, cls.objects.filter(id__in=group_ids))
+        return cls.on_rest_list(request, cls.objects.none())
