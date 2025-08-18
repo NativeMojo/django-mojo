@@ -17,6 +17,8 @@ def on_user_me(request):
 
 
 @md.POST('refresh_token')
+@md.POST('token/refresh')
+@md.POST("auth/token/refresh")
 @md.requires_params("refresh_token")
 def on_refresh_token(request):
     user, error = User.validate_jwt(request.DATA.refresh_token)
@@ -30,6 +32,7 @@ def on_refresh_token(request):
 
 
 @md.POST("login")
+@md.POST("auth/login")
 @md.requires_params("username", "password")
 def on_user_login(request):
     username = request.DATA.username
@@ -44,4 +47,5 @@ def on_user_login(request):
     user.last_login = dates.utcnow()
     user.touch()
     token_package = JWToken(user.get_auth_key()).create(uid=user.id)
+    token_package['user'] = user.to_dict("basic")
     return JsonResponse(dict(status=True, data=token_package))

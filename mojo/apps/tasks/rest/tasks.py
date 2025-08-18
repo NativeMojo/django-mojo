@@ -34,7 +34,7 @@ def api_pending(request):
 @md.URL('completed')
 def api_completed(request):
     tman = tasks.get_manager()
-    completed = tman.get_all_completed()
+    completed = tman.get_all_completed(include_data=True)
     size = len(completed)
     response = {
         'status': True,
@@ -48,7 +48,7 @@ def api_completed(request):
 @md.URL('running')
 def api_running(request):
     tman = tasks.get_manager()
-    running = tman.get_all_running()
+    running = tman.get_all_running(include_data=True)
     size = len(running)
     response = {
         'count': size,

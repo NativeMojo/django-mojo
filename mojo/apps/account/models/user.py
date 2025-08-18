@@ -132,6 +132,11 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
             self.atomic_save()
         return self.auth_key
 
+    def set_username(self, value):
+        if not isinstance(value, str):
+            raise ValueError("Username must be a string")
+        self.username = value
+
     def set_permissions(self, value):
         if not isinstance(value, dict):
             return
@@ -189,12 +194,102 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
         self.set_password(value)
         self.save()
 
-    def save(self, *args, **kwargs):
+    def validate_email(self):
+        import re
+        if not self.email:
+            raise merrors.ValueException("Email is required")
+        if not re.match(r"[^@]+@[^@]+\.[^@]+", str(self.email)):
+            raise merrors.ValueException("Invalid email format")
+        return True
+
+    def validate_username(self):
         if not self.username:
-            self.username = self.email.split("@")[0]
-        if not self.display_name:
-            self.display_name = self.username
-        super().save(*args, **kwargs)
+            raise merrors.ValueException("Username is required")
+        if len(str(self.username)) <= 2:
+            raise merrors.ValueException("Username must be more than 2 characters")
+        # Check for special characters (only allow alphanumeric, underscore, and dot)
+        import re
+        if not re.match(r'^[a-zA-Z0-9_.]+$', str(self.username)):
+            raise merrors.ValueException("Username can only contain letters, numbers, underscores, and dots")
+        return True
+
+    def set_new_password(self, new_password):
+        # Validate password strength
+        if len(new_password) < 8:
+            raise merrors.ValueException("Password must be at least 8 characters long")
+
+        strength_score = 0
+
+        # Length contributes to strength (longer is better)
+        if len(new_password) >= 12:
+            strength_score += 2
+        elif len(new_password) >= 10:
+            strength_score += 1
+
+        # Check for mixed case
+        has_upper = any(c.isupper() for c in new_password)
+        has_lower = any(c.islower() for c in new_password)
+        if has_upper and has_lower:
+            strength_score += 1
+
+        # Check for numbers
+        has_numbers = any(c.isdigit() for c in new_password)
+        if has_numbers:
+            strength_score += 1
+
+        # Check for special characters
+        import re
+        has_special = bool(re.search(r'[!@#$%^&*(),.?":{}|<>]', new_password))
+        if has_special:
+            strength_score += 1
+
+        # Require minimum strength score
+        if strength_score < 2:
+            raise merrors.ValueException("Password is too weak. Use a longer password or include a mix of uppercase, lowercase, numbers, and special characters")
+
+        self.set_password(new_password)
+
+    def can_change_password(self):
+        if self.pk == self.active_request.user.pk:
+            return True
+        if self.active_request.user.is_superuser:
+            return True
+        if self.active_request.user.has_permission(["manage_users"]):
+            return True
+        return False
+
+    def on_rest_pre_save(self, changed_fields, created):
+        creds_changed = False
+        if "email" in changed_fields:
+            creds_changed = True
+            self.validate_email()
+            self.email = self.email.lower()
+            if not self.username:
+                self.username = self.email.split("@")[0]
+            qset = User.objects.filter(email=self.email)
+            if self.pk is not None:
+                qset = qset.exclude(pk=self.pk)
+            if qset.exists():
+                raise merrors.ValueException("Email already exists")
+        if "username" in changed_fields:
+            creds_changed = True
+            self.validate_username()
+            self.username = self.username.lower()
+            qset = User.objects.filter(username=self.username)
+            if self.pk is not None:
+                qset = qset.exclude(pk=self.pk)
+            if qset.exists():
+                raise merrors.ValueException("Username already exists")
+        if self.pk is not None:
+            # only super user can change email or username
+            if creds_changed and not self.active_request.user.is_superuser:
+                raise merrors.PermissionDeniedException("You are not allowed to change email or username")
+            if "password" in changed_fields:
+                raise merrors.PermissionDeniedException("You are not allowed to change password")
+            if "new_password" in changed_fields and not self.can_change_password():
+                raise merrors.PermissionDeniedException("You are not allowed to change password")
+        # self.debug("on_rest_pre_save", changed_fields, creds_changed, self.active_request.user.is_superuser)
+
 
     def check_edit_permission(self, perms, request):
         if "owner" in perms and self.is_request_user():
