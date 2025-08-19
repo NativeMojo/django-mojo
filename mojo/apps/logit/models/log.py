@@ -29,6 +29,7 @@ class Log(dm.Model, MojoModel):
         log = logit.mask_sensitive_data(log)
 
         uid, username, ip_address, path, method, duid = 0, None, None, None, None, None
+        user_agent = "system"
         if request:
             username = request.user.username if request.user.is_authenticated else None
             uid = request.user.pk if request.user.is_authenticated else 0
@@ -36,6 +37,7 @@ class Log(dm.Model, MojoModel):
             duid = request.duid
             ip_address = request.ip
             method = request.method
+            user_agent = request.user_agent
 
         path = kwargs.get("path", path)
         method = kwargs.get("method", method)
@@ -46,12 +48,13 @@ class Log(dm.Model, MojoModel):
             kind=kind,
             method=method,
             path=path,
+            payload=kwargs.get("payload", None),
             ip=ip_address,
             uid=uid,
             duid=duid,
             username=username,
             log=log,
-            user_agent=request.user_agent,
+            user_agent=user_agent,
             model_name=model_name,
             model_id=model_id
         )

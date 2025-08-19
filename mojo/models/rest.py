@@ -22,6 +22,13 @@ class MojoModel:
         """Returns the active request being processed."""
         return ACTIVE_REQUEST
 
+    @property
+    def active_user(self):
+        """Returns the active user being processed."""
+        if ACTIVE_REQUEST:
+            return ACTIVE_REQUEST.user
+        return None
+
     @classmethod
     def get_rest_meta_prop(cls, name, default=None):
         """
@@ -553,8 +560,12 @@ class MojoModel:
         if hasattr(field.related_model, "on_rest_related_save"):
             related_instance = getattr(self, field.name)
             field.related_model.on_rest_related_save(self, field.name, field_value, related_instance)
-        elif isinstance(field_value, int) or (isinstance(field_value, str) and field_value.isnumeric()):
+        elif isinstance(field_value, int) or (isinstance(field_value, str)):
             # self.debug(f"Related Model: {field.related_model.__name__}, Field Value: {field_value}")
+            if not bool(field_value):
+                # None, "", 0 will set it to None
+                setattr(self, field.name, None)
+                return
             field_value = int(field_value)
             if (self.pk == field_value):
                 self.debug("Skipping self-reference")
@@ -629,7 +640,7 @@ class MojoModel:
         if Event is None:
             Event.report(description, kind, **kwargs)
 
-    def log(self, log, kind="model_log", level="info", **kwargs):
+    def log(self, log="", kind="model_log", level="info", **kwargs):
         return self.class_logit(ACTIVE_REQUEST, log, kind, self.id, level, **kwargs)
 
     def model_logit(self, request, log, kind="model_log", level="info", **kwargs):

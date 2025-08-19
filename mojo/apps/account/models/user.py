@@ -7,7 +7,24 @@ from mojo.helpers import dates
 from mojo.apps.account.utils.jwtoken import JWToken
 import uuid
 
+SYS_USER_PERMS_PROTECTION = {
+    "manage_users": "manage_users",
+    "manage_groups": "manage_users",
+    "view_logs": "manage_users",
+    "view_incidents": "manage_users",
+    "view_admin": "manage_users",
+    "view_taskqueue": "manage_users",
+    "view_global": "manage_users",
+    "manage_notifications": "manage_users",
+    "manage_files": "manage_users",
+    "force_single_session": "manage_users",
+    "file_vault": "manage_users",
+    "manage_aws": "manage_users"
+}
+
 USER_PERMS_PROTECTION = settings.get("USER_PERMS_PROTECTION", {})
+USER_PERMS_PROTECTION.update(SYS_USER_PERMS_PROTECTION)
+
 USER_LAST_ACTIVITY_FREQ = settings.get("USER_LAST_ACTIVITY_FREQ", 300)
 
 class CustomUserManager(BaseUserManager):
@@ -108,6 +125,11 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
                     "avatar": "basic"
                 }
             },
+            "full": {
+                "graphs": {
+                    "avatar": "basic"
+                }
+            }
         }
 
     def __str__(self):
@@ -142,14 +164,14 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
             return
         for key in value:
             if key in USER_PERMS_PROTECTION:
-                if not self.active_request.user.has_permission(USER_PERMS_PROTECTION[key]):
+                if not self.active_user.has_permission(USER_PERMS_PROTECTION[key]):
                     raise merrors.PermissionDeniedException()
-            elif not self.active_request.user.has_permission("manage_users"):
+            elif not self.active_user.has_permission("manage_users"):
                 raise merrors.PermissionDeniedException()
             if bool(value[key]):
-                self.add_permission(key)
+                self.add_permission(key, commit=False)
             else:
-                self.remove_permission(key)
+                self.remove_permission(key, commit=False)
 
     def has_module_perms(self, app_label):
         """Check if user has any permissions in a given app."""
@@ -166,25 +188,39 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
             return True
         return self.permissions.get(perm_key, False)
 
-    def add_permission(self, perm_key, value=True):
+    def add_permission(self, perm_key, value=True, commit=True):
         """Dynamically add a permission."""
+        changed = False
         if isinstance(perm_key, (list, set)):
             for pk in perm_key:
-                self.permissions[pk] = value
+                if self.permissions.get(pk) != value:
+                    self.permissions[pk] = value
+                    changed = True
         else:
-            self.permissions[perm_key] = value
-        self.save()
+            if self.permissions.get(perm_key) != value:
+                self.permissions[perm_key] = value
+                changed = True
+        if changed:
+            self.log(f"Added permission {perm_key}", "permission:added")
+        if commit and changed:
+            self.save()
 
-    def remove_permission(self, perm_key):
+    def remove_permission(self, perm_key, commit=True):
         """Remove a permission."""
+        changed = False
         if isinstance(perm_key, (list, set)):
             for pk in perm_key:
                 if pk in self.permissions:
                     del self.permissions[pk]
+                    changed = True
         else:
             if perm_key in self.permissions:
                 del self.permissions[perm_key]
-        self.save()
+                changed = True
+        if changed:
+            self.log(f"Removed permission {perm_key}", "permission:removed")
+        if commit and changed:
+            self.save()
 
     def remove_all_permissions(self):
         self.permissions = {}
@@ -207,13 +243,17 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
             raise merrors.ValueException("Username is required")
         if len(str(self.username)) <= 2:
             raise merrors.ValueException("Username must be more than 2 characters")
-        # Check for special characters (only allow alphanumeric, underscore, and dot)
+        # Check for special characters (only allow alphanumeric, underscore, dot, and @)
         import re
-        if not re.match(r'^[a-zA-Z0-9_.]+$', str(self.username)):
-            raise merrors.ValueException("Username can only contain letters, numbers, underscores, and dots")
+        if not re.match(r'^[a-zA-Z0-9_.@]+$', str(self.username)):
+            raise merrors.ValueException("Username can only contain letters, numbers, underscores, dots, and @")
+        # If username contains @, it must match the email field
+        if '@' in str(self.username) and str(self.username) != str(self.email):
+            raise merrors.ValueException("Username containing @ must match the email address")
         return True
 
     def set_new_password(self, new_password):
+        self.debug("SET NEW PASSWORD")
         # Validate password strength
         if len(new_password) < 8:
             raise merrors.ValueException("Password must be at least 8 characters long")
@@ -248,24 +288,48 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
             raise merrors.ValueException("Password is too weak. Use a longer password or include a mix of uppercase, lowercase, numbers, and special characters")
 
         self.set_password(new_password)
+        self._set_field_change("new_password", "*", "*********")
 
     def can_change_password(self):
-        if self.pk == self.active_request.user.pk:
+        if self.pk == self.active_user.pk:
             return True
-        if self.active_request.user.is_superuser:
+        if self.active_user.is_superuser:
             return True
-        if self.active_request.user.has_permission(["manage_users"]):
+        if self.active_user.has_permission(["manage_users"]):
             return True
         return False
 
+    def generate_username_from_email(self):
+        """Generate a username from email, falling back to email if username exists."""
+        if not self.email:
+            raise merrors.ValueException("Email is required to generate username")
+
+        # Try using the part before @ as username
+        potential_username = self.email.split("@")[0].lower()
+
+        # Check if this username already exists
+        qset = User.objects.filter(username=potential_username)
+        if self.pk is not None:
+            qset = qset.exclude(pk=self.pk)
+
+        # If username doesn't exist, use it
+        if not qset.exists():
+            return potential_username
+
+        # Fall back to using the full email as username
+        return self.email.lower()
+
     def on_rest_pre_save(self, changed_fields, created):
+        self.debug("PRE SAVE")
         creds_changed = False
         if "email" in changed_fields:
             creds_changed = True
             self.validate_email()
             self.email = self.email.lower()
             if not self.username:
-                self.username = self.email.split("@")[0]
+                self.username = self.generate_username_from_email()
+            elif "@" in self.username and self.username != self.email:
+                self.username = self.email
             qset = User.objects.filter(email=self.email)
             if self.pk is not None:
                 qset = qset.exclude(pk=self.pk)
@@ -282,13 +346,20 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
                 raise merrors.ValueException("Username already exists")
         if self.pk is not None:
             # only super user can change email or username
-            if creds_changed and not self.active_request.user.is_superuser:
+            if creds_changed and not self.active_user.is_superuser:
                 raise merrors.PermissionDeniedException("You are not allowed to change email or username")
             if "password" in changed_fields:
                 raise merrors.PermissionDeniedException("You are not allowed to change password")
-            if "new_password" in changed_fields and not self.can_change_password():
-                raise merrors.PermissionDeniedException("You are not allowed to change password")
-        # self.debug("on_rest_pre_save", changed_fields, creds_changed, self.active_request.user.is_superuser)
+            if "new_password" in changed_fields:
+                if not self.can_change_password():
+                    raise merrors.PermissionDeniedException("You are not allowed to change password")
+                self.debug("CHANGING PASSWORD")
+                self.log("****", kind="password:changed")
+            if "email" in changed_fields:
+                self.log(kind="email:changed", log=f"{changed_fields['email']} to {self.email}")
+            if "username" in changed_fields:
+                self.log(kind="username:changed", log=f"{changed_fields['username']} to {self.username}")
+        self.debug("on_rest_pre_save", changed_fields, creds_changed, self.active_user.is_superuser)
 
 
     def check_edit_permission(self, perms, request):
