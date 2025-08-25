@@ -72,12 +72,24 @@ class GroupMember(models.Model, MojoModel):
                     self.remove_permission(perm)
 
     def has_permission(self, perm_key):
-        """Check if user has a specific permission in JSON field."""
+        """
+        Check if user has a specific permission—supports system-level permissions via 'sys.' prefix.
+        If perm_key starts with 'sys.', only the user-level permission is checked.
+        Otherwise, checks group-member-level permission as before.
+        """
+        # Support lists for "OR" logic
         if isinstance(perm_key, list):
             for pk in perm_key:
                 if self.has_permission(pk):
                     return True
             return False
+
+        # System-level: only check user permission
+        SYS_PREFIX = "sys."
+        if isinstance(perm_key, str) and perm_key.startswith(SYS_PREFIX):
+            bare_perm = perm_key[len(SYS_PREFIX):]
+            return self.user.has_permission(bare_perm)
+
         if perm_key == "all":
             return True
         return self.permissions.get(perm_key, False)

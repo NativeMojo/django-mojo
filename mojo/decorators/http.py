@@ -32,7 +32,10 @@ def dispatcher(request, *args, **kwargs):
     rest.ACTIVE_REQUEST = request
     key = kwargs.pop('__mojo_rest_root_key__', None)
     if "group" in request.DATA:
-        request.group = modules.get_model_instance("account", "Group", int(request.DATA.group))
+        try:
+            request.group = modules.get_model_instance("account", "Group", int(request.DATA.group))
+        except ValueError:
+            return JsonResponse({"error": "Invalid group ID", "code": 400}, status=400)
     method_key = f"{key}__{request.method}"
     if method_key not in URLPATTERN_METHODS:
         method_key = f"{key}__ALL"
