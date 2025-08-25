@@ -1,66 +1,107 @@
-# Django-MOJO Documentation
+# Django-MOJO
 
-Django-MOJO is a streamlined set of Django applications and a lightweight REST framework designed to simplify user authentication, authorization, and efficient API testing. This documentation provides descriptions and examples to help you get started quickly.
+**The Lightweight, Secure, and Extensible REST and Auth Framework for Django**
+
+---
+
+Django-MOJO helps you rapidly build secure APIs and manage authentication in Django projects—without the usual boilerplate or complexity. It brings clarity and maintainability to your codebase, all while providing robust object-level security and powerful helper utilities for real-world development.
+
+---
 
 ## Why Django-MOJO?
 
-We built Django-MOJO to address the complexity and overhead of existing REST frameworks. Many frameworks are feature-heavy, making them cumbersome for projects that require simplicity, speed, and robust security.
+- **Minimal Setup, Maximum Power:** Expose Django models as RESTful APIs with a few lines of code. Add new features without touching central registries.
+- **Object-Level Permissions:** Move beyond Django’s traditional model-level permissions for fine-grained access control.
+- **Secure by Default:** Every endpoint and operation is permission-aware, designed to keep your data and users safe.
+- **Simple Patterns & Helpers:** Use concise decorators, built-in utilities (cron, crypto, logging, tasks), and keep codebases easy for teams to extend.
+- **Effortless Testing:** Built-in lightweight test framework for REST APIs—no external dependencies needed.
 
-## Key Differentiators
+---
 
-- **Lightweight Framework:** Django-MOJO is minimalistic, providing an easy way to add REST APIs to your Django models without unnecessary complexity.
-- **Built-in Security:** Security is integral to Django-MOJO. We offer an alternative to Django's built-in permissions system, automatically protecting your REST APIs and data.
-- **Robust Object-Level Permission System:** Unlike Django's native model-level permissions, Django-MOJO provides a simple yet robust permission system at the object level. This allows fine-grained control, enabling permissions to be applied to individual objects and extended to both user and group levels.
-- **Effortless Integration:** Adding REST endpoints to your models is straightforward, enabling rapid development without compromising security or performance.
+## Core Workflow
 
-With Django-MOJO, you get a simple, efficient framework with powerful security features designed for developers who value speed and control.
+1. **Create Django Models:**  
+   Inherit from `MojoModel` and define a `RestMeta` inner class to configure permissions, default filters, and output graphs.
 
-## Table of Contents
+2. **Register REST Endpoints:**  
+   Use decorators (`@md.URL`, `@md.GET`, etc.) to expose catch-all or method-specific API endpoints in your app’s rest/ directory.
 
-1. [Overview](#overview)
-2. [Installation](#installation)
-3. [MOJO.Auth - Authentication and Authorization](#mojo-auth)
-   - [JWT Authentication Middleware](#jwt-authentication)
-   - [Models](#models)
-   - [REST API](#mojo-auth-rest-api)
-4. [MOJO - REST Framework](#mojo)
-   - [URL Decorators](#url-decorators)
-   - [GraphSerializer](#graphserializer)
-5. [Testit - Testing Suite](#testit)
-   - [Writing Tests](#writing-tests)
-   - [Running Tests](#running-tests)
-6. [Taskit - Task Runner](#taskit)
-7. [Utilities](#utilities)
-8. [Contributing](#contributing)
-9. [License](#license)
+3. **Embrace Helpers:**  
+   Leverage and extend the extensive helpers in `mojo/helpers/` for logging, cron, request parsing, redis, and more.
 
-## Overview
+4. **Test with Confidence:**  
+   Write and run tests using MOJO’s integrated “testit” system—both for APIs and backend logic.
 
-Django-MOJO is a collection of Django-based applications focused on authentication, task management, and testing. These tools are built to enhance development efficiency by providing utilities for common requirements such as user management, token-based authentication, and automated testing.
+---
 
-## Installation
+## Quick Example
 
-```bash
-pip install django-nativemojo
+**models/group.py**
+```python
+from django.db import models
+from mojo.models import MojoModel
+
+class Group(MojoModel):
+    name = models.CharField(max_length=200)
+    class RestMeta:
+        VIEW_PERMS = ["view_groups"]
+        SAVE_PERMS = ["manage_groups"]
+        LIST_DEFAULT_FILTERS = {"is_active": True}
+        GRAPHS = {
+            "default": {"fields": ["id", "name", "created"]},
+        }
 ```
 
-## Detailed Documentation
+**rest/group.py**
+```python
+from mojo import decorators as md
+from .models.group import Group
 
-For detailed information about each module and its usage, refer to the documentation within the `docs` folder:
+@md.URL('group')
+@md.URL('group/<int:pk>')
+def on_group(request, pk=None):
+    return Group.on_rest_request(request, pk)
+```
 
-- [MOJO Auth Documentation](docs/auth.md): Authentication and authorization management with JWT support.
-- [MOJO REST Documentation](docs/rest.md): Provides RESTful API capabilities for Django models.
-- [MOJO Testing Documentation](docs/testit.md): Offers tools and utilities for testing Django applications.
-- [MOJO Tasks Documentation](docs/tasks.md): Handles task management and processing with Redis.
-- [MOJO Decorators Documentation](docs/decorators.md): Describes decorators to enhance Django views with HTTP routing, validation, etc.
-- [Helpers Documentation](docs/helpers.md): Lists various helper utilities for common tasks.
-- [MOJO Metrics Documentation](docs/metrics.md): Details on recording and retrieving metrics using Redis.
-- [Cron Scheduler Documentation](docs/cron.md): Explains task scheduling using a cron syntax.
+---
+
+## Project Structure
+
+- **mojo/account/** – Authentication models, JWT middleware, and permissions
+- **mojo/base/** – Core model/REST abstractions
+- **mojo/helpers/** – Logging, crypto, cron, and other utilities
+- **mojo/tasks/** – Redis-backed task scheduling and runner
+- **mojo/testit/** – Lightweight test suite and REST client
+- **docs/** – Area-focused detailed documentation
+
+---
+
+## Documentation
+
+Want details or examples? Dive into the docs:
+
+- [Getting Started & Installing](docs/llm_context.md)
+- [REST API & Graph Serialization](docs/rest.md)
+- [Authentication & JWT](docs/auth.md)
+- [Helpers & Utilities](docs/helpers.md)
+- [Tasks & Cron Schedules](docs/tasks.md)  
+- [Testing Framework](docs/testit.md)
+- [Developing & Contributing](docs/developer_guide.md)
+- [Decorators Reference](docs/decorators.md)
+- [Metrics](docs/metrics.md)
+- [Cron Scheduler](docs/cron.md)
+
+---
 
 ## Contributing
 
-We welcome contributions! Please create an issue or submit a pull request on the GitHub repository.
+We welcome pull requests and issues! Contributions should follow our [Developer Guide](docs/developer_guide.md) and maintain the framework’s philosophy: **keep it simple, explicit, and secure**.
+
+---
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+Licensed under the Apache License v2.0.
+See the [LICENSE](LICENSE) file for details.
+
+---

@@ -1,6 +1,7 @@
 # from django.http import JsonResponse
 from mojo.helpers.response import JsonResponse
 from mojo.serializers.simple import GraphSerializer
+from mojo.serializers.manager import get_serializer_manager
 from mojo.helpers import modules
 from mojo.helpers.settings import settings
 from django.core.exceptions import ObjectDoesNotExist
@@ -123,7 +124,7 @@ class MojoModel:
     @classmethod
     def rest_check_permission(cls, request, permission_keys, instance=None):
         """
-        Check permissions for a given request.
+        Check permissions for a given request. Reports granular denied feedback to incident/event system.
 
         Args:
             request: Django HTTP request object.
@@ -136,20 +137,69 @@ class MojoModel:
         perms = cls.get_rest_meta_prop(permission_keys, [])
         if perms is None or len(perms) == 0:
             return True
+
         if "all" not in perms:
             if request.user is None or not request.user.is_authenticated:
+                cls.class_report_incident(
+                    details="Permission denied: unauthenticated user",
+                    event_type="unauthenticated",
+                    request=request,
+                    perms=perms,
+                    permission_keys=permission_keys,
+                    branch="unauthenticated",
+                    instance=repr(instance) if instance else None,
+                    request_path=getattr(request, "path", None),
+                )
                 return False
+
         if instance is not None:
             if hasattr(instance, "check_edit_permission"):
-                return instance.check_edit_permission(perms, request)
+                allowed = instance.check_edit_permission(perms, request)
+                if not allowed:
+                    cls.class_report_incident(
+                        details="Permission denied: edit_permission_denied",
+                        event_type="edit_permission_denied",
+                        request=request,
+                        perms=perms,
+                        permission_keys=permission_keys,
+                        branch="instance.check_edit_permission",
+                        instance=repr(instance),
+                        request_path=getattr(request, "path", None),
+                    )
+                return allowed
             if "owner" in perms and getattr(instance, "user", None) is not None:
                 if instance.user.id == request.user.id:
                     return True
+
         if request.group and hasattr(cls, "group"):
-            # lets check our group member permissions
-            # this will now force any queries to include the group
-            return request.group.member_has_permission(request.user, perms)
-        return request.user.has_permission(perms)
+            allowed = request.group.member_has_permission(request.user, perms)
+            if not allowed:
+                cls.class_report_incident(
+                    details="Permission denied: group_member_permission_denied",
+                    event_type="group_member_permission_denied",
+                    request=request,
+                    perms=perms,
+                    permission_keys=permission_keys,
+                    group=getattr(request, "group", None),
+                    branch="group.member_has_permission",
+                    instance=repr(instance) if instance else None,
+                    request_path=getattr(request, "path", None),
+                )
+            return allowed
+
+        allowed = request.user.has_permission(perms)
+        if not allowed:
+            cls.class_report_incident(
+                details="Permission denied: user_permission_denied",
+                event_type="user_permission_denied",
+                request=request,
+                perms=perms,
+                permission_keys=permission_keys,
+                branch="user.has_permission",
+                instance=repr(instance) if instance else None,
+                request_path=getattr(request, "path", None),
+            )
+        return allowed
 
     @classmethod
     def on_rest_handle_get(cls, request, instance):
@@ -213,6 +263,7 @@ class MojoModel:
         Returns:
             JsonResponse representing the list of resources.
         """
+        cls.debug("on_rest_handle_list")
         if cls.rest_check_permission(request, "VIEW_PERMS"):
             return cls.on_rest_list(request)
         return cls.rest_error_response(request, 403, error=f"GET permission denied: {cls.__name__}")
@@ -263,6 +314,7 @@ class MojoModel:
         Returns:
             JsonResponse representing the paginated and serialized list of objects.
         """
+        cls.debug("on_rest_list:start")
         if queryset is None:
             queryset = cls.objects.all()
         if request.group is not None and hasattr(cls, "group"):
@@ -272,6 +324,7 @@ class MojoModel:
         queryset = cls.on_rest_list_filter(request, queryset)
         queryset = cls.on_rest_list_date_range_filter(request, queryset)
         queryset = cls.on_rest_list_sort(request, queryset)
+        cls.debug("on_rest_list:end")
         return cls.on_rest_list_response(request, queryset)
 
     @classmethod
@@ -282,7 +335,9 @@ class MojoModel:
         page_end = page_start+page_size
         paged_queryset = queryset[page_start:page_end]
         graph = request.DATA.get("graph", "list")
-        serializer = GraphSerializer(paged_queryset, graph=graph, many=True)
+        # Use serializer manager for optimal performance
+        manager = get_serializer_manager()
+        serializer = manager.get_serializer(paged_queryset, graph=graph, many=True)
         return serializer.to_response(request, count=queryset.count(), start=page_start, size=page_size)
 
     @classmethod
@@ -456,7 +511,9 @@ class MojoModel:
             JsonResponse representing the object.
         """
         graph = request.GET.get("graph", graph)
-        serializer = GraphSerializer(self, graph=graph)
+        # Use serializer manager for optimal performance
+        manager = get_serializer_manager()
+        serializer = manager.get_serializer(self, graph=graph)
         return serializer.to_response(request)
 
     def _set_field_change(self, key, old_value=None, new_value=None):
@@ -619,13 +676,15 @@ class MojoModel:
             return JsonResponse({"error": str(e)}, status=400)
 
     def to_dict(self, graph="default"):
-        serializer = GraphSerializer(self, graph=graph)
-        return serializer.serialize()
+        # Use serializer manager for optimal performance
+        manager = get_serializer_manager()
+        return manager.serialize(self, graph=graph)
 
     @classmethod
     def queryset_to_dict(cls, qset, graph="default"):
-        serializer = GraphSerializer(qset, graph=graph)
-        return serializer.serialize()
+        # Use serializer manager for optimal performance
+        manager = get_serializer_manager()
+        return manager.serialize(qset, graph=graph, many=True)
 
     def atomic_save(self):
         """
@@ -634,11 +693,39 @@ class MojoModel:
         with transaction.atomic():
             self.save()
 
-    def report_incident(self, description, kind="error", level="critical", **kwargs):
-        self.model_logit(ACTIVE_REQUEST, description, kind=kind, level=level)
-        Event = modules.get_model("incidents", "Event")
-        if Event is None:
-            Event.report(description, kind, **kwargs)
+    def report_incident(self, details, event_type="info", level=1, request=None, **context):
+        """
+        Instance-level audit/event reporting. Automatically includes model+id.
+        """
+        context = dict(context)
+        context.setdefault("model_name", self.__class__.__name__)
+        if hasattr(self, 'id'):
+            context.setdefault("model_id", self.id)
+        self.__class__.class_report_incident(
+            details, event_type=event_type, level=level, request=request, **context
+        )
+
+    @classmethod
+    def class_report_incident(cls, details, event_type="info", level=1, request=None, **context):
+        """
+        Class-level audit/event reporting.
+        details: Human description.
+        event_type: Category/kind (e.g. "permission_denied", "security_alert").
+        level: Numeric severity.
+        request: Optional HTTP request or actor.
+        **context: Any additional context.
+        """
+        from mojo.apps import incident
+        context = dict(context)
+        context.setdefault("model_name", cls.__name__)
+        incident.report_event(
+            details,
+            title=details[:80],
+            category=event_type,
+            level=level,
+            request=request,
+            **context
+        )
 
     def log(self, log="", kind="model_log", level="info", **kwargs):
         return self.class_logit(ACTIVE_REQUEST, log, kind, self.id, level, **kwargs)
