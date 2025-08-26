@@ -1,7 +1,11 @@
 from django.db import models
 from mojo.models import MojoModel, MojoSecrets
 from mojo.helpers import dates
+from mojo.apps import metrics
+from mojo.helpers.settings import settings
 
+GROUP_LAST_ACTIVITY_FREQ = settings.get("GROUP_LAST_ACTIVITY_FREQ", 300)
+METRICS_TIMEZONE = settings.get("METRICS_TIMEZONE", "America/Los_Angeles")
 
 
 class Group(MojoSecrets, MojoModel):
@@ -10,6 +14,7 @@ class Group(MojoSecrets, MojoModel):
     """
     created = models.DateTimeField(auto_now_add=True, editable=False)
     modified = models.DateTimeField(auto_now=True, db_index=True)
+    last_activity = models.DateTimeField(default=None, null=True, db_index=True)
 
     name = models.CharField(max_length=200)
     uuid = models.CharField(max_length=200, null=True, default=None, db_index=True)
@@ -36,6 +41,7 @@ class Group(MojoSecrets, MojoModel):
                     'name',
                     'created',
                     'modified',
+                    'last_activity',
                     'is_active',
                     'kind',
                 ]
@@ -46,6 +52,7 @@ class Group(MojoSecrets, MojoModel):
                     'name',
                     'created',
                     'modified',
+                    'last_activity',
                     'is_active',
                     'kind',
                     'parent',
@@ -82,6 +89,14 @@ class Group(MojoSecrets, MojoModel):
         if ms is not None:
             return ms.has_permission(perms)
         return False
+
+    def touch(self):
+        # can't subtract offset-naive and offset-aware datetimes
+        if self.last_activity and not dates.is_today(self.last_activity, METRICS_TIMEZONE):
+            metrics.record("group_activity_day", category="group", min_granularity="days")
+        if self.last_activity is None or dates.has_time_elsapsed(self.last_activity, seconds=GROUP_LAST_ACTIVITY_FREQ):
+            self.last_activity = dates.utcnow()
+            self.atomic_save()
 
     def get_metadata(self):
         # converts our local metadata into an objict

@@ -40,7 +40,7 @@ def on_raw_email(request, imsg, msg_data):
     to_email = imsg.receipt.recipients[0]
     # logger.info("parsed", msg_data)
     msg = createMessage(to_email, msg_data)
-    metrics.metric("emails_received", category="email", min_granularity="hourly")
+    metrics.metric("emails_received", category="email", min_granularity="hours")
 
     attachments = []
     for msg_atch in msg_data.attachments:

@@ -67,3 +67,21 @@ def subtract(when=None, seconds=None, minutes=None, hours=None, days=None):
 
 def has_time_elsapsed(when, seconds=None, minutes=None, hours=None, days=None):
     return utcnow() >= add(when, seconds, minutes, hours, days)
+
+
+def is_today(when, timezone=None):
+    if timezone is None:
+        timezone = 'UTC'
+
+    # Convert when to the specified timezone
+    if when.tzinfo is None:
+        when = pytz.UTC.localize(when)
+    local_tz = pytz.timezone(timezone)
+    when_local = when.astimezone(local_tz)
+
+    # Get today's date in the specified timezone
+    now_utc = utcnow()
+    now_local = now_utc.astimezone(local_tz)
+
+    # Compare dates
+    return when_local.date() == now_local.date()

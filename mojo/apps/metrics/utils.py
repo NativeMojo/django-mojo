@@ -34,8 +34,8 @@ GRANULARITY_OFFSET_MAP = {
 
 GRANULARITY_END_MAP = {
     'minutes': timedelta(minutes=29),
-    'hours': timedelta(hours=11),
-    'days': timedelta(days=11),
+    'hours': timedelta(hours=24),
+    'days': timedelta(days=30),
     'weeks': timedelta(weeks=11),
     'months': timedelta(days=12*30),
     'years': timedelta(days=11*360)

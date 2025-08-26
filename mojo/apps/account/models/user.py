@@ -5,6 +5,7 @@ from mojo.helpers.settings import settings
 from mojo import errors as merrors
 from mojo.helpers import dates
 from mojo.apps.account.utils.jwtoken import JWToken
+from mojo.apps import metrics
 import uuid
 
 SYS_USER_PERMS_PROTECTION = {
@@ -26,6 +27,7 @@ USER_PERMS_PROTECTION = settings.get("USER_PERMS_PROTECTION", {})
 USER_PERMS_PROTECTION.update(SYS_USER_PERMS_PROTECTION)
 
 USER_LAST_ACTIVITY_FREQ = settings.get("USER_LAST_ACTIVITY_FREQ", 300)
+METRICS_TIMEZONE = settings.get("METRICS_TIMEZONE", "America/Los_Angeles")
 
 class CustomUserManager(BaseUserManager):
     def create_user(self, email, password=None, **extra_fields):
@@ -144,6 +146,8 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
 
     def touch(self):
         # can't subtract offset-naive and offset-aware datetimes
+        if self.last_activity and not dates.is_today(self.last_activity, METRICS_TIMEZONE):
+            metrics.record("user_activity_day", category="user", min_granularity="days")
         if self.last_activity is None or dates.has_time_elsapsed(self.last_activity, seconds=USER_LAST_ACTIVITY_FREQ):
             self.last_activity = dates.utcnow()
             self.atomic_save()

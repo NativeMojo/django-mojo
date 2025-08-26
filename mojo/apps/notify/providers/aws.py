@@ -31,11 +31,11 @@ def send_mail_via_ses(msg, sender, recipients, fail_silently=True):
             RawMessage={'Data': msg.as_string()}
         )
         if EMAIL_METRICS:
-            metrics.record("emails_sent", category="email", min_granularity="hourly")
+            metrics.record("emails_sent", category="email", min_granularity="hours")
         return True
     except Exception as err:
         if EMAIL_METRICS:
-            metrics.record("email_errors", category="email", min_granularity="hourly")
+            metrics.record("email_errors", category="email", min_granularity="hours")
         EMAIL_LOGGER.exception(err)
         EMAIL_LOGGER.error(msg.as_string())
         if not fail_silently:
