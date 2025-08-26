@@ -24,6 +24,7 @@ def api_pending(request):
     pending = tman.get_all_pending()
     size = len(pending)
     response = {
+        'status': True,
         'count': size,
         'page': 0,
         'size': size,
@@ -51,6 +52,7 @@ def api_running(request):
     running = tman.get_all_running(include_data=True)
     size = len(running)
     response = {
+        'status': True,
         'count': size,
         'page': 0,
         'size': size,
@@ -65,6 +67,7 @@ def api_errors(request):
     errors = tman.get_all_errors()
     size = len(errors)
     response = {
+        'status': True,
         'count': size,
         'page': 0,
         'size': size,

@@ -19,6 +19,7 @@ def on_group_me_member(request, pk=None):
     request.group = Group.objects.filter(pk=pk).last()
     if request.group is None:
         return Group.rest_error_response(request, 403, error="GET permission denied: Group")
+    request.group.touch()
     member = request.group.get_member_for_user(request.user)
     if member is None:
         return Group.rest_error_response(request, 403, error="GET permission denied: Member")

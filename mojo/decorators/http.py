@@ -34,6 +34,8 @@ def dispatcher(request, *args, **kwargs):
     if "group" in request.DATA:
         try:
             request.group = modules.get_model_instance("account", "Group", int(request.DATA.group))
+            if request.group is not None:
+                request.group.touch()
         except ValueError:
             return JsonResponse({"error": "Invalid group ID", "code": 400}, status=400)
     method_key = f"{key}__{request.method}"
