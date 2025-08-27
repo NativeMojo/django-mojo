@@ -371,19 +371,6 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
         if "new_password" in changed_fields:
             if not self.can_change_password():
                 raise merrors.PermissionDeniedException("You are not allowed to change password")
-<<<<<<< Updated upstream
-            if "new_password" in changed_fields:
-                if not self.can_change_password():
-                    raise merrors.PermissionDeniedException("You are not allowed to change password")
-                self.debug("CHANGING PASSWORD")
-                self.log("****", kind="password:changed")
-            if "email" in changed_fields:
-                self.log(kind="email:changed", log=f"{changed_fields['email']} to {self.email}")
-            if "username" in changed_fields:
-                self.log(kind="username:changed", log=f"{changed_fields['username']} to {self.username}")
-        self.debug("on_rest_pre_save", changed_fields, creds_changed, self.active_user.is_superuser)
-
-=======
             self.debug("CHANGING PASSWORD")
             self.log("****", kind="password:changed")
         if "email" in changed_fields:
@@ -394,7 +381,6 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
             if not self.is_active:
                 metrics.record("user_deactivated", category="user", min_granularity="hours")
             metrics.set_value("total_users", User.objects.filter(is_active=True).count(), account="global")
->>>>>>> Stashed changes
 
     def check_edit_permission(self, perms, request):
         if "owner" in perms and self.is_request_user():
