@@ -100,15 +100,22 @@ def test_metrics_utils_periods_from_dr_slugs(opts):
     # test utils.generate_slug
     slugs = utils.generate_slugs_for_range("example", start, end, "hours", "mojo")
     periods = utils.periods_from_dr_slugs(slugs)
-    hours = ['03:00', '04:00', '05:00', '06:00', '07:00', '08:00',
-        '09:00', '10:00', '11:00', '12:00', '13:00', '14:00']
+    hours = ['14:00', '15:00', '16:00', '17:00', '18:00', '19:00',
+        '20:00', '21:00', '22:00', '23:00', '00:00', '01:00',
+        '02:00', '03:00', '04:00', '05:00', '06:00', '07:00',
+        '08:00', '09:00', '10:00', '11:00', '12:00', '13:00', '14:00']
     assert periods == hours, f"hours slugs: {periods}"
 
     # test utils.generate_slug
     slugs = utils.generate_slugs_for_range("example", start, end, "days", "mojo")
     periods = utils.periods_from_dr_slugs(slugs)
-    days = ['2025-04-21', '2025-04-22', '2025-04-23', '2025-04-24', '2025-04-25', '2025-04-26',
-        '2025-04-27', '2025-04-28', '2025-04-29', '2025-04-30', '2025-05-01', '2025-05-02']
+    days = ['2025-04-02', '2025-04-03', '2025-04-04', '2025-04-05', '2025-04-06',
+        '2025-04-07', '2025-04-08', '2025-04-09', '2025-04-10', '2025-04-11',
+        '2025-04-12', '2025-04-13', '2025-04-14', '2025-04-15', '2025-04-16',
+        '2025-04-17', '2025-04-18', '2025-04-19', '2025-04-20', '2025-04-21',
+        '2025-04-22', '2025-04-23', '2025-04-24', '2025-04-25', '2025-04-26',
+        '2025-04-27', '2025-04-28', '2025-04-29', '2025-04-30', '2025-05-01',
+        '2025-05-02']
     assert periods == days, f"days slugs: {periods}"
 
     # test utils.generate_slug
@@ -260,11 +267,11 @@ def test_metrics_api(opts):
     resp = opts.client.post(f"/api/metrics/record", dict(slug="c3"))
     assert resp.status_code == 200, f"public -> Expected status_code is 200 but got {resp.status_code}"
 
-    resp = opts.client.get(f"/api/metrics/fetch", params=dict(slugs="c3"))
+    resp = opts.client.get(f"/api/metrics/fetch", params=dict(slugs="c3", with_labels=True))
     assert resp.status_code == 200, f"fetch public Expected status_code is 200 but got {resp.status_code}"
     assert resp.response.data, "missing resp.data"
     data = resp.response.data
-    assert isinstance(data, dict), "result is not dict"
+    assert isinstance(data, dict), f"result is not dict:\n{data}"
     assert isinstance(data.labels, list), "data.label is not list"
     # assert data.label[-1] == "15:00", f"period label is 15:00: {data.periods[-1]}"
     assert isinstance(data.data, dict), f"data.data is not dict {data}"

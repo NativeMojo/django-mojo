@@ -323,6 +323,15 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
         # Fall back to using the full email as username
         return self.email.lower()
 
+    def generate_display_name(self):
+        """Generate a display name from email, falling back to email if username exists."""
+        # Try using the part before @ as display name
+        # generate display name from usernames like "bob.smith", "bob_smith", "bob.smith@example.com"
+        # Extract the base part (before @ if email format)
+        base_username = self.username.split("@")[0] if "@" in self.username else self.username
+        # Replace underscores and dots with spaces, then title case
+        return base_username.replace("_", " ").replace(".", " ").title()
+
     def on_rest_pre_save(self, changed_fields, created):
         self.debug("PRE SAVE")
         creds_changed = False
@@ -348,12 +357,21 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
                 qset = qset.exclude(pk=self.pk)
             if qset.exists():
                 raise merrors.ValueException("Username already exists")
+        if not self.display_name:
+            self.display_name = self.generate_display_name()
         if self.pk is not None:
-            # only super user can change email or username
-            if creds_changed and not self.active_user.is_superuser:
-                raise merrors.PermissionDeniedException("You are not allowed to change email or username")
-            if "password" in changed_fields:
+            self._handle_new_user_pre_save(creds_changed, changed_fields)
+
+    def _handle_new_user_pre_save(self, creds_changed, changed_fields):
+        # only super user can change email or username
+        if creds_changed and not self.active_user.is_superuser:
+            raise merrors.PermissionDeniedException("You are not allowed to change email or username")
+        if "password" in changed_fields:
+            raise merrors.PermissionDeniedException("You are not allowed to change password")
+        if "new_password" in changed_fields:
+            if not self.can_change_password():
                 raise merrors.PermissionDeniedException("You are not allowed to change password")
+<<<<<<< Updated upstream
             if "new_password" in changed_fields:
                 if not self.can_change_password():
                     raise merrors.PermissionDeniedException("You are not allowed to change password")
@@ -365,6 +383,18 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
                 self.log(kind="username:changed", log=f"{changed_fields['username']} to {self.username}")
         self.debug("on_rest_pre_save", changed_fields, creds_changed, self.active_user.is_superuser)
 
+=======
+            self.debug("CHANGING PASSWORD")
+            self.log("****", kind="password:changed")
+        if "email" in changed_fields:
+            self.log(kind="email:changed", log=f"{changed_fields['email']} to {self.email}")
+        if "username" in changed_fields:
+            self.log(kind="username:changed", log=f"{changed_fields['username']} to {self.username}")
+        if "is_active" in changed_fields:
+            if not self.is_active:
+                metrics.record("user_deactivated", category="user", min_granularity="hours")
+            metrics.set_value("total_users", User.objects.filter(is_active=True).count(), account="global")
+>>>>>>> Stashed changes
 
     def check_edit_permission(self, perms, request):
         if "owner" in perms and self.is_request_user():
