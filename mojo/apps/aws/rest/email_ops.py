@@ -43,7 +43,7 @@ def _dns_records_to_dict(records: List[DnsRecord]) -> List[Dict[str, Any]]:
     return [{"type": r.type, "name": r.name, "value": r.value, "ttl": r.ttl} for r in records]
 
 
-@md.URL("aws/email/domain/<int:pk>/onboard")
+@md.URL("email/domain/<int:pk>/onboard")
 @md.requires_perms("manage_aws")
 def on_email_domain_onboard(request, pk: int):
     """
@@ -148,7 +148,7 @@ def on_email_domain_onboard(request, pk: int):
         return JsonResponse({"error": str(e)}, status=500)
 
 
-@md.URL("aws/email/domain/<int:pk>/audit")
+@md.URL("email/domain/<int:pk>/audit")
 @md.requires_perms("manage_aws")
 def on_email_domain_audit(request, pk: int):
     """
@@ -207,7 +207,7 @@ def on_email_domain_audit(request, pk: int):
         return JsonResponse({"error": str(e)}, status=500)
 
 
-@md.URL("aws/email/domain/<int:pk>/reconcile")
+@md.URL("email/domain/<int:pk>/reconcile")
 @md.requires_perms("manage_aws")
 def on_email_domain_reconcile(request, pk: int):
     """

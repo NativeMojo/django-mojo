@@ -2,7 +2,7 @@ from django.db import models
 from mojo.models import MojoModel
 
 
-class SentMessage(MojoModel):
+class SentMessage(models.Model, MojoModel):
     """
     SentMessage
 

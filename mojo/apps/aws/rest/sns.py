@@ -370,7 +370,7 @@ def _handle_sns(kind: str, request):
     return JsonResponse({"status": True, "info": f"Unhandled Type: {msg_type}"})
 
 
-@md.URL("aws/email/sns/inbound")
+@md.URL("email/sns/inbound")
 def on_sns_inbound(request):
     """
     Public webhook endpoint for SES inbound (S3 + SNS).
@@ -378,7 +378,7 @@ def on_sns_inbound(request):
     return _handle_sns("inbound", request)
 
 
-@md.URL("aws/email/sns/bounce")
+@md.URL("email/sns/bounce")
 def on_sns_bounce(request):
     """
     Public webhook endpoint for SES bounce notifications.
@@ -386,7 +386,7 @@ def on_sns_bounce(request):
     return _handle_sns("bounce", request)
 
 
-@md.URL("aws/email/sns/complaint")
+@md.URL("email/sns/complaint")
 def on_sns_complaint(request):
     """
     Public webhook endpoint for SES complaint notifications.
@@ -394,7 +394,7 @@ def on_sns_complaint(request):
     return _handle_sns("complaint", request)
 
 
-@md.URL("aws/email/sns/delivery")
+@md.URL("email/sns/delivery")
 def on_sns_delivery(request):
     """
     Public webhook endpoint for SES delivery notifications.

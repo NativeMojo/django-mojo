@@ -1,5 +1,3 @@
-# django-mojo/docs/rest_api/email.md
-
 # Email REST API — Usage Guide and Portal Integration
 
 Audience: Frontend/portal developers and automation/AI agents
@@ -43,42 +41,42 @@ This guide covers:
 ## Base Paths and Permissions
 
 - All endpoints summarized below start with:
-  - /aws/email/...
+  - /api/aws/email/...
 - Most endpoints require the server-side permission: "manage_aws".
 - Public SNS webhooks (no auth) validate Amazon SNS signatures and allowed TopicArns:
-  - /aws/email/sns/inbound
-  - /aws/email/sns/bounce
-  - /aws/email/sns/complaint
-  - /aws/email/sns/delivery
+  - /api/aws/email/sns/inbound
+  - /api/aws/email/sns/bounce
+  - /api/aws/email/sns/complaint
+  - /api/aws/email/sns/delivery
 
 ---
 
 ## Quick Start Flows
 
 1) Create an EmailDomain
-- POST /aws/email/domain
+- POST /api/aws/email/domain
 - Body: {"name": "example.com", "receiving_enabled": true, "s3_inbound_bucket": "inbound-bucket", "s3_inbound_prefix": "inbound/example.com/"}
 - Behavior: Automatically audits and reconciles SES/SNS on create. Use onboarding to generate/apply DNS.
 
 2) Onboard a Domain (DNS + SNS + optional receiving)
-- POST /aws/email/domain/<id>/onboard
+- POST /api/aws/email/domain/<id>/onboard
 - Returns required DNS records (or applies via GoDaddy if credentials provided).
 
 3) Create a Mailbox
-- POST /aws/email/mailbox
+- POST /api/aws/email/mailbox
 - Body: {"domain": <domain_id>, "email": "support@example.com", "allow_inbound": true, "allow_outbound": true, "async_handler": "myapp.handlers.process_support"}
 
 4) Send Email
-- POST /aws/email/send
+- POST /api/aws/email/send
 - Body: {"from_email": "support@example.com", "to": ["user@example.org"], "subject": "Hello", "body_text": "Hi there!"}
 
 5) Optional: Use DB EmailTemplate (Django-templated)
-- Create EmailTemplate via /aws/email/template
+- Create EmailTemplate via /api/aws/email/template
 - Then send email via Python service (preferred) or mirror in REST (see Examples section).
 
 6) Check Inbound and Sent Items
-- GET /aws/email/incoming?search=...
-- GET /aws/email/sent?search=...
+- GET /api/aws/email/incoming?search=...
+- GET /api/aws/email/sent?search=...
 
 ---
 
@@ -86,9 +84,9 @@ This guide covers:
 
 ### EmailDomain
 
-- GET /aws/email/domain
+- GET /api/aws/email/domain
   - List domains (supports search/sort/pagination per MOJO patterns).
-- POST /aws/email/domain
+- POST /api/aws/email/domain
   - Create a domain. Automatically audits & reconciles. Fields:
     - name: string (required)
     - region: string (optional; defaults to project AWS_REGION)
@@ -96,12 +94,12 @@ This guide covers:
     - s3_inbound_bucket: string (required if receiving_enabled)
     - s3_inbound_prefix: string (optional)
     - dns_mode: "manual" | "godaddy" | "route53" (route53 may be future)
-- GET /aws/email/domain/<id>
+- GET /api/aws/email/domain/<id>
   - Detailed view with SNS topic ARNs.
-- PUT /aws/email/domain/<id>, DELETE /aws/email/domain/<id>
+- PUT /api/aws/email/domain/<id>, DELETE /api/aws/email/domain/<id>
   - Modify or delete the domain record (deleting does not remove AWS resources automatically).
 
-- POST /aws/email/domain/<id>/onboard
+- POST /api/aws/email/domain/<id>/onboard
   - Orchestrates:
     - SES verification & DKIM → produces required DNS records.
     - Ensures SNS topics/subscriptions for bounce/complaint/delivery/inbound.
@@ -115,23 +113,23 @@ This guide covers:
   - Response:
     - dns_records (for manual apply), dkim_tokens, topic_arns, receipt_rule, rule_set, notes
 
-- GET|POST /aws/email/domain/<id>/audit
+- GET|POST /api/aws/email/domain/<id>/audit
   - Returns a drift report for SES/SNS receiving and notifications.
 
-- POST /aws/email/domain/<id>/reconcile
+- POST /api/aws/email/domain/<id>/reconcile
   - Applies safe fixes for SNS topics/mappings and receiving rule (no DNS writes).
   - Response: topic_arns, receipt_rule, rule_set, notes.
 
 ### Mailbox
 
-- GET /aws/email/mailbox
-- POST /aws/email/mailbox
+- GET /api/aws/email/mailbox
+- POST /api/aws/email/mailbox
   - Fields:
     - domain: FK (domain id) or domain name (implementation may accept name).
     - email: full address (unique).
     - allow_inbound, allow_outbound: booleans.
     - async_handler: "package.module:function" for task dispatch on inbound.
-- GET /aws/email/mailbox/<id>, PUT /aws/email/mailbox/<id>, DELETE /aws/email/mailbox/<id>
+- GET /api/aws/email/mailbox/<id>, PUT /api/aws/email/mailbox/<id>, DELETE /api/aws/email/mailbox/<id>
 
 Notes:
 - No SES recipient-specific rules are created per mailbox; SES uses a domain-level catch‑all.
@@ -139,17 +137,17 @@ Notes:
 
 ### Templates (Django EmailTemplate)
 
-- GET /aws/email/template
-- POST /aws/email/template
+- GET /api/aws/email/template
+- POST /api/aws/email/template
   - Fields:
     - name: unique string (required)
     - subject_template, html_template, text_template: Django template strings
     - metadata: object
-- GET /aws/email/template/<id>, PUT /aws/email/template/<id>, DELETE /aws/email/template/<id>
+- GET /api/aws/email/template/<id>, PUT /api/aws/email/template/<id>, DELETE /api/aws/email/template/<id>
 
 ### Sending
 
-- POST /aws/email/send
+- POST /api/aws/email/send
   - Sends a plain/HTML email via SES:
     - from_email: string (required; must be a Mailbox)
     - to: string or array (required)
@@ -170,20 +168,20 @@ Notes:
 
 ### Inbound and Sent Messages
 
-- GET /aws/email/incoming
+- GET /api/aws/email/incoming
   - Query params:
     - search=, sort=, size=, start=, dr_field=, dr_start=, dr_end= (standard MOJO filters)
-- GET /aws/email/incoming/<id>
+- GET /api/aws/email/incoming/<id>
 
-- GET /aws/email/sent
-- GET /aws/email/sent/<id>
+- GET /api/aws/email/sent
+- GET /api/aws/email/sent/<id>
 
 ### SNS Webhooks (Public)
 
-- POST /aws/email/sns/inbound
-- POST /aws/email/sns/bounce
-- POST /aws/email/sns/complaint
-- POST /aws/email/sns/delivery
+- POST /api/aws/email/sns/inbound
+- POST /api/aws/email/sns/bounce
+- POST /api/aws/email/sns/complaint
+- POST /api/aws/email/sns/delivery
 
 Behavior:
 - Validates SNS signature:
@@ -211,7 +209,7 @@ Settings:
 
 Request:
 ```
-POST /aws/email/domain
+POST /api/aws/email/domain
 Content-Type: application/json
 
 {
@@ -245,7 +243,7 @@ Response (simplified):
 
 Request:
 ```
-POST /aws/email/domain/42/onboard
+POST /api/aws/email/domain/42/onboard
 Content-Type: application/json
 
 {
@@ -295,7 +293,7 @@ Response (simplified):
 
 Request:
 ```
-POST /aws/email/mailbox
+POST /api/aws/email/mailbox
 Content-Type: application/json
 
 {
@@ -311,7 +309,7 @@ Content-Type: application/json
 
 Request (plain/HTML):
 ```
-POST /aws/email/send
+POST /api/aws/email/send
 Content-Type: application/json
 
 {
@@ -352,10 +350,10 @@ Key details:
 
 ## Health, Drift, and Reconciliation
 
-- Audit: GET|POST /aws/email/domain/<id>/audit
+- Audit: GET|POST /api/aws/email/domain/<id>/audit
   - Produces drift report for SES identity verification/DKIM, notification topics, and receipt rules.
 
-- Reconcile: POST /aws/email/domain/<id>/reconcile
+- Reconcile: POST /api/aws/email/domain/<id>/reconcile
   - Applies safe, idempotent fixes for topics/mappings and catch‑all receiving rule.
   - Does not modify DNS; use onboard for DNS outputs or provider-integrated apply.
 

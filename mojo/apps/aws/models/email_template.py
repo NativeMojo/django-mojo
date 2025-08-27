@@ -4,7 +4,7 @@ from django.utils.functional import cached_property
 from mojo.models import MojoModel
 
 
-class EmailTemplate(MojoModel):
+class EmailTemplate(models.Model, MojoModel):
     """
     EmailTemplate
 

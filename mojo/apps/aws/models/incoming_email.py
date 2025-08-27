@@ -2,7 +2,7 @@ from django.db import models
 from mojo.models import MojoModel
 
 
-class IncomingEmail(MojoModel):
+class IncomingEmail(models.Model, MojoModel):
     """
     IncomingEmail
 

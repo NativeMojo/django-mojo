@@ -6,6 +6,7 @@ import os
 from mojo.helpers import logit
 from mojo.helpers import daemon
 from mojo.helpers import paths
+from mojo.helpers.settings import settings
 from mojo.apps import metrics
 import time
 import socket
@@ -44,6 +45,43 @@ class TaskEngine(daemon.Daemon):
         self.ping_thread = None
         self.ping_interval = 30  # seconds
         self.started_at = time.time()
+
+    def _is_logging_enabled(self):
+        """Check if task logging is enabled."""
+        return getattr(settings, 'TASKS_LOG_ENABLED', True)
+
+    def _log_task_event(self, task_data, event_type, **kwargs):
+        """Log task event if logging is enabled."""
+        if not self._is_logging_enabled():
+            return
+
+        try:
+            from .models import TaskLog
+
+            if event_type == 'started':
+                TaskLog.log_status_change(
+                    task_data=task_data,
+                    new_status='running',
+                    previous_status='pending',
+                    runner_hostname=self.hostname
+                )
+            elif event_type == 'completed':
+                TaskLog.log_status_change(
+                    task_data=task_data,
+                    new_status='completed',
+                    previous_status='running',
+                    runner_hostname=self.hostname
+                )
+            elif event_type == 'error':
+                TaskLog.log_task_error(
+                    task_data=task_data,
+                    error_message=kwargs.get('error_message'),
+                    error_traceback=kwargs.get('error_traceback'),
+                    runner_hostname=self.hostname
+                )
+        except Exception as e:
+            # Don't let logging errors break task processing
+            self.logger.error(f"Failed to log task event: {e}")
 
     def register_runner(self):
         """
@@ -265,6 +303,9 @@ class TaskEngine(daemon.Daemon):
         self.manager.remove_from_pending(task_id, task_data.channel)
         self.manager.add_to_running(task_id, task_data.channel)
 
+        # Log task started event
+        self._log_task_event(task_data, 'started')
+
         try:
             task_data.started_at = time.time()
             task_data._thread_id = threading.current_thread().ident
@@ -283,11 +324,28 @@ class TaskEngine(daemon.Daemon):
                 del task_data["_thread_id"]
             tman.save_task(task_data)
             tman.add_to_completed(task_data)
+
+            # Log task completion
+            self._log_task_event(task_data, 'completed')
+
             metrics.record("tasks_completed", category="tasks")
             self.logger.info(f"Task {task_id} completed after {task_data.elapsed_time} seconds")
         except Exception as e:
-            self.logger.exception(f"Error executing task {task_id}: {str(e)}")
-            tman.add_to_errors(task_data, str(e))
+            import traceback
+            error_traceback = traceback.format_exc()
+            error_message = str(e)
+
+            self.logger.exception(f"Error executing task {task_id}: {error_message}")
+
+            # Log task error with traceback
+            self._log_task_event(
+                task_data,
+                'error',
+                error_message=error_message,
+                error_traceback=error_traceback
+            )
+
+            tman.add_to_errors(task_data, error_message)
             metrics.record("tasks_errors", category="tasks")
         finally:
             tman.remove_from_running(task_id, task_data.channel)

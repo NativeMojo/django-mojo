@@ -564,6 +564,13 @@ class MojoModel:
             elif field.get_internal_type() == "JSONField":
                 self.on_rest_update_jsonfield(key, value)
             else:
+                if field.get_internal_type() == "BooleanField":
+                    if isinstance(value, str):
+                        value = value.lower() in ("true", "1")
+                    elif isinstance(value, int):
+                        value = bool(value)
+                    else:
+                        value = bool(value)
                 self._set_field_change(key, getattr(self, key), value)
                 setattr(self, key, value)
 

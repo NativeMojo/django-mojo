@@ -2,7 +2,7 @@ from django.db import models
 from mojo.models import MojoModel
 
 
-class EmailAttachment(MojoModel):
+class EmailAttachment(models.Model, MojoModel):
     """
     EmailAttachment
 

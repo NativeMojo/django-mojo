@@ -18,7 +18,7 @@ def _as_list(value: Any) -> List[str]:
     return [str(value).strip()] if str(value).strip() else []
 
 
-@md.URL("aws/email/send")
+@md.URL("email/send")
 @md.requires_perms("manage_aws")
 def on_send_email(request):
     """

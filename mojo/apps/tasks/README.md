@@ -34,7 +34,28 @@ Ensure your Django project is set up to use Taskit by configuring the necessary 
 TASKIT_CHANNELS = ['channel1', 'channel2', 'broadcast']
 REDIS_HOST = 'localhost'
 REDIS_PORT = 6379
+
+# Task logging (enabled by default)
+TASKS_LOG_ENABLED = True  # Set to False to disable task logging
 ```
+
+### Task Logging
+
+Taskit includes comprehensive task logging that tracks the complete lifecycle of tasks including:
+
+- Task creation and publication
+- Status changes (pending → running → completed/error/cancelled)
+- Execution timing and performance metrics
+- Error messages and stack traces
+- Runner/hostname information
+
+The logging is enabled by default via `TASKS_LOG_ENABLED = True` and stores logs in the `TaskLog` model with the following key features:
+
+- **Audit Trail**: Complete chronological history of all task events
+- **Error Tracking**: Detailed error messages and stack traces for failed tasks
+- **Performance Metrics**: Execution duration and timing information
+- **Multi-tenancy**: Support for different channels and runner identification
+- **REST API**: Full REST interface for querying and analyzing task logs
 
 ## Usage
 
@@ -89,11 +110,36 @@ python manage.py taskit --start
 
 Taskit provides several Django REST API endpoints for managing tasks:
 
+### Task Management
 - **Status:** `GET /status/` - Get the overall status of the task system.
 - **Pending Tasks:** `GET /pending/` - Retrieve all pending tasks.
 - **Completed Tasks:** `GET /completed/` - Retrieve all completed tasks.
 - **Running Tasks:** `GET /running/` - Retrieve all running tasks.
 - **Error Tasks:** `GET /errors/` - Retrieve tasks that encountered errors.
+- **Runners:** `GET /runners/` - Get information about active task runners.
+
+### Task Logging (New!)
+- **Task Logs:** `GET /logs/` - List task logs with filtering by task_id, channel, status, date range
+- **Task Timeline:** `GET /logs/task/{task_id}/` - Get chronological timeline for a specific task
+- **Error Logs:** `GET /logs/errors/` - Get detailed error logs with stack traces
+- **Task Statistics:** `GET /logs/stats/` - Get task execution statistics and metrics
+- **Log Detail:** `GET /logs/{log_id}/` - Get detailed information for a specific log entry
+
+#### Task Log Filtering
+
+The logs endpoint supports extensive filtering options:
+
+```bash
+GET /logs/?task_channel=background&status=completed&hours=24&limit=100
+GET /logs/errors/?hours=48&runner_hostname=server1
+GET /logs/stats/?group_by=channel&hours=168
+```
+
+Supported filters:
+- `task_id`, `task_function`, `task_channel`, `event_type`, `status`
+- `runner_hostname`, `has_error`, `created_after`, `created_before`, `hours`
+- `graph` (basic, detailed, with_data, errors, timeline)
+- `limit`, `offset` for pagination
 
 ## Command Line Interface
 

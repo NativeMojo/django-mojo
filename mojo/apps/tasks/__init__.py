@@ -8,9 +8,9 @@ def get_manager():
     return TaskManager(settings.TASK_CHANNELS)
 
 
-def publish(channel, function, data, expires=1800):
+def publish(channel, function, data, expires=1800, user=None):
     man = get_manager()
-    return man.publish(function, data, channel=channel, expires=expires)
+    return man.publish(function, data, channel=channel, expires=expires, user=user)
 
 
 def async_task(channel="bg_tasks", expires=1800):

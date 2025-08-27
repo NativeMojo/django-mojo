@@ -1,9 +1,11 @@
 from posix import lockf
 from venv import create
 from mojo.helpers import redis
+from mojo.helpers.settings import settings
 from objict import objict
 import uuid
 import time
+import socket
 
 
 class TaskManager:
@@ -17,6 +19,42 @@ class TaskManager:
         self.redis = redis.get_connection()
         self.channels = channels
         self.prefix = prefix
+        self.hostname = socket.gethostname()
+
+    def _is_logging_enabled(self):
+        """Check if task logging is enabled."""
+        return getattr(settings, 'TASKS_LOG_ENABLED', True)
+
+    def _log_task_event(self, task_data, event_type, **kwargs):
+        """Log task event if logging is enabled."""
+        if not self._is_logging_enabled():
+            return
+
+        try:
+            from .models import TaskLog
+
+            if event_type == 'created':
+                TaskLog.log_task_created(task_data, user=kwargs.get('user'))
+            elif event_type == 'status_change':
+                TaskLog.log_status_change(
+                    task_data=task_data,
+                    new_status=kwargs.get('new_status'),
+                    previous_status=kwargs.get('previous_status'),
+                    runner_hostname=kwargs.get('runner_hostname', self.hostname),
+                    error_message=kwargs.get('error_message')
+                )
+            elif event_type == 'error':
+                TaskLog.log_task_error(
+                    task_data=task_data,
+                    error_message=kwargs.get('error_message'),
+                    error_traceback=kwargs.get('error_traceback'),
+                    runner_hostname=kwargs.get('runner_hostname', self.hostname)
+                )
+        except Exception as e:
+            # Don't let logging errors break task processing
+            import logging
+            logger = logging.getLogger('tasks.logging')
+            logger.error(f"Failed to log task event: {e}")
 
     def take_out_the_dead(self, local=False):
         # Get channels from Redis instead of using self.channels
@@ -183,6 +221,16 @@ class TaskManager:
         :param channel: Channel name. Default is "default".
         :return: True if operation is successful.
         """
+        # Log status change if logging enabled
+        task_data = self.get_task(task_id)
+        if task_data:
+            self._log_task_event(
+                task_data,
+                'status_change',
+                new_status='running',
+                previous_status=task_data.get('status', 'pending')
+            )
+
         self.redis.sadd(self.get_running_key(channel), task_id)
         return True
 
@@ -194,8 +242,18 @@ class TaskManager:
         :param error_message: Error message string.
         :return: True if operation is successful.
         """
+        previous_status = task_data.get('status', 'running')
         task_data.status = "error"
         task_data.error = error_message
+
+        # Log error event
+        self._log_task_event(
+            task_data,
+            'error',
+            error_message=error_message,
+            previous_status=previous_status
+        )
+
         self.save_task(task_data, expires=86400)
         self.redis.sadd(self.get_error_key(task_data.channel), task_data.id)
         return True
@@ -207,7 +265,17 @@ class TaskManager:
         :param task_data: Task data as an objict.
         :return: True if operation is successful.
         """
+        previous_status = task_data.get('status', 'running')
         task_data.status = "completed"
+
+        # Log completion event
+        self._log_task_event(
+            task_data,
+            'status_change',
+            new_status='completed',
+            previous_status=previous_status
+        )
+
         # save completed tasks for 24 hours
         self.save_task(task_data, expires=86400)
         self.redis.sadd(self.get_completed_key(task_data.channel), task_data.id)
@@ -281,7 +349,17 @@ class TaskManager:
         task_data_raw = self.redis.get(self.get_task_key(task_id))
         task_data = objict.from_json(task_data_raw, ignore_errors=True)
         if task_data:
+            previous_status = task_data.get('status', 'pending')
             task_data.status = "cancelled"
+
+            # Log cancellation event
+            self._log_task_event(
+                task_data,
+                'status_change',
+                new_status='cancelled',
+                previous_status=previous_status
+            )
+
             self.remove_from_pending(task_data.id, task_data.channel)
             self.save_task(task_data)
             return True
@@ -387,7 +465,7 @@ class TaskManager:
                 self.remove_from_errors(task_id, channel)
         return error_tasks
 
-    def publish(self, function, data, channel="default", expires=1800):
+    def publish(self, function, data, channel="default", expires=1800, user=None):
         """
         Publish a new task to a channel, save it, and add to pending tasks.
 
@@ -395,6 +473,7 @@ class TaskManager:
         :param data: Data to be processed by the task.
         :param channel: Channel name. Default is "default".
         :param expires: Expiration time in seconds. Default is 1800.
+        :param user: User who created the task (for logging).
         :return: Task ID of the published task.
         """
         from mojo.apps import metrics
@@ -404,6 +483,10 @@ class TaskManager:
         task_data.created = time.time()
         task_data.expires = time.time() + expires
         task_data.status = "pending"
+
+        # Log task creation
+        self._log_task_event(task_data, 'created', user=user)
+
         self.add_to_pending(task_data.id, channel)
         self.save_task(task_data, expires)
         self.redis.publish(self.get_channel_key(channel), task_data.id)

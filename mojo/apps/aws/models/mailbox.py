@@ -3,7 +3,7 @@ from django.core.exceptions import ValidationError
 from mojo.models import MojoModel
 
 
-class Mailbox(MojoModel):
+class Mailbox(models.Model, MojoModel):
     """
     Mailbox
 
