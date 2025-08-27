@@ -175,6 +175,7 @@ def on_email_domain_audit(request, pk: int):
             "prefix": domain.s3_inbound_prefix or "",
             "rule_set": payload.get("rule_set") or "mojo-default-receiving",
             "rule_name": payload.get("rule_name") or f"mojo-{domain.name}-catchall",
+            "inbound_topic_arn": getattr(domain, "sns_topic_inbound_arn", None),
         }
 
     try:
@@ -184,14 +185,56 @@ def on_email_domain_audit(request, pk: int):
             access_key=access_key,
             secret_key=secret_key,
             desired_receiving=desired_receiving,
-            desired_topics=None,  # we treat topics as flexible unless caller provides explicit desired ARNs
+            desired_topics={
+                "bounce": getattr(domain, "sns_topic_bounce_arn", None),
+                "complaint": getattr(domain, "sns_topic_complaint_arn", None),
+                "delivery": getattr(domain, "sns_topic_delivery_arn", None),
+            },
         )
+        # Persist summarized audit results on the EmailDomain
+        try:
+            # can_send: SES verified + DKIM verified + SES production access + notification topics mapped
+            can_send = bool(
+                report.checks.get("ses_verified") and
+                report.checks.get("dkim_verified") and
+                report.checks.get("ses_production_access") and
+                report.checks.get("notification_topics_ok")
+            )
+            # can_recv: only if receiving is enabled and bucket exists + receipt rule S3+SNS OK + topics exist + subs confirmed
+            can_recv = False
+            if domain.receiving_enabled:
+                can_recv = bool(
+                    report.checks.get("s3_bucket_exists") and
+                    report.checks.get("receiving_rule_s3_ok") and
+                    report.checks.get("receiving_rule_sns_ok") and
+                    report.checks.get("sns_topics_exist") and
+                    report.checks.get("sns_subscriptions_confirmed")
+                )
+            # status: "ready" if audit passes, otherwise "missing" (keeps "pending" only for first create before audit)
+            new_status = "ready" if report.audit_pass else "missing"
+            updates = {}
+            if domain.status != new_status:
+                updates["status"] = new_status
+            if domain.can_send != can_send:
+                updates["can_send"] = can_send
+            if domain.can_recv != can_recv:
+                updates["can_recv"] = can_recv
+            if updates:
+                for k, v in updates.items():
+                    setattr(domain, k, v)
+                domain.save(update_fields=list(updates.keys()) + ["modified"])
+        except Exception:
+            # Non-fatal: still return the audit payload even if persistence fails
+            pass
+
         return JsonResponse({
             "status": True,
             "data": {
                 "domain": report.domain,
                 "region": report.region,
                 "status": report.status,
+                "audit_pass": report.audit_pass,
+                "checks": report.checks,
                 "items": [
                     {
                         "resource": it.resource,

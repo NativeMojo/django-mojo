@@ -89,6 +89,8 @@ class AuditReport:
     region: str
     status: Literal["ok", "drifted", "conflict"]
     items: List[AuditItem] = field(default_factory=list)
+    checks: Dict[str, bool] = field(default_factory=dict)
+    audit_pass: bool = False
 
 
 def _get_ses_client(region: str, access_key: Optional[str], secret_key: Optional[str]):
@@ -386,28 +388,90 @@ def audit_domain_config(
     desired_topics: Optional[Dict[str, str]] = None,
 ) -> AuditReport:
     """
-    Inspect SES identity verification/DKIM/notifications and receiving rules.
-    Return a drift/conflict report with current vs desired.
+    Inspect SES identity verification/DKIM/notifications and receiving rules,
+    and produce a boolean checks summary plus detailed items.
+
     - desired_receiving: {"bucket": str, "prefix": str, "rule_set": str, "rule_name": str}
-    - desired_topics: {"bounce": arn, "complaint": arn, "delivery": arn, "inbound": arn}
+    - desired_topics: {"bounce": arn, "complaint": arn, "delivery": arn}
+      If not provided, will be derived from the EmailDomain model fields.
     """
     region = region or getattr(settings, "AWS_REGION", "us-east-1")
     ses = _get_ses_client(region, access_key, secret_key)
 
     items: List[AuditItem] = []
+    checks: Dict[str, bool] = {}
 
-    # Identity verification
+    # 0) SES account sandbox/production access (region-specific)
+    try:
+        sesv2 = boto3.client(
+            "sesv2",
+            aws_access_key_id=access_key or settings.AWS_KEY,
+            aws_secret_access_key=secret_key or settings.AWS_SECRET,
+            region_name=region,
+        )
+        acct = sesv2.get_account()
+        prod = bool(acct.get("ProductionAccessEnabled", False))
+        checks["ses_production_access"] = prod
+        items.append(
+            AuditItem(
+                resource="ses.account.production_access",
+                desired={"ProductionAccessEnabled": True},
+                current={"ProductionAccessEnabled": prod},
+                status="ok" if prod else "drifted",
+            )
+        )
+    except Exception as e:
+        checks["ses_production_access"] = False
+        items.append(
+            AuditItem(
+                resource="ses.account.production_access",
+                desired={"ProductionAccessEnabled": True},
+                current=f"error: {e}",
+                status="conflict",
+            )
+        )
+
+    # Load configured expectations from EmailDomain when available
+    try:
+        from mojo.apps.aws.models import EmailDomain as _EmailDomain
+        _ed = _EmailDomain.objects.filter(name=domain).first()
+    except Exception:
+        _ed = None
+
+    # Derive desired topics from model if not provided
+    if desired_topics is None:
+        desired_topics = {}
+        if _ed:
+            desired_topics = {
+                "bounce": getattr(_ed, "sns_topic_bounce_arn", None),
+                "complaint": getattr(_ed, "sns_topic_complaint_arn", None),
+                "delivery": getattr(_ed, "sns_topic_delivery_arn", None),
+            }
+
+    # Derive desired_receiving from model if not provided
+    if desired_receiving is None and _ed and getattr(_ed, "receiving_enabled", False) and getattr(_ed, "s3_inbound_bucket", None):
+        desired_receiving = {
+            "bucket": _ed.s3_inbound_bucket,
+            "prefix": _ed.s3_inbound_prefix or "",
+            "rule_set": DEFAULT_RULE_SET_NAME,
+            "rule_name": f"mojo-{domain}-catchall",
+            "inbound_topic_arn": getattr(_ed, "sns_topic_inbound_arn", None),
+        }
+
+    # 1) Identity verification
     try:
         ver = ses.get_identity_verification_attributes(Identities=[domain])
-        vstatus = ver.get("VerificationAttributes", {}).get(domain, {}).get("VerificationStatus")
+        vstatus = (ver.get("VerificationAttributes", {}).get(domain, {}) or {}).get("VerificationStatus")
+        item_status = "ok" if vstatus == "Success" else "drifted"
         items.append(
             AuditItem(
                 resource="ses.identity.verification",
                 desired="Success",
                 current=vstatus,
-                status="ok" if vstatus == "Success" else "drifted",
+                status=item_status,
             )
         )
+        checks["ses_verified"] = (vstatus == "Success")
     except ClientError as e:
         items.append(
             AuditItem(
@@ -417,25 +481,27 @@ def audit_domain_config(
                 status="conflict",
             )
         )
+        checks["ses_verified"] = False
 
-    # DKIM attributes
+    # 2) DKIM attributes
     try:
         dk = ses.get_identity_dkim_attributes(Identities=[domain])
-        dkattrs = dk.get("DkimAttributes", {}).get(domain, {})
+        dkattrs = (dk.get("DkimAttributes", {}) or {}).get(domain, {}) or {}
         current_dkim = {
             "Enabled": dkattrs.get("DkimEnabled"),
             "VerificationStatus": dkattrs.get("DkimVerificationStatus"),
         }
         desired_dkim = {"Enabled": True, "VerificationStatus": "Success"}
-        status = "ok" if current_dkim == desired_dkim else "drifted"
+        item_status = "ok" if current_dkim == desired_dkim else "drifted"
         items.append(
             AuditItem(
                 resource="ses.identity.dkim",
                 desired=desired_dkim,
                 current=current_dkim,
-                status=status,
+                status=item_status,
             )
         )
+        checks["dkim_verified"] = (current_dkim.get("Enabled") is True and current_dkim.get("VerificationStatus") == "Success")
     except ClientError as e:
         items.append(
             AuditItem(
@@ -445,32 +511,38 @@ def audit_domain_config(
                 status="conflict",
             )
         )
+        checks["dkim_verified"] = False
 
-    # Notification topics
+    # 3) Notification topics mapping (SES identity)
     try:
         na = ses.get_identity_notification_attributes(Identities=[domain])
-        cur = na.get("NotificationAttributes", {}).get(domain, {})
-        desired = {
-            "BounceTopic": desired_topics.get("bounce") if desired_topics else None,
-            "ComplaintTopic": desired_topics.get("complaint") if desired_topics else None,
-            "DeliveryTopic": desired_topics.get("delivery") if desired_topics else None,
-        }
+        cur = (na.get("NotificationAttributes", {}) or {}).get(domain, {}) or {}
         current = {
             "BounceTopic": cur.get("BounceTopic"),
             "ComplaintTopic": cur.get("ComplaintTopic"),
             "DeliveryTopic": cur.get("DeliveryTopic"),
         }
-        status = "ok" if all(
-            (desired[k] is None) or (desired[k] == current[k]) for k in desired
-        ) else "drifted"
+        desired = {
+            "BounceTopic": desired_topics.get("bounce"),
+            "ComplaintTopic": desired_topics.get("complaint"),
+            "DeliveryTopic": desired_topics.get("delivery"),
+        }
+        mapping_ok = True
+        for k in ("BounceTopic", "ComplaintTopic", "DeliveryTopic"):
+            # ok only if both are equal (including both None)
+            if desired.get(k) != current.get(k):
+                mapping_ok = False
+                break
+        item_status = "ok" if mapping_ok else "drifted"
         items.append(
             AuditItem(
                 resource="ses.identity.notification_topics",
                 desired=desired,
                 current=current,
-                status=status,
+                status=item_status,
             )
         )
+        checks["notification_topics_ok"] = mapping_ok
     except ClientError as e:
         items.append(
             AuditItem(
@@ -480,50 +552,199 @@ def audit_domain_config(
                 status="conflict",
             )
         )
+        checks["notification_topics_ok"] = False
 
-    # Receipt rules (optional)
+    # 4) Receipt rule (S3 and SNS actions) and S3 bucket existence
+    checks["receiving_rule_s3_ok"] = False
+    checks["receiving_rule_sns_ok"] = False
+    checks["s3_bucket_exists"] = False
     if desired_receiving:
+        rs_name = desired_receiving.get("rule_set") or DEFAULT_RULE_SET_NAME
+        rule_name = desired_receiving.get("rule_name") or f"mojo-{domain}-catchall"
+        want_bucket = desired_receiving.get("bucket")
+        want_prefix = desired_receiving.get("prefix") or ""
+        want_inbound_arn = desired_receiving.get("inbound_topic_arn")
+
+        # S3 bucket head check (read-only)
         try:
-            rs_name = desired_receiving.get("rule_set") or DEFAULT_RULE_SET_NAME
-            rule_name = desired_receiving.get("rule_name") or f"mojo-{domain}-catchall"
+            s3 = boto3.client(
+                "s3",
+                aws_access_key_id=access_key or settings.AWS_KEY,
+                aws_secret_access_key=secret_key or settings.AWS_SECRET,
+                region_name=region,
+            )
+            s3.head_bucket(Bucket=want_bucket)
+            checks["s3_bucket_exists"] = True
+            items.append(
+                AuditItem(
+                    resource=f"s3.bucket.exists.{want_bucket}",
+                    desired={"Exists": True},
+                    current={"Exists": True},
+                    status="ok",
+                )
+            )
+        except Exception as e:
+            items.append(
+                AuditItem(
+                    resource=f"s3.bucket.exists.{want_bucket}",
+                    desired={"Exists": True},
+                    current=f"error: {e}",
+                    status="missing",
+                )
+            )
+            checks["s3_bucket_exists"] = False
+
+        try:
             rs = ses.describe_receipt_rule_set(RuleSetName=rs_name)
             rules = {r.get("Name"): r for r in rs.get("Rules", [])}
             current_rule = rules.get(rule_name)
-            desired_rule = {
-                "Recipients": [domain],
-                "BucketName": desired_receiving.get("bucket"),
-                "ObjectKeyPrefix": desired_receiving.get("prefix"),
-            }
             if current_rule:
-                # Extract a shallow view for comparison
-                s3_action = next((a.get("S3Action") for a in current_rule.get("Actions", []) if "S3Action" in a), {})
-                recipients = current_rule.get("Recipients", [])
+                # Pull S3Action and SNSAction
+                s3_action = next((a.get("S3Action") for a in current_rule.get("Actions", []) if "S3Action" in a), {}) or {}
+                sns_action = next((a.get("SNSAction") for a in current_rule.get("Actions", []) if "SNSAction" in a), {}) or {}
+                recipients = current_rule.get("Recipients", []) or []
+
+                s3_ok = (want_bucket == s3_action.get("BucketName")) and ((want_prefix or "") == (s3_action.get("ObjectKeyPrefix") or ""))
+                sns_ok = (want_inbound_arn is None) or (want_inbound_arn == sns_action.get("TopicArn"))
+                rec_ok = (domain in recipients)
+
                 current_view = {
                     "Recipients": recipients,
                     "BucketName": s3_action.get("BucketName"),
                     "ObjectKeyPrefix": s3_action.get("ObjectKeyPrefix"),
+                    "SnsTopicArn": sns_action.get("TopicArn"),
                 }
-                status = "ok" if current_view == desired_rule else "drifted"
-            else:
-                current_view = None
-                status = "missing"
-            items.append(
-                AuditItem(
-                    resource=f"ses.receipt_rule.{rs_name}.{rule_name}",
-                    desired=desired_rule,
-                    current=current_view,
-                    status=status,
+                desired_view = {
+                    "Recipients": [domain],
+                    "BucketName": want_bucket,
+                    "ObjectKeyPrefix": want_prefix,
+                    "SnsTopicArn": want_inbound_arn,
+                }
+
+                # S3 comparison item
+                items.append(
+                    AuditItem(
+                        resource=f"ses.receipt_rule.s3.{rs_name}.{rule_name}",
+                        desired={"Recipients": [domain], "BucketName": want_bucket, "ObjectKeyPrefix": want_prefix},
+                        current={"Recipients": recipients, "BucketName": s3_action.get("BucketName"), "ObjectKeyPrefix": s3_action.get("ObjectKeyPrefix")},
+                        status="ok" if (s3_ok and rec_ok) else "drifted",
+                    )
                 )
-            )
+                # SNS comparison item
+                items.append(
+                    AuditItem(
+                        resource=f"ses.receipt_rule.sns.{rs_name}.{rule_name}",
+                        desired={"SnsTopicArn": want_inbound_arn},
+                        current={"SnsTopicArn": sns_action.get("TopicArn")},
+                        status="ok" if sns_ok else "drifted",
+                    )
+                )
+
+                checks["receiving_rule_s3_ok"] = bool(s3_ok and rec_ok)
+                checks["receiving_rule_sns_ok"] = bool(sns_ok)
+            else:
+                items.append(
+                    AuditItem(
+                        resource=f"ses.receipt_rule.{rs_name}.{rule_name}",
+                        desired={"Recipients": [domain], "BucketName": want_bucket, "ObjectKeyPrefix": want_prefix, "SnsTopicArn": want_inbound_arn},
+                        current=None,
+                        status="missing",
+                    )
+                )
+                checks["receiving_rule_s3_ok"] = False
+                checks["receiving_rule_sns_ok"] = False
         except ClientError as e:
             items.append(
                 AuditItem(
-                    resource="ses.receipt_rule",
+                    resource=f"ses.receipt_rule.{rs_name}",
                     desired=desired_receiving,
                     current=f"error: {e}",
                     status="conflict",
                 )
             )
+            checks["receiving_rule_s3_ok"] = False
+            checks["receiving_rule_sns_ok"] = False
+
+    # 5) SNS topics existence and subscription status for configured ARNs
+    checks["sns_topics_exist"] = True
+    checks["sns_subscriptions_confirmed"] = True
+    try:
+        sns = boto3.client(
+            "sns",
+            aws_access_key_id=access_key or settings.AWS_KEY,
+            aws_secret_access_key=secret_key or settings.AWS_SECRET,
+            region_name=region,
+        )
+        # Include bounce/complaint/delivery + inbound (from desired_receiving) if present
+        topic_map: Dict[str, Optional[str]] = {
+            "bounce": desired_topics.get("bounce"),
+            "complaint": desired_topics.get("complaint"),
+            "delivery": desired_topics.get("delivery"),
+        }
+        if desired_receiving and desired_receiving.get("inbound_topic_arn"):
+            topic_map["inbound"] = desired_receiving.get("inbound_topic_arn")
+
+        for key, arn in topic_map.items():
+            if not arn:
+                # If we expect no ARN, treat as OK only if SES mapping is also None (handled above).
+                continue
+            exists_ok = False
+            subs_ok = False
+            try:
+                sns.get_topic_attributes(TopicArn=arn)
+                exists_ok = True
+            except Exception as e:
+                items.append(
+                    AuditItem(
+                        resource=f"sns.topic.exists.{key}",
+                        desired={"TopicArn": arn},
+                        current=f"error: {e}",
+                        status="missing",
+                    )
+                )
+                exists_ok = False
+
+            if exists_ok:
+                # Check subscriptions
+                try:
+                    subs = sns.list_subscriptions_by_topic(TopicArn=arn).get("Subscriptions", []) or []
+                    # Confirm at least one confirmed HTTPS subscription
+                    confirmed = False
+                    for s in subs:
+                        proto = (s.get("Protocol") or "").lower()
+                        pending = s.get("PendingConfirmation")
+                        # PendingConfirmation may be 'true'/'false' or boolean
+                        is_pending = (str(pending).lower() == "true")
+                        if proto == "https" and not is_pending:
+                            confirmed = True
+                            break
+                    subs_ok = confirmed
+                    items.append(
+                        AuditItem(
+                            resource=f"sns.topic.subscriptions.{key}",
+                            desired={"ConfirmedHttpsSubscription": True},
+                            current={"ConfirmedHttpsSubscription": confirmed},
+                            status="ok" if confirmed else "drifted",
+                        )
+                    )
+                except Exception as e:
+                    items.append(
+                        AuditItem(
+                            resource=f"sns.topic.subscriptions.{key}",
+                            desired={"ConfirmedHttpsSubscription": True},
+                            current=f"error: {e}",
+                            status="conflict",
+                        )
+                    )
+                    subs_ok = False
+
+            checks["sns_topics_exist"] = checks["sns_topics_exist"] and exists_ok
+            checks["sns_subscriptions_confirmed"] = checks["sns_subscriptions_confirmed"] and subs_ok
+
+    except Exception:
+        # If SNS client init fails, mark as unknown/false
+        checks["sns_topics_exist"] = False
+        checks["sns_subscriptions_confirmed"] = False
 
     # Overall status
     overall = "ok"
@@ -532,7 +753,14 @@ def audit_domain_config(
     elif any(it.status in ("drifted", "missing") for it in items):
         overall = "drifted"
 
-    return AuditReport(domain=domain, region=region, status=overall, items=items)
+    return AuditReport(
+        domain=domain,
+        region=region,
+        status=overall,
+        items=items,
+        checks=checks,
+        audit_pass=(overall == "ok"),
+    )
 
 
 def reconcile_domain_config(

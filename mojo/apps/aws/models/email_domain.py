@@ -33,7 +33,7 @@ class EmailDomain(MojoSecrets, MojoModel):
         max_length=32,
         default='pending',
         db_index=True,
-        help_text="High-level status: pending, verified, error (free-form)"
+        help_text='Domain status: "pending" (created), "ready" (audit passed), or "missing" (audit failed)'
     )
 
     receiving_enabled = models.BooleanField(
@@ -86,6 +86,16 @@ class EmailDomain(MojoSecrets, MojoModel):
     )
 
     metadata = models.JSONField(default=dict, blank=True)
+
+    # Computed readiness flags updated by audit runs
+    can_send = models.BooleanField(
+        default=False,
+        help_text="True if outbound sending is ready per last audit"
+    )
+    can_recv = models.BooleanField(
+        default=False,
+        help_text="True if inbound receiving is ready per last audit"
+    )
 
     class Meta:
         db_table = "aws_email_domain"

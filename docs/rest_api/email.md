@@ -19,6 +19,7 @@ This guide covers:
   - Can enable domain-level catch‑all receiving (SES receipt rule → S3 + SNS).
   - Stores SNS topic ARNs for inbound, bounce, complaint, and delivery.
   - Auto-audits and auto-reconciles on creation to adopt or create necessary resources.
+  - Audit persistence: status is updated to "ready" when audit passes, or "missing" when audit fails (initial is "pending" on create). Boolean readiness flags can_send (outbound) and can_recv (inbound) are also persisted by the audit.
 
 - Mailbox
   - Represents a single email address within a domain.
@@ -94,8 +95,8 @@ This guide covers:
     - s3_inbound_bucket: string (required if receiving_enabled)
     - s3_inbound_prefix: string (optional)
     - dns_mode: "manual" | "godaddy" | "route53" (route53 may be future)
-- GET /api/aws/email/domain/<id>
-  - Detailed view with SNS topic ARNs.
+- GET /aws/email/domain/<id>
+  - Detailed view with SNS topic ARNs, status ("pending" | "ready" | "missing"), and readiness flags can_send/can_recv (set by the last audit).
 - PUT /api/aws/email/domain/<id>, DELETE /api/aws/email/domain/<id>
   - Modify or delete the domain record (deleting does not remove AWS resources automatically).
 
@@ -113,8 +114,13 @@ This guide covers:
   - Response:
     - dns_records (for manual apply), dkim_tokens, topic_arns, receipt_rule, rule_set, notes
 
-- GET|POST /api/aws/email/domain/<id>/audit
-  - Returns a drift report for SES/SNS receiving and notifications.
+- GET|POST /aws/email/domain/<id>/audit
+  - Returns a drift report with:
+    - status ("ok" | "drifted" | "conflict"), audit_pass (boolean), checks (booleans for each subsystem), and detailed items (resource, desired, current, status).
+  - Persists a summary on the EmailDomain:
+    - status → "ready" if audit_pass is true, otherwise "missing" (initially "pending" on first create)
+    - can_send → true when SES identity is verified, DKIM verified, SES production access is enabled, and SES identity notification topics map to the stored ARNs
+    - can_recv → true (when receiving_enabled) if inbound S3 bucket exists, receipt rule S3Action and SNSAction match expectations, and SNS topics exist with at least one confirmed HTTPS subscription
 
 - POST /api/aws/email/domain/<id>/reconcile
   - Applies safe fixes for SNS topics/mappings and receiving rule (no DNS writes).
@@ -350,8 +356,8 @@ Key details:
 
 ## Health, Drift, and Reconciliation
 
-- Audit: GET|POST /api/aws/email/domain/<id>/audit
-  - Produces drift report for SES identity verification/DKIM, notification topics, and receipt rules.
+- Audit: GET|POST /aws/email/domain/<id>/audit
+  - Produces a drift report (status, audit_pass, checks, items) and persists EmailDomain.status ("ready"/"missing") and readiness flags can_send/can_recv based on the audit outcome.
 
 - Reconcile: POST /api/aws/email/domain/<id>/reconcile
   - Applies safe, idempotent fixes for topics/mappings and catch‑all receiving rule.

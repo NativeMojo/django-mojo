@@ -2,7 +2,7 @@ from typing import Any, Dict, List, Optional
 
 from mojo import decorators as md
 from mojo import JsonResponse
-from mojo.apps.aws.models import Mailbox, SentMessage, EmailDomain
+from mojo.apps.aws.models import Mailbox, SentMessage, EmailDomain, EmailTemplate
 from mojo.helpers.aws.ses import EmailSender
 from mojo.helpers.settings import settings
 from mojo.helpers import logit
@@ -34,8 +34,9 @@ def on_send_email(request):
       "body_text": "Text body",                       // optional
       "body_html": "<p>HTML body</p>",                // optional
       "reply_to": ["replies@example.com"],            // optional
-      "template_name": "ses-template-optional",       // optional, uses AWS SES template if provided
-      "template_context": { ... },                    // optional, for SES template
+      "template_name": "db-template-optional",        // optional, uses DB EmailTemplate if provided
+      "ses_template_name": "ses-template-optional",   // optional, uses AWS SES managed template
+      "template_context": { ... },                    // optional, for DB/SES template context
       "aws_access_key": "...",                        // optional, defaults to settings
       "aws_secret_key": "...",                        // optional, defaults to settings
       "allow_unverified": false                       // optional, allow send even if domain.status != 'verified'
@@ -45,7 +46,8 @@ def on_send_email(request):
     - Resolves the Mailbox by from_email (case-insensitive).
     - Ensures mailbox.allow_outbound is True.
     - Uses mailbox.domain.region (or settings.AWS_REGION) to send via SES.
-    - If template_name is provided, uses EmailSender.send_template_email (AWS SES template).
+    - If template_name is provided and matches a DB EmailTemplate, renders and uses EmailSender.send_email with the rendered subject/body.
+      If ses_template_name is provided, uses EmailSender.send_template_email (AWS SES managed template).
       Otherwise uses EmailSender.send_email with subject/body_text/body_html.
     - Creates a SentMessage row and updates with SES MessageId and status.
     """
@@ -90,12 +92,33 @@ def on_send_email(request):
     body_text = data.get("body_text")
     body_html = data.get("body_html")
     template_name = (data.get("template_name") or "").strip() or None
+    ses_template_name = (data.get("ses_template_name") or "").strip() or None
     template_context = data.get("template_context") or {}
+    if isinstance(template_context, str) and '{' in template_context:
+        import json
+        try:
+            template_context = json.loads(template_context)
+        except json.JSONDecodeError:
+            template_context = {}
 
     # If not using a template, require subject or at least one of body_text/body_html.
-    if not template_name and not (subject or body_text or body_html):
+    # Try DB EmailTemplate first if template_name is provided
+    db_template = None
+    if template_name:
+        db_template = EmailTemplate.objects.filter(name=template_name).first()
+        if db_template:
+            try:
+                rendered = db_template.render_all(template_context)
+                subject = (rendered.get("subject") or "").strip()
+                body_text = rendered.get("text")
+                body_html = rendered.get("html")
+            except Exception as e:
+                return JsonResponse({"error": f"DB template render failed: {e}"}, status=400)
+
+    # Validate payload if no DB template and no SES template; must have subject or one body
+    if not db_template and not ses_template_name and not (subject or body_text or body_html):
         return JsonResponse({
-            "error": "Provide either a template_name or a subject/body_text/body_html payload"
+            "error": "Provide either a template_name (DB), ses_template_name (SES), or a subject/body_text/body_html payload"
         }, status=400)
 
     # Optional AWS creds override
@@ -113,23 +136,37 @@ def on_send_email(request):
         subject=subject or None,
         body_text=body_text,
         body_html=body_html,
-        template_name=template_name,
+        template_name=template_name or ses_template_name,
         template_context=template_context if isinstance(template_context, dict) else {},
         status=SentMessage.STATUS_SENDING,
     )
 
     try:
-        if template_name:
+        if db_template is not None:
+            # Use rendered DB EmailTemplate with standard send_email
+            resp = sender.send_email(
+                source=from_email,
+                to_addresses=to,
+                subject=subject or "",
+                body_text=body_text,
+                body_html=body_html,
+                cc_addresses=cc or None,
+                bcc_addresses=bcc or None,
+                reply_to_addresses=reply_to or None,
+            )
+        elif ses_template_name:
+            # Fall back to AWS SES managed template only when explicitly provided
             resp = sender.send_template_email(
                 source=from_email,
                 to_addresses=to,
-                template_name=template_name,
+                template_name=ses_template_name,
                 template_data=template_context if isinstance(template_context, dict) else {},
                 cc_addresses=cc or None,
                 bcc_addresses=bcc or None,
                 reply_to_addresses=reply_to or None,
             )
         else:
+            # Plain subject/body (no template usage)
             resp = sender.send_email(
                 source=from_email,
                 to_addresses=to,

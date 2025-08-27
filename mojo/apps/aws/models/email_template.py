@@ -1,6 +1,5 @@
 from django.db import models
 from django.template import Template, Context
-from django.utils.functional import cached_property
 from mojo.models import MojoModel
 
 
