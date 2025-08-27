@@ -84,6 +84,104 @@ def fetch(slug, dt_start=None, dt_end=None, granularity="hours",
         return values
     return nobjict(labels=utils.periods_from_dr_slugs(dr_slugs), data={slug: values})
 
+
+def fetch_values(slugs, when=None, granularity="hours", redis_con=None, account="global", timezone=None):
+    """
+    Fetches specific metric values for multiple slugs at a single point in time.
+
+    Args:
+        slugs (str or list): The slug(s) to fetch values for. If string, should be comma-separated.
+        when (datetime): The specific datetime to fetch values for.
+        granularity (str, optional): The time granularity to use. Defaults to "hours".
+        redis_con: The Redis connection instance (optional).
+        account (str, optional): The account under which the metrics are recorded. Defaults to "global".
+
+    Returns:
+        dict: A dictionary containing:
+            - 'data': dict mapping slug names to their values
+            - 'slugs': list of slug names that were queried
+            - 'when': the datetime that was queried (as string)
+            - 'granularity': the granularity used
+            - 'account': the account queried
+    """
+    if redis_con is None:
+        redis_con = redis.get_connection()
+    when = utils.normalize_datetime(when, timezone)
+    # Handle comma-separated string input
+    if isinstance(slugs, str):
+        if ',' in slugs:
+            slugs = [s.strip() for s in slugs.split(',')]
+        else:
+            slugs = [slugs]
+
+    # Generate Redis keys for each slug at the specific datetime
+    redis_keys = []
+    for slug in slugs:
+        redis_key = utils.generate_slug(slug, when, granularity, account)
+        redis_keys.append(redis_key)
+
+    # Fetch all values with single MGET operation
+    values = redis_con.mget(redis_keys)
+
+    # Build response data dictionary
+    data = {}
+    for i, slug in enumerate(slugs):
+        value = values[i]
+        data[slug] = int(value) if value is not None else 0
+
+    return {
+        'data': data,
+        'slugs': slugs,
+        'when': when.isoformat() if hasattr(when, 'isoformat') else str(when),
+        'granularity': granularity,
+        'account': account
+    }
+
+
+def set_value(slug, value, redis_con=None, account="global"):
+    """
+    Sets a simple key-value pair in Redis for global storage (not time-series).
+
+    Args:
+        slug (str): The key identifier for the value.
+        value: The value to store (will be converted to string).
+        redis_con: The Redis connection instance (optional).
+        account (str, optional): The account under which the value is stored. Defaults to "global".
+
+    Returns:
+        None
+    """
+    if redis_con is None:
+        redis_con = redis.get_connection()
+
+    key = utils.generate_value_key(slug, account)
+    redis_con.set(key, str(value))
+
+
+def get_value(slug, redis_con=None, account="global", default=None):
+    """
+    Retrieves a simple value from Redis for global storage (not time-series).
+
+    Args:
+        slug (str): The key identifier for the value.
+        redis_con: The Redis connection instance (optional).
+        account (str, optional): The account under which the value is stored. Defaults to "global".
+        default: The default value to return if key doesn't exist. Defaults to None.
+
+    Returns:
+        str or default: The stored value as string, or default if key doesn't exist.
+    """
+    if redis_con is None:
+        redis_con = redis.get_connection()
+
+    key = utils.generate_value_key(slug, account)
+    value = redis_con.get(key)
+
+    if value is not None:
+        return value.decode('utf-8')
+    return default
+
+
 def add_metrics_slug(slug, redis_con=None, account="global"):
     """
     Adds a metric slug to a Redis set for the specified account.

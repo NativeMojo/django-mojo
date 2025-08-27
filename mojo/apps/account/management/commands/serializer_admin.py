@@ -37,8 +37,23 @@ from mojo.serializers import (
     clear_serializer_caches,
     benchmark_serializers,
     list_serializers,
-    set_default_serializer
+    set_default_serializer,
+    HAS_UJSON,
+    UJSON_VERSION
 )
+
+# Import cache system for enhanced functionality
+try:
+    from mojo.serializers.core.cache import (
+        get_cache_backend,
+        get_cache_stats,
+        get_available_backends,
+        test_backend_connectivity,
+        get_cache_health
+    )
+    HAS_CACHE_SYSTEM = True
+except ImportError:
+    HAS_CACHE_SYSTEM = False
 
 
 class Command(BaseCommand):
@@ -146,6 +161,14 @@ class Command(BaseCommand):
             help='Graph configuration to test'
         )
 
+        # Cache information
+        cache_parser = subparsers.add_parser('cache-info', help='Show detailed cache information')
+        cache_parser.add_argument(
+            '--test-connectivity',
+            action='store_true',
+            help='Test cache backend connectivity'
+        )
+
     def handle(self, *args, **options):
         """Handle command execution."""
         action = options.get('action')
@@ -163,6 +186,7 @@ class Command(BaseCommand):
             'clear-cache': self.handle_clear_cache,
             'health': self.handle_health,
             'test': self.handle_test,
+            'cache-info': self.handle_cache_info,
         }
 
         handler = handler_map.get(action)
@@ -195,6 +219,24 @@ class Command(BaseCommand):
             if options.get('detail'):
                 self.stdout.write(f"    Class: {info['class_name']}")
                 self.stdout.write(f"    Description: {info['description']}")
+
+        # Show ujson information
+        self.stdout.write(f"\nPerformance Information:")
+        if HAS_UJSON:
+            self.stdout.write(f"  ✓ ujson {UJSON_VERSION} available - optimal JSON performance")
+        else:
+            self.stdout.write(f"  ⚠ ujson not available - using standard json (slower)")
+            self.stdout.write(f"    Install with: pip install ujson")
+
+        # Show cache backend information
+        if HAS_CACHE_SYSTEM:
+            try:
+                cache_backend = get_cache_backend()
+                cache_stats = cache_backend.stats()
+                backend_type = cache_stats.get('backend', 'unknown')
+                self.stdout.write(f"  ✓ Cache backend: {backend_type}")
+            except Exception as e:
+                self.stdout.write(f"  ⚠ Cache backend error: {e}")
 
     def handle_benchmark(self, options):
         """Benchmark serializer performance."""
@@ -277,6 +319,68 @@ class Command(BaseCommand):
                 manager.reset_performance_stats()
             self.stdout.write(
                 self.style.SUCCESS("Performance statistics cleared")
+            )
+
+    def handle_cache_info(self, options):
+        """Show detailed cache information."""
+        if not HAS_CACHE_SYSTEM:
+            self.stdout.write(
+                self.style.ERROR("Cache system not available")
+            )
+            return
+
+        self.stdout.write(self.style.SUCCESS("Cache System Information:"))
+
+        try:
+            # Show available backends
+            backends = get_available_backends()
+            self.stdout.write(f"\nAvailable Backends:")
+            for name, info in backends.items():
+                status = "✓" if info['available'] else "✗"
+                self.stdout.write(f"  {status} {name}: {info['description']}")
+                if info.get('ujson_available'):
+                    self.stdout.write(f"    ujson: {info.get('ujson_version', 'available')}")
+                if info.get('error'):
+                    self.stdout.write(f"    Error: {info['error']}")
+
+            # Show current backend health
+            health = get_cache_health()
+            self.stdout.write(f"\nCache Health: {health['status'].upper()}")
+            if health.get('issues'):
+                for issue in health['issues']:
+                    self.stdout.write(f"  ⚠ {issue}")
+
+            # Show recommendations
+            if health.get('recommendations'):
+                self.stdout.write(f"\nRecommendations:")
+                for rec in health['recommendations']:
+                    self.stdout.write(f"  • {rec}")
+
+            # Test connectivity if requested
+            if options.get('test_connectivity'):
+                self.stdout.write(f"\nTesting Cache Connectivity:")
+                backend_type = health.get('backend_type', 'unknown')
+                test_result = test_backend_connectivity(backend_type)
+
+                if test_result['connectivity']:
+                    self.stdout.write(f"  ✓ {backend_type} backend connectivity OK")
+                    if test_result['functionality']:
+                        perf = test_result.get('performance', {})
+                        self.stdout.write(f"  ✓ Functionality test passed")
+                        if perf:
+                            self.stdout.write(f"    Set time: {perf.get('set_time_ms', 0)}ms")
+                            self.stdout.write(f"    Get time: {perf.get('get_time_ms', 0)}ms")
+                    else:
+                        self.stdout.write(f"  ✗ Functionality test failed")
+                else:
+                    self.stdout.write(f"  ✗ {backend_type} backend connectivity failed")
+
+                for error in test_result.get('errors', []):
+                    self.stdout.write(f"    Error: {error}")
+
+        except Exception as e:
+            self.stdout.write(
+                self.style.ERROR(f"Error getting cache information: {e}")
             )
 
     def handle_clear_cache(self, options):
@@ -434,6 +538,21 @@ class Command(BaseCommand):
                     f"{data['total_objects']} objects serialized"
                 )
 
+        # Cache statistics
+        if HAS_CACHE_SYSTEM:
+            try:
+                cache_stats = get_cache_stats()
+                self.stdout.write(f"\nCache Statistics:")
+                self.stdout.write(f"  Backend: {cache_stats.get('backend', 'unknown')}")
+                self.stdout.write(f"  Hit Rate: {cache_stats.get('hit_rate', 0):.1%}")
+                self.stdout.write(f"  Total Requests: {cache_stats.get('total_requests', 0)}")
+                self.stdout.write(f"  Cache Size: {cache_stats.get('current_size', 0)}")
+                if cache_stats.get('max_size'):
+                    utilization = cache_stats.get('current_size', 0) / cache_stats.get('max_size', 1)
+                    self.stdout.write(f"  Utilization: {utilization:.1%}")
+            except Exception as e:
+                self.stdout.write(f"\nCache Stats Error: {e}")
+
         # Individual serializer stats
         for key, value in stats.items():
             if key.endswith('_stats') and isinstance(value, dict):
@@ -528,4 +647,5 @@ class Command(BaseCommand):
         self.stdout.write("  clear-cache - Clear serializer caches")
         self.stdout.write("  health      - Run health checks")
         self.stdout.write("  test        - Test serializer functionality")
+        self.stdout.write("  cache-info  - Show detailed cache information")
         self.stdout.write("\nUse 'python manage.py serializer_admin <action> --help' for more details")

@@ -180,6 +180,21 @@ def generate_perm_view_key(account):
     return f"mets:{account}:perm:v"
 
 
+def generate_value_key(slug, account):
+    """
+    Generate a Redis key for storing simple key-value pairs.
+
+    Args:
+        slug (str): The slug identifier for the value.
+        account (str): The account under which the value is stored.
+
+    Returns:
+        str: The Redis key for the value.
+    """
+    normalized_slug = normalize_slug(slug)
+    return f"mets:{account}:val:{normalized_slug}"
+
+
 def normalize_slug(slug):
     return slug.replace(':', '|')
 

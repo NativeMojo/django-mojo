@@ -24,16 +24,10 @@ Usage:
 
 # Core serializer classes
 from .simple import GraphSerializer
-from .optimized import OptimizedGraphSerializer
 
-# Advanced serializer (optional - may not be available)
-try:
-    from .advanced import AdvancedGraphSerializer
-except ImportError:
-    AdvancedGraphSerializer = None
-
-# Manager and convenience functions
-from .manager import (
+# New optimized core system (default)
+from .core import (
+    OptimizedGraphSerializer,
     SerializerManager,
     get_serializer_manager,
     register_serializer,
@@ -43,8 +37,16 @@ from .manager import (
     to_response,
     get_performance_stats,
     clear_serializer_caches,
-    benchmark_serializers
+    benchmark_serializers,
+    HAS_UJSON,
+    UJSON_VERSION
 )
+
+# Advanced serializer (optional - may not be available)
+try:
+    from .advanced import AdvancedGraphSerializer
+except ImportError:
+    AdvancedGraphSerializer = None
 
 # Version and metadata
 __version__ = "2.0.0"
@@ -74,6 +76,10 @@ __all__ = [
     'get_performance_stats',
     'clear_serializer_caches',
     'benchmark_serializers',
+
+    # Performance info
+    'HAS_UJSON',
+    'UJSON_VERSION',
 ]
 
 # Initialize default manager on import
