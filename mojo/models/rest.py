@@ -335,10 +335,21 @@ class MojoModel:
         page_end = page_start+page_size
         paged_queryset = queryset[page_start:page_end]
         graph = request.DATA.get("graph", "list")
+        count = queryset.count()
         # Use serializer manager for optimal performance
         manager = get_serializer_manager()
         serializer = manager.get_serializer(paged_queryset, graph=graph, many=True)
-        return serializer.to_response(request, count=queryset.count(), start=page_start, size=page_size)
+        resp = serializer.to_response(request, count=count, start=page_start, size=page_size)
+        resp.log_context = {
+            "endpoint": "list",
+            "model": cls.__name__,
+            "page_size": page_size,
+            "page_start": page_start,
+            "page_end": page_end,
+            "graph": graph,
+            "count": count
+        }
+        return resp
 
     @classmethod
     def on_rest_list_date_range_filter(cls, request, queryset):

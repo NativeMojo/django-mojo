@@ -18,10 +18,11 @@ This file distills the core philosophy, structure, and conventions necessary for
 ## Core MOJO Conventions
 
 **Models**
-- Inherit from `MojoModel` (or extensions) and live in `app/models`.
+- Inherit from `MojoModel` and `models.Model` (or extensions) and live in `app/models`.
 - Define an inner `RestMeta` class with:
   - `VIEW_PERMS`, `SAVE_PERMS`, etc.
   - `GRAPHS` for all response graph shapes (see below for graphs deep dive).
+- adding fields: user to "account.User" and group to "account.Group" when appropriate allows the framework to provide security and permissions to the model so users or groups can access the model.   It shoulld only been done when we think this model will require user and/or group level access controls.
 
 **REST Handlers**
 - Place in `app/rest`.
