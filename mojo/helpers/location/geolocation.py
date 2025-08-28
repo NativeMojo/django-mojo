@@ -1,4 +1,5 @@
 import requests
+import ipaddress
 from datetime import timedelta
 from django.conf import settings
 from mojo.helpers import dates
@@ -27,20 +28,39 @@ def get_user_device_location_model():
 
 def geolocate(ip_address):
     """
-    Retrieves geolocation data for an IP address, utilizing a cache (`GeoLocatedIP` model)
-    to avoid redundant API calls. If the IP is not in the cache or the entry has expired,
-    it fetches data from a configured third-party provider.
+    Retrieves geolocation data for an IP address. For private/reserved IPs, it creates a
+    standardized internal record. For public IPs, it uses a cache (`GeoLocatedIP` model)
+    to avoid redundant API calls.
 
     This function is intended to be called from a background task.
     """
     GeoLocatedIP = get_geo_located_ip_model()
 
-    # 1. Check for a fresh, non-expired entry in the cache
+    # 1. Validate IP address
+    try:
+        ip_obj = ipaddress.ip_address(ip_address)
+    except ValueError:
+        return None  # Not a valid IP address
+
+    # 2. Handle private/reserved IP addresses
+    if ip_obj.is_private or ip_obj.is_reserved:
+        geo_record, created = GeoLocatedIP.objects.update_or_create(
+            ip_address=ip_address,
+            defaults={
+                'provider': 'internal',
+                'country_name': 'Private Network',
+                'region': ip_obj.is_private and 'Private' or 'Reserved',
+                'expires_at': None  # Internal records never expire
+            }
+        )
+        return geo_record
+
+    # 3. Handle public IPs: Check for a fresh, non-expired entry in the cache
     cached_geo = GeoLocatedIP.objects.filter(ip_address=ip_address).first()
     if cached_geo and not cached_geo.is_expired:
         return cached_geo
 
-    # 2. Fetch from the external provider
+    # 4. Fetch from the external provider
     provider = getattr(settings, 'GEOLOCATION_PROVIDER', 'ipinfo').lower()
     api_key_setting_name = f'GEOLOCATION_API_KEY_{provider.upper()}'
     api_key = getattr(settings, api_key_setting_name, None)
@@ -53,7 +73,7 @@ def geolocate(ip_address):
     if not geo_data:
         return None
 
-    # 3. Create or update the cache entry
+    # 5. Create or update the cache entry
     cache_duration_days = getattr(settings, 'GEOLOCATION_CACHE_DURATION_DAYS', 30)
     expires_at = dates.utcnow() + timedelta(days=cache_duration_days)
 
@@ -65,7 +85,7 @@ def geolocate(ip_address):
         }
     )
 
-    # 4. Link this new geo record to any device locations waiting for it
+    # 6. Link this new geo record to any device locations waiting for it
     UserDeviceLocation = get_user_device_location_model()
     locations_to_update = UserDeviceLocation.objects.filter(
         ip_address=ip_address,

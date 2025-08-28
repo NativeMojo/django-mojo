@@ -25,7 +25,9 @@ When called, this method performs the following actions:
 
 1.  **Identifies the Device**: It looks for a `duid` in the request or generates a unique signature based on the user agent. It then finds or creates a `UserDevice` record linked to the authenticated user.
 2.  **Logs the Location**: It creates or updates a `UserDeviceLocation` record, linking the device to the request's IP address.
-3.  **Triggers Geolocation**: If the IP address has not been geolocated before (or if its cached data has expired), it triggers a background task to fetch the data. The result is stored in the `GeoLocatedIP` model.
+3.  **Triggers Geolocation**: If the IP address has not been geolocated before (or if its cached data has expired), it triggers a background task to fetch the data. 
+    - For **public IPs**, the result is stored in the `GeoLocatedIP` model.
+    - For **private and reserved IPs** (e.g., `192.168.x.x`, `10.x.x.x`), a special record is created with metadata like "Private Network" to identify them clearly in reporting.
 
 ---
 
