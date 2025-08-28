@@ -1,15 +1,20 @@
+from turtledemo.chaos import g
 import hashlib
 from django.db import models
-from django.conf import settings
+from mojo.helpers.settings import settings
 from mojo.models import MojoModel
 from mojo.helpers import dates, request as rhelper
+from mojo.apps import tasks
+from mojo.helpers.location.geolocation import refresh_geolocation_for_ip
+from fnmatch import filter
 
-# Placeholder for a background task runner
-# In a real implementation, you would replace this with your project's task runner (e.g., Celery)
-def trigger_geolocation_task(ip_address):
-    print(f"BG Task: Geolocation needed for {ip_address}")
-    # from mojo.helpers.location.geolocation import geolocate
-    # geolocate.delay(ip_address) # Example for Celery
+GEOLOCATION_ALLOW_SUBNET_LOOKUP = settings.get('GEOLOCATION_ALLOW_SUBNET_LOOKUP', False)
+
+def trigger_refresh_task(ip_address):
+    """
+    Publishes a task to refresh the geolocation data for a given IP address.
+    """
+    tasks.publish_local(refresh_geolocation_for_ip, ip_address)
 
 
 class GeoLocatedIP(models.Model, MojoModel):
@@ -21,6 +26,7 @@ class GeoLocatedIP(models.Model, MojoModel):
     modified = models.DateTimeField(auto_now=True, db_index=True)
 
     ip_address = models.GenericIPAddressField(db_index=True, unique=True)
+    subnet = models.CharField(max_length=16, db_index=True, null=True, default=None)
 
     # Normalized and indexed fields for querying
     country_code = models.CharField(max_length=3, db_index=True, null=True, blank=True)
@@ -46,9 +52,52 @@ class GeoLocatedIP(models.Model, MojoModel):
 
     @property
     def is_expired(self):
+        if self.provider == 'internal':
+            return False # Internal records never expire
         if self.expires_at:
             return dates.utcnow() > self.expires_at
-        return False
+        return True # If no expiry is set, it needs a refresh
+
+    def refresh(self):
+        """
+        Refreshes the geolocation data for this IP by calling the geolocation
+        helper and updating the model instance with the returned data.
+        """
+        from mojo.helpers.location import geolocation
+        from datetime import timedelta
+
+        geo_data = geolocation.geolocate_ip(self.ip_address)
+
+        if not geo_data:
+            return False
+
+        # Update self with new data
+        for key, value in geo_data.items():
+            setattr(self, key, value)
+
+        # Set the expiration date
+        if self.provider == 'internal':
+            self.expires_at = None
+        else:
+            cache_duration_days = getattr(settings, 'GEOLOCATION_CACHE_DURATION_DAYS', 30)
+            self.expires_at = dates.utcnow() + timedelta(days=cache_duration_days)
+
+        self.save()
+        return True
+
+    @classmethod
+    def geolocate(cls, ip_address, auto_refresh=False):
+        # Extract subnet from IP address using simple string parsing
+        subnet = ip_address[:ip_address.rfind('.')]
+        geo_ip = GeoLocatedIP.objects.filter(ip_address=ip_address).first()
+        if not geo_ip and GEOLOCATION_ALLOW_SUBNET_LOOKUP:
+            geo_ip = GeoLocatedIP.objects.filter(subnet=subnet).last()
+        elif not geo_ip:
+            geo_ip = GeoLocatedIP.objects.create(ip_address=ip_address, subnet=subnet)
+        if auto_refresh and geo_ip.is_expired:
+            geo_ip.refresh()
+        return geo_ip
+
 
 
 class UserDevice(models.Model, MojoModel):
@@ -118,15 +167,15 @@ class UserDevice(models.Model, MojoModel):
         return device
 
 
-class UserDeviceLocation(MojoModel):
+class UserDeviceLocation(models.Model, MojoModel):
     """
     A log linking a UserDevice to every IP address it uses. Geolocation is
     handled asynchronously.
     """
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='device_locations_direct')
-    user_device = models.ForeignKey(UserDevice, on_delete=models.CASCADE, related_name='locations')
+    user_device = models.ForeignKey('UserDevice', on_delete=models.CASCADE, related_name='locations')
     ip_address = models.GenericIPAddressField(db_index=True)
-    geolocation = models.ForeignKey(GeoLocatedIP, on_delete=models.SET_NULL, null=True, blank=True, related_name='device_locations')
+    geolocation = models.ForeignKey('GeoLocatedIP', on_delete=models.SET_NULL, null=True, blank=True, related_name='device_locations')
 
     first_seen = models.DateTimeField(auto_now_add=True)
     last_seen = models.DateTimeField(auto_now=True)
@@ -141,29 +190,30 @@ class UserDeviceLocation(MojoModel):
     @classmethod
     def track(cls, device, ip_address):
         """
-        Creates or updates a device location entry and triggers geolocation
-        if the IP is unknown or its cache has expired.
+        Creates or updates a device location entry, links it to a GeoLocatedIP record,
+        and triggers a background refresh if the geo data is stale.
         """
-        location, created = cls.objects.get_or_create(
+        # First, get or create the geolocation record for this IP.
+        # The actual fetching of data is handled by the background task.
+        geo_ip = GeoLocatedIP.geolocate(ip_address)
+
+        # Now, create the actual location event log, linking the device and the geo_ip record.
+        location, loc_created = cls.objects.get_or_create(
             user=device.user,
             user_device=device,
-            ip_address=ip_address
+            ip_address=ip_address,
+            defaults={'geolocation': geo_ip}
         )
 
-        if not created:
+        if not loc_created:
             location.last_seen = dates.utcnow()
-            location.save(update_fields=['last_seen'])
+            # If the location already existed but wasn't linked to a geo_ip object yet
+            if not location.geolocation:
+                location.geolocation = geo_ip
+            location.save(update_fields=['last_seen', 'geolocation'])
 
-        # Check if geolocation is needed
-        if not location.geolocation or location.geolocation.is_expired:
-            # Check if a valid cache entry already exists for this IP
-            existing_geo = GeoLocatedIP.objects.filter(ip_address=ip_address).first()
-            if existing_geo and not existing_geo.is_expired:
-                if location.geolocation != existing_geo:
-                    location.geolocation = existing_geo
-                    location.save(update_fields=['geolocation'])
-            else:
-                # Trigger background task to fetch geolocation data
-                trigger_geolocation_task(ip_address)
+        # Finally, if the geo data is stale or new, trigger a refresh.
+        if geo_ip.is_expired:
+            trigger_refresh_task(ip_address)
 
         return location

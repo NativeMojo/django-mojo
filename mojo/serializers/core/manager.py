@@ -58,7 +58,15 @@ _PERFORMANCE_DATA = {
 
 
 class SerializerRegistry:
-    """Registry for managing available serializers."""
+    """
+    Registry for managing available serializers.
+
+    This registry supports lazy loading of serializers. When a serializer is
+    registered using an import path string, it is only imported when the
+    `register` method is called. The default serializers are registered
+    on the first call to `get_serializer_manager()`, avoiding imports at
+    application startup.
+    """
 
     def __init__(self):
         self.serializers = {}
@@ -503,14 +511,6 @@ def benchmark_serializers(instance, graph: str = "default", serializer_types: Li
 def list_serializers():
     """List all registered serializers globally."""
     return get_serializer_manager().registry.list_serializers()
-
-def set_default_serializer(name: str):
-    """Set the global default serializer."""
-    return get_serializer_manager().set_default_serializer(name)
-
-def get_performance_stats():
-    """Get global performance statistics."""
-    return get_serializer_manager().get_performance_stats()
 
 # Import ujson availability info
 try:

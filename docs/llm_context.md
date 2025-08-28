@@ -22,7 +22,7 @@ This file distills the core philosophy, structure, and conventions necessary for
 - Define an inner `RestMeta` class with:
   - `VIEW_PERMS`, `SAVE_PERMS`, etc.
   - `GRAPHS` for all response graph shapes (see below for graphs deep dive).
-- adding fields: user to "account.User" and group to "account.Group" when appropriate allows the framework to provide security and permissions to the model so users or groups can access the model.   It shoulld only been done when we think this model will require user and/or group level access controls.
+- adding fields: user="account.User" and/or group="account.Group" to Models when appropriate allows the framework to provide security and permissions to the model so users or groups can access the model.   It shoulld only been done when we think this model will require user and/or group level access controls.
 
 **REST Handlers**
 - Place in `app/rest`.
@@ -52,6 +52,7 @@ This file distills the core philosophy, structure, and conventions necessary for
 
 **Helpers & Utilities**
 - All repeated logic resides in `mojo/helpers`—always use or extend these before new standalone functions.
+- For example always use from mojo.helpers.settings import settings, and then settings.get("MY_SETTING", default_value)
 
 **Testing**
 - Use the inbuilt `testit` suite for both REST and backend unit tests.

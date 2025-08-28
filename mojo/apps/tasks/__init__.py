@@ -1,3 +1,6 @@
+default_app_config = 'mojo.apps.tasks.apps.TasksAppConfig'
+
+from .local_queue import publish_local
 from mojo.helpers.settings import settings
 from mojo.helpers import modules
 import functools

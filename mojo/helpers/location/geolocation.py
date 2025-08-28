@@ -1,13 +1,11 @@
 import requests
 import ipaddress
-from datetime import timedelta
-from django.conf import settings
-from mojo.helpers import dates
+import random
+from mojo.helpers import settings
 from .countries import get_country_name
 
-# Lazy-load models to avoid circular imports
+# Lazy-load model to avoid circular imports
 _GeoLocatedIP = None
-_UserDeviceLocation = None
 
 
 def get_geo_located_ip_model():
@@ -18,80 +16,64 @@ def get_geo_located_ip_model():
     return _GeoLocatedIP
 
 
-def get_user_device_location_model():
-    global _UserDeviceLocation
-    if _UserDeviceLocation is None:
-        from mojo.apps.account.models.device import UserDeviceLocation
-        _UserDeviceLocation = UserDeviceLocation
-    return _UserDeviceLocation
-
-
-def geolocate(ip_address):
+def geolocate_ip(ip_address):
     """
-    Retrieves geolocation data for an IP address. For private/reserved IPs, it creates a
-    standardized internal record. For public IPs, it uses a cache (`GeoLocatedIP` model)
-    to avoid redundant API calls.
-
-    This function is intended to be called from a background task.
+    Fetches geolocation data for a given IP address. It handles both
+    public IPs (by calling an external provider) and private IPs.
+    Returns a normalized dictionary of geolocation data.
     """
-    GeoLocatedIP = get_geo_located_ip_model()
-
-    # 1. Validate IP address
+    # 1. Handle private/reserved IPs
     try:
         ip_obj = ipaddress.ip_address(ip_address)
-    except ValueError:
-        return None  # Not a valid IP address
-
-    # 2. Handle private/reserved IP addresses
-    if ip_obj.is_private or ip_obj.is_reserved:
-        geo_record, created = GeoLocatedIP.objects.update_or_create(
-            ip_address=ip_address,
-            defaults={
+        if ip_obj.is_private or ip_obj.is_reserved:
+            return {
                 'provider': 'internal',
                 'country_name': 'Private Network',
-                'region': ip_obj.is_private and 'Private' or 'Reserved',
-                'expires_at': None  # Internal records never expire
+                'region': 'Private' if ip_obj.is_private else 'Reserved',
             }
-        )
-        return geo_record
+    except ValueError:
+        return None  # Invalid IP
 
-    # 3. Handle public IPs: Check for a fresh, non-expired entry in the cache
-    cached_geo = GeoLocatedIP.objects.filter(ip_address=ip_address).first()
-    if cached_geo and not cached_geo.is_expired:
-        return cached_geo
+    # 2. Handle public IPs by dispatching to a randomly selected provider
+    providers = getattr(settings, 'GEOLOCATION_PROVIDERS', None)
+    if not providers:
+        # Fallback to the single provider setting for backward compatibility
+        single_provider = getattr(settings, 'GEOLOCATION_PROVIDER', 'ipinfo').lower()
+        providers = [single_provider]
 
-    # 4. Fetch from the external provider
-    provider = getattr(settings, 'GEOLOCATION_PROVIDER', 'ipinfo').lower()
+    provider = random.choice(providers)
     api_key_setting_name = f'GEOLOCATION_API_KEY_{provider.upper()}'
     api_key = getattr(settings, api_key_setting_name, None)
 
-    if provider == 'ipinfo':
-        geo_data = fetch_from_ipinfo(ip_address, api_key)
-    else:
-        raise NotImplementedError(f"Geolocation provider '{provider}' is not supported.")
+    provider_map = {
+        'ipinfo': fetch_from_ipinfo,
+        'ipstack': fetch_from_ipstack,
+        'ip-api': fetch_from_ipapi,
+        'maxmind': fetch_from_maxmind,
+    }
 
-    if not geo_data:
+    fetch_function = provider_map.get(provider)
+
+    if fetch_function:
+        return fetch_function(ip_address, api_key)
+    else:
+        # In a real app, you might want to log this or handle it differently
+        print(f"[Geolocation Error] Provider '{provider}' is not supported.")
         return None
 
-    # 5. Create or update the cache entry
-    cache_duration_days = getattr(settings, 'GEOLOCATION_CACHE_DURATION_DAYS', 30)
-    expires_at = dates.utcnow() + timedelta(days=cache_duration_days)
 
-    geo_record, created = GeoLocatedIP.objects.update_or_create(
-        ip_address=ip_address,
-        defaults={
-            **geo_data,
-            'expires_at': expires_at
-        }
-    )
+def refresh_geolocation_for_ip(ip_address):
+    """
+    This function is the entry point for the background task.
+    It gets or creates a GeoLocatedIP record and refreshes it if necessary.
+    """
+    GeoLocatedIP = get_geo_located_ip_model()
 
-    # 6. Link this new geo record to any device locations waiting for it
-    UserDeviceLocation = get_user_device_location_model()
-    locations_to_update = UserDeviceLocation.objects.filter(
-        ip_address=ip_address,
-        geolocation__isnull=True
-    )
-    locations_to_update.update(geolocation=geo_record)
+    # Get or create the record, then call its internal refresh logic.
+    geo_record, created = GeoLocatedIP.objects.get_or_create(ip_address=ip_address)
+
+    if created or geo_record.is_expired:
+        geo_record.refresh()
 
     return geo_record
 
@@ -133,3 +115,86 @@ def fetch_from_ipinfo(ip_address, api_key):
         # In a real application, you would want to log this error.
         print(f"[Geolocation Error] Failed to fetch from ipinfo.io for IP {ip_address}: {e}")
         return None
+
+
+def fetch_from_ipstack(ip_address, api_key):
+    """
+    Fetches geolocation data from the ipstack.com API and normalizes it.
+    """
+    if not api_key:
+        print("[Geolocation Error] ipstack provider requires an API key (GEOLOCATION_API_KEY_IPSTACK).")
+        return None
+    try:
+        url = f"http://api.ipstack.com/{ip_address}?access_key={api_key}"
+        response = requests.get(url, timeout=5)
+        response.raise_for_status()
+        data = response.json()
+
+        if data.get('success') is False:
+            error_info = data.get('error', {}).get('info', 'Unknown error')
+            print(f"[Geolocation Error] ipstack API error: {error_info}")
+            return None
+
+        country_code = data.get('country_code')
+        return {
+            'provider': 'ipstack',
+            'country_code': country_code,
+            'country_name': data.get('country_name') or get_country_name(country_code),
+            'region': data.get('region_name'),
+            'city': data.get('city'),
+            'postal_code': data.get('zip'),
+            'latitude': data.get('latitude'),
+            'longitude': data.get('longitude'),
+            'data': data
+        }
+    except Exception as e:
+        print(f"[Geolocation Error] Failed to fetch from ipstack.com for IP {ip_address}: {e}")
+        return None
+
+
+def fetch_from_ipapi(ip_address, api_key=None):
+    """
+    Fetches geolocation data from the ip-api.com API and normalizes it.
+    Note: The free tier does not require an API key.
+    """
+    try:
+        url = f"http://ip-api.com/json/{ip_address}"
+        response = requests.get(url, timeout=5)
+        response.raise_for_status()
+        data = response.json()
+
+        if data.get('status') == 'fail':
+            error_info = data.get('message', 'Unknown error')
+            print(f"[Geolocation Error] ip-api.com API error: {error_info}")
+            return None
+
+        country_code = data.get('countryCode')
+        return {
+            'provider': 'ip-api',
+            'country_code': country_code,
+            'country_name': data.get('country') or get_country_name(country_code),
+            'region': data.get('regionName'),
+            'city': data.get('city'),
+            'postal_code': data.get('zip'),
+            'latitude': data.get('lat'),
+            'longitude': data.get('lon'),
+            'timezone': data.get('timezone'),
+            'data': data
+        }
+    except Exception as e:
+        print(f"[Geolocation Error] Failed to fetch from ip-api.com for IP {ip_address}: {e}")
+        return None
+
+
+def fetch_from_maxmind(ip_address, api_key):
+    """
+    Placeholder for MaxMind GeoIP2 web service integration.
+    """
+    # MaxMind's GeoIP2 web services are best accessed via their official client library.
+    # See: https://github.com/maxmind/geoip2-python
+    # This is a placeholder for where you would integrate the geoip2.webservice.Client.
+    # You would typically fetch account_id and license_key from settings here instead of a single api_key.
+    raise NotImplementedError(
+        "MaxMind provider requires the 'geoip2' client library. "
+        "Set GEOLOCATION_API_KEY_MAXMIND_ACCOUNT_ID and GEOLOCATION_API_KEY_MAXMIND_LICENSE_KEY in your settings."
+    )
