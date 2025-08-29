@@ -1,5 +1,9 @@
 from objict import objict, nobjict
 from .request_parser import RequestDataParser
+from mojo.helpers.settings import settings
+
+DUID_HEADER = settings.get('DUID_HEADER', 'X-Mojo-UID').replace('-', '_').upper()
+DUID_HEADER = f"HTTP_{DUID_HEADER}"
 
 REQUEST_PARSER = RequestDataParser()
 
@@ -43,6 +47,10 @@ def get_remote_ip(request):
 
 def get_device_id(request):
     # Look for 'buid' or 'duid' in GET parameters
+    duid = request.META.get(DUID_HEADER, None)
+    if duid:
+        return duid
+
     for key in ['__buid__', 'duid', "buid"]:
         if key in request.GET:
             return request.GET[key]

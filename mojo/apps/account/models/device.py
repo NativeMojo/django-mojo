@@ -9,6 +9,9 @@ from mojo.helpers.location.geolocation import refresh_geolocation_for_ip
 from fnmatch import filter
 
 GEOLOCATION_ALLOW_SUBNET_LOOKUP = settings.get('GEOLOCATION_ALLOW_SUBNET_LOOKUP', False)
+GEOLOCATION_DEVICE_LOCATION_AGE = settings.get('GEOLOCATION_DEVICE_LOCATION_AGE', 300)
+GEOLOCATION_CACHE_DURATION_DAYS = settings.get('GEOLOCATION_CACHE_DURATION_DAYS', 30)
+
 
 def trigger_refresh_task(ip_address):
     """
@@ -42,6 +45,14 @@ class GeoLocatedIP(models.Model, MojoModel):
     provider = models.CharField(max_length=50, null=True, blank=True)
     data = models.JSONField(default=dict, blank=True)
     expires_at = models.DateTimeField(default=None, null=True, blank=True)
+
+    class RestMeta:
+        VIEW_PERMS = ['manage_users']
+        GRAPHS = {
+            'default': {
+
+            }
+        }
 
     class Meta:
         verbose_name = "Geolocated IP"
@@ -79,7 +90,7 @@ class GeoLocatedIP(models.Model, MojoModel):
         if self.provider == 'internal':
             self.expires_at = None
         else:
-            cache_duration_days = getattr(settings, 'GEOLOCATION_CACHE_DURATION_DAYS', 30)
+            cache_duration_days = GEOLOCATION_CACHE_DURATION_DAYS
             self.expires_at = dates.utcnow() + timedelta(days=cache_duration_days)
 
         self.save()
@@ -92,7 +103,13 @@ class GeoLocatedIP(models.Model, MojoModel):
         geo_ip = GeoLocatedIP.objects.filter(ip_address=ip_address).first()
         if not geo_ip and GEOLOCATION_ALLOW_SUBNET_LOOKUP:
             geo_ip = GeoLocatedIP.objects.filter(subnet=subnet).last()
-        elif not geo_ip:
+            if geo_ip:
+                geo_ip.id = None
+                geo_ip.pk = None
+                geo_ip.ip_address = ip_address
+                if "subnet" not in geo_ip.provider:
+                    geo_ip.provider = f"subnet:{geo_ip.provider}"
+        if not geo_ip:
             geo_ip = GeoLocatedIP.objects.create(ip_address=ip_address, subnet=subnet)
         if auto_refresh and geo_ip.is_expired:
             geo_ip.refresh()
@@ -105,7 +122,7 @@ class UserDevice(models.Model, MojoModel):
     Represents a unique device used by a user, tracked via a device ID (duid) or
     a hash of the user agent string as a fallback.
     """
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='devices')
+    user = models.ForeignKey("account.User", on_delete=models.CASCADE, related_name='devices')
     duid = models.CharField(max_length=255, db_index=True)
 
     device_info = models.JSONField(default=dict, blank=True)
@@ -114,6 +131,25 @@ class UserDevice(models.Model, MojoModel):
     last_ip = models.GenericIPAddressField(null=True, blank=True)
     first_seen = models.DateTimeField(auto_now_add=True)
     last_seen = models.DateTimeField(auto_now=True)
+
+    class RestMeta:
+        VIEW_PERMS = ['manage_users', 'owner']
+        GRAPHS = {
+            'default': {
+                'graphs': {
+                    'user': 'basic'
+                }
+            },
+            'basic': {
+                "fields": ["duid", "last_ip", "last_seen", "device_info"],
+            },
+            'locations': {
+                'fields': ['duid', 'last_ip', 'last_seen'],
+                'graphs': {
+                    'locations': 'default'
+                }
+            }
+        }
 
     class Meta:
         unique_together = ('user', 'duid')
@@ -153,13 +189,17 @@ class UserDevice(models.Model, MojoModel):
 
         # If device already existed, update its last_seen and ip
         if not created:
-            device.last_ip = ip_address
-            device.last_seen = dates.utcnow()
-            # Optionally update device_info if user agent has changed
-            if device.user_agent_hash != ua_hash:
-                device.user_agent_hash = ua_hash
-                device.device_info = rhelper.parse_user_agent(user_agent_str)
-            device.save()
+            now = dates.utcnow()
+            age_seconds = (now - device.last_seen).total_seconds()
+            is_stale = age_seconds > GEOLOCATION_DEVICE_LOCATION_AGE
+            if is_stale or device.last_ip != ip_address:
+                device.last_ip = ip_address
+                device.last_seen = dates.utcnow()
+                # Optionally update device_info if user agent has changed
+                if device.user_agent_hash != ua_hash:
+                    device.user_agent_hash = ua_hash
+                    device.device_info = rhelper.parse_user_agent(user_agent_str)
+                device.save()
 
         # Track the location (IP) used by this device
         UserDeviceLocation.track(device, ip_address)
@@ -172,13 +212,32 @@ class UserDeviceLocation(models.Model, MojoModel):
     A log linking a UserDevice to every IP address it uses. Geolocation is
     handled asynchronously.
     """
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='device_locations_direct')
+    user = models.ForeignKey("account.User", on_delete=models.CASCADE, related_name='device_locations_direct')
     user_device = models.ForeignKey('UserDevice', on_delete=models.CASCADE, related_name='locations')
     ip_address = models.GenericIPAddressField(db_index=True)
     geolocation = models.ForeignKey('GeoLocatedIP', on_delete=models.SET_NULL, null=True, blank=True, related_name='device_locations')
 
     first_seen = models.DateTimeField(auto_now_add=True)
     last_seen = models.DateTimeField(auto_now=True)
+
+    class RestMeta:
+        VIEW_PERMS = ['manage_users']
+        GRAPHS = {
+            'default': {
+                'graphs': {
+                    'user': 'basic',
+                    'geolocation': 'default',
+                    'user_device': 'basic'
+                }
+            },
+            'list': {
+                'graphs': {
+                    'user': 'basic',
+                    'geolocation': 'default',
+                    'user_device': 'basic'
+                }
+            }
+        }
 
     class Meta:
         unique_together = ('user', 'user_device', 'ip_address')
@@ -206,11 +265,14 @@ class UserDeviceLocation(models.Model, MojoModel):
         )
 
         if not loc_created:
-            location.last_seen = dates.utcnow()
-            # If the location already existed but wasn't linked to a geo_ip object yet
-            if not location.geolocation:
-                location.geolocation = geo_ip
-            location.save(update_fields=['last_seen', 'geolocation'])
+            now = dates.utcnow()
+            age_seconds = (now - location.last_seen).total_seconds()
+            if age_seconds > GEOLOCATION_DEVICE_LOCATION_AGE:
+                location.last_seen = now
+                # If the location already existed but wasn't linked to a geo_ip object yet
+                if not location.geolocation:
+                    location.geolocation = geo_ip
+                location.save(update_fields=['last_seen', 'geolocation'])
 
         # Finally, if the geo data is stale or new, trigger a refresh.
         if geo_ip.is_expired:

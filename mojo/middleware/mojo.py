@@ -2,6 +2,10 @@ from mojo.helpers import request as rhelper
 import time
 from objict import objict
 from mojo.helpers.settings import settings
+from mojo.helpers import dates, logit
+
+
+logger = logit.get_logger("debug", "debug.log")
 
 ANONYMOUS_USER = objict(is_authenticated=False)
 
@@ -18,6 +22,7 @@ class MojoMiddleware:
         request.ip = rhelper.get_remote_ip(request)
         request.user_agent = rhelper.get_user_agent(request)
         request.duid = rhelper.get_device_id(request)
+        logger.info(f"duid: {request.duid}", request.META)
         if settings.LOGIT_REQUEST_BODY:
             request._raw_body = str(request.body)
         else:

@@ -217,8 +217,9 @@ class OptimizedGraphSerializer:
             try:
                 if hasattr(obj, method_name):
                     attr = getattr(obj, method_name)
-                    value = attr() if callable(attr) else attr
-                    data[alias] = self._serialize_value_fast(value)
+                    # For extra fields, we trust the method/property to return a
+                    # JSON-serializable value, just like the simple serializer does.
+                    data[alias] = attr() if callable(attr) else attr
                 else:
                     if self._debug_enabled:
                         logger.debug(f"Extra field '{method_name}' not found on {obj.__class__.__name__}")

@@ -1,6 +1,7 @@
 from mojo.models import MojoModel
 from django.db import models as dm
 from mojo.helpers import logit
+import ujson
 # logger = logit.get_logger("requests", "requests.log")
 
 
@@ -23,6 +24,8 @@ class Log(dm.Model, MojoModel):
 
     @classmethod
     def logit(cls, request, log, kind="log", model_name=None, model_id=0, level="info", **kwargs):
+        if isinstance(log, dict):
+            log = ujson.encode(log, indent=4)
         if not isinstance(log, (bytes, str)):
             log = f"INVALID LOG TYPE: attempting to log type: {type(log)}"
         log = log.decode("utf-8") if isinstance(log, bytes) else log

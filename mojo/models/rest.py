@@ -281,6 +281,8 @@ class MojoModel:
             instance = cls()
             instance.on_rest_save(request, request.DATA)
             instance.on_rest_created()
+            if cls.get_rest_meta_prop("LOG_CHANGES", False):
+                instance.log(kind="model:created", log=f"{ACTIVE_REQUEST.username} created {instance.pk}")
             return instance.on_rest_get(request)
         return cls.rest_error_response(request, 403, error=f"CREATE permission denied: {cls.__name__}")
 
@@ -596,6 +598,8 @@ class MojoModel:
             self.on_rest_save_files(data_dict["files"])
         self.atomic_save()
         self.on_rest_saved(self.__changed_fields__, created)
+        if self.get_rest_meta_prop("LOG_CHANGES", False):
+            self.log(kind="model:changed", log=str(self.__changed_fields__))
 
     def on_rest_save_files(self, files):
         for name, file in files.items():
@@ -754,9 +758,13 @@ class MojoModel:
         return logger.info(log, *args)
 
     @classmethod
+    def get_model_string(cls):
+        return f"{ cls._meta.app_label.lower()}.{cls.__name__}"
+
+    @classmethod
     def class_logit(cls, request, log, kind="cls_log", model_id=0, level="info", **kwargs):
         from mojo.apps.logit.models import Log
-        return Log.logit(request, log, kind, cls.__name__, model_id, level, **kwargs)
+        return Log.logit(request, log, kind, cls.get_model_string(), model_id, level, **kwargs)
 
     @classmethod
     def get_model_field(cls, field_name):

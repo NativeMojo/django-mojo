@@ -13,7 +13,8 @@ LOGIT_RETURN_REAL_ERROR = settings.get("LOGIT_RETURN_REAL_ERROR", True)
 LOGIT_MAX_RESPONSE_SIZE = settings.get("LOGIT_MAX_RESPONSE_SIZE", 1024)  # 1KB default
 LOGGER = logit.get_logger("requests", "requests.log")
 ERROR_LOGGER = logit.get_logger("error", "error.log")
-LOGIT_NO_LOG_PREFIX = settings.get("LOGIT_NO_LOG_PREFIX", [])
+LOGIT_NO_LOG_PREFIX = settings.get("LOGIT_NO_LOG_PREFIX", ['GET:/api/user'])
+LOGIT_ALWAYS_LOG_PREFIX = settings.get("LOGIT_ALWAYS_LOG_PREFIX", ['POST:/api/user', 'GET:/api/user/'])
 
 # Async logging setup
 log_queue = Queue()
@@ -56,6 +57,30 @@ class LoggerMiddleware:
     def __init__(self, get_response):
         self.get_response = get_response
 
+    def _request_matches_prefix(self, request, prefix):
+        """
+        Checks if a request matches a given prefix rule.
+        The rule can be a simple path prefix or a "METHOD:/path/prefix".
+        """
+        method = None
+        path_prefix = prefix
+
+        if ":" in prefix:
+            parts = prefix.split(":", 1)
+            # Ensure it's a valid METHOD:/path format
+            if len(parts) == 2 and parts[0].upper() in ('GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'):
+                method, path_prefix = parts[0].upper(), parts[1]
+
+        # Check if the path matches
+        if not request.path.startswith(path_prefix):
+            return False
+
+        # If a method was specified in the rule, check if it matches
+        if method and request.method != method:
+            return False
+
+        return True
+
     def __call__(self, request):
         self.log_request(request)
         try:
@@ -72,10 +97,23 @@ class LoggerMiddleware:
         return response
 
     def can_log(self, request):
-        prefixes = LOGIT_NO_LOG_PREFIX
-        if not isinstance(prefixes, (list, set, tuple)) or not prefixes:
-            return True
-        return not any(request.path.startswith(prefix) for prefix in prefixes)
+        """
+        Determines if a request should be logged based on settings.
+        - LOGIT_ALWAYS_LOG_PREFIX overrides LOGIT_NO_LOG_PREFIX.
+        - Rules can be "METHOD:/path/prefix" or "/path/prefix".
+        """
+        # 1. Check LOGIT_ALWAYS_LOG_PREFIX first. If it matches, we must log.
+        for prefix in LOGIT_ALWAYS_LOG_PREFIX:
+            if self._request_matches_prefix(request, prefix):
+                return True
+
+        # 2. Check LOGIT_NO_LOG_PREFIX. If it matches, we must NOT log.
+        for prefix in LOGIT_NO_LOG_PREFIX:
+            if self._request_matches_prefix(request, prefix):
+                return False
+
+        # 3. Default behavior: log if no specific rules apply.
+        return True
 
     def should_log_full_content(self, request, response):
         """Fast conditional checks to decide logging strategy."""

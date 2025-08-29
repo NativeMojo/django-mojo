@@ -41,7 +41,7 @@ class GroupMember(models.Model, MojoModel):
                     'metadata'
                 ],
                 "graphs": {
-                    "user": "basic",
+                    "user": "default",
                     "group": "basic"
                 }
             }

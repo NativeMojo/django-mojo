@@ -27,7 +27,11 @@ class Group(MojoSecrets, MojoModel):
     # JSON-based metadata field
     metadata = models.JSONField(default=dict, blank=True)
 
+    avatar = models.ForeignKey('fileman.File', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='+')
+
     class RestMeta:
+        LOG_CHANGES = True
         SEARCH_FIELDS = ["name"]
         VIEW_PERMS = ["view_groups", "manage_groups"]
         SAVE_PERMS = ["manage_groups"]
@@ -44,7 +48,10 @@ class Group(MojoSecrets, MojoModel):
                     'last_activity',
                     'is_active',
                     'kind',
-                ]
+                ],
+                "graphs": {
+                    "avatar": "basic"
+                }
             },
             "default": {
                 "fields": [
@@ -59,6 +66,7 @@ class Group(MojoSecrets, MojoModel):
                     'metadata'
                 ],
                 "graphs": {
+                    "avatar": "basic",
                     "parent": "basic"
                 }
             },

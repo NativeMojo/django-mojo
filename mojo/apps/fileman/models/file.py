@@ -421,17 +421,42 @@ class File(models.Model, MojoModel):
     def on_rest_related_save(cls, related_instance, related_field_name, field_value, current_instance=None):
         # this allows us to handle json posts with inline base64 file data
         if isinstance(field_value, str):
-            # assume base64 encoded data
-            file_bytes = base64.b64decode(field_value)
-            mime_type = magic.from_buffer(file_bytes, mime=True)
-            ext = mimetypes.guess_extension(mime_type)
+            mime_type = None
+            b64_data = field_value
+
+            # Check for and parse Data URL scheme (e.g., "data:image/png;base64,iVBOR...")
+            if field_value.startswith('data:') and ',' in field_value:
+                header, b64_data = field_value.split(',', 1)
+                mime_type = header.split(';')[0].split(':')[1]
+
+            # Fix incorrect padding, which can occur with base64 strings from web clients
+            missing_padding = len(b64_data) % 4
+            if missing_padding:
+                b64_data += '=' * (4 - missing_padding)
+
+            try:
+                file_bytes = base64.b64decode(b64_data)
+            except (TypeError, base64.binascii.Error):
+                # If decoding fails, it's not a valid base64 string.
+                # In a real app, you might want to raise a validation error here.
+                return
+
+            # If mime_type wasn't in the data URL, detect it with python-magic
+            if not mime_type:
+                mime_type = magic.from_buffer(file_bytes, mime=True)
+
+            # Safely guess the extension, defaulting to an empty string if unknown
+            ext = mimetypes.guess_extension(mime_type) or ''
+
             file_obj = io.BytesIO(file_bytes)
             file_obj.name = f"{related_field_name}{ext}"
             file_obj.content_type = mime_type
             file_obj.size = len(file_bytes)
+
             # now we need to upload the file
             instance = cls.create_from_file(file_obj, file_obj.name)
             setattr(related_instance, related_field_name, instance)
+
         elif isinstance(field_value, int):
             # assume file id
             instance = File.objects.get(id=field_value)

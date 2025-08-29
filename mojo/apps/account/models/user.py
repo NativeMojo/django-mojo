@@ -6,6 +6,7 @@ from mojo import errors as merrors
 from mojo.helpers import dates
 from mojo.apps.account.utils.jwtoken import JWToken
 from mojo.apps import metrics
+from .device import UserDevice
 import uuid
 
 SYS_USER_PERMS_PROTECTION = {
@@ -28,6 +29,7 @@ USER_PERMS_PROTECTION.update(SYS_USER_PERMS_PROTECTION)
 
 USER_LAST_ACTIVITY_FREQ = settings.get("USER_LAST_ACTIVITY_FREQ", 300)
 METRICS_TIMEZONE = settings.get("METRICS_TIMEZONE", "America/Los_Angeles")
+METRICS_TRACK_USER_ACTIVITY = settings.get("METRICS_TRACK_USER_ACTIVITY", False)
 
 class CustomUserManager(BaseUserManager):
     def create_user(self, email, password=None, **extra_fields):
@@ -88,6 +90,7 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
     objects = CustomUserManager()
 
     class RestMeta:
+        LOG_CHANGES = True
         NO_SHOW_FIELDS = ["password", "auth_key", "onetime_code"]
         SEARCH_FIELDS = ["username", "email", "display_name"]
         VIEW_PERMS = ["view_users", "manage_users", "owner"]
@@ -151,6 +154,12 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
         if self.last_activity is None or dates.has_time_elsapsed(self.last_activity, seconds=USER_LAST_ACTIVITY_FREQ):
             self.last_activity = dates.utcnow()
             self.atomic_save()
+        if METRICS_TRACK_USER_ACTIVITY:
+            metrics.record(f"user_activity:{self.pk}", category="user", min_granularity="minutes")
+
+    def track(self, request):
+        self.touch()
+        UserDevice.track(request)
 
     def get_auth_key(self):
         if self.auth_key is None:

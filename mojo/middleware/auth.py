@@ -23,4 +23,4 @@ class AuthenticationMiddleware(MiddlewareMixin):
         if error is not None:
             return JsonResponse({'error': error}, status=401)
         request.user = user
-        user.touch()
+        user.track(request)

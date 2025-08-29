@@ -1,11 +1,12 @@
 import requests
 import ipaddress
 import random
-from mojo.helpers import settings
+from mojo.helpers.settings import settings
 from .countries import get_country_name
 
 # Lazy-load model to avoid circular imports
 _GeoLocatedIP = None
+GEOLOCATION_PROVIDERS = settings.get('GEOLOCATION_PROVIDERS', ['ipinfo'])
 
 
 def get_geo_located_ip_model():
@@ -35,12 +36,7 @@ def geolocate_ip(ip_address):
         return None  # Invalid IP
 
     # 2. Handle public IPs by dispatching to a randomly selected provider
-    providers = getattr(settings, 'GEOLOCATION_PROVIDERS', None)
-    if not providers:
-        # Fallback to the single provider setting for backward compatibility
-        single_provider = getattr(settings, 'GEOLOCATION_PROVIDER', 'ipinfo').lower()
-        providers = [single_provider]
-
+    providers = GEOLOCATION_PROVIDERS
     provider = random.choice(providers)
     api_key_setting_name = f'GEOLOCATION_API_KEY_{provider.upper()}'
     api_key = getattr(settings, api_key_setting_name, None)

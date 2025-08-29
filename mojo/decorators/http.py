@@ -23,6 +23,7 @@ MOJO_APPEND_SLASH = settings.get("MOJO_APPEND_SLASH", False)
 
 API_METRICS = settings.get("API_METRICS", False)
 API_METRICS_GRANULARITY = settings.get("API_METRICS_GRANULARITY", "days")
+EVENTS_ON_ERRORS = settings.get("EVENTS_ON_ERRORS", True)
 
 
 def dispatcher(request, *args, **kwargs):
@@ -37,6 +38,13 @@ def dispatcher(request, *args, **kwargs):
             if request.group is not None:
                 request.group.touch()
         except ValueError:
+            if EVENTS_ON_ERRORS:
+                rest.MojoModel.class_report_incident(
+                    details=f"Permission denied: Invalid group ID -> '{request.DATA.group}'",
+                    event_type="rest_error",
+                    request=request,
+                    request_path=getattr(request, "path", None),
+                )
             return JsonResponse({"error": "Invalid group ID", "code": 400}, status=400)
     method_key = f"{key}__{request.method}"
     if method_key not in URLPATTERN_METHODS:
@@ -60,17 +68,41 @@ def dispatch_error_handler(func):
         except mojo.errors.MojoException as err:
             if API_METRICS:
                 metrics.record("api_errors", category="mojo_api", min_granularity=API_METRICS_GRANULARITY)
+            if EVENTS_ON_ERRORS:
+                rest.MojoModel.class_report_incident(
+                    details=f"Rest Mojo Error: {err.reason}",
+                    event_type="rest_error",
+                    request_data=request.DATA,
+                    request=request,
+                    request_path=getattr(request, "path", None),
+                )
             return JsonResponse({"error": err.reason, "code": err.code}, status=err.status)
         except ValueError as err:
             if API_METRICS:
                 metrics.record("api_errors", category="mojo_api", min_granularity=API_METRICS_GRANULARITY)
             logger.exception(f"ValueErrror: {str(err)}, Path: {request.path}, IP: {request.META.get('REMOTE_ADDR')}")
+            if EVENTS_ON_ERRORS:
+                rest.MojoModel.class_report_incident(
+                    details=f"Rest Value Error: {err}",
+                    event_type="rest_error",
+                    request_data=request.DATA,
+                    request=request,
+                    request_path=getattr(request, "path", None),
+                )
             return JsonResponse({"error": str(err), "code": 555 }, status=500)
         except Exception as err:
             if API_METRICS:
                 metrics.record("api_errors", category="mojo_api", min_granularity=API_METRICS_GRANULARITY)
             # logger.exception(f"Unhandled REST Exception: {request.path}")
             logger.exception(f"Error: {str(err)}, Path: {request.path}, IP: {request.META.get('REMOTE_ADDR')}")
+            if EVENTS_ON_ERRORS:
+                rest.MojoModel.class_report_incident(
+                    details=f"Rest Exception: {err}",
+                    event_type="rest_error",
+                    request_data=request.DATA,
+                    request=request,
+                    request_path=getattr(request, "path", None),
+                )
             return JsonResponse({"error": str(err), "code": 500 }, status=500)
 
     return wrapper
