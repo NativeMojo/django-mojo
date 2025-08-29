@@ -19,6 +19,7 @@ def _create_event_dict(details, title=None, category="api_error", level=1, reque
         "title": title,
         "category": category,
         "level": level,
+        "uid": kwargs.pop("uid", None),
         "hostname": kwargs.pop("hostname", None),
         "model_name": kwargs.pop("model_name", None),
         "model_id": kwargs.pop("model_id", None),
@@ -38,6 +39,11 @@ def _create_event_dict(details, title=None, category="api_error", level=1, reque
             "http_user_agent": request.META.get("HTTP_USER_AGENT", ""),
             "http_host": request.META.get("HTTP_HOST", "")
         })
+        if request.user.is_authenticated:
+            event_data["uid"] = request.user.id
+            event_metadata["user_name"] = request.user.display_name
+            event_metadata["user_email"] = request.user.email
+
 
     event_metadata.update({k: v for k, v in kwargs.items() if k not in event_data})
     event_data['metadata'] = event_metadata

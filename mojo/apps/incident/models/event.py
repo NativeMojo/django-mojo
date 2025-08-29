@@ -22,6 +22,7 @@ class Event(models.Model, MojoModel):
     category = models.CharField(max_length=124, db_index=True)
     source_ip = models.CharField(max_length=16, null=True, default=None, db_index=True)
     hostname = models.CharField(max_length=16, null=True, default=None, db_index=True)
+    uid = models.IntegerField(default=None, null=True, db_index=True)
 
     title = models.TextField(default=None, null=True)
     details = models.TextField(default=None, null=True)

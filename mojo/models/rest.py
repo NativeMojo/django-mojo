@@ -536,6 +536,15 @@ class MojoModel:
     def has_field_changed(self, key):
         return key in self.__changed_fields__
 
+    def has_changed(self):
+        return bool(self.__changed_fields__)
+
+    def get_changes(self, data):
+        changes = {}
+        for key, value in self.__changed_fields__.items():
+            changes[key] = f"{value} -> {data.get(key, None)}"
+        return changes
+
     def on_rest_save(self, request, data_dict):
         """
         Create a model instance from a dictionary.
@@ -598,8 +607,8 @@ class MojoModel:
             self.on_rest_save_files(data_dict["files"])
         self.atomic_save()
         self.on_rest_saved(self.__changed_fields__, created)
-        if self.get_rest_meta_prop("LOG_CHANGES", False):
-            self.log(kind="model:changed", log=str(self.__changed_fields__))
+        if self.get_rest_meta_prop("LOG_CHANGES", False) and self.has_changed():
+            self.log(kind="model:changed", log=self.get_changes(data_dict))
 
     def on_rest_save_files(self, files):
         for name, file in files.items():
@@ -718,12 +727,26 @@ class MojoModel:
         Instance-level audit/event reporting. Automatically includes model+id.
         """
         context = dict(context)
-        context.setdefault("model_name", self.__class__.__name__)
-        if hasattr(self, 'id'):
+        context.setdefault("model_name", self.__class__.get_model_string())
+        if hasattr(self, 'id') and self.id is not None:
             context.setdefault("model_id", self.id)
         self.__class__.class_report_incident(
             details, event_type=event_type, level=level, request=request, **context
         )
+
+    @classmethod
+    def class_report_incident_for_user(cls, details, event_type="info", level=1, request=None, **context):
+        """
+        Class-level audit/event reporting for a specific user.
+        details: Human description.
+        event_type: Category/kind (e.g. "permission_denied", "security_alert").
+        level: Numeric severity.
+        request: Optional HTTP request or actor.
+        **context: Any additional context.
+        """
+        if ACTIVE_REQUEST and ACTIVE_REQUEST.user.is_authenticated:
+            return request.user.report_incident(details, event_type=event_type, level=level, request=request, **context)
+        return cls.class_report_incident(details, event_type=event_type, level=level, request=request, **context)
 
     @classmethod
     def class_report_incident(cls, details, event_type="info", level=1, request=None, **context):

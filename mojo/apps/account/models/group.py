@@ -114,6 +114,83 @@ class Group(MojoSecrets, MojoModel):
     def get_member_for_user(self, user):
         return self.members.filter(user=user).last()
 
+    def get_children(self, is_active=True, kind=None):
+        """
+        Returns a QuerySet of all direct and indirect children of this group.
+        """
+        child_ids = self._get_all_child_ids()
+        queryset = Group.objects.filter(id__in=child_ids)
+
+        if is_active is not None:
+            queryset = queryset.filter(is_active=is_active)
+        if kind:
+            queryset = queryset.filter(kind=kind)
+
+        return queryset
+
+    def _get_all_child_ids(self, collected_ids=None):
+        """
+        Recursively collects the IDs of all children.
+        """
+        if collected_ids is None:
+            collected_ids = set()
+
+        # Note: self.groups is the related_name from the parent ForeignKey
+        children = self.groups.all()
+        for child in children:
+            if child.id not in collected_ids:
+                collected_ids.add(child.id)
+                child._get_all_child_ids(collected_ids)
+
+        return list(collected_ids)
+
+    def get_parents(self, is_active=True, kind=None):
+        """
+        Returns a QuerySet of all parents (ancestors) of this group.
+        """
+        parent_ids = []
+        current = self.parent
+        while current:
+            parent_ids.append(current.id)
+            current = current.parent
+
+        queryset = Group.objects.filter(id__in=parent_ids)
+
+        if is_active is not None:
+            queryset = queryset.filter(is_active=is_active)
+        if kind:
+            queryset = queryset.filter(kind=kind)
+
+        return queryset
+
+    @property
+    def top_most_parent(self):
+        """
+        Finds the top-most parent (root ancestor) of this group.
+        Returns self if the group has no parent.
+        """
+        current = self
+        while current.parent:
+            current = current.parent
+        return current
+
+    def is_child_of(self, parent_group):
+        """
+        Checks if this group is a descendant of the given parent_group.
+        """
+        current = self.parent
+        while current:
+            if current.id == parent_group.id:
+                return True
+            current = current.parent
+        return False
+
+    def is_parent_of(self, child_group):
+        """
+        Checks if this group is an ancestor of the given child_group.
+        """
+        return child_group.is_child_of(self)
+
     @classmethod
     def on_rest_handle_list(cls, request):
         if cls.rest_check_permission(request, "VIEW_PERMS"):

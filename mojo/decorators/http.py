@@ -69,7 +69,7 @@ def dispatch_error_handler(func):
             if API_METRICS:
                 metrics.record("api_errors", category="mojo_api", min_granularity=API_METRICS_GRANULARITY)
             if EVENTS_ON_ERRORS:
-                rest.MojoModel.class_report_incident(
+                rest.MojoModel.class_report_incident_for_user(
                     details=f"Rest Mojo Error: {err.reason}",
                     event_type="rest_error",
                     request_data=request.DATA,
@@ -82,7 +82,7 @@ def dispatch_error_handler(func):
                 metrics.record("api_errors", category="mojo_api", min_granularity=API_METRICS_GRANULARITY)
             logger.exception(f"ValueErrror: {str(err)}, Path: {request.path}, IP: {request.META.get('REMOTE_ADDR')}")
             if EVENTS_ON_ERRORS:
-                rest.MojoModel.class_report_incident(
+                rest.MojoModel.class_report_incident_for_user(
                     details=f"Rest Value Error: {err}",
                     event_type="rest_error",
                     request_data=request.DATA,
@@ -96,7 +96,7 @@ def dispatch_error_handler(func):
             # logger.exception(f"Unhandled REST Exception: {request.path}")
             logger.exception(f"Error: {str(err)}, Path: {request.path}, IP: {request.META.get('REMOTE_ADDR')}")
             if EVENTS_ON_ERRORS:
-                rest.MojoModel.class_report_incident(
+                rest.MojoModel.class_report_incident_for_user(
                     details=f"Rest Exception: {err}",
                     event_type="rest_error",
                     request_data=request.DATA,
