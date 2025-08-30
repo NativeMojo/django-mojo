@@ -286,7 +286,7 @@ class MojoModel:
             instance.on_rest_save(request, request.DATA)
             instance.on_rest_created()
             if cls.get_rest_meta_prop("LOG_CHANGES", False):
-                instance.log(kind="model:created", log=f"{ACTIVE_REQUEST.username} created {instance.pk}")
+                instance.log(kind="model:created", log=f"{ACTIVE_REQUEST.user.username} created {instance.pk}")
             return instance.on_rest_get(request)
         return cls.rest_error_response(request, 403, error=f"CREATE permission denied: {cls.__name__}")
 
@@ -613,12 +613,16 @@ class MojoModel:
 
         created = self.pk is None
         if created:
-            if request.user.is_authenticated and self.get_model_field("user"):
-                if getattr(self, "user", None) is None:
-                    self.user = request.user
+            owner_field = self.get_rest_meta_prop("CREATED_BY_OWNER_FIELD", "user")
+            if request.user.is_authenticated and self.get_model_field(owner_field):
+                setattr(self, owner_field, request.user)
             if request.group and self.get_model_field("group"):
                 if getattr(self, "group", None) is None:
                     self.group = request.group
+        else:
+            owner_field = self.get_rest_meta_prop("UPDATED_BY_OWNER_FIELD", "modified_by")
+            if request.user.is_authenticated and self.get_model_field(owner_field):
+                setattr(self, owner_field, request.user)
         self.on_rest_pre_save(self.__changed_fields__, created)
         if "files" in data_dict:
             self.on_rest_save_files(data_dict["files"])

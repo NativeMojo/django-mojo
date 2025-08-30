@@ -12,6 +12,7 @@ import time
 import socket
 import threading
 import json
+from django.db import close_old_connections
 
 
 class TaskEngine(daemon.Daemon):
@@ -348,6 +349,9 @@ class TaskEngine(daemon.Daemon):
             tman.add_to_errors(task_data, error_message)
             metrics.record("tasks_errors", category="tasks")
         finally:
+            # CRITICAL: Close the database connection for this thread
+            # to prevent stale connection errors.
+            close_old_connections()
             tman.remove_from_running(task_id, task_data.channel)
 
     def queue_task(self, task_id):

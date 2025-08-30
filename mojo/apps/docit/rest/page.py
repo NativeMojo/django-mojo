@@ -1,0 +1,17 @@
+import mojo.decorators as md
+from ..models import Page
+
+
+@md.URL('page')
+@md.URL('page/<int:pk>')
+def on_page(request, pk=None):
+    """
+    Standard CRUD endpoints for Page model
+
+    GET /api/docit/page - List pages
+    POST /api/docit/page - Create new page
+    GET /api/docit/page/<id> - Get single page
+    PUT /api/docit/page/<id> - Update page
+    DELETE /api/docit/page/<id> - Delete page
+    """
+    return Page.on_rest_request(request, pk)

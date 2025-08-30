@@ -158,7 +158,7 @@ def test_add_group_member(opts):
     assert opts.client.is_authenticated, "authentication failed"
     resp = opts.client.post("/api/group/member", dict(user=opts.user_id, group=opts.group_id))
     assert resp.status_code == 200, f"Expected status_code is 200 but got {resp.status_code}"
-    assert resp.response.data.user.id == opts.user_id, f"user: {resp.response.data.user.id }"
+    assert resp.response.data.user.id == opts.user_id, f"user: {resp.response.data.user.id } vs {opts.user_id}"
     assert resp.response.data.group.id == opts.group_id, f"group: {resp.response.data.group.id }"
     opts.member_id = resp.response.data.id
 

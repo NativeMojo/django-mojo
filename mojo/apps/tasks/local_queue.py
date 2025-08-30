@@ -1,9 +1,12 @@
 import queue
 import threading
 from django.db import close_old_connections, models
+from mojo.helpers import logit
 
 # 1. A thread-safe, in-memory queue
 local_task_queue = queue.Queue()
+
+logger = logit.get_logger("tasks_local", "tasks_local.log")
 
 # 2. The public function to add tasks to the queue
 def publish_local(function, *args, **kwargs):
@@ -44,8 +47,7 @@ def _worker():
         try:
             function(*args, **kwargs)
         except Exception as e:
-            # In a real application, you would use a proper logger
-            print(f"[local_queue] Error executing task {function.__name__}: {e}")
+            logger.exception(f"Error executing task {function.__name__}")
         finally:
             # CRITICAL: Close the database connection for this thread
             # to prevent stale connection errors.
@@ -54,11 +56,21 @@ def _worker():
             local_task_queue.task_done()
 
 # 4. The function to start the worker thread
+_worker_thread = None
+
 def start_worker_thread():
     """
     Starts the background worker thread.
     This should only be called once when the Django app starts.
     """
-    worker_thread = threading.Thread(target=_worker, daemon=True)
-    worker_thread.start()
+    global _worker_thread
+    if _worker_thread and _worker_thread.is_alive():
+        return
+
+    _worker_thread = threading.Thread(target=_worker, daemon=True)
+    _worker_thread.start()
     print("[local_queue] Background worker thread started.")
+
+def is_local_worker_running():
+    """Check if the local task worker thread is running."""
+    return _worker_thread is not None and _worker_thread.is_alive()

@@ -29,6 +29,16 @@ This file distills the core philosophy, structure, and conventions necessary for
   - `GRAPHS` for all response graph shapes (see below for graphs deep dive).
 - Adding fields: user="account.User" and/or group="account.Group" to Models when appropriate allows the framework to provide security and permissions to the model so users or groups can access the model. It should only be done when we think this model will require user and/or group level access controls.
 
+- When building rest endpoints, keep it or simple CRUD convention (this handles everything we need and keeps it consistent):
+```
+import mojo.decorators as md
+
+@md.URL('book')
+@md.URL('book/<int:pk>')
+def on_book(request, pk=None):
+    return Book.on_rest_request(request, pk)
+```
+
 **Services**
 - Domain-specific business logic belongs in `app/services/` (not `mojo/helpers/`).
 - Keep service filenames short (e.g., `push.py` not `push_notifications.py`).
@@ -162,8 +172,6 @@ This file distills the core philosophy, structure, and conventions necessary for
 - Double-check if the area touches backend vs REST user patterns; keep doc/code modular.
 - Never change permission or REST flow without cross-referencing/updating both dev and API docs.
 - Keep code/config DRY and idiomatic—prefer composition and helper reuse over copy-paste.
-</thinking>
-
 
 ---
 

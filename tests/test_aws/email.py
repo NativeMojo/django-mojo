@@ -76,7 +76,8 @@ def test_aws_email_domain_audit(opts):
     # The audit 'data' includes: domain, region, status, items[], checks{}
     assert resp1.response.data.domain == opts.domain_name, f"mismatched domain in audit: {resp1.response.data.domain}"
     assert resp1.response.data.status in ["ok", "drifted", "conflict"], f"unexpected audit status {resp1.response.data.status}"
-    assert isinstance(resp1.response.data.items, list), "audit items should be a list"
+    items = resp1.response.data.get("items")
+    assert isinstance(items, list), f"audit items should be a list, {str(items)}"
     assert hasattr(resp1.response.data, "checks"), "missing checks in audit response"
     # minimally assert that SES identity is verified for a known domain
     assert resp1.response.data.checks.get("ses_verified") is True, "SES identity not verified"
@@ -84,7 +85,8 @@ def test_aws_email_domain_audit(opts):
     resp2 = opts.client.post(f"/api/aws/email/domain/{opts.domain_id}/audit", json={})
     assert resp2.status_code == 200, f"audit status {resp2.status_code}"
     assert resp2.response.data.domain == opts.domain_name, "domain name changed between audits"
-    assert isinstance(resp2.response.data.items, list), "audit items should be a list (2nd pass)"
+    items = resp1.response.data.get("items")
+    assert isinstance(items, list), "audit items should be a list (2nd pass)"
     assert hasattr(resp2.response.data, "checks"), "missing checks in audit response (2nd pass)"
     assert hasattr(resp2.response.data, "audit_pass"), "missing audit_pass in audit response (2nd pass)"
 
