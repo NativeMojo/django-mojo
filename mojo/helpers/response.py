@@ -16,3 +16,10 @@ class JsonResponse(HttpResponse):
             data.code = status
         data = data.to_json(as_string=True)
         super().__init__(content=data, status=status, **kwargs)
+
+
+def error(message, status=400):
+    return JsonResponse(objict(error=message), status=status)
+
+def success(data, status=200):
+    return JsonResponse(objict(status=True, data=data), status=status)

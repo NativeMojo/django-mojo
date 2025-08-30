@@ -48,6 +48,40 @@ def color_print(msg, color, end="\n"):
     ConsoleLogger.print_message(msg, color, end)
 
 
+# Convenience logging functions with automatic logger routing
+_mojo_logger = None
+_debug_logger = None
+_error_logger = None
+
+def info(*args):
+    """Log info messages to mojo.log"""
+    global _mojo_logger
+    if _mojo_logger is None:
+        _mojo_logger = get_logger("mojo", "mojo.log")
+    _mojo_logger.info(*args)
+
+def warn(*args):
+    """Log warning messages to mojo.log"""
+    global _mojo_logger
+    if _mojo_logger is None:
+        _mojo_logger = get_logger("mojo", "mojo.log")
+    _mojo_logger.warning(*args)
+
+def debug(*args):
+    """Log debug messages to debug.log"""
+    global _debug_logger
+    if _debug_logger is None:
+        _debug_logger = get_logger("debug", "debug.log", debug=True)
+    _debug_logger.debug(*args)
+
+def error(*args):
+    """Log error messages to error.log"""
+    global _error_logger
+    if _error_logger is None:
+        _error_logger = get_logger("error", "error.log")
+    _error_logger.error(*args)
+
+
 # Mask sensitive data in the log
 def mask_sensitive_data(text):
     sensitive_patterns = [

@@ -264,6 +264,10 @@ class MojoModel:
         cls.debug("on_rest_handle_list")
         if cls.rest_check_permission(request, "VIEW_PERMS"):
             return cls.on_rest_list(request)
+        else:
+            perms = cls.get_rest_meta_prop("VIEW_PERMS", [])
+            if perms and "owner" in perms and request.user.is_authenticated:
+                return cls.on_rest_list(request, cls.objects.filter(user=request.user))
         return cls.rest_error_response(request, 403, error=f"GET permission denied: {cls.__name__}")
 
     @classmethod
@@ -510,6 +514,19 @@ class MojoModel:
         """
         # Perform any additional actions after object creation
         pass
+
+    def on_rest_response(self, request, graph="default"):
+        """
+        Handle the response after a REST request.
+
+        Args:
+            request: Django HTTP request object.
+            graph: String representing the graph to use for serialization.
+
+        Returns:
+            JsonResponse representing the object.
+        """
+        return self.on_rest_get(request, graph=graph)
 
     def on_rest_get(self, request, graph="default"):
         """

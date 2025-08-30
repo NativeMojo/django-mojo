@@ -357,6 +357,7 @@ def set_view_perms(account, perms, redis_con=None):
     if perms is None:
         redis_con.delete(view_perm_key)
     else:
+        add_account(account, redis_con)
         if isinstance(perms, list):
             perms = ','.join(perms)
         redis_con.set(view_perm_key, perms)
@@ -380,6 +381,7 @@ def set_write_perms(account, perms, redis_con=None):
     if perms is None:
         redis_con.delete(write_perm_key)
     else:
+        add_account(account, redis_con)
         if isinstance(perms, list):
             perms = ','.join(perms)
         redis_con.set(write_perm_key, perms)
@@ -427,3 +429,101 @@ def get_write_perms(account, redis_con=None):
         if ',' in perms:
             perms = perms.split(',')
     return perms
+
+def add_account(account, redis_con=None):
+    """
+    Adds a new account to the system.
+
+    Args:
+        account (str): The account to add.
+        redis_con: The Redis connection instance (optional).
+
+    Returns:
+        bool: True if the account was added successfully, False otherwise.
+    """
+    if redis_con is None:
+        redis_con = redis.get_connection()
+    accounts_key = utils.generate_accounts_key()
+    return redis_con.sadd(accounts_key, account) == 1
+
+def list_accounts(redis_con=None):
+    """
+    Lists all accounts in the system.
+
+    Args:
+        redis_con: The Redis connection instance (optional).
+
+    Returns:
+        list: A list of all accounts in the system.
+    """
+    if redis_con is None:
+        redis_con = redis.get_connection()
+    accounts_key = utils.generate_accounts_key()
+    return [account.decode('utf-8') for account in redis_con.smembers(accounts_key)]
+
+def delete_account(account, redis_con=None):
+    if redis_con is None:
+        redis_con = redis.get_connection()
+    set_view_perms(account, None, redis_con)
+    set_write_perms(account, None, redis_con)
+    accounts_key = utils.generate_accounts_key()
+    return redis_con.srem(accounts_key, account)
+
+
+
+def get_accounts_with_permissions(redis_con=None):
+    """
+    Scans Redis to find all accounts that have view or write permissions configured.
+
+    Args:
+        redis_con: The Redis connection instance (optional).
+
+    Returns:
+        list: A list of dictionaries containing account information and their permissions.
+    """
+    if redis_con is None:
+        redis_con = redis.get_connection()
+
+    accounts = {}
+
+    # Scan for view permission keys
+    cursor = b'0'
+    while cursor != b'0':
+        cursor, keys = redis_con.scan(cursor=cursor, match="mets:*:perm:v")
+        for key in keys:
+            key_str = key.decode('utf-8')
+            # Extract account from key: mets:{account}:perm:v
+            parts = key_str.split(':')
+            if len(parts) >= 4:
+                account = parts[1]
+                if account not in accounts:
+                    accounts[account] = {"account": account, "view_permissions": None, "write_permissions": None}
+
+                perms = redis_con.get(key)
+                if perms:
+                    perms = perms.decode('utf-8')
+                    if ',' in perms:
+                        perms = perms.split(',')
+                    accounts[account]["view_permissions"] = perms
+
+    # Scan for write permission keys
+    cursor = b'0'
+    while cursor != b'0':
+        cursor, keys = redis_con.scan(cursor=cursor, match="mets:*:perm:w")
+        for key in keys:
+            key_str = key.decode('utf-8')
+            # Extract account from key: mets:{account}:perm:w
+            parts = key_str.split(':')
+            if len(parts) >= 4:
+                account = parts[1]
+                if account not in accounts:
+                    accounts[account] = {"account": account, "view_permissions": None, "write_permissions": None}
+
+                perms = redis_con.get(key)
+                if perms:
+                    perms = perms.decode('utf-8')
+                    if ',' in perms:
+                        perms = perms.split(',')
+                    accounts[account]["write_permissions"] = perms
+
+    return list(accounts.values())

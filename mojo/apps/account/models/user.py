@@ -64,6 +64,11 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
     phone_number = models.CharField(max_length=32, blank=True, null=True, default=None)
     is_active = models.BooleanField(default=True, db_index=True)
     display_name = models.CharField(max_length=80, blank=True, null=True, default=None)
+
+    # Organization relationship for push config resolution
+    org = models.ForeignKey("account.Group", on_delete=models.SET_NULL,
+                           null=True, blank=True, related_name="org_users",
+                           help_text="Default organization for this user")
     # key used for sessions and general authentication algs
     auth_key = models.TextField(null=True, default=None)
     onetime_code = models.TextField(null=True, default=None)

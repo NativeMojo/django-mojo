@@ -179,6 +179,8 @@ def generate_perm_write_key(account):
 def generate_perm_view_key(account):
     return f"mets:{account}:perm:v"
 
+def generate_accounts_key():
+    return f"mets:_accounts_"
 
 def generate_value_key(slug, account):
     """

@@ -184,6 +184,12 @@ class OptimizedGraphSerializer:
         fields = graph_config.get("fields", [])
         if not fields:
             fields = [field.name for field in obj._meta.fields]
+
+        # Apply exclude filter to remove sensitive fields
+        exclude_fields = graph_config.get("exclude", [])
+        if exclude_fields:
+            fields = [field for field in fields if field not in exclude_fields]
+
         for field_name in fields:
             try:
                 field_value = getattr(obj, field_name)

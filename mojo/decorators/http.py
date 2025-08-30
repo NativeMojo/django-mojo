@@ -75,6 +75,7 @@ def dispatch_error_handler(func):
                     request_data=request.DATA,
                     request=request,
                     request_path=getattr(request, "path", None),
+                    stack_trace=traceback.format_exc(),
                 )
             return JsonResponse({"error": err.reason, "code": err.code}, status=err.status)
         except ValueError as err:
@@ -88,6 +89,7 @@ def dispatch_error_handler(func):
                     request_data=request.DATA,
                     request=request,
                     request_path=getattr(request, "path", None),
+                    stack_trace=traceback.format_exc()
                 )
             return JsonResponse({"error": str(err), "code": 555 }, status=500)
         except Exception as err:
@@ -101,6 +103,7 @@ def dispatch_error_handler(func):
                     event_type="rest_error",
                     request_data=request.DATA,
                     request=request,
+                    stack_trace=traceback.format_exc(),
                     request_path=getattr(request, "path", None),
                 )
             return JsonResponse({"error": str(err), "code": 500 }, status=500)

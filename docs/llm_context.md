@@ -18,17 +18,41 @@ This file distills the core philosophy, structure, and conventions necessary for
 ## Core MOJO Conventions
 
 **Models**
-- Inherit from `MojoModel` and `models.Model` (or extensions) and live in `app/models`.
+- **Regular Models:** Inherit from `models.Model, MojoModel` (correct order: `models.Model, MojoModel`).
+- **Models with Secrets:** Inherit from `MojoSecrets, MojoModel` (DO NOT include `models.Model` - MojoSecrets already provides it).
+- Always include standard fields: `created = models.DateTimeField(auto_now_add=True, editable=False, db_index=True)` and `modified = models.DateTimeField(auto_now=True, db_index=True)`.
+- Models live in `app/models` with one model per file.
+- For related models, organize them in subdirectories (e.g., `models/push/`) with short filenames (`device.py`, `config.py`, `template.py`).
+- Use `__init__.py` in subdirectories to export all models for clean imports.
 - Define an inner `RestMeta` class with:
   - `VIEW_PERMS`, `SAVE_PERMS`, etc.
   - `GRAPHS` for all response graph shapes (see below for graphs deep dive).
-- adding fields: user="account.User" and/or group="account.Group" to Models when appropriate allows the framework to provide security and permissions to the model so users or groups can access the model.   It shoulld only been done when we think this model will require user and/or group level access controls.
+- Adding fields: user="account.User" and/or group="account.Group" to Models when appropriate allows the framework to provide security and permissions to the model so users or groups can access the model. It should only be done when we think this model will require user and/or group level access controls.
+
+**Services**
+- Domain-specific business logic belongs in `app/services/` (not `mojo/helpers/`).
+- Keep service filenames short (e.g., `push.py` not `push_notifications.py`).
+- Services handle complex business logic that doesn't belong in models or REST handlers.
+
+**MojoSecrets Usage**
+- MojoSecrets stores all sensitive data in a single encrypted JSON field (`mojo_secrets`).
+- Use `set_secret(key, value)` and `get_secret(key, default)` methods.
+- Never create individual encrypted model fields - always use the secrets system.
+
+**Logging**
+- Use `import logit` and call `logit.info()`, `logit.error()`, `logit.warn()`, `logit.debug()`.
+- Automatic routing: `info`/`warn` → `mojo.log`, `error` → `error.log`, `debug` → `debug.log`.
+- Always use module prefix (`logit.error`) for clarity and readability.
 
 **REST Handlers**
-- Place in `app/rest`.
+- Place in `app/rest` with short, descriptive filenames.
 - Use decorators (`@md.URL`, `@md.GET`, etc.) to register endpoints.
+- Prefer data in params/POST body, not URL paths: `@md.POST('devices/push/send')` not `@md.POST('devices/push/send/<param>')`.
+- **Data Access**: Always use `request.DATA` for unified access to both POST data and GET params - never use `request.POST.get()` or `request.GET.get()` directly.
+- **URL Patterns**: List endpoints should NOT end with trailing slashes (e.g., `/api/account/devices/push` not `/api/account/devices/push/`).
 - Standard handlers point to `Model.on_rest_request(request, pk)` for automatic CRUD logic.
 - Only add custom handlers when necessary (nested, complex, special validation).
+- Support both templated and direct content patterns where applicable (e.g., notifications can use templates OR direct title/body).
 
 **Graphs (Serialization System)**
 - Controlled per-model in `RestMeta.GRAPHS`.
@@ -51,8 +75,9 @@ This file distills the core philosophy, structure, and conventions necessary for
 - Auth/Perm: `@md.requires_auth`, `@md.requires_perms`
 
 **Helpers & Utilities**
-- All repeated logic resides in `mojo/helpers`—always use or extend these before new standalone functions.
-- For example always use from mojo.helpers.settings import settings, and then settings.get("MY_SETTING", default_value)
+- General utilities in `mojo/helpers`, domain-specific logic in `app/services/`.
+- Always use `from mojo.helpers.settings import settings`, then `settings.get("MY_SETTING", default_value)`.
+- Use `from mojo.helpers import logit`, then `logit.info()`, `logit.error()`, etc.
 
 **Testing**
 - Use the inbuilt `testit` suite for both REST and backend unit tests.
@@ -77,6 +102,31 @@ This file distills the core philosophy, structure, and conventions necessary for
 
 ---
 
+## Implementation Best Practices
+
+**Model Design**
+- Keep business logic separate from data access - use services for complex operations.
+- Design for both individual and bulk operations from the start.
+- Support flexible configuration (system-wide and organization-specific).
+
+**API Design**
+- Design APIs to support both templated and direct content patterns.
+- Always provide complete audit trails for sensitive operations.
+- Use proper HTTP methods and status codes consistently.
+
+**File Organization**
+- One model per file, short descriptive names.
+- Group related models in subdirectories (e.g., `models/push/device.py`, `models/push/config.py`).
+- Use `__init__.py` files to maintain clean imports from subdirectories.
+- Keep imports simple and explicit.
+
+**Security & Permissions**
+- Never expose sensitive fields (like `mojo_secrets`) in API responses.
+- Use `exclude` in RestMeta GRAPHS to prevent credential exposure.
+- Test permission enforcement thoroughly in all scenarios.
+
+---
+
 ## Security
 
 - All changes must maintain "fail closed" access unless explicitly documented.
@@ -87,9 +137,33 @@ This file distills the core philosophy, structure, and conventions necessary for
 
 ## LLM/Contributor Checklist
 
+**Before Implementation:**
+- Check model inheritance order:
+  - Regular models: `models.Model, MojoModel`
+  - Models with secrets: `MojoSecrets, MojoModel` (DO NOT include `models.Model`)
+- Include standard `created`/`modified` fields with proper indexing.
+- Use MojoSecrets correctly (single JSON field, not individual encrypted fields).
+- Place domain logic in `app/services/`, not `mojo/helpers/`.
+
+**During Development:**
+- Use `logit.info()`, `logit.error()`, etc. with module prefix for clarity.
+- Keep filenames short and descriptive.
+- Put data in params/POST body, not URL paths.
+- Always use `request.DATA` for data access, never `request.POST.get()` or `request.GET.get()`.
+- List endpoints should not end with trailing slashes.
+- Support both templated and direct patterns where applicable.
+
+**Security & Testing:**
+- Never expose `mojo_secrets` or encrypted fields in API responses.
+- Test permission enforcement thoroughly.
+- Ensure "fail closed" behavior is maintained.
+
+**Documentation:**
 - Double-check if the area touches backend vs REST user patterns; keep doc/code modular.
 - Never change permission or REST flow without cross-referencing/updating both dev and API docs.
 - Keep code/config DRY and idiomatic—prefer composition and helper reuse over copy-paste.
+</thinking>
+
 
 ---
 
