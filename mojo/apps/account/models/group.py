@@ -191,6 +191,151 @@ class Group(MojoSecrets, MojoModel):
         """
         return child_group.is_child_of(self)
 
+    def send_email(
+        self,
+        to,
+        subject=None,
+        body_text=None,
+        body_html=None,
+        cc=None,
+        bcc=None,
+        reply_to=None,
+        **kwargs
+    ):
+        """Send email using mailbox determined by group's domain or system default
+
+        Args:
+            to: One or more recipient addresses
+            subject: Email subject
+            body_text: Optional plain text body
+            body_html: Optional HTML body
+            cc, bcc, reply_to: Optional addressing
+            **kwargs: Additional arguments passed to mailbox.send_email()
+
+        Returns:
+            SentMessage instance
+
+        Raises:
+            ValueError: If no mailbox can be found
+        """
+        from mojo.apps.aws.models import Mailbox
+
+        mailbox = None
+        domain = None
+
+        # Try to get domain from this group's metadata
+        if self.metadata:
+            domain = self.metadata.get("domain")
+
+        # If no domain, check top_most_parent's metadata
+        if not domain and self.top_most_parent != self:
+            parent_metadata = self.top_most_parent.metadata
+            if parent_metadata:
+                domain = parent_metadata.get("domain")
+
+        # Try to get mailbox from domain
+        if domain:
+            # Try domain default first
+            mailbox = Mailbox.get_domain_default(domain)
+            if not mailbox:
+                # Try any mailbox from that domain
+                mailbox = Mailbox.objects.filter(
+                    domain__name__iexact=domain,
+                    allow_outbound=True
+                ).first()
+
+        # Fall back to system default
+        if not mailbox:
+            mailbox = Mailbox.get_system_default()
+
+        if not mailbox:
+            raise ValueError("No mailbox available for sending email. Please configure a system default mailbox.")
+
+        return mailbox.send_email(
+            to=to,
+            subject=subject,
+            body_text=body_text,
+            body_html=body_html,
+            cc=cc,
+            bcc=bcc,
+            reply_to=reply_to,
+            **kwargs
+        )
+
+    def send_template_email(
+        self,
+        to,
+        template_name,
+        context=None,
+        cc=None,
+        bcc=None,
+        reply_to=None,
+        **kwargs
+    ):
+        """Send template email using mailbox determined by group's domain or system default
+
+        Args:
+            to: One or more recipient addresses
+            template_name: Name of the EmailTemplate in database
+            context: Template context variables (group will be added automatically)
+            cc, bcc, reply_to: Optional addressing
+            **kwargs: Additional arguments passed to mailbox.send_template_email()
+
+        Returns:
+            SentMessage instance
+
+        Raises:
+            ValueError: If no mailbox can be found or template not found
+        """
+        from mojo.apps.aws.models import Mailbox
+
+        mailbox = None
+        domain = None
+
+        # Try to get domain from this group's metadata
+        if self.metadata:
+            domain = self.metadata.get("domain")
+
+        # If no domain, check top_most_parent's metadata
+        if not domain and self.top_most_parent != self:
+            parent_metadata = self.top_most_parent.metadata
+            if parent_metadata:
+                domain = parent_metadata.get("domain")
+
+        # Try to get mailbox from domain
+        if domain:
+            # Try domain default first
+            mailbox = Mailbox.get_domain_default(domain)
+            if not mailbox:
+                # Try any mailbox from that domain
+                mailbox = Mailbox.objects.filter(
+                    domain__name__iexact=domain,
+                    allow_outbound=True
+                ).first()
+
+        # Fall back to system default
+        if not mailbox:
+            mailbox = Mailbox.get_system_default()
+
+        if not mailbox:
+            raise ValueError("No mailbox available for sending email. Please configure a system default mailbox.")
+
+        # Add group to context if not already present
+        if context is None:
+            context = {}
+        if 'group' not in context:
+            context['group'] = self
+
+        return mailbox.send_template_email(
+            to=to,
+            template_name=template_name,
+            context=context,
+            cc=cc,
+            bcc=bcc,
+            reply_to=reply_to,
+            **kwargs
+        )
+
     @classmethod
     def on_rest_handle_list(cls, request):
         if cls.rest_check_permission(request, "VIEW_PERMS"):

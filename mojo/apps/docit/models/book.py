@@ -53,6 +53,9 @@ class Book(models.Model, MojoModel):
     group = models.ForeignKey(
         'account.Group',
         on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        default=None,
         help_text="Owning group for this book"
     )
     user = models.ForeignKey(
@@ -128,10 +131,10 @@ class Book(models.Model, MojoModel):
                     'id', 'title', 'slug', 'description', 'is_active'
                 ],
                 "graphs": {
-                    "user": "basic",
+                    # "user": "basic",
                     "group": "basic",
-                    "created_by": "basic",
-                    "modified_by": "basic"
+                    # "created_by": "basic",
+                    # "modified_by": "basic"
                 }
             }
         }

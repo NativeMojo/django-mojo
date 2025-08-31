@@ -176,3 +176,7 @@ def on_book(request, pk=None):
 ---
 
 _Reference this file before making any LLM- or contributor-initiated changes to code or documentation._
+
+IMPORTANT:
+ - this is a django framework not a django project, ask use to run any django project related commmands
+ - Never create migration files, ask user to.

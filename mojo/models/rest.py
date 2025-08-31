@@ -576,40 +576,17 @@ class MojoModel:
         self.__changed_fields__ = objict.objict()
         # Get fields that should not be saved
         no_save_fields = self.get_rest_meta_prop("NO_SAVE_FIELDS", ["id", "pk", "created", "uuid"])
-
+        post_save_fields = self.get_rest_meta_prop("POST_SAVE_FIELDS", ['action'])
+        post_save_data = {}
         # Iterate through data_dict keys instead of model fields
         for key, value in data_dict.items():
             # Skip fields that shouldn't be saved
             if key in no_save_fields:
                 continue
-
-            # First check for custom setter method
-            set_field_method = getattr(self, f'set_{key}', None)
-            if callable(set_field_method):
-                old_value = getattr(self, key, None)
-                set_field_method(value)
-                new_value = getattr(self, key, None)
-                self._set_field_change(key, old_value, new_value)
+            if key in post_save_fields:
+                post_save_data[key] = value
                 continue
-
-            # Check if this is a model field
-            field = self.get_model_field(key)
-            if field is None:
-                continue
-            if field.get_internal_type() == "ForeignKey":
-                self.on_rest_save_related_field(field, value, request)
-            elif field.get_internal_type() == "JSONField":
-                self.on_rest_update_jsonfield(key, value)
-            else:
-                if field.get_internal_type() == "BooleanField":
-                    if isinstance(value, str):
-                        value = value.lower() in ("true", "1")
-                    elif isinstance(value, int):
-                        value = bool(value)
-                    else:
-                        value = bool(value)
-                self._set_field_change(key, getattr(self, key), value)
-                setattr(self, key, value)
+            self.on_rest_save_field(key, value, request)
 
         created = self.pk is None
         if created:
@@ -628,8 +605,46 @@ class MojoModel:
             self.on_rest_save_files(data_dict["files"])
         self.atomic_save()
         self.on_rest_saved(self.__changed_fields__, created)
+        for key, value in post_save_data.items():
+            # post save fields can only be called via on_action_
+            set_field_method = getattr(self, f'on_action_{key}', None)
+            if callable(set_field_method):
+                old_value = getattr(self, key, None)
+                set_field_method(value)
+                new_value = getattr(self, key, None)
+                self._set_field_change(key, old_value, new_value)
+
         if self.get_rest_meta_prop("LOG_CHANGES", False) and self.has_changed():
             self.log(kind="model:changed", log=self.get_changes(data_dict))
+
+    def on_rest_save_field(self, key, value, request):
+        # First check for custom setter method
+        set_field_method = getattr(self, f'set_{key}', None)
+        if callable(set_field_method):
+            old_value = getattr(self, key, None)
+            set_field_method(value)
+            new_value = getattr(self, key, None)
+            self._set_field_change(key, old_value, new_value)
+            return
+
+        # Check if this is a model field
+        field = self.get_model_field(key)
+        if field is None:
+            return
+        if field.get_internal_type() == "ForeignKey":
+            self.on_rest_save_related_field(field, value, request)
+        elif field.get_internal_type() == "JSONField":
+            self.on_rest_update_jsonfield(key, value)
+        else:
+            if field.get_internal_type() == "BooleanField":
+                if isinstance(value, str):
+                    value = value.lower() in ("true", "1")
+                elif isinstance(value, int):
+                    value = bool(value)
+                else:
+                    value = bool(value)
+            self._set_field_change(key, getattr(self, key), value)
+            setattr(self, key, value)
 
     def on_rest_save_files(self, files):
         for name, file in files.items():

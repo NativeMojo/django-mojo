@@ -100,7 +100,7 @@ class Page(models.Model, MojoModel):
         unique_together = ['book', 'slug']
 
     class RestMeta:
-        VIEW_PERMS = ['public']
+        VIEW_PERMS = ['all']
         SAVE_PERMS = ['manage_docit', 'owner']
         DELETE_PERMS = ['manage_docit', 'owner']
         CREATED_BY_OWNER_FIELD = 'created_by'
@@ -132,9 +132,9 @@ class Page(models.Model, MojoModel):
                     'id', 'title', 'slug', 'is_published', 'order_priority'
                 ],
                 "graphs": {
-                    "user": "basic",
+                    # "user": "basic",
                     "book": "default",
-                    "created_by": "basic",
+                    # "created_by": "basic",
                     "modified_by": "basic"
                 }
             },

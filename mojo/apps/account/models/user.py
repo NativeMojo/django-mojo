@@ -401,6 +401,139 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
             return True
         return request.user.has_permission(perms)
 
+    def on_action_send_invite(self, value):
+        self.send_invite()
+
+    def send_invite(self):
+        self.send_template_email(
+            to=self.email,
+            template_name="invite",
+            context={"user": self}
+        )
+
+    def send_email(
+        self,
+        subject=None,
+        body_text=None,
+        body_html=None,
+        cc=None,
+        bcc=None,
+        reply_to=None,
+        **kwargs
+    ):
+        """Send email to this user using mailbox determined by user's org domain or system default
+
+        Args:
+            subject: Email subject
+            body_text: Optional plain text body
+            body_html: Optional HTML body
+            cc, bcc, reply_to: Optional addressing
+            **kwargs: Additional arguments passed to mailbox.send_email()
+
+        Returns:
+            SentMessage instance
+
+        Raises:
+            ValueError: If no mailbox can be found
+        """
+        from mojo.apps.aws.models import Mailbox
+
+        mailbox = None
+
+        # Try to get mailbox from org domain
+        if self.org and hasattr(self.org, 'metadata'):
+            domain = self.org.metadata.get("domain")
+            if domain:
+                # Try domain default first
+                mailbox = Mailbox.get_domain_default(domain)
+                if not mailbox:
+                    # Try any mailbox from that domain
+                    mailbox = Mailbox.objects.filter(
+                        domain__name__iexact=domain,
+                        allow_outbound=True
+                    ).first()
+
+        # Fall back to system default
+        if not mailbox:
+            mailbox = Mailbox.get_system_default()
+
+        if not mailbox:
+            raise ValueError("No mailbox available for sending email. Please configure a system default mailbox.")
+
+        return mailbox.send_email(
+            to=self.email,
+            subject=subject,
+            body_text=body_text,
+            body_html=body_html,
+            cc=cc,
+            bcc=bcc,
+            reply_to=reply_to,
+            **kwargs
+        )
+
+    def send_template_email(
+        self,
+        template_name,
+        context=None,
+        cc=None,
+        bcc=None,
+        reply_to=None,
+        **kwargs
+    ):
+        """Send template email to this user using mailbox determined by user's org domain or system default
+
+        Args:
+            template_name: Name of the EmailTemplate in database
+            context: Template context variables (user will be added automatically)
+            cc, bcc, reply_to: Optional addressing
+            **kwargs: Additional arguments passed to mailbox.send_template_email()
+
+        Returns:
+            SentMessage instance
+
+        Raises:
+            ValueError: If no mailbox can be found or template not found
+        """
+        from mojo.apps.aws.models import Mailbox
+
+        mailbox = None
+
+        # Try to get mailbox from org domain
+        if self.org and hasattr(self.org, 'metadata'):
+            domain = self.org.metadata.get("domain")
+            if domain:
+                # Try domain default first
+                mailbox = Mailbox.get_domain_default(domain)
+                if not mailbox:
+                    # Try any mailbox from that domain
+                    mailbox = Mailbox.objects.filter(
+                        domain__name__iexact=domain,
+                        allow_outbound=True
+                    ).first()
+
+        # Fall back to system default
+        if not mailbox:
+            mailbox = Mailbox.get_system_default()
+
+        if not mailbox:
+            raise ValueError("No mailbox available for sending email. Please configure a system default mailbox.")
+
+        # Add user to context if not already present
+        if context is None:
+            context = {}
+        if 'user' not in context:
+            context['user'] = self
+
+        return mailbox.send_template_email(
+            to=self.email,
+            template_name=template_name,
+            context=context,
+            cc=cc,
+            bcc=bcc,
+            reply_to=reply_to,
+            **kwargs
+        )
+
     @classmethod
     def validate_jwt(cls, token):
         token_manager = JWToken()
