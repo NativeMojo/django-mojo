@@ -96,6 +96,7 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
 
     class RestMeta:
         LOG_CHANGES = True
+        POST_SAVE_ACTIONS = ['send_invite']
         NO_SHOW_FIELDS = ["password", "auth_key", "onetime_code"]
         SEARCH_FIELDS = ["username", "email", "display_name"]
         VIEW_PERMS = ["view_users", "manage_users", "owner"]
@@ -406,9 +407,8 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
 
     def send_invite(self):
         self.send_template_email(
-            to=self.email,
             template_name="invite",
-            context={"user": self}
+            context={"user": self.to_dict("basic")}
         )
 
     def send_email(
@@ -531,6 +531,7 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
             cc=cc,
             bcc=bcc,
             reply_to=reply_to,
+            allow_unverified=True,
             **kwargs
         )
 

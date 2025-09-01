@@ -576,14 +576,14 @@ class MojoModel:
         self.__changed_fields__ = objict.objict()
         # Get fields that should not be saved
         no_save_fields = self.get_rest_meta_prop("NO_SAVE_FIELDS", ["id", "pk", "created", "uuid"])
-        post_save_fields = self.get_rest_meta_prop("POST_SAVE_FIELDS", ['action'])
+        post_save_actions = self.get_rest_meta_prop("POST_SAVE_ACTIONS", ['action'])
         post_save_data = {}
         # Iterate through data_dict keys instead of model fields
         for key, value in data_dict.items():
             # Skip fields that shouldn't be saved
             if key in no_save_fields:
                 continue
-            if key in post_save_fields:
+            if key in post_save_actions:
                 post_save_data[key] = value
                 continue
             self.on_rest_save_field(key, value, request)
