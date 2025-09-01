@@ -43,7 +43,7 @@ class File(models.Model, MojoModel):
             },
             "basic": {
                 "fields": ["id", "filename", "content_type", "category"],
-                "extra": ["url", "renditions"],
+                "extra": ["url", "thumbnail"],
             },
             "default": {
                 "extra": ["url", "renditions"],
@@ -290,6 +290,16 @@ class File(models.Model, MojoModel):
     @property
     def url(self):
         return self.generate_download_url()
+
+    @property
+    def thumbnail(self):
+        r = self.get_rendition_by_role('thumbnail')
+        if r:
+            return r.url
+        return None
+
+    def get_rendition_by_role(self, role):
+        return self.file_renditions.filter(role=role).first()
 
     def generate_download_url(self):
         if self.download_url:

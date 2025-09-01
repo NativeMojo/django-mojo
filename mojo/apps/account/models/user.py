@@ -133,7 +133,8 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
                     'is_active'
                 ],
                 "graphs": {
-                    "avatar": "basic"
+                    "avatar": "basic",
+                    "org": "basic"
                 }
             },
             "full": {
@@ -522,7 +523,7 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
         if context is None:
             context = {}
         if 'user' not in context:
-            context['user'] = self
+            context['user'] = self.to_dict("basic")
 
         return mailbox.send_template_email(
             to=self.email,
