@@ -15,3 +15,8 @@ def on_page(request, pk=None):
     DELETE /api/docit/page/<id> - Delete page
     """
     return Page.on_rest_request(request, pk)
+
+
+@md.URL('page/slug/<str:slug>')
+def on_page_by_slug(request, slug=None):
+    return Page.objects.get(slug=slug).on_rest_get(request)

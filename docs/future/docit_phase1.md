@@ -43,7 +43,7 @@ mojo/apps/docit/
 
 **Core Fields**:
 - `title` - CharField(max_length=200)
-- `slug` - SlugField(unique=True, max_length=200)  
+- `slug` - SlugField(unique=True, max_length=200)
 - `description` - TextField(blank=True)
 - `order_priority` - IntegerField(default=0, db_index=True)
 - `permissions` - CharField(max_length=500, blank=True)
@@ -64,10 +64,10 @@ class RestMeta:
     VIEW_PERMS = ['public']
     SAVE_PERMS = ['manage_docit', 'owner']
     DELETE_PERMS = ['manage_docit', 'owner']
-    
+
     GRAPHS = {
         'default': ['id', 'title', 'slug', 'description', 'is_active', 'created', 'modified'],
-        'detail': ['id', 'title', 'slug', 'description', 'order_priority', 'config', 
+        'detail': ['id', 'title', 'slug', 'description', 'order_priority', 'config',
                    'is_active', 'created', 'modified', 'created_by', 'modified_by'],
         'list': ['id', 'title', 'slug', 'description', 'is_active']
     }
@@ -102,7 +102,7 @@ class RestMeta:
     VIEW_PERMS = ['public']
     SAVE_PERMS = ['manage_docit', 'owner']
     DELETE_PERMS = ['manage_docit', 'owner']
-    
+
     GRAPHS = {
         'default': ['id', 'title', 'slug', 'content', 'is_published', 'created', 'modified'],
         'detail': ['id', 'title', 'slug', 'content', 'order_priority', 'metadata',
@@ -135,7 +135,7 @@ class RestMeta:
     VIEW_PERMS = ['public']
     SAVE_PERMS = ['manage_docit', 'owner']
     DELETE_PERMS = ['manage_docit', 'owner']
-    
+
     GRAPHS = {
         'default': ['id', 'version', 'change_summary', 'created'],
         'detail': ['id', 'content', 'version', 'change_summary', 'created', 'page'],
@@ -166,7 +166,7 @@ class RestMeta:
     VIEW_PERMS = ['public']
     SAVE_PERMS = ['manage_docit', 'owner']
     DELETE_PERMS = ['manage_docit', 'owner']
-    
+
     GRAPHS = {
         'default': ['id', 'alt_text', 'description', 'order_priority', 'created'],
         'detail': ['id', 'alt_text', 'description', 'order_priority', 'file', 'book', 'created'],
@@ -324,7 +324,7 @@ Business logic for:
 - Business logic methods
 
 ### REST API Tests
-- CRUD operations for all models  
+- CRUD operations for all models
 - Permission enforcement
 - Graph response validation
 - Error condition handling
@@ -353,7 +353,10 @@ Phase 1 is complete when:
 
 Phase 2 will add:
 - Markdown processing to HTML/AST
-- Content search and indexing  
+- Markdown Plugin Support
+
+Phase 3 will add:
+- Content search and indexing
 - Advanced page operations (move, copy, etc.)
 - Asset management features
 - Template and plugin system

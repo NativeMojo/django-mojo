@@ -638,3 +638,40 @@ def test_cleanup_docit_test_data(opts):
     assert remaining_pages == 0, f"Expected 0 remaining pages, found {remaining_pages}"
     assert remaining_revisions == 0, f"Expected 0 remaining revisions, found {remaining_revisions}"
     assert remaining_assets == 0, f"Expected 0 remaining assets, found {remaining_assets}"
+
+
+@th.django_unit_test()
+def test_markdown_rendering_service(opts):
+    """Test the MarkdownRenderer service and its plugins."""
+    from mojo.apps.docit.services.markdown import MarkdownRenderer
+
+    # Test basic rendering
+    renderer = MarkdownRenderer()
+    markdown_text = "# Hello World"
+    html = renderer.render(markdown_text)
+    assert "<h1>Hello World</h1>" in html, f"Should render basic markdown. Got:\n{html}"
+
+    # Test syntax highlighting
+    code_block = "```python\nprint('Hello')\n```"
+    html = renderer.render(code_block)
+    assert '<pre><code class="language-python">' in html, f"Should have a python code block. Got:\n{html}"
+
+    # Test TOC (Note: our simple plugin just creates a placeholder)
+    toc_markdown = "[TOC]\n\n# Header 1\n\n## Header 2"
+    html = renderer.render(toc_markdown)
+    assert '<div class="toc">' in html, f"Should have a TOC placeholder. Got:\n{html}"
+
+
+
+@th.django_unit_test()
+def test_page_html_property(opts):
+    """Test the html property on the Page model."""
+    from mojo.apps.docit.models import Page
+
+    page = Page.objects.get(id=opts.test_root_page_id)
+    page.content = "## Sub-header\n\n* One\n* Two"
+    page.save()
+
+    html = page.html
+    assert "<h2>Sub-header</h2>" in html, f"Should render sub-header. Got:\n{html}"
+    assert "<ul>" in html and "<li>One</li>" in html, f"Should render list. Got:\n{html}"

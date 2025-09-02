@@ -129,7 +129,7 @@ class Page(models.Model, MojoModel):
             },
             'list': {
                 "fields": [
-                    'id', 'title', 'slug', 'is_published', 'order_priority'
+                    'id', 'title', 'slug', 'is_published', 'order_priority', "metadata"
                 ],
                 "graphs": {
                     # "user": "basic",
@@ -142,6 +142,16 @@ class Page(models.Model, MojoModel):
                 "fields": [
                 'id', 'title', 'content'
                 ],
+            },
+            'html': {
+                "fields": [
+                    'id', 'title', 'slug', 'order_priority',
+                    'metadata', 'is_published', 'created', 'modified',
+                ],
+                "extra": ["html"],
+                "graphs": {
+                    "modified_by": "basic"
+                }
             },
             'tree': {
                 "fields": [
@@ -221,11 +231,12 @@ class Page(models.Model, MojoModel):
     @property
     def html(self):
         """
-        Return HTML representation of page content
-
-        This will be implemented in Phase 2 with markdown processing
+        Renders the Markdown content of the page to HTML.
         """
-        return None
+        from mojo.apps.docit.services.markdown import MarkdownRenderer
+        renderer = MarkdownRenderer()
+        rendered_html = renderer.render(self.content)
+        return rendered_html
 
     @property
     def ast(self):

@@ -19,6 +19,8 @@ dependencies = [
     "pytz (>=2025.1,<2026.0)",
     "ua-parser (>=1.0.1,<2.0.0)",
     "gevent (>=25.5.1,<26.0.0)",
+    "mistune (>=3.0.2,<4.0.0)",
+    "pygments (>=2.18.0,<3.0.0)",
 ]
 
 [tool.poetry]

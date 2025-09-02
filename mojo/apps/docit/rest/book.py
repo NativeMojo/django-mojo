@@ -15,3 +15,8 @@ def on_book(request, pk=None):
     DELETE /api/docit/book/<id> - Delete book
     """
     return Book.on_rest_request(request, pk)
+
+
+@md.URL('book/slug/<str:slug>')
+def on_book_by_slug(request, slug=None):
+    return Book.objects.get(slug=slug).on_rest_get(request)

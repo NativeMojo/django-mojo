@@ -184,7 +184,8 @@ class MojoModel:
                     request_path=getattr(request, "path", None),
                 )
             return allowed
-
+        if request.user is None or not request.user.is_authenticated:
+            return False
         allowed = request.user.has_permission(perms)
         if not allowed:
             cls.class_report_incident(
