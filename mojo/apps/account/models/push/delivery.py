@@ -16,10 +16,12 @@ class NotificationDelivery(models.Model, MojoModel):
     template = models.ForeignKey("account.NotificationTemplate", on_delete=models.SET_NULL,
                                null=True, blank=True, related_name="deliveries")
 
-    title = models.CharField(max_length=200)
-    body = models.TextField()
+    title = models.CharField(max_length=200, blank=True, null=True)
+    body = models.TextField(blank=True, null=True)
     category = models.CharField(max_length=50, db_index=True)
     action_url = models.URLField(blank=True, null=True)
+    data_payload = models.JSONField(default=dict, blank=True,
+                                   help_text="Custom data payload sent with notification")
 
     # Delivery tracking
     status = models.CharField(max_length=20, choices=[
@@ -50,7 +52,7 @@ class NotificationDelivery(models.Model, MojoModel):
                 "fields": ["id", "title", "category", "status", "sent_at", "created"]
             },
             "default": {
-                "fields": ["id", "title", "body", "category", "action_url", "status",
+                "fields": ["id", "title", "body", "category", "action_url", "data_payload", "status",
                           "sent_at", "delivered_at", "error_message", "created"],
                 "graphs": {
                     "user": "basic",
@@ -67,7 +69,8 @@ class NotificationDelivery(models.Model, MojoModel):
         }
 
     def __str__(self):
-        return f"{self.title} -> {self.device} ({self.status})"
+        display_title = self.title or f"[{self.category} data]"
+        return f"{display_title} -> {self.device} ({self.status})"
 
     def mark_sent(self):
         """Mark notification as sent with timestamp."""

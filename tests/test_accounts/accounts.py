@@ -172,6 +172,14 @@ def test_user_can_list_group(opts):
     assert resp.response.count == 1, f"size is not 1: {resp.response.count}"
 
 
+@th.unit_test("user_can_get_group")
+def test_user_can_get_group(opts):
+    resp = opts.client.login(TEST_USER, TEST_PWORD)
+    assert opts.client.is_authenticated, "authentication failed"
+    resp = opts.client.get(f"/api/group/{opts.group_id}")
+    assert resp.status_code == 200, f"Expected status_code is 200 but got {resp.status_code}"
+    assert resp.response.data.id == opts.group_id, "id does not match"
+
 @th.unit_test("edit_group_member")
 def test_edit_group_member(opts):
     resp = opts.client.login(ADMIN_USER, ADMIN_PWORD)

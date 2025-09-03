@@ -1,0 +1,531 @@
+"""
+Scheduler daemon for moving due jobs from ZSET to Streams.
+
+Runs as a single active instance using Redis leadership lock.
+Continuously monitors scheduled jobs and enqueues them when due.
+"""
+import os
+import sys
+import signal
+import time
+import json
+import uuid
+import random
+import threading
+from datetime import datetime, timedelta
+from typing import List, Optional, Set
+
+from django.conf import settings
+from django.utils import timezone
+from django.db import close_old_connections
+
+from mojo.helpers import logit
+from .daemon import DaemonRunner
+from .keys import JobKeys
+from .adapters import get_adapter
+from .models import Job, JobEvent
+
+
+class Scheduler:
+    """
+    Scheduler daemon that moves due jobs from ZSET to Streams.
+
+    Uses Redis lock for single-leader pattern to ensure only one
+    scheduler is active across the cluster at any time.
+    """
+
+    def __init__(self, channels: Optional[List[str]] = None,
+                 scheduler_id: Optional[str] = None):
+        """
+        Initialize the scheduler.
+
+        Args:
+            channels: List of channels to schedule for (default: all configured)
+            scheduler_id: Unique scheduler identifier (auto-generated if not provided)
+        """
+        self.channels = channels or self._get_all_channels()
+        self.scheduler_id = scheduler_id or f"scheduler-{uuid.uuid4().hex[:8]}"
+        self.redis = get_adapter()
+        self.keys = JobKeys()
+
+        # Lock configuration
+        self.lock_key = self.keys.scheduler_lock()
+        self.lock_ttl_ms = getattr(settings, 'JOBS_SCHEDULER_LOCK_TTL_MS', 5000)
+        self.lock_renew_interval = self.lock_ttl_ms / 1000 / 2  # Renew at half TTL
+        self.lock_value = uuid.uuid4().hex  # Unique value for this scheduler
+
+        # Control flags
+        self.running = False
+        self.stop_event = threading.Event()
+        self.has_lock = False
+
+        # Stats
+        self.jobs_scheduled = 0
+        self.jobs_expired = 0
+        self.start_time = None
+
+        # Sleep configuration (with jitter)
+        self.base_sleep_ms = 250
+        self.max_sleep_ms = 500
+
+        logit.info(f"Scheduler initialized: id={self.scheduler_id}, "
+                  f"channels={self.channels}")
+
+    def _get_all_channels(self) -> List[str]:
+        """Get all configured channels from settings or discover from Redis."""
+        # Try settings first
+        configured = getattr(settings, 'JOBS_CHANNELS', None)
+        if configured:
+            return configured
+
+        # Default channels
+        return ['default']
+
+    def start(self):
+        """
+        Start the scheduler daemon.
+
+        Acquires leadership lock and begins processing scheduled jobs.
+        """
+        if self.running:
+            logit.warn("Scheduler already running")
+            return
+
+        logit.info(f"Starting Scheduler {self.scheduler_id}")
+        self.running = True
+        self.start_time = timezone.now()
+        self.stop_event.clear()
+
+        # Register signal handlers
+        self._setup_signal_handlers()
+
+        # Main loop with lock management
+        try:
+            self._main_loop_with_lock()
+        except KeyboardInterrupt:
+            logit.info("Scheduler interrupted by user")
+        except Exception as e:
+            logit.error(f"Scheduler crashed: {e}")
+            raise
+        finally:
+            self.stop()
+
+    def stop(self):
+        """Stop the scheduler gracefully."""
+        if not self.running:
+            return
+
+        logit.info(f"Stopping Scheduler {self.scheduler_id}...")
+        self.running = False
+        self.stop_event.set()
+
+        # Release lock if held
+        if self.has_lock:
+            self._release_lock()
+
+        logit.info(f"Scheduler {self.scheduler_id} stopped. "
+                  f"Scheduled: {self.jobs_scheduled}, Expired: {self.jobs_expired}")
+
+    def _setup_signal_handlers(self):
+        """Register signal handlers for graceful shutdown."""
+        def handle_signal(signum, frame):
+            logit.info(f"Scheduler received signal {signum}, shutting down")
+            self.stop()
+            sys.exit(0)
+
+        signal.signal(signal.SIGTERM, handle_signal)
+        signal.signal(signal.SIGINT, handle_signal)
+
+    def _acquire_lock(self) -> bool:
+        """
+        Try to acquire the scheduler lock.
+
+        Returns:
+            True if lock acquired, False otherwise
+        """
+        try:
+            # SET key value NX PX milliseconds
+            result = self.redis.set(
+                self.lock_key,
+                self.lock_value,
+                nx=True,  # Only set if doesn't exist
+                px=self.lock_ttl_ms  # Expire after milliseconds
+            )
+
+            if result:
+                self.has_lock = True
+                logit.info(f"Scheduler {self.scheduler_id} acquired lock")
+
+                # Emit metric
+                try:
+                    from mojo.metrics.redis_metrics import record_metrics
+                    record_metrics('jobs.scheduler.leader', timezone.now(), 1,
+                                 category='jobs')
+                except Exception:
+                    pass
+
+                return True
+
+            return False
+
+        except Exception as e:
+            logit.error(f"Failed to acquire scheduler lock: {e}")
+            return False
+
+    def _renew_lock(self) -> bool:
+        """
+        Renew the scheduler lock if we still hold it.
+
+        Returns:
+            True if renewed, False if lost
+        """
+        if not self.has_lock:
+            return False
+
+        try:
+            # Check if we still own the lock
+            current_value = self.redis.get(self.lock_key)
+
+            if current_value and current_value == self.lock_value:
+                # We still own it, renew TTL
+                self.redis.pexpire(self.lock_key, self.lock_ttl_ms)
+                return True
+            else:
+                # Lock stolen or expired
+                logit.warn(f"Scheduler {self.scheduler_id} lost lock")
+                self.has_lock = False
+                return False
+
+        except Exception as e:
+            logit.error(f"Failed to renew scheduler lock: {e}")
+            self.has_lock = False
+            return False
+
+    def _release_lock(self):
+        """Release the scheduler lock if we hold it."""
+        if not self.has_lock:
+            return
+
+        try:
+            # Only delete if we own it
+            current_value = self.redis.get(self.lock_key)
+
+            if current_value and current_value == self.lock_value:
+                self.redis.delete(self.lock_key)
+                logit.info(f"Scheduler {self.scheduler_id} released lock")
+
+            self.has_lock = False
+
+        except Exception as e:
+            logit.error(f"Failed to release scheduler lock: {e}")
+
+    def _main_loop_with_lock(self):
+        """Main loop with lock acquisition and renewal."""
+        last_renew = time.time()
+
+        while self.running and not self.stop_event.is_set():
+            try:
+                # Try to acquire lock if we don't have it
+                if not self.has_lock:
+                    if not self._acquire_lock():
+                        # Failed to acquire, sleep and retry
+                        time.sleep(2)
+                        continue
+
+                # Renew lock if needed
+                now = time.time()
+                if now - last_renew >= self.lock_renew_interval:
+                    if not self._renew_lock():
+                        # Lost lock, go back to acquisition
+                        continue
+                    last_renew = now
+
+                # Process scheduled jobs
+                self._process_scheduled_jobs()
+
+                # Sleep with jitter
+                sleep_ms = random.randint(self.base_sleep_ms, self.max_sleep_ms)
+                time.sleep(sleep_ms / 1000.0)
+
+            except Exception as e:
+                logit.error(f"Error in scheduler main loop: {e}")
+                time.sleep(1)
+
+    def _process_scheduled_jobs(self):
+        """Process scheduled jobs for all channels."""
+        now = timezone.now()
+        now_ms = now.timestamp() * 1000
+
+        # Close old DB connections at start
+        close_old_connections()
+
+        for channel in self.channels:
+            try:
+                self._process_channel(channel, now, now_ms)
+            except Exception as e:
+                logit.error(f"Failed to process channel {channel}: {e}")
+
+    def _process_channel(self, channel: str, now: datetime, now_ms: float):
+        """
+        Process scheduled jobs for a single channel.
+
+        Args:
+            channel: Channel name
+            now: Current datetime
+            now_ms: Current time in milliseconds
+        """
+        sched_key = self.keys.sched(channel)
+
+        # Pop all due jobs from ZSET
+        while True:
+            # ZPOPMIN returns list of (member, score) tuples
+            results = self.redis.zpopmin(sched_key, count=10)
+
+            if not results:
+                break
+
+            for job_id, score in results:
+                # Check if job is due
+                if score > now_ms:
+                    # Not due yet, put it back
+                    self.redis.zadd(sched_key, {job_id: score})
+                    return  # Nothing else will be due either
+
+                # Process due job
+                self._enqueue_job(job_id, channel, now)
+
+    def _enqueue_job(self, job_id: str, channel: str, now: datetime):
+        """
+        Move a job from scheduled to stream.
+
+        Args:
+            job_id: Job ID to enqueue
+            channel: Channel the job belongs to
+            now: Current datetime
+        """
+        try:
+            # Load job data
+            job_data = self._load_job(job_id)
+            if not job_data:
+                logit.warn(f"Scheduled job {job_id} not found")
+                return
+
+            # Check expiration
+            if self._is_expired(job_data, now):
+                self._mark_expired(job_id, channel)
+                self.jobs_expired += 1
+                return
+
+            # Determine target stream
+            broadcast = job_data.get('broadcast') == '1'
+            if broadcast:
+                stream_key = self.keys.stream_broadcast(channel)
+            else:
+                stream_key = self.keys.stream(channel)
+
+            # Add to stream
+            self.redis.xadd(stream_key, {
+                'job_id': job_id,
+                'func': job_data.get('func', ''),
+                'scheduled': now.isoformat()
+            }, maxlen=getattr(settings, 'JOBS_STREAM_MAXLEN', 100000))
+
+            # Update status in Redis
+            self.redis.hset(self.keys.job(job_id), {'status': 'pending'})
+
+            # Record event in database
+            try:
+                job = Job.objects.get(id=job_id)
+                JobEvent.objects.create(
+                    job=job,
+                    channel=channel,
+                    event='queued',
+                    details={
+                        'scheduler_id': self.scheduler_id,
+                        'stream': stream_key
+                    }
+                )
+            except Exception as e:
+                logit.warn(f"Failed to record queued event for {job_id}: {e}")
+
+            self.jobs_scheduled += 1
+            logit.debug(f"Enqueued job {job_id} to {stream_key}")
+
+            # Emit metric
+            try:
+                from mojo.metrics.redis_metrics import record_metrics
+                record_metrics('jobs.scheduled', now, 1, category='jobs',
+                             args=[channel])
+            except Exception:
+                pass
+
+        except Exception as e:
+            logit.error(f"Failed to enqueue job {job_id}: {e}")
+
+    def _load_job(self, job_id: str) -> Optional[dict]:
+        """Load job data from Redis or database."""
+        # Try Redis first
+        job_hash = self.redis.hgetall(self.keys.job(job_id))
+
+        if job_hash:
+            return job_hash
+
+        # Fall back to database
+        try:
+            job = Job.objects.get(id=job_id)
+            return {
+                'status': job.status,
+                'channel': job.channel,
+                'func': job.func,
+                'expires_at': job.expires_at.isoformat() if job.expires_at else '',
+                'broadcast': '1' if job.broadcast else '0'
+            }
+        except Job.DoesNotExist:
+            return None
+
+    def _is_expired(self, job_data: dict, now: datetime) -> bool:
+        """Check if a job has expired."""
+        expires_at = job_data.get('expires_at', '')
+        if not expires_at:
+            return False
+
+        try:
+            expiry = datetime.fromisoformat(expires_at)
+            if timezone.is_naive(expiry):
+                expiry = timezone.make_aware(expiry)
+            return now > expiry
+        except Exception:
+            return False
+
+    def _mark_expired(self, job_id: str, channel: str):
+        """Mark a job as expired."""
+        try:
+            # Update Redis
+            self.redis.hset(self.keys.job(job_id), {
+                'status': 'expired',
+                'finished_at': timezone.now().isoformat()
+            })
+
+            # Update database
+            job = Job.objects.get(id=job_id)
+            job.status = 'expired'
+            job.finished_at = timezone.now()
+            job.save(update_fields=['status', 'finished_at', 'modified'])
+
+            # Record event
+            JobEvent.objects.create(
+                job=job,
+                channel=channel,
+                event='expired',
+                details={'scheduler_id': self.scheduler_id}
+            )
+
+            logit.info(f"Job {job_id} expired at scheduler")
+
+            # Emit metric
+            try:
+                from mojo.metrics.redis_metrics import record_metrics
+                record_metrics('jobs.expired', timezone.now(), 1, category='jobs')
+            except Exception:
+                pass
+
+        except Exception as e:
+            logit.error(f"Failed to mark job {job_id} as expired: {e}")
+
+
+def main():
+    """
+    Main entry point for running Scheduler as a daemon.
+
+    This can be called directly or via Django management command.
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(description='Django-MOJO Job Scheduler')
+    parser.add_argument(
+        '--channels',
+        type=str,
+        default=None,
+        help='Comma-separated list of channels to schedule (default: all)'
+    )
+    parser.add_argument(
+        '--scheduler-id',
+        type=str,
+        default=None,
+        help='Explicit scheduler ID (auto-generated if not provided)'
+    )
+    parser.add_argument(
+        '--daemon',
+        action='store_true',
+        help='Run as background daemon'
+    )
+    parser.add_argument(
+        '--pidfile',
+        type=str,
+        default=None,
+        help='PID file path (auto-generated if daemon mode and not specified)'
+    )
+    parser.add_argument(
+        '--logfile',
+        type=str,
+        default=None,
+        help='Log file path for daemon mode'
+    )
+    parser.add_argument(
+        '--action',
+        type=str,
+        choices=['start', 'stop', 'restart', 'status'],
+        default='start',
+        help='Daemon control action (only with --daemon)'
+    )
+
+    args = parser.parse_args()
+
+    # Parse channels if provided
+    channels = None
+    if args.channels:
+        channels = [c.strip() for c in args.channels.split(',')]
+
+    # Create scheduler
+    scheduler = Scheduler(channels=channels, scheduler_id=args.scheduler_id)
+
+    # Auto-generate pidfile if daemon mode and not specified
+    if args.daemon and not args.pidfile:
+        scheduler_id = scheduler.scheduler_id
+        args.pidfile = f"/tmp/job-scheduler-{scheduler_id}.pid"
+
+    # Setup daemon runner
+    runner = DaemonRunner(
+        name="Scheduler",
+        run_func=scheduler.start,
+        stop_func=scheduler.stop,
+        pidfile=args.pidfile,
+        logfile=args.logfile,
+        daemon=args.daemon
+    )
+
+    # Handle daemon actions
+    if args.daemon and args.action != 'start':
+        if args.action == 'stop':
+            sys.exit(0 if runner.stop() else 1)
+        elif args.action == 'restart':
+            runner.restart()
+            sys.exit(0)
+        elif args.action == 'status':
+            if runner.status():
+                print(f"Scheduler is running (PID file: {args.pidfile})")
+                sys.exit(0)
+            else:
+                print(f"Scheduler is not running")
+                sys.exit(1)
+    else:
+        # Start the scheduler (foreground or background)
+        try:
+            runner.start()
+        except Exception as e:
+            logit.error(f"Scheduler failed: {e}")
+            sys.exit(1)
+
+
+if __name__ == '__main__':
+    main()

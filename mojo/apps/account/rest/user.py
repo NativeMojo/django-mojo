@@ -38,7 +38,8 @@ def on_refresh_token(request):
 def on_user_login(request):
     username = request.DATA.username
     password = request.DATA.password
-    user = User.objects.filter(username=username.lower().strip()).last()
+    from django.db.models import Q
+    user = User.objects.filter(Q(username=username.lower().strip()) | Q(email=username.lower().strip())).last()
     if user is None:
         User.class_report_incident(
             f"login attempt with unknown username {username}",

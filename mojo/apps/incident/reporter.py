@@ -44,7 +44,19 @@ def _create_event_dict(details, title=None, category="api_error", level=1, reque
             event_metadata["user_name"] = request.user.display_name
             event_metadata["user_email"] = request.user.email
 
+    processed_kwargs = {}
+    for k, v in kwargs.items():
+        if k not in event_data:
+            if is_json_serializable(v):
+                processed_kwargs[k] = v
+            elif hasattr(v, 'id'):
+                processed_kwargs[k] = v.id
+            else:
+                processed_kwargs[k] = str(v)
 
-    event_metadata.update({k: v for k, v in kwargs.items() if k not in event_data})
+    event_metadata.update(processed_kwargs)
     event_data['metadata'] = event_metadata
     return event_data
+
+def is_json_serializable(value):
+    return isinstance(value, (str, int, float, bool, type(None), list, dict))

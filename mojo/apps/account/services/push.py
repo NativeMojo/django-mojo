@@ -43,7 +43,7 @@ class PushNotificationService:
         return PushConfig.get_for_user(self.user)
 
     def send_notification(self, template_name=None, context=None, devices=None, user_ids=None,
-                         title=None, body=None, category="general", action_url=None):
+                         title=None, body=None, category="general", action_url=None, data=None):
         """
         Send notification using template or direct content.
 
@@ -56,6 +56,7 @@ class PushNotificationService:
             body: Direct body (for non-templated sending)
             category: Notification category
             action_url: Direct action URL
+            data: Custom data payload dict
 
         Returns:
             List of NotificationDelivery objects
@@ -71,8 +72,8 @@ class PushNotificationService:
             if not template:
                 logit.error(f"Template {template_name} not found")
                 return []
-        elif not (title and body):
-            logit.error("Must provide either template_name or both title and body")
+        elif not (title or body or data):
+            logit.error("Must provide either template_name, title/body, or data payload")
             return []
 
         target_devices = self._resolve_devices(devices, user_ids)
@@ -85,9 +86,9 @@ class PushNotificationService:
             notification_category = template.category if template else category
             if self._should_send_to_device(device, notification_category):
                 if template:
-                    result = self._send_to_device(device, template, context or {})
+                    result = self._send_to_device(device, template, context or {}, data)
                 else:
-                    result = self._send_direct(device, title, body, notification_category, action_url)
+                    result = self._send_direct(device, title, body, notification_category, action_url, data)
                 results.append(result)
 
         return results
@@ -128,9 +129,14 @@ class PushNotificationService:
         preferences = device.push_preferences or {}
         return preferences.get(category, True)  # Default to enabled
 
-    def _send_to_device(self, device, template, context):
+    def _send_to_device(self, device, template, context, custom_data=None):
         """Send notification to a specific device using template."""
-        title, body, action_url = template.render(context)
+        title, body, action_url, template_data = template.render(context)
+
+        # Merge template data with custom data (custom data takes precedence)
+        merged_data = template_data.copy() if template_data else {}
+        if custom_data:
+            merged_data.update(custom_data)
 
         delivery = NotificationDelivery.objects.create(
             user=device.user,
@@ -139,13 +145,14 @@ class PushNotificationService:
             title=title,
             body=body,
             category=template.category,
-            action_url=action_url
+            action_url=action_url,
+            data_payload=merged_data
         )
 
         self._attempt_delivery(delivery, device, title, body, template)
         return delivery
 
-    def _send_direct(self, device, title, body, category, action_url=None):
+    def _send_direct(self, device, title, body, category, action_url=None, data=None):
         """Send direct notification without template."""
         delivery = NotificationDelivery.objects.create(
             user=device.user,
@@ -153,7 +160,8 @@ class PushNotificationService:
             title=title,
             body=body,
             category=category,
-            action_url=action_url
+            action_url=action_url,
+            data_payload=data or {}
         )
 
         self._attempt_delivery(delivery, device, title, body, None)
@@ -211,16 +219,31 @@ class PushNotificationService:
             client = APNsClient(credentials=credentials,
                               use_sandbox=self.config.apns_use_sandbox)
 
-            # Build payload
-            payload = Payload(
-                alert={'title': title, 'body': body},
-                sound=self.config.default_sound,
-                badge=self.config.default_badge_count
-            )
+            # Build payload - handle optional title/body for silent notifications
+            if title or body:
+                alert = {}
+                if title:
+                    alert['title'] = title
+                if body:
+                    alert['body'] = body
+                payload = Payload(
+                    alert=alert,
+                    sound=self.config.default_sound,
+                    badge=self.config.default_badge_count
+                )
+            else:
+                # Silent notification - no alert, sound, or badge
+                payload = Payload(
+                    content_available=True
+                )
 
-            # Add action URL if present
+            # Build custom data payload - merge custom data with action_url
+            custom_data = delivery.data_payload.copy() if delivery.data_payload else {}
             if delivery.action_url:
-                payload.custom = {'action_url': delivery.action_url}
+                custom_data['action_url'] = delivery.action_url
+
+            if custom_data:
+                payload.custom = custom_data
 
             # Send notification
             response = client.send_notification(
@@ -251,8 +274,8 @@ class PushNotificationService:
         try:
             push_service = FCMNotification(api_key=self.config.get_decrypted_fcm_key())
 
-            # Build data payload
-            data_message = {}
+            # Build data payload - merge custom data with action_url
+            data_message = delivery.data_payload.copy() if delivery.data_payload else {}
             if delivery.action_url:
                 data_message['action_url'] = delivery.action_url
 
@@ -260,7 +283,7 @@ class PushNotificationService:
                 registration_id=device.device_token,
                 message_title=title,
                 message_body=body,
-                sound=self.config.default_sound,
+                sound=self.config.default_sound if (title or body) else None,
                 data_message=data_message if data_message else None
             )
 
@@ -281,15 +304,29 @@ class PushNotificationService:
 
     def _send_test(self, delivery, device, title, body, template):
         """Send fake notification for testing - always succeeds."""
-        logit.info(f"TEST MODE: Fake notification to {device.platform} device '{device.device_name}' - {title}: {body}")
+        # Build log message with optional title/body and data payload
+        log_parts = []
+        if title:
+            log_parts.append(f"Title: {title}")
+        if body:
+            log_parts.append(f"Body: {body}")
+        if delivery.data_payload:
+            log_parts.append(f"Data: {delivery.data_payload}")
 
-        # Store fake test data
+        log_message = f"TEST MODE: Fake notification to {device.platform} device '{device.device_name}'"
+        if log_parts:
+            log_message += f" - {' | '.join(log_parts)}"
+
+        logit.info(log_message)
+
+        # Store fake test data including data payload
         delivery.platform_data = {
             'test_mode': True,
             'platform': device.platform,
             'device_name': device.device_name,
             'timestamp': dates.utcnow().isoformat(),
-            'fake_delivery': 'success'
+            'fake_delivery': 'success',
+            'data_payload': delivery.data_payload or {}
         }
         delivery.save(update_fields=['platform_data'])
 
@@ -297,28 +334,30 @@ class PushNotificationService:
 
 
 # Convenience functions for easy usage
-def send_push_notification(user, template_name, context=None, devices=None, user_ids=None):
+def send_push_notification(user, template_name, context=None, devices=None, user_ids=None, data=None, delay=None):
     """
     Send templated push notification.
 
     Usage:
         send_push_notification(user, 'welcome', {'name': user.display_name})
         send_push_notification(user, 'alert', user_ids=[1, 2, 3])
+        send_push_notification(user, 'order_update', {'order_id': '123'}, data={'action': 'view_order'})
     """
     service = PushNotificationService(user)
     return service.send_notification(template_name=template_name, context=context,
-                                   devices=devices, user_ids=user_ids)
+                                   devices=devices, user_ids=user_ids, data=data)
 
 
-def send_direct_notification(user, title, body, category="general", action_url=None,
-                           devices=None, user_ids=None):
+def send_direct_notification(user, title=None, body=None, category="general", action_url=None,
+                           data=None, devices=None, user_ids=None, delay=None):
     """
     Send direct push notification without template.
 
     Usage:
         send_direct_notification(user, "Hello!", "Your order is ready", "orders")
         send_direct_notification(user, "Alert", "System maintenance", user_ids=[1, 2, 3])
+        send_direct_notification(user, data={"action": "sync", "silent": True})
     """
     service = PushNotificationService(user)
     return service.send_notification(title=title, body=body, category=category,
-                                   action_url=action_url, devices=devices, user_ids=user_ids)
+                                   action_url=action_url, data=data, devices=devices, user_ids=user_ids)

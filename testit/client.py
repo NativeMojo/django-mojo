@@ -61,7 +61,7 @@ class RestClient:
         response = requests.request(method, url, headers=headers, **kwargs)
         if self.logger:
             self.logger.info("REQUEST", f"{method}:{url}", headers)
-            self.logger.info(kwargs.get("json", ""))
+            self.logger.info("params:",kwargs.get("params", ""), "json:", kwargs.get("json", ""))
         try:
             data = objict.fromdict(response.json()) if response.content else None
             response_data = objict(response=data, status_code=response.status_code)

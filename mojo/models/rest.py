@@ -12,6 +12,7 @@ logger = logit.get_logger("debug", "debug.log")
 ACTIVE_REQUEST = None
 LOGGING_CLASS = None
 MOJO_APP_STATUS_200_ON_ERROR = settings.MOJO_APP_STATUS_200_ON_ERROR
+MOJO_REST_LIST_PERM_DENY = settings.get("MOJO_REST_LIST_PERM_DENY", False)
 
 class MojoModel:
     """Base model class for REST operations with GraphSerializer integration."""
@@ -120,6 +121,16 @@ class MojoModel:
             return cls.rest_error_response(None, 404, error=f"{cls.__name__} not found")
 
     @classmethod
+    def get_instance_from_request(cls, request, field_name=None):
+        if field_name is None:
+            field_name = cls.__name__.lower()
+        if field_name not in request.DATA:
+            field_name = f"{field_name}_id"
+            if field_name not in request.DATA:
+                return None
+        return cls.objects.filter(pk=request.DATA.get(field_name)).last()
+
+    @classmethod
     def rest_check_permission(cls, request, permission_keys, instance=None):
         """
         Check permissions for a given request. Reports granular denied feedback to incident/event system.
@@ -151,6 +162,25 @@ class MojoModel:
                 return False
 
         if instance is not None:
+            is_view = isinstance(permission_keys, list) and "VIEW_PERMS" in permission_keys
+            if not is_view and isinstance(permission_keys, str):
+                is_view = permission_keys == "VIEW_PERMS"
+            if is_view:
+                if hasattr(instance, "check_view_permission"):
+                    allowed = instance.check_view_permission(perms, request)
+                    if not allowed:
+                        cls.class_report_incident(
+                            details="Permission denied: view_permission_denied",
+                            event_type="view_permission_denied",
+                            request=request,
+                            perms=perms,
+                            permission_keys=permission_keys,
+                            branch="instance.check_view_permission",
+                            instance=repr(instance),
+                            request_path=getattr(request, "path", None),
+                        )
+                    return allowed
+
             if hasattr(instance, "check_edit_permission"):
                 allowed = instance.check_edit_permission(perms, request)
                 if not allowed:
@@ -165,12 +195,15 @@ class MojoModel:
                         request_path=getattr(request, "path", None),
                     )
                 return allowed
-            if "owner" in perms and getattr(instance, "user", None) is not None:
-                if instance.user.id == request.user.id:
+
+            if "owner" in perms:
+                owner_field = instance.get_rest_meta_prop("OWNER_FIELD", "user")
+                owner = getattr(instance, owner_field, None)
+                if owner is not None and owner.id == request.user.id:
                     return True
 
         if request.group and hasattr(cls, "group"):
-            allowed = request.group.member_has_permission(request.user, perms)
+            allowed = request.group.user_has_permission(request.user, perms)
             if not allowed:
                 cls.class_report_incident(
                     details="Permission denied: group_member_permission_denied",
@@ -179,7 +212,7 @@ class MojoModel:
                     perms=perms,
                     permission_keys=permission_keys,
                     group=getattr(request, "group", None),
-                    branch="group.member_has_permission",
+                    branch="group.user_has_permission",
                     instance=repr(instance) if instance else None,
                     request_path=getattr(request, "path", None),
                 )
@@ -262,14 +295,25 @@ class MojoModel:
         Returns:
             JsonResponse representing the list of resources.
         """
-        cls.debug("on_rest_handle_list")
+        # cls.debug("on_rest_handle_list")
         if cls.rest_check_permission(request, "VIEW_PERMS"):
             return cls.on_rest_list(request)
         else:
             perms = cls.get_rest_meta_prop("VIEW_PERMS", [])
             if perms and "owner" in perms and request.user.is_authenticated:
                 return cls.on_rest_list(request, cls.objects.filter(user=request.user))
-        return cls.rest_error_response(request, 403, error=f"GET permission denied: {cls.__name__}")
+        if MOJO_REST_LIST_PERM_DENY:
+            return cls.rest_error_response(request, 403, error=f"GET permission denied: {cls.__name__}")
+        return cls.on_rest_list_response(request, cls.objects.none())
+
+    @classmethod
+    def create_from_request(cls, request, **kwargs):
+        instance = cls(**kwargs)
+        instance.on_rest_save(request, request.DATA)
+        instance.on_rest_created()
+        if cls.get_rest_meta_prop("LOG_CHANGES", False):
+            instance.log(kind="model:created", log=f"{ACTIVE_REQUEST.user.username} created {instance.pk}")
+        return instance
 
     @classmethod
     def on_rest_handle_create(cls, request):
@@ -283,11 +327,7 @@ class MojoModel:
             JsonResponse representing the result of the create operation.
         """
         if cls.rest_check_permission(request, ["SAVE_PERMS", "VIEW_PERMS"]):
-            instance = cls()
-            instance.on_rest_save(request, request.DATA)
-            instance.on_rest_created()
-            if cls.get_rest_meta_prop("LOG_CHANGES", False):
-                instance.log(kind="model:created", log=f"{ACTIVE_REQUEST.user.username} created {instance.pk}")
+            instance = cls.create_from_request(request)
             return instance.on_rest_get(request)
         return cls.rest_error_response(request, 403, error=f"CREATE permission denied: {cls.__name__}")
 
@@ -398,7 +438,7 @@ class MojoModel:
             The filtered queryset.
         """
         filters = {}
-        for key, value in request.GET.items():
+        for key, value in request.DATA.items():
             # Split key to check for foreign key relationships
             key_parts = key.split('__')
             field_name = key_parts[0]
@@ -422,7 +462,7 @@ class MojoModel:
         Returns:
             The filtered queryset based on the search criteria.
         """
-        search_query = request.GET.get('search', None)
+        search_query = request.DATA.get('search', None)
         if not search_query:
             return queryset
 
@@ -539,7 +579,7 @@ class MojoModel:
         Returns:
             JsonResponse representing the object.
         """
-        graph = request.GET.get("graph", graph)
+        graph = request.DATA.get("graph", graph)
         # Use serializer manager for optimal performance
         manager = get_serializer_manager()
         serializer = manager.get_serializer(self, graph=graph)

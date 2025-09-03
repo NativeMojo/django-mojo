@@ -1,0 +1,162 @@
+"""
+Redis key builder for jobs system.
+Centralized, prefix-aware key management.
+"""
+from typing import Optional
+from django.conf import settings
+
+
+class JobKeys:
+    """Centralized Redis key builder for the jobs system."""
+
+    def __init__(self, prefix: Optional[str] = None):
+        """
+        Initialize with optional prefix override.
+
+        Args:
+            prefix: Override the default prefix from settings
+        """
+        self.prefix = prefix or getattr(settings, 'JOBS_REDIS_PREFIX', 'mojo:jobs')
+
+    def stream(self, channel: str) -> str:
+        """
+        Get the stream key for a channel.
+
+        Args:
+            channel: The channel name
+
+        Returns:
+            Redis key for the channel's main stream
+        """
+        return f"{self.prefix}:stream:{channel}"
+
+    def stream_broadcast(self, channel: str) -> str:
+        """
+        Get the broadcast stream key for a channel.
+
+        Args:
+            channel: The channel name
+
+        Returns:
+            Redis key for the channel's broadcast stream
+        """
+        return f"{self.prefix}:stream:{channel}:broadcast"
+
+    def group_workers(self, channel: str) -> str:
+        """
+        Get the consumer group key for workers on a channel.
+
+        Args:
+            channel: The channel name
+
+        Returns:
+            Redis consumer group name for workers
+        """
+        return f"{self.prefix}:cg:{channel}:workers"
+
+    def group_runner(self, channel: str, runner_id: str) -> str:
+        """
+        Get the consumer group key for a specific runner on broadcast stream.
+
+        Args:
+            channel: The channel name
+            runner_id: The runner's unique identifier
+
+        Returns:
+            Redis consumer group name for this runner
+        """
+        return f"{self.prefix}:cg:{channel}:runner:{runner_id}"
+
+    def sched(self, channel: str) -> str:
+        """
+        Get the scheduled jobs ZSET key for a channel.
+
+        Args:
+            channel: The channel name
+
+        Returns:
+            Redis ZSET key for scheduled/delayed jobs
+        """
+        return f"{self.prefix}:sched:{channel}"
+
+    def job(self, job_id: str) -> str:
+        """
+        Get the hash key for a specific job's metadata.
+
+        Args:
+            job_id: The job's unique identifier
+
+        Returns:
+            Redis hash key for job metadata
+        """
+        return f"{self.prefix}:job:{job_id}"
+
+    def runner_ctl(self, runner_id: str) -> str:
+        """
+        Get the control channel key for a runner.
+
+        Args:
+            runner_id: The runner's unique identifier
+
+        Returns:
+            Redis key for runner control messages
+        """
+        return f"{self.prefix}:runner:{runner_id}:ctl"
+
+    def runner_hb(self, runner_id: str) -> str:
+        """
+        Get the heartbeat key for a runner.
+
+        Args:
+            runner_id: The runner's unique identifier
+
+        Returns:
+            Redis key for runner heartbeat (with TTL)
+        """
+        return f"{self.prefix}:runner:{runner_id}:hb"
+
+    def scheduler_lock(self) -> str:
+        """
+        Get the scheduler leadership lock key.
+
+        Returns:
+            Redis key for scheduler lock
+        """
+        return f"{self.prefix}:lock:scheduler"
+
+    def stats_counter(self, metric: str) -> str:
+        """
+        Get a stats counter key.
+
+        Args:
+            metric: The metric name (e.g., 'published', 'completed')
+
+        Returns:
+            Redis key for the stats counter
+        """
+        return f"{self.prefix}:stats:{metric}"
+
+    def registry_key(self) -> str:
+        """
+        Get the job registry hash key.
+
+        Returns:
+            Redis key for the job function registry
+        """
+        return f"{self.prefix}:registry"
+
+    def idempotency(self, key: str) -> str:
+        """
+        Get the idempotency check key.
+
+        Args:
+            key: The idempotency key from the client
+
+        Returns:
+            Redis key for idempotency checking
+        """
+        return f"{self.prefix}:idempotent:{key}"
+
+
+# Default instance for module-level use
+default_keys = JobKeys()

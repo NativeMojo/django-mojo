@@ -51,6 +51,18 @@ class GroupMember(models.Model, MojoModel):
     def __str__(self):
         return f"{self.user.username}@{self.group.name}"
 
+    @property
+    def username(self):
+        return self.user.username
+
+    @property
+    def display_name(self):
+        return self.user.display_name
+
+    @property
+    def email(self):
+        return self.user.email
+
     def can_change_permission(self, perm, value, request):
         if request.user.has_permission(["manage_groups", "manage_users"]):
             return True

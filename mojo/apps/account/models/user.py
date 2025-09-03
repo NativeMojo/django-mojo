@@ -349,7 +349,6 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
         return base_username.replace("_", " ").replace(".", " ").title()
 
     def on_rest_pre_save(self, changed_fields, created):
-        self.debug("PRE SAVE")
         creds_changed = False
         if "email" in changed_fields:
             creds_changed = True
@@ -405,6 +404,15 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
 
     def on_action_send_invite(self, value):
         self.send_invite()
+
+    def push_notification(self, title=None, body=None, data=None,
+                          category="general", action_url=None,
+                          devices=None, user_ids=None, delay=None):
+        from mojo.apps.account.services.push import send_direct_notification
+        send_direct_notification(
+            self, title=title, body=body, data=data, category=category,
+            action_url=action_url,
+            devices=devices, user_ids=user_ids, delay=delay)
 
     def send_invite(self):
         self.send_template_email(

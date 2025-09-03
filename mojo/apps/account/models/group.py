@@ -1,6 +1,6 @@
 from django.db import models
 from mojo.models import MojoModel, MojoSecrets
-from mojo.helpers import dates
+from mojo.helpers import dates, logit
 from mojo.apps import metrics
 from mojo.helpers.settings import settings
 
@@ -86,14 +86,10 @@ class Group(MojoSecrets, MojoModel):
     def __str__(self):
         return str(self.name)
 
-    def has_permission(self, user):
-        from mojo.account.models.member import GroupMember
-        return GroupMember.objects.filter(user=user).last()
-
-    def member_has_permission(self, user, perms, check_user=True):
+    def user_has_permission(self, user, perms, check_user=True):
         if check_user and user.has_permission(perms):
             return True
-        ms = self.has_permission(user)
+        ms = self.get_member_for_user(user)
         if ms is not None:
             return ms.has_permission(perms)
         return False
@@ -110,6 +106,10 @@ class Group(MojoSecrets, MojoModel):
         # converts our local metadata into an objict
         self.metadata = self.jsonfield_as_objict("metadata")
         return self.metadata
+
+    def add_member(self, user):
+        member, created = self.members.get_or_create(user=user)
+        return member
 
     def get_member_for_user(self, user):
         return self.members.filter(user=user).last()
@@ -141,7 +141,6 @@ class Group(MojoSecrets, MojoModel):
             if child.id not in collected_ids:
                 collected_ids.add(child.id)
                 child._get_all_child_ids(collected_ids)
-
         return list(collected_ids)
 
     def get_parents(self, is_active=True, kind=None):
@@ -190,6 +189,34 @@ class Group(MojoSecrets, MojoModel):
         Checks if this group is an ancestor of the given child_group.
         """
         return child_group.is_child_of(self)
+
+    def invite(self, email, context=None):
+        """
+        Invites a user to join the group.
+        """
+        from mojo.apps.account.models import User
+        user = User.objects.filter(email=email).last()
+        ms = None
+        if context is None:
+            context = {}
+        context['group'] = self
+        if user:
+            ms = self.add_member(user)
+        elif not user:
+            user = User(is_active=True)
+            user.on_rest_pre_save(dict(email=None), True)
+            user.save()
+            ms = self.add_member(user)
+        try:
+            user.send_template_email('group_invite', context)
+        except Exception as e:
+            logit.error(f"Error sending email: {e}")
+        return ms
+
+    def push_notification(self, title=None, body=None, data=None, **kwargs):
+        from mojo.apps.account.services.push import send_direct_notification
+        for member in self.members.filter(is_active=True):
+            send_direct_notification(member.user, title=title, body=body, data=data, **kwargs)
 
     def send_email(
         self,
@@ -335,6 +362,18 @@ class Group(MojoSecrets, MojoModel):
             reply_to=reply_to,
             **kwargs
         )
+
+    def check_view_permission(self, perms, request):
+        # check if the user is a member of the group
+        ms = self.get_member_for_user(request.user)
+        if ms is None:
+            return False
+        if ms.has_permission(["view_group", "manage_group"]):
+            return True
+        # we still allow the user to view the group if they are a member
+        # but we limit the fields they can see
+        request.DATA.set("graph", "basic")
+        return True
 
     @classmethod
     def on_rest_handle_list(cls, request):
