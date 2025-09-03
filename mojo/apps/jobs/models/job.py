@@ -3,6 +3,7 @@ Job and JobEvent models for the jobs system.
 """
 from django.db import models
 from mojo.models import MojoModel
+from mojo.helpers import logit
 
 
 class Job(models.Model, MojoModel):
@@ -99,10 +100,11 @@ class Job(models.Model, MojoModel):
         ordering = ['-created']
 
     class RestMeta:
-        # Permissions - restricted to system users only by default
-        VIEW_PERMS = ['system']
-        SAVE_PERMS = ['system']
-        DELETE_PERMS = ['system']
+        # Permissions - jobs system specific permissions
+        VIEW_PERMS = ['view_jobs', 'manage_jobs']
+        SAVE_PERMS = ['manage_jobs']
+        DELETE_PERMS = ['manage_jobs']
+        POST_SAVE_ACTIONS = ["cancel_request", "retry_request", "get_status", "publish_job"]
 
         # Graphs for different use cases
         GRAPHS = {
@@ -153,6 +155,97 @@ class Job(models.Model, MojoModel):
             delta = self.finished_at - self.started_at
             return int(delta.total_seconds() * 1000)
         return 0
+
+    def check_cancel_requested(self) -> bool:
+        """
+        Sync the cancel_requested field from the database and return updated value.
+
+        This method refreshes the cancel_requested field from the database to get
+        the most current cancellation status, useful for long-running jobs that
+        need to check for cancellation requests during execution.
+
+        Returns:
+            bool: Current cancel_requested value from database
+        """
+        self.refresh_from_db(fields=['cancel_requested'])
+        return self.cancel_requested
+
+    def on_action_cancel_request(self, value):
+        """
+        Cancel this job via REST API action.
+
+        Args:
+            value: Boolean indicating if cancellation is requested
+
+        Returns:
+            dict: Response indicating success/failure
+        """
+        if not value:
+            return {'status': False, 'error': 'cancel_request must be true'}
+
+        from mojo.apps.jobs.services import JobActionsService
+        return JobActionsService.cancel_job(self)
+
+    def on_action_retry_request(self, value):
+        """
+        Retry this failed/cancelled job via REST API action.
+
+        Args:
+            value: Can be boolean True or dict with 'delay' key for delayed retry
+
+        Returns:
+            dict: Response indicating success/failure with new job_id
+        """
+        # Parse value - can be boolean or dict with delay
+        delay = None
+        if isinstance(value, dict):
+            if not value.get('retry'):
+                return {'status': False, 'error': 'retry_request must be true or {retry: true, delay: N}'}
+            delay = value.get('delay')
+        elif not value:
+            return {'status': False, 'error': 'retry_request must be true or {retry: true, delay: N}'}
+
+        from mojo.apps.jobs.services import JobActionsService
+        return JobActionsService.retry_job(self, delay=delay)
+
+    def on_action_get_status(self, value):
+        """
+        Get detailed status of this job via REST API action.
+
+        Args:
+            value: Boolean (should be true)
+
+        Returns:
+            dict: Detailed job status information
+        """
+        if not value:
+            return {'status': False, 'error': 'get_status must be true'}
+
+        from mojo.apps.jobs.services import JobActionsService
+        return JobActionsService.get_job_status(self)
+
+    def on_action_publish_job(self, value):
+        """
+        Publish a new job using this job as a template via REST API action.
+
+        Args:
+            value: Dict with optional overrides for the new job:
+                - func: Override function path
+                - payload: Override payload
+                - channel: Override channel
+                - delay: Delay in seconds
+                - run_at: Specific run time
+                - max_retries: Override max retries
+                - broadcast: Override broadcast flag
+
+        Returns:
+            dict: Response with new job ID
+        """
+        if not isinstance(value, dict):
+            return {'status': False, 'error': 'publish_job must be a dict with job parameters'}
+
+        from mojo.apps.jobs.services import JobActionsService
+        return JobActionsService.publish_job_from_template(self, value)
 
 
 class JobEvent(models.Model, MojoModel):
@@ -218,9 +311,9 @@ class JobEvent(models.Model, MojoModel):
 
     class RestMeta:
         # Permissions - restricted to system users only
-        VIEW_PERMS = ['system']
+        VIEW_PERMS = ['manage_jobs', 'view_jobs']
         SAVE_PERMS = []  # Events are system-created only
-        DELETE_PERMS = ['system']
+        DELETE_PERMS = ['manage_jobs']
 
         # Graphs
         GRAPHS = {

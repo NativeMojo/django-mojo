@@ -1,258 +1,177 @@
-# Django-MOJO Jobs System Tests
+# Refactored Jobs System Tests
 
-Comprehensive test suite for the Django-MOJO Jobs background task system.
+Simplified test suite for the Django-MOJO Jobs system focusing on core functionality without decorator complexity.
+
+## Overview
+
+These refactored tests provide cleaner, more maintainable test coverage by:
+- Removing decorator testing complexity
+- Focusing on core job functionality
+- Using direct model operations where appropriate
+- Reducing shared state between tests
+- Making tests more readable and easier to debug
 
 ## Test Files
 
-### 1. `basic.py`
-Tests fundamental job operations:
-- Job publishing with various options
-- Delayed and scheduled jobs
-- Job expiration settings
-- Broadcast jobs
-- Idempotency keys
-- Job cancellation
-- Local job publishing
-- Job status API
-- Payload validation
-- Registry functions
-
-### 2. `redis_ops.py`
-Tests Redis adapter and operations:
-- Connection management
-- Key generation with prefixes
-- Stream operations (XADD, XREADGROUP, XACK)
-- Consumer group operations
-- ZSET operations for scheduling
-- Hash operations for job metadata
-- Pipeline operations
-- Pub/Sub functionality
-- Expiration handling
-- Connection recovery
-
-### 3. `execution.py`
-Tests job execution and worker functionality:
-- JobContext creation and operations
-- Metadata management
-- Cancellation detection
-- Job direct execution
-- Error handling
+### test_basic.py
+Tests fundamental job model operations:
+- Direct job creation via models
+- Status transitions
+- Job scheduling and expiration
+- Cancellation functionality
 - Retry configuration
-- Expiration detection
-- Broadcast job setup
-- Job event recording
-- Metadata persistence
+- Broadcast jobs
+- Metadata storage
+- Idempotency keys
+- Event tracking
+- Payload handling
 
-### 4. `scheduler_manager.py`
-Tests scheduler and manager components:
-- Scheduler initialization and locking
-- Leadership lock acquisition/renewal
-- Job movement from ZSET to streams
-- Expired job handling
+### test_job_execution.py
+Tests job execution logic without decorators:
+- Simple job handlers (plain functions)
+- Cancellation checking
+- Error handling
+- Retry logic with backoff
+- Progress reporting
+- External API simulation
+- Database operations
+- Expiration checks
+- Broadcast job execution
+
+### test_redis_operations.py
+Tests Redis adapter functionality:
+- Connection management
+- Key generation patterns
+- Stream operations (XADD, XREADGROUP)
+- Consumer groups
+- Sorted sets for scheduling
+- Hash operations for metadata
+- Expiration and TTL
+- Pipeline operations
+- Pub/Sub messaging
+- Data type handling
+
+### test_manager.py
+Tests management and scheduler components:
 - JobManager operations
-- Runner discovery and health checks
-- Queue state inspection
-- Runner control (ping/shutdown)
-- Job retry functionality
+- Queue state monitoring
+- Runner tracking
+- Job status retrieval
+- Cancellation via manager
+- Retry functionality
 - System statistics
-
-### 5. `verify.py`
-Quick verification tests to ensure system is working:
-- Component availability
-- Redis connectivity
-- Basic publish/status operations
-- Registry functionality
-- Cancellation
-- Local queue
-- Delayed jobs
-- Manager basics
+- Scheduler locking
+- Job movement from scheduled to ready
+- Stuck job detection
+- Channel health checks
+- Runner control commands
 
 ## Running Tests
 
-### Run All Job Tests
+### Run All Refactored Tests
 ```bash
-/bin/testit -m test_jobs
+/bin/testit -m test_jobs_refactored
 ```
 
 ### Run Specific Test File
 ```bash
-# Run basic tests only
-/bin/testit -m test_jobs.basic
+# Basic tests
+/bin/testit -m test_jobs_refactored.test_basic
 
-# Run Redis operations tests
-/bin/testit -m test_jobs.redis_ops
+# Execution tests
+/bin/testit -m test_jobs_refactored.test_job_execution
 
-# Run execution tests
-/bin/testit -m test_jobs.execution
+# Redis tests
+/bin/testit -m test_jobs_refactored.test_redis_operations
 
-# Run scheduler/manager tests
-/bin/testit -m test_jobs.scheduler_manager
-
-# Run verification tests
-/bin/testit -m test_jobs.verify
+# Manager tests
+/bin/testit -m test_jobs_refactored.test_manager
 ```
 
 ### Run Specific Test
 ```bash
-/bin/testit -m test_jobs.basic -t test_basic_job_publish
+/bin/testit -m test_jobs_refactored.test_basic -t test_create_job_directly
 ```
 
-### Run with Verbose Output
+### Verbose Output
 ```bash
-/bin/testit -m test_jobs -v
+/bin/testit -m test_jobs_refactored -v
 ```
 
-### Stop on First Failure
-```bash
-/bin/testit -m test_jobs -s
-```
+## Key Differences from Original Tests
 
-## Test Requirements
+1. **No Decorator Testing**: Tests focus on job functionality, not decorator mechanics
+2. **Direct Model Usage**: Many tests create jobs directly via models instead of through decorators
+3. **Simpler Job Handlers**: Job handlers are plain functions that accept a Job model instance
+4. **Less Shared State**: Each test file has minimal setup with less shared state
+5. **Clearer Test Intent**: Each test has a single, clear purpose
+6. **Better Isolation**: Tests clean up after themselves more thoroughly
 
-1. **Redis Server**: Must be running and accessible
-   - Default: `redis://localhost:6379/0`
-   - Configure via `JOBS_REDIS_URL` setting
+## Test Patterns
 
-2. **Database**: Django database must be configured
-   - Tests will create/delete test data
-   - Uses transactions for isolation
-
-3. **Django Settings**: Must be properly configured
-   - `DJANGO_SETTINGS_MODULE` should be set
-   - Jobs-specific settings optional
-
-## Test Coverage
-
-### Core Functionality
-- ✅ Job publishing and queueing
-- ✅ Delayed and scheduled jobs
-- ✅ Job cancellation
-- ✅ Job expiration
-- ✅ Retry with exponential backoff
-- ✅ Broadcast jobs
-- ✅ Local in-process jobs
-- ✅ Idempotency keys
-
-### Infrastructure
-- ✅ Redis adapter with retry logic
-- ✅ Key generation with prefixes
-- ✅ Stream operations
-- ✅ Consumer groups
-- ✅ ZSET scheduling
-- ✅ Connection recovery
-
-### Execution
-- ✅ JobContext operations
-- ✅ Metadata management
-- ✅ Cooperative cancellation
-- ✅ Error handling
-- ✅ Event recording
-
-### Management
-- ✅ Scheduler leadership
-- ✅ Lock acquisition/renewal
-- ✅ Runner health monitoring
-- ✅ Queue state inspection
-- ✅ System statistics
-- ✅ Remote control
-
-## Test Data Cleanup
-
-Tests automatically clean up after themselves:
-- Database records are deleted
-- Redis keys are removed
-- Job registries are cleared
-
-If tests fail, manual cleanup may be needed:
-```python
-from mojo.apps.jobs.models import Job, JobEvent
-Job.objects.filter(channel__startswith='test').delete()
-JobEvent.objects.filter(channel__startswith='test').delete()
-```
-
-## Common Test Patterns
-
-### Publishing a Test Job
-```python
-from mojo.apps.jobs import publish, async_job
-
-@async_job(channel="test")
-def test_job(ctx):
-    return "success"
-
-job_id = publish(
-    func=test_job,
-    payload={'test': True},
-    channel="test"
-)
-```
-
-### Checking Job Status
-```python
-from mojo.apps.jobs import status
-
-job_status = status(job_id)
-assert job_status['status'] == 'pending'
-```
-
-### Direct Job Execution
-```python
-from mojo.apps.jobs.context import JobContext
-
-ctx = JobContext(
-    job_id="test123",
-    channel="test",
-    payload={'data': 'value'}
-)
-
-result = test_job(ctx)
-```
-
-## Debugging Failed Tests
-
-1. **Check Redis Connection**:
-```bash
-redis-cli ping
-```
-
-2. **Check Database**:
+### Creating a Job Directly
 ```python
 from mojo.apps.jobs.models import Job
-Job.objects.count()
+import uuid
+
+job = Job.objects.create(
+    id=uuid.uuid4().hex,
+    channel='test_channel',
+    func='path.to.function',
+    payload={'key': 'value'},
+    status='pending'
+)
 ```
 
-3. **Enable Verbose Output**:
-```bash
-/bin/testit -m test_jobs -v -s
+### Simple Job Handler
+```python
+def simple_handler(job):
+    """A simple job handler without decorators."""
+    # Access payload
+    data = job.payload.get('data')
+    
+    # Update metadata
+    job.metadata['processed'] = True
+    job.metadata['result'] = process_data(data)
+    
+    # Check cancellation
+    if job.cancel_requested:
+        return "cancelled"
+    
+    return "completed"
 ```
 
-4. **Check Redis Keys**:
-```bash
-redis-cli --scan --pattern "mojo:jobs:*"
+### Testing Job Execution
+```python
+# Create job
+job = Job.objects.create(...)
+
+# Execute handler
+result = simple_handler(job)
+
+# Update job status
+job.status = 'completed' if result == "completed" else 'failed'
+job.save()
 ```
 
-## Performance Notes
+## Requirements
 
-- Tests use small delays and timeouts for speed
-- Some tests simulate runners/schedulers with threads
-- Redis operations are tested with retries
-- Database operations use transactions
+- Django with database configured
+- Redis server running
+- TestIt framework installed
+- Django-MOJO Jobs app configured
 
-## Contributing
+## Benefits of This Approach
 
-When adding new tests:
-1. Follow the existing naming convention
-2. Use appropriate setup/teardown
-3. Clean up all test data
-4. Document what the test verifies
-5. Use descriptive assertions
+1. **Easier to Debug**: Direct function calls are easier to step through than decorated functions
+2. **Faster Tests**: Less overhead from decorator machinery
+3. **Better Coverage**: Can test edge cases more easily
+4. **Simpler Maintenance**: Less magic, more explicit code
+5. **Educational**: Shows how the jobs system works at a fundamental level
 
-## Test Isolation
+## Notes
 
-Each test file has its own setup that:
-- Clears relevant database tables
-- Removes Redis test keys
-- Resets job registries
-- Uses unique channel names
-
-This ensures tests don't interfere with each other.
+- Tests use `test_` and `mgr_test_` channel prefixes to avoid conflicts
+- All tests clean up their data in teardown
+- Redis keys are properly namespaced
+- Tests can run independently without order dependencies

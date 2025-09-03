@@ -25,32 +25,65 @@ from mojo.helpers import logit
 from .daemon import DaemonRunner
 from .keys import JobKeys
 from .adapters import get_adapter
-from .context import JobContext
-from .registry import get_job_function
 from .models import Job, JobEvent
+import concurrent.futures
+import importlib
+from threading import Lock, Semaphore
+from typing import Callable
+
+
+def load_job_function(func_path: str) -> Callable:
+    """
+    Dynamically import a job function.
+    Example: 'mojo.apps.account.jobs.send_invite'
+    """
+    try:
+        module_path, func_name = func_path.rsplit('.', 1)
+        module = importlib.import_module(module_path)
+        return getattr(module, func_name)
+    except (ImportError, AttributeError, ValueError) as e:
+        raise ImportError(f"Cannot load job function '{func_path}': {e}")
 
 
 class JobEngine:
     """
     Job execution engine that runs as a daemon process.
 
-    Consumes jobs from Redis Streams and executes registered handlers
-    with support for retries, cancellation, and subprocess execution.
+    Consumes jobs from Redis Streams and executes handlers dynamically
+    with support for retries, cancellation, and parallel execution.
     """
 
     def __init__(self, channels: Optional[List[str]] = None,
-                 runner_id: Optional[str] = None):
+                 runner_id: Optional[str] = None,
+                 max_workers: Optional[int] = None):
         """
         Initialize the job engine.
 
         Args:
             channels: List of channels to consume from (default: ['default'])
             runner_id: Unique runner identifier (auto-generated if not provided)
+            max_workers: Maximum thread pool workers (default from settings)
         """
         self.channels = channels or ['default']
         self.runner_id = runner_id or self._generate_runner_id()
         self.redis = get_adapter()
         self.keys = JobKeys()
+
+        # Thread pool configuration
+        self.max_workers = max_workers or getattr(settings, 'JOBS_ENGINE_MAX_WORKERS', 10)
+        self.executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=self.max_workers,
+            thread_name_prefix=f"JobWorker-{self.runner_id}"
+        )
+
+        # Track active jobs
+        self.active_jobs = {}
+        self.active_lock = Lock()
+
+        # Limit claimed jobs
+        claim_buffer = getattr(settings, 'JOBS_ENGINE_CLAIM_BUFFER', 2)
+        self.max_claimed = self.max_workers * claim_buffer
+        self.claim_semaphore = Semaphore(self.max_claimed)
 
         # Control flags
         self.running = False
@@ -116,7 +149,7 @@ class JobEngine:
         finally:
             self.stop()
 
-    def stop(self, timeout: float = 10.0):
+    def stop(self, timeout: float = 30.0):
         """
         Stop the job engine gracefully.
 
@@ -130,13 +163,25 @@ class JobEngine:
         self.running = False
         self.stop_event.set()
 
+        # Wait for active jobs
+        with self.active_lock:
+            active = list(self.active_jobs.values())
+
+        if active:
+            logit.info(f"Waiting for {len(active)} active jobs...")
+            futures = [j['future'] for j in active]
+            concurrent.futures.wait(futures, timeout=timeout/2)
+
+        # Shutdown executor
+        self.executor.shutdown(wait=True, timeout=10.0)
+
         # Stop heartbeat
         if self.heartbeat_thread and self.heartbeat_thread.is_alive():
-            self.heartbeat_thread.join(timeout=timeout/2)
+            self.heartbeat_thread.join(timeout=5.0)
 
         # Stop control listener
         if self.control_thread and self.control_thread.is_alive():
-            self.control_thread.join(timeout=timeout/2)
+            self.control_thread.join(timeout=5.0)
 
         # Clean up Redis keys
         try:
@@ -253,79 +298,97 @@ class JobEngine:
             logit.error(f"Failed to handle control message: {e}")
 
     def _main_loop(self):
-        """Main processing loop."""
+        """Main processing loop - claims jobs based on capacity."""
         logit.info(f"JobEngine {self.runner_id} entering main loop")
-
-        # Build streams dict for XREADGROUP
-        streams = {}
-        for channel in self.channels:
-            # Normal stream
-            stream_key = self.keys.stream(channel)
-            streams[stream_key] = '>'
-
-            # Broadcast stream
-            broadcast_key = self.keys.stream_broadcast(channel)
-            streams[broadcast_key] = '>'
 
         while self.running and not self.stop_event.is_set():
             try:
                 # Close old DB connections at loop start
                 close_old_connections()
 
-                # Read from streams
-                messages = self._read_streams(streams)
+                # Check available capacity
+                with self.active_lock:
+                    active_count = len(self.active_jobs)
 
-                if not messages:
+                if active_count >= self.max_claimed:
+                    time.sleep(0.1)
                     continue
 
-                # Process each message
-                for stream_key, stream_messages in messages:
-                    for msg_id, msg_data in stream_messages:
-                        self._process_message(stream_key, msg_id, msg_data)
+                # Claim jobs up to available capacity
+                available = self.max_claimed - active_count
+                claim_batch = getattr(settings, 'JOBS_ENGINE_CLAIM_BATCH', 5)
+                messages = self._claim_jobs(min(available, claim_batch))
+
+                for stream_key, msg_id, job_id in messages:
+                    # Submit to thread pool
+                    future = self.executor.submit(
+                        self._execute_job_wrapper,
+                        stream_key, msg_id, job_id
+                    )
+
+                    # Track active job
+                    with self.active_lock:
+                        self.active_jobs[job_id] = {
+                            'future': future,
+                            'started': timezone.now(),
+                            'stream': stream_key,
+                            'msg_id': msg_id
+                        }
+
+                    # Cleanup callback
+                    future.add_done_callback(
+                        lambda f, jid=job_id: self._job_completed(jid)
+                    )
 
             except Exception as e:
                 logit.error(f"Error in main loop: {e}")
                 time.sleep(1)  # Brief pause before retry
 
-    def _read_streams(self, streams: Dict[str, str]) -> List[Tuple]:
+    def _claim_jobs(self, count: int) -> List[Tuple[str, str, str]]:
         """
-        Read from multiple streams with appropriate consumer groups.
+        Claim up to 'count' jobs from Redis streams.
 
         Args:
-            streams: Dict of stream keys to read positions
+            count: Maximum number of jobs to claim
 
         Returns:
-            List of (stream_key, messages) tuples
+            List of (stream_key, msg_id, job_id) tuples
         """
-        results = []
+        claimed = []
 
-        for stream_key, position in streams.items():
-            # Determine which group to use
-            if ':broadcast' in stream_key:
-                # Broadcast stream - use runner-specific group
-                channel = stream_key.split(':')[-2]  # Extract channel from key
-                group = self.keys.group_runner(channel, self.runner_id)
-            else:
-                # Normal stream - use workers group
-                channel = stream_key.split(':')[-1]  # Extract channel from key
-                group = self.keys.group_workers(channel)
+        for channel in self.channels:
+            if len(claimed) >= count:
+                break
+
+            stream_key = self.keys.stream(channel)
+            group = self.keys.group_workers(channel)
 
             try:
+                # Non-blocking read
                 messages = self.redis.xreadgroup(
                     group=group,
                     consumer=self.runner_id,
-                    streams={stream_key: position},
-                    count=1,  # Process one at a time for fairness
-                    block=1000  # Block for 1 second
+                    streams={stream_key: '>'},
+                    count=count - len(claimed),
+                    block=100  # 100ms timeout
                 )
 
                 if messages:
-                    results.extend(messages)
+                    for msg_id, data in messages[0][1]:
+                        job_id_bytes = data.get(b'job_id', b'')
+                        job_id = job_id_bytes.decode('utf-8') if isinstance(job_id_bytes, bytes) else job_id_bytes
+                        if job_id:
+                            claimed.append((stream_key, msg_id, job_id))
 
             except Exception as e:
-                logit.error(f"Failed to read from {stream_key}: {e}")
+                logit.error(f"Failed to claim jobs from {channel}: {e}")
 
-        return results
+        return claimed
+
+    def _job_completed(self, job_id: str):
+        """Callback when job future completes."""
+        with self.active_lock:
+            self.active_jobs.pop(job_id, None)
 
     def _process_message(self, stream_key: str, msg_id: str,
                         msg_data: Dict[bytes, bytes]):
@@ -496,69 +559,158 @@ class JobEngine:
         except Exception as e:
             logit.error(f"Failed to mark job {job_id} as running: {e}")
 
-    def _execute_job(self, job_id: str, job_data: Dict) -> bool:
-        """
-        Execute a job handler.
-
-        Returns:
-            True if successful, False if failed
-        """
-        func_name = job_data.get('func', '')
-
-        # Get the registered function
-        func = get_job_function(func_name)
-        if not func:
-            logit.error(f"No handler registered for {func_name}")
-            return False
-
-        # Parse payload
+    def _execute_job_wrapper(self, stream_key: str, msg_id: str, job_id: str):
+        """Execute job and handle all state updates."""
         try:
-            payload = json.loads(job_data.get('payload', '{}'))
-        except Exception:
-            payload = {}
+            # Load job from database
+            job = Job.objects.select_for_update().get(id=job_id)
 
-        # Create context
-        ctx = JobContext(
-            job_id=job_id,
-            channel=job_data.get('channel', 'unknown'),
-            payload=payload,
-            redis_adapter=self.redis,
-            redis_keys=self.keys
-        )
+            # Check if already processed or cancelled
+            if job.status in ('completed', 'cancelled'):
+                self._ack_message(stream_key, msg_id)
+                return
 
-        # Check for hard execution limit
-        max_exec = job_data.get('max_exec_seconds', '')
-        if max_exec and max_exec.isdigit():
-            return self._execute_with_timeout(func, ctx, int(max_exec))
-        else:
-            return self._execute_direct(func, ctx)
+            # Check expiration
+            if job.expires_at and timezone.now() > job.expires_at:
+                job.status = 'expired'
+                job.finished_at = timezone.now()
+                job.save(update_fields=['status', 'finished_at'])
 
-    def _execute_direct(self, func: Callable, ctx: JobContext) -> bool:
-        """Execute a job directly in this process."""
-        try:
+                JobEvent.objects.create(
+                    job=job,
+                    channel=job.channel,
+                    event='expired',
+                    runner_id=self.runner_id
+                )
+
+                self._ack_message(stream_key, msg_id)
+
+                from mojo.metrics import redis_metrics as metrics
+                metrics.record("jobs.expired", count=1, category="jobs")
+                return
+
+            # Mark as running
+            job.status = 'running'
+            job.started_at = timezone.now()
+            job.runner_id = self.runner_id
+            job.attempt += 1
+            job.save(update_fields=['status', 'started_at', 'runner_id', 'attempt'])
+
+            JobEvent.objects.create(
+                job=job,
+                channel=job.channel,
+                event='running',
+                runner_id=self.runner_id,
+                attempt=job.attempt
+            )
+
+            # Load and execute function
+            func = load_job_function(job.func)
+
+            # Close connections before and after job execution
+            close_old_connections()
+            result = func(job)
             close_old_connections()
 
-            # Execute the function
-            result = func(ctx)
+            # Mark complete
+            job.status = 'completed'
+            job.finished_at = timezone.now()
+            job.save(update_fields=['status', 'finished_at', 'metadata'])
 
-            close_old_connections()
+            JobEvent.objects.create(
+                job=job,
+                channel=job.channel,
+                event='completed',
+                runner_id=self.runner_id
+            )
 
-            ctx.log(f"Job completed successfully", level='info')
-            return True
+            # ACK message
+            self._ack_message(stream_key, msg_id)
+            self.jobs_processed += 1
+
+            # Metrics
+            duration_ms = int((job.finished_at - job.started_at).total_seconds() * 1000)
+            from mojo.metrics import redis_metrics as metrics
+            metrics.record("jobs.completed", count=1, category="jobs")
+            metrics.record(f"jobs.channel.{job.channel}.completed", count=1, category="jobs")
+            metrics.record("jobs.duration_ms", count=duration_ms, category="jobs")
 
         except Exception as e:
-            ctx.log(f"Job failed: {e}", level='error')
+            self._handle_job_failure(job_id, stream_key, msg_id, e)
 
-            # Store error details
-            try:
-                job = Job.objects.get(id=ctx.job_id)
-                job.last_error = str(e)
-                job.stack_trace = traceback.format_exc()
-                job.save(update_fields=['last_error', 'stack_trace', 'modified'])
-            except Exception:
-                pass
+    def _handle_job_failure(self, job_id: str, stream_key: str,
+                           msg_id: str, error: Exception):
+        """Handle job failure with retries."""
+        try:
+            job = Job.objects.select_for_update().get(id=job_id)
 
-            return False
+            # Record error
+            job.last_error = str(error)
+            job.stack_trace = traceback.format_exc()
+
+            # Check retry eligibility
+            if job.attempt < job.max_retries:
+                # Calculate backoff with jitter
+                backoff = min(
+                    job.backoff_base ** job.attempt,
+                    job.backoff_max_sec
+                )
+                jitter = backoff * (0.8 + random.random() * 0.4)
+
+                # Schedule retry
+                job.run_at = timezone.now() + timedelta(seconds=jitter)
+                job.status = 'pending'
+                job.save(update_fields=[
+                    'status', 'run_at', 'last_error', 'stack_trace'
+                ])
+
+                # Add to scheduled ZSET
+                score = job.run_at.timestamp() * 1000
+                self.redis.zadd(self.keys.sched(job.channel), {job_id: score})
+
+                JobEvent.objects.create(
+                    job=job,
+                    channel=job.channel,
+                    event='retry',
+                    runner_id=self.runner_id,
+                    attempt=job.attempt,
+                    details={'retry_at': job.run_at.isoformat(), 'backoff': jitter}
+                )
+
+                from mojo.metrics import redis_metrics as metrics
+                metrics.record("jobs.retried", count=1, category="jobs")
+                logit.info(f"Job {job_id} scheduled for retry #{job.attempt} at {job.run_at}")
+            else:
+                # Max retries exceeded
+                job.status = 'failed'
+                job.finished_at = timezone.now()
+                job.save(update_fields=[
+                    'status', 'finished_at', 'last_error', 'stack_trace'
+                ])
+
+                JobEvent.objects.create(
+                    job=job,
+                    channel=job.channel,
+                    event='failed',
+                    runner_id=self.runner_id,
+                    attempt=job.attempt,
+                    details={'max_retries_exceeded': True}
+                )
+
+                from mojo.metrics import redis_metrics as metrics
+                metrics.record("jobs.failed", count=1, category="jobs")
+                metrics.record(f"jobs.channel.{job.channel}.failed", count=1, category="jobs")
+
+                self.jobs_failed += 1
+                logit.error(f"Job {job_id} failed after {job.attempt} attempts")
+
+            # Always ACK to prevent redelivery
+            self._ack_message(stream_key, msg_id)
+
+        except Exception as e:
+            logit.error(f"Failed to handle job failure: {e}")
+            # Still ACK to prevent stuck message
+            self._ack_message(stream_key, msg_id)
 
     def _execute_with_timeout(self, func: Callable, ctx: JobContext,
                             timeout_seconds: int) -> bool:

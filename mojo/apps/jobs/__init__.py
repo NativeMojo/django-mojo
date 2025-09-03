@@ -13,11 +13,9 @@ from django.db import transaction
 
 from mojo.helpers import logit
 from mojo.helpers.settings import settings as mojo_settings
-
-from .registry import async_job, local_async_job, get_job_function, list_jobs
+from mojo.apps import metrics
 from .keys import JobKeys
 from .adapters import get_adapter
-from .context import JobContext
 
 
 __all__ = [
@@ -25,9 +23,6 @@ __all__ = [
     'publish_local',
     'cancel',
     'status',
-    'async_job',
-    'local_async_job',
-    'JobContext',
 ]
 
 
@@ -74,16 +69,11 @@ def publish(
     """
     from .models import Job, JobEvent
 
-    # Resolve function name
+    # Convert callable to module path string
     if callable(func):
-        if hasattr(func, '_job_name'):
-            func_name = func._job_name
-        else:
-            raise ValueError(f"Function {func} is not registered as a job")
+        func_path = f"{func.__module__}.{func.__name__}"
     else:
-        func_name = func
-        if not get_job_function(func_name):
-            raise ValueError(f"No job registered with name: {func_name}")
+        func_path = func
 
     # Validate payload
     payload = payload or {}
@@ -134,7 +124,7 @@ def publish(
             job = Job.objects.create(
                 id=job_id,
                 channel=channel,
-                func=func_name,
+                func=func_path,
                 payload=payload,
                 status='pending',
                 run_at=run_at,
@@ -152,7 +142,7 @@ def publish(
                 job=job,
                 channel=channel,
                 event='created',
-                details={'func': func_name, 'channel': channel}
+                details={'func': func_path, 'channel': channel}
             )
 
     except Exception as e:
@@ -172,19 +162,15 @@ def publish(
         redis = get_adapter()
         keys = JobKeys()
 
-        # Store job metadata in Redis hash
+        # Store minimal metadata in Redis hash (no payload!)
         redis.hset(keys.job(job_id), {
             'status': 'pending',
             'channel': channel,
-            'func': func_name,
-            'payload': json.dumps(payload),
+            'func': func_path,
             'expires_at': expires_at.isoformat() if expires_at else '',
             'run_at': run_at.isoformat() if run_at else '',
             'attempt': 0,
-            'max_retries': max_retries,
-            'broadcast': '1' if broadcast else '0',
-            'max_exec_seconds': max_exec_seconds or '',
-            'created_at': now.isoformat()
+            'cancel_requested': '0'
         })
 
         # Route based on scheduling
@@ -207,7 +193,7 @@ def publish(
             stream_key = keys.stream_broadcast(channel) if broadcast else keys.stream(channel)
             redis.xadd(stream_key, {
                 'job_id': job_id,
-                'func': func_name,
+                'func': func_path,  # For logging only
                 'created': now.isoformat()
             }, maxlen=getattr(settings, 'JOBS_STREAM_MAXLEN', 100000))
 
@@ -222,13 +208,19 @@ def publish(
             logit.info(f"Queued job {job_id} on {channel} (broadcast={broadcast})")
 
         # Emit metric
-        from mojo.metrics.redis_metrics import record_metrics
-        record_metrics(
+
+        metrics.record(
             slug="jobs.published",
             when=now,
             count=1,
-            category="jobs",
-            args=[channel, func_name]
+            category="jobs"
+        )
+
+        metrics.record(
+            slug="jobs.published.{channel}",
+            when=now,
+            count=1,
+            category="jobs"
         )
 
     except Exception as e:
@@ -247,7 +239,7 @@ def publish_local(func: Union[str, Callable], *args, **kwargs) -> str:
     Publish a job to the local in-process queue.
 
     Args:
-        func: Job function (registered name or callable)
+        func: Job function (module path or callable)
         *args: Positional arguments for the job
         **kwargs: Keyword arguments for the job
 
@@ -255,24 +247,24 @@ def publish_local(func: Union[str, Callable], *args, **kwargs) -> str:
         Job ID (for compatibility, though local jobs aren't persistent)
 
     Raises:
-        ValueError: If func is not registered as a local job
         RuntimeError: If local queue is full
     """
     from .local_queue import get_local_queue
+    import importlib
 
     # Resolve function
     if callable(func):
-        if hasattr(func, '_job_name'):
-            func_name = func._job_name
-            func_obj = func
-        else:
-            raise ValueError(f"Function {func} is not registered as a local job")
+        func_path = f"{func.__module__}.{func.__name__}"
+        func_obj = func
     else:
-        func_name = func
-        from .registry import get_local_function
-        func_obj = get_local_function(func_name)
-        if not func_obj:
-            raise ValueError(f"No local job registered with name: {func_name}")
+        # Dynamic import
+        func_path = func
+        try:
+            module_path, func_name = func_path.rsplit('.', 1)
+            module = importlib.import_module(module_path)
+            func_obj = getattr(module, func_name)
+        except (ImportError, AttributeError, ValueError) as e:
+            raise ImportError(f"Cannot load local job function '{func_path}': {e}")
 
     # Generate a pseudo job ID
     job_id = f"local-{uuid.uuid4().hex[:8]}"
@@ -282,7 +274,7 @@ def publish_local(func: Union[str, Callable], *args, **kwargs) -> str:
     if not queue.put(func_obj, args, kwargs, job_id):
         raise RuntimeError("Local job queue is full")
 
-    logit.info(f"Queued local job {job_id} ({func_name})")
+    logit.info(f"Queued local job {job_id} ({func_path})")
     return job_id
 
 

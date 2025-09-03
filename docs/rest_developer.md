@@ -92,6 +92,70 @@ You can nest graphs multiple layers deep for more complex domains (organizations
 
 ---
 
+## Build the Rest ROUTES
+
+Rest Routes are built into the apps/rest folder with a file for each model and their desired routes.
+
+The basic routes should always you our simple CRUD patthern.
+
+```python
+from mojo import decorators as md
+from mojo.apps.account.models import Group
+from mojo.helpers.response import JsonResponse
+
+
+@md.URL('group')
+@md.URL('group/<int:pk>')
+def on_group(request, pk=None):
+    # this handles CRUD, and all security checks are also automatically handled
+    return Group.on_rest_request(request, pk)
+
+
+@md.GET('group/hello')
+@md.requires_perms("manage_groups")   # requires the user to be authenticated and have the "manage_groups" permission
+def on_group_hello(request):
+    return JsonResponse(dict(status=True, data='Hello World'))
+
+
+@md.POST('group/echo')
+@md.requires_auth()  # requires the user to be authenticated
+@md.requries_params("echo")
+def on_group_echo(request):
+    return JsonResponse(dict(status=True, data=request.DATA["echo"]))
+
+
+```
+
+## POST Save Actions
+
+POST_SAVE_ACTIONS
+
+```python
+class Project(MojoModel):
+    owner = models.ForeignKey(User, ...)
+
+    class RestMeta:
+        POST_SAVE_ACTIONS = ["cancel_request", "retry_request"]
+        GRAPHS = {
+            "default": {
+                "fields": ["id", "owner"],
+                "graphs": {"owner": "basic"}
+            }
+        }
+
+    def on_action_cancel_request(self, value):
+        pass
+
+    def on_action_retry_request(self, value):
+        pass
+```
+
+Usage would be you would POST to the endpoint with the action name in the data.
+
+```
+POST /api/projects/2 {"cancel_request": true}
+```
+
 ## Best Practices
 
 - **Keep It Minimal:** Only include fields and relationships that are really needed in each graph context.

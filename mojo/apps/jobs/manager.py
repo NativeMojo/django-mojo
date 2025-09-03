@@ -187,6 +187,181 @@ class JobManager:
 
         return state
 
+    def get_channel_health(self, channel: str) -> Dict[str, Any]:
+        """
+        Get comprehensive health metrics for a channel.
+
+        Args:
+            channel: Channel name
+
+        Returns:
+            Dict with health status including unclaimed jobs, stuck jobs, and alerts
+        """
+        stream_key = self.keys.stream(channel)
+        group_key = self.keys.group_workers(channel)
+        sched_key = self.keys.sched(channel)
+
+        # Get basic queue state
+        state = self.get_queue_state(channel)
+
+        # Calculate unclaimed (waiting to be picked up)
+        total_messages = state['stream_length']
+        pending_count = state['pending_count']
+        unclaimed = max(0, total_messages - pending_count)
+
+        # Find stuck jobs
+        stuck = self._find_stuck_jobs(channel)
+
+        # Get active runners
+        runners = self.get_runners(channel)
+        active_runners = [r for r in runners if r.get('alive')]
+
+        # Build health status
+        health = {
+            'channel': channel,
+            'status': 'healthy',  # Will update based on checks
+            'messages': {
+                'total': total_messages,
+                'unclaimed': unclaimed,
+                'pending': pending_count,
+                'scheduled': state['scheduled_count'],
+                'stuck': len(stuck)
+            },
+            'runners': {
+                'active': len(active_runners),
+                'total': len(runners)
+            },
+            'stuck_jobs': stuck[:10],  # First 10 stuck jobs
+            'alerts': []
+        }
+
+        # Health checks
+        if unclaimed > 100:
+            health['alerts'].append(f"High unclaimed count: {unclaimed}")
+            health['status'] = 'warning'
+
+        if unclaimed > 500:
+            health['status'] = 'critical'
+
+        if len(stuck) > 0:
+            health['alerts'].append(f"Stuck jobs detected: {len(stuck)}")
+            health['status'] = 'warning'
+
+        if len(stuck) > 10:
+            health['status'] = 'critical'
+
+        if len(active_runners) == 0 and total_messages > 0:
+            health['alerts'].append("No active runners for channel with pending jobs")
+            health['status'] = 'critical'
+
+        # Add metrics if available
+        if 'metrics' in state:
+            health['metrics'] = state['metrics']
+
+        return health
+
+    def _find_stuck_jobs(self, channel: str, idle_threshold_ms: int = 60000) -> List[Dict]:
+        """
+        Find jobs that have been claimed but not processed.
+
+        Args:
+            channel: Channel name
+            idle_threshold_ms: Consider stuck if idle longer than this (default 1 minute)
+
+        Returns:
+            List of stuck job details
+        """
+        stream_key = self.keys.stream(channel)
+        group_key = self.keys.group_workers(channel)
+
+        stuck = []
+        try:
+            # Get detailed pending info using xpending with range
+            client = self.redis.get_client()
+            # XPENDING key group [idle] start end count [consumer]
+            pending_details = client.execute_command(
+                'XPENDING', stream_key, group_key,
+                idle_threshold_ms, '-', '+', '100'
+            )
+
+            if pending_details:
+                for entry in pending_details:
+                    # Entry format: [message_id, consumer, idle_time, delivery_count]
+                    if len(entry) >= 4:
+                        stuck.append({
+                            'message_id': entry[0].decode('utf-8') if isinstance(entry[0], bytes) else entry[0],
+                            'consumer': entry[1].decode('utf-8') if isinstance(entry[1], bytes) else entry[1],
+                            'idle_ms': entry[2],
+                            'delivery_count': entry[3]
+                        })
+        except Exception as e:
+            logit.error(f"Failed to check stuck jobs: {e}")
+            # Fallback to basic pending info
+            try:
+                pending_info = self.redis.xpending(stream_key, group_key)
+                if pending_info and pending_info.get('pending', 0) > 0:
+                    # Can't get details, but report that there are pending jobs
+                    stuck.append({
+                        'message_id': 'unknown',
+                        'consumer': 'unknown',
+                        'idle_ms': 0,
+                        'delivery_count': 0,
+                        'note': f"Total pending: {pending_info['pending']}"
+                    })
+            except:
+                pass
+
+        return stuck
+
+    def broadcast_command(self, command: str, data: Dict = None,
+                         timeout: float = 2.0) -> List[Dict]:
+        """
+        Send command to all runners and collect responses.
+
+        Args:
+            command: Command to send (status, shutdown, pause, resume)
+            data: Additional command data
+            timeout: Time to wait for responses
+
+        Returns:
+            List of responses from runners
+        """
+        import uuid as uuid_module
+        reply_channel = f"mojo:jobs:replies:{uuid_module.uuid4().hex[:8]}"
+
+        # Subscribe to replies before sending
+        pubsub = self.redis.pubsub()
+        pubsub.subscribe(reply_channel)
+
+        # Send broadcast command
+        message = {
+            'command': command,
+            'data': data or {},
+            'reply_channel': reply_channel,
+            'timestamp': timezone.now().isoformat()
+        }
+
+        self.redis.publish("mojo:jobs:runners:broadcast", json.dumps(message))
+
+        # Collect responses
+        responses = []
+        start_time = time.time()
+
+        while time.time() - start_time < timeout:
+            msg = pubsub.get_message(timeout=0.1)
+            if msg and msg['type'] == 'message':
+                try:
+                    response_data = msg['data']
+                    if isinstance(response_data, bytes):
+                        response_data = response_data.decode('utf-8')
+                    response = json.loads(response_data)
+                    responses.append(response)
+                except Exception as e:
+                    logit.debug(f"Failed to parse response: {e}")
+
+        pubsub.close()
+        return responses
+
     def ping(self, runner_id: str, timeout: float = 2.0) -> bool:
         """
         Ping a runner to check if it's responsive.
@@ -256,7 +431,7 @@ class JobManager:
 
         Args:
             channel: Channel to broadcast on
-            func: Job function name
+            func: Job function module path
             payload: Job payload
             **options: Additional job options
 
