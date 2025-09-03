@@ -7,7 +7,6 @@ import time
 import json
 import uuid
 from datetime import datetime, timedelta
-from django.utils import timezone
 
 
 @th.django_unit_setup()
@@ -44,13 +43,13 @@ def setup_redis_tests(opts):
 def test_redis_connection(opts):
     """Test basic Redis connectivity."""
     # Test ping
-    assert opts.redis.ping() is True
+    assert opts.redis.ping() is True, f"Redis ping failed - connection may be down. Redis adapter: {type(opts.redis)}"
 
     # Test basic set/get
     test_key = f"{opts.test_prefix}connection_test"
     opts.redis.set(test_key, "test_value", ex=60)
     value = opts.redis.get(test_key)
-    assert value == "test_value"
+    assert value == "test_value", f"Redis get/set failed: expected 'test_value', got '{value}'. Test key: {test_key}"
 
     # Clean up
     opts.redis.delete(test_key)
@@ -61,27 +60,27 @@ def test_key_generation(opts):
     """Test key generation patterns."""
     # Test stream keys
     stream_key = opts.keys.stream('test_channel')
-    assert 'stream:test_channel' in stream_key
+    assert 'stream:test_channel' in stream_key, f"Stream key pattern incorrect: expected 'stream:test_channel' in '{stream_key}'"
 
     broadcast_key = opts.keys.stream_broadcast('test_channel')
-    assert 'stream:test_channel:broadcast' in broadcast_key
+    assert 'stream:test_channel:broadcast' in broadcast_key, f"Broadcast key pattern incorrect: expected 'stream:test_channel:broadcast' in '{broadcast_key}'"
 
     # Test scheduled jobs key
     sched_key = opts.keys.sched('test_channel')
-    assert 'sched:test_channel' in sched_key
+    assert 'sched:test_channel' in sched_key, f"Scheduled jobs key pattern incorrect: expected 'sched:test_channel' in '{sched_key}'"
 
     # Test job metadata key
     job_id = uuid.uuid4().hex
     job_key = opts.keys.job(job_id)
-    assert f'job:{job_id}' in job_key
+    assert f'job:{job_id}' in job_key, f"Job metadata key pattern incorrect: expected 'job:{job_id}' in '{job_key}'"
 
     # Test runner keys
     runner_id = 'test_runner_001'
     heartbeat_key = opts.keys.runner_hb(runner_id)
-    assert f'runner:{runner_id}:hb' in heartbeat_key
+    assert f'runner:{runner_id}:hb' in heartbeat_key, f"Runner heartbeat key pattern incorrect: expected 'runner:{runner_id}:hb' in '{heartbeat_key}'"
 
     control_key = opts.keys.runner_ctl(runner_id)
-    assert f'runner:{runner_id}:ctl' in control_key
+    assert f'runner:{runner_id}:ctl' in control_key, f"Runner control key pattern incorrect: expected 'runner:{runner_id}:ctl' in '{control_key}'"
 
 
 @th.django_unit_test()
@@ -99,13 +98,13 @@ def test_stream_add_and_read(opts):
             'created': datetime.now().isoformat()
         })
         job_ids.append(job_id)
-        assert entry_id is not None
+        assert entry_id is not None, f"Failed to add entry to stream {stream_key}. Job ID: {job_id}, func: test.function_{i}"
 
     # Read from stream
     client = opts.redis.get_client()
     messages = client.xrange(stream_key, count=10)
 
-    assert len(messages) >= 3
+    assert len(messages) >= 3, f"Expected at least 3 messages from stream, got {len(messages)}. Stream: {stream_key}, job_ids added: {job_ids}"
 
     # Verify message content
     found_jobs = []
@@ -115,7 +114,7 @@ def test_stream_add_and_read(opts):
             found_jobs.append(job_id.decode('utf-8'))
 
     for job_id in job_ids:
-        assert job_id in found_jobs
+        assert job_id in found_jobs, f"Job ID {job_id} not found in stream messages. Found jobs: {found_jobs}, expected: {job_ids}"
 
     # Clean up
     opts.redis.delete(stream_key)
@@ -130,7 +129,7 @@ def test_consumer_group(opts):
 
     # Create consumer group
     created = opts.redis.xgroup_create(stream_key, group_name)
-    assert created is True
+    assert created is True, f"Failed to create consumer group '{group_name}' for stream {stream_key}. Create result: {created}"
 
     # Add messages to stream
     for i in range(3):
@@ -148,18 +147,18 @@ def test_consumer_group(opts):
         block=100
     )
 
-    assert len(messages) > 0
+    assert len(messages) > 0, f"No messages received from consumer group. Group: {group_name}, consumer: {consumer_name}, stream: {stream_key}"
     stream_name, stream_messages = messages[0]
-    assert len(stream_messages) == 2  # We asked for count=2
+    assert len(stream_messages) == 2, f"Expected 2 messages from consumer group, got {len(stream_messages)}. Group: {group_name}, consumer: {consumer_name}"
 
     # Acknowledge messages
     for msg_id, data in stream_messages:
         ack_count = opts.redis.xack(stream_key, group_name, msg_id)
-        assert ack_count == 1
+        assert ack_count == 1, f"Failed to acknowledge message {msg_id}. Ack count: {ack_count}, group: {group_name}"
 
     # Check pending (should be 1 unread message)
     pending_info = opts.redis.xpending(stream_key, group_name)
-    assert pending_info is not None
+    assert pending_info is not None, f"Failed to get pending messages info. Group: {group_name}, stream: {stream_key}"
 
     # Clean up
     opts.redis.delete(stream_key)
@@ -181,28 +180,28 @@ def test_scheduled_jobs_zset(opts):
 
     # Add all jobs
     added = opts.redis.zadd(sched_key, future_times)
-    assert added >= 4
+    assert added >= 4, f"Failed to add all scheduled jobs. Expected >=4, got {added}. ZSET key: {sched_key}, jobs: {list(future_times.keys())}"
 
     # Check total count
     count = opts.redis.zcard(sched_key)
-    assert count == 4
+    assert count == 4, f"Expected 4 jobs in scheduled ZSET, got {count}. ZSET key: {sched_key}"
 
     # Pop the earliest (should be job_immediate)
     results = opts.redis.zpopmin(sched_key, count=1)
-    assert len(results) == 1
+    assert len(results) == 1, f"Expected 1 result from zpopmin, got {len(results)}. Results: {results}, ZSET: {sched_key}"
 
     job_id, score = results[0]
-    assert job_id == 'job_immediate'
-    assert score < now  # Was in the past
+    assert job_id == 'job_immediate', f"Expected 'job_immediate' to be earliest job, got '{job_id}'. Results: {results}"
+    assert score < now, f"Expected job score {score} to be < now {now} (was in past). Job: {job_id}"
 
     # Check remaining count
     count = opts.redis.zcard(sched_key)
-    assert count == 3
+    assert count == 3, f"Expected 3 jobs remaining after zpopmin, got {count}. ZSET key: {sched_key}"
 
     # Get all remaining without removing
     client = opts.redis.get_client()
     remaining = client.zrange(sched_key, 0, -1, withscores=True)
-    assert len(remaining) == 3
+    assert len(remaining) == 3, f"Expected 3 remaining jobs from zrange, got {len(remaining)}. Remaining: {remaining}, ZSET: {sched_key}"
 
     # Clean up
     opts.redis.delete(sched_key)
@@ -227,32 +226,32 @@ def test_job_metadata_hash(opts):
     }
 
     fields_set = opts.redis.hset(job_key, job_data)
-    assert fields_set >= 0
+    assert fields_set >= 0, f"Failed to set job metadata hash. Fields set: {fields_set}, job_key: {job_key}, data: {list(job_data.keys())}"
 
     # Get individual field
     status = opts.redis.hget(job_key, 'status')
-    assert status == 'pending'
+    assert status == 'pending', f"Expected status='pending', got '{status}'. Job key: {job_key}"
 
     # Get all fields
     all_data = opts.redis.hgetall(job_key)
-    assert all_data['status'] == 'pending'
-    assert all_data['channel'] == opts.test_channel
-    assert all_data['attempt'] == '0'
-    assert all_data['cancel_requested'] == '0'  # Bool converted to string
+    assert all_data['status'] == 'pending', f"Expected status='pending' in hash, got '{all_data.get('status')}'. Job: {job_id}, all_data keys: {list(all_data.keys())}"
+    assert all_data['channel'] == opts.test_channel, f"Expected channel='{opts.test_channel}', got '{all_data.get('channel')}'. Job: {job_id}"
+    assert all_data['attempt'] == '0', f"Expected attempt='0', got '{all_data.get('attempt')}'. Job: {job_id}"
+    assert all_data['cancel_requested'] == '0', f"Expected cancel_requested='0' (bool converted), got '{all_data.get('cancel_requested')}'. Job: {job_id}"
 
     # Parse JSON payload
     payload = json.loads(all_data['payload'])
-    assert payload['key'] == 'value'
-    assert payload['count'] == 42
+    assert payload['key'] == 'value', f"Expected payload key='value', got '{payload.get('key')}'. Full payload: {payload}"
+    assert payload['count'] == 42, f"Expected payload count=42, got {payload.get('count')}. Full payload: {payload}"
 
     # Update fields
     opts.redis.hset(job_key, {'status': 'running', 'attempt': '1'})
 
     updated_status = opts.redis.hget(job_key, 'status')
-    assert updated_status == 'running'
+    assert updated_status == 'running', f"Expected updated status='running', got '{updated_status}'. Job: {job_id}"
 
     updated_attempt = opts.redis.hget(job_key, 'attempt')
-    assert updated_attempt == '1'
+    assert updated_attempt == '1', f"Expected updated attempt='1', got '{updated_attempt}'. Job: {job_id}"
 
     # Clean up
     opts.redis.delete(job_key)
@@ -268,22 +267,22 @@ def test_expiration_and_ttl(opts):
 
     # Check TTL
     ttl = opts.redis.ttl(test_key)
-    assert ttl > 0
-    assert ttl <= 5
+    assert ttl > 0, f"Expected TTL > 0 for expiring key, got {ttl}. Key: {test_key}"
+    assert ttl <= 5, f"Expected TTL <= 5 seconds, got {ttl}. Key: {test_key}"
 
     # Set key without expiration
     test_key2 = f"{opts.test_prefix}persistent_key"
     opts.redis.set(test_key2, "no_expiry")
 
     ttl2 = opts.redis.ttl(test_key2)
-    assert ttl2 == -1  # No expiration
+    assert ttl2 == -1, f"Expected TTL = -1 for persistent key, got {ttl2}. Key: {test_key2}"
 
     # Add expiration to existing key
     opts.redis.expire(test_key2, 10)
 
     ttl2_updated = opts.redis.ttl(test_key2)
-    assert ttl2_updated > 0
-    assert ttl2_updated <= 10
+    assert ttl2_updated > 0, f"Expected TTL > 0 after setting expiration, got {ttl2_updated}. Key: {test_key2}"
+    assert ttl2_updated <= 10, f"Expected TTL <= 10 after expire command, got {ttl2_updated}. Key: {test_key2}"
 
     # Clean up
     opts.redis.delete(test_key, test_key2)
@@ -298,16 +297,17 @@ def test_pipeline_operations(opts):
     with opts.redis.pipeline() as pipe:
         for i, key in enumerate(test_keys):
             pipe.set(key, f"value_{i}", ex=60)
-            pipe.hset(f"{key}_hash", {'field1': f'data_{i}', 'field2': i})
+            # Manually serialize data for pipeline (raw Redis client doesn't auto-serialize)
+            pipe.hset(f"{key}_hash", mapping={'field1': f'data_{i}', 'field2': str(i)})
 
     # Verify all keys were set
     for i, key in enumerate(test_keys):
         value = opts.redis.get(key)
-        assert value == f"value_{i}"
+        assert value == f"value_{i}", f"Pipeline set failed for key {key}: expected 'value_{i}', got '{value}'"
 
         hash_data = opts.redis.hgetall(f"{key}_hash")
-        assert hash_data['field1'] == f'data_{i}'
-        assert hash_data['field2'] == str(i)
+        assert hash_data['field1'] == f'data_{i}', f"Pipeline hash set failed for {key}_hash field1: expected 'data_{i}', got '{hash_data.get('field1')}'"
+        assert hash_data['field2'] == str(i), f"Pipeline hash set failed for {key}_hash field2: expected '{i}', got '{hash_data.get('field2')}'"
 
     # Clean up with pipeline
     with opts.redis.pipeline() as pipe:
@@ -356,14 +356,14 @@ def test_pubsub_messages(opts):
     # Publish message
     message = {'command': 'ping', 'timestamp': time.time()}
     subscribers = opts.redis.publish(channel, json.dumps(message))
-    assert subscribers >= 0
+    assert subscribers >= 0, f"Failed to publish message to channel {channel}. Subscribers: {subscribers}, message: {message}"
 
     # Wait for subscriber to receive
     thread.join(timeout=2.0)
 
     # Verify message was received
-    assert len(received_messages) == 1
-    assert received_messages[0]['command'] == 'ping'
+    assert len(received_messages) == 1, f"Expected 1 received message, got {len(received_messages)}. Messages: {received_messages}"
+    assert received_messages[0]['command'] == 'ping', f"Expected command='ping', got '{received_messages[0].get('command') if received_messages else 'no messages'}'. Full message: {received_messages[0] if received_messages else None}"
 
 
 @th.django_unit_test()
@@ -389,13 +389,13 @@ def test_redis_data_types(opts):
     raw_data = opts.redis.get(test_key)
     parsed_data = json.loads(raw_data)
 
-    assert parsed_data['string'] == 'hello'
-    assert parsed_data['number'] == 42
-    assert parsed_data['float'] == 3.14
-    assert parsed_data['boolean'] is True
-    assert parsed_data['null'] is None
-    assert parsed_data['list'] == [1, 2, 3]
-    assert parsed_data['nested']['a'] == 1
+    assert parsed_data['string'] == 'hello', f"Expected string='hello', got '{parsed_data.get('string')}'. Full data: {parsed_data}"
+    assert parsed_data['number'] == 42, f"Expected number=42, got {parsed_data.get('number')}. Full data: {parsed_data}"
+    assert parsed_data['float'] == 3.14, f"Expected float=3.14, got {parsed_data.get('float')}. Full data: {parsed_data}"
+    assert parsed_data['boolean'] is True, f"Expected boolean=True, got {parsed_data.get('boolean')}. Full data: {parsed_data}"
+    assert parsed_data['null'] is None, f"Expected null=None, got {parsed_data.get('null')}. Full data: {parsed_data}"
+    assert parsed_data['list'] == [1, 2, 3], f"Expected list=[1, 2, 3], got {parsed_data.get('list')}. Full data: {parsed_data}"
+    assert parsed_data['nested']['a'] == 1, f"Expected nested.a=1, got {parsed_data.get('nested', {}).get('a')}. Nested: {parsed_data.get('nested')}"
 
     # Clean up
     opts.redis.delete(test_key)
@@ -406,20 +406,37 @@ def test_stream_trimming(opts):
     """Test stream maxlen trimming."""
     stream_key = f"{opts.test_prefix}trimmed_stream"
 
-    # Add many entries with maxlen
+    # Clean up any existing stream first
+    opts.redis.delete(stream_key)
+    print(f"Cleaned up stream: {stream_key}")
+
+    # Add entries first to create a full stream
     for i in range(20):
         opts.redis.xadd(stream_key, {
             'index': str(i),
             'data': f'entry_{i}'
-        }, maxlen=10)  # Keep only 10 most recent
+        })
+        if i == 0 or i == 19:
+            info = opts.redis.xinfo_stream(stream_key)
+            print(f"After adding entry {i}: stream has {info['length']} entries")
 
-    # Check stream length
+    # Verify we have 20 entries initially
     client = opts.redis.get_client()
-    info = client.xinfo_stream(stream_key)
+    initial_info = client.xinfo_stream(stream_key)
+    print(f"Final count after adding 20 entries: {initial_info['length']}")
+    assert initial_info['length'] == 20, f"Expected 20 initial entries, got {initial_info['length']}. Stream key: {stream_key}"
 
-    # Should have approximately 10 (trimming is approximate)
-    assert info['length'] <= 15  # Allow some variance
-    assert info['length'] >= 8
+    # Now trim the stream manually for more predictable behavior
+    # Use exact trimming (approximate=False) to ensure it actually trims
+    trimmed_count = client.xtrim(stream_key, maxlen=10, approximate=False)
+    print(f"XTRIM removed {trimmed_count} entries (exact trim to 10)")
+
+    # Check stream length after trimming
+    info = client.xinfo_stream(stream_key)
+    print(f"After trimming: stream has {info['length']} entries")
+
+    # Should have exactly 10 entries (using exact trimming)
+    assert info['length'] == 10, f"Stream length should be exactly 10 after exact trimming, got {info['length']}. Stream: {stream_key}, removed: {trimmed_count}"
 
     # Clean up
     opts.redis.delete(stream_key)

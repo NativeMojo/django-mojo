@@ -712,14 +712,6 @@ class JobEngine:
             # Still ACK to prevent stuck message
             self._ack_message(stream_key, msg_id)
 
-    def _execute_with_timeout(self, func: Callable, ctx: JobContext,
-                            timeout_seconds: int) -> bool:
-        """Execute a job in a subprocess with timeout."""
-        # TODO: Implement subprocess execution with hard timeout
-        # For now, fall back to direct execution
-        logit.warn(f"Subprocess execution not yet implemented for job {ctx.job_id}")
-        return self._execute_direct(func, ctx)
-
     def _mark_completed(self, job_id: str):
         """Mark a job as completed."""
         now = timezone.now()

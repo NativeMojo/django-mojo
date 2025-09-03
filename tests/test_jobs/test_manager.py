@@ -42,12 +42,12 @@ def test_manager_initialization(opts):
 
     # Create manager instance
     manager = JobManager()
-    assert manager.redis is not None
-    assert manager.keys is not None
+    assert manager.redis is not None, f"JobManager Redis adapter should not be None. Manager: {manager}, redis: {manager.redis}"
+    assert manager.keys is not None, f"JobManager keys should not be None. Manager: {manager}, keys: {manager.keys}"
 
     # Test singleton pattern
     manager2 = get_manager()
-    assert isinstance(manager2, JobManager)
+    assert isinstance(manager2, JobManager), f"get_manager() should return JobManager instance, got {type(manager2)}. Instance: {manager2}"
 
 
 @th.django_unit_test()
@@ -71,12 +71,12 @@ def test_queue_state_monitoring(opts):
     # Get queue state
     state = manager.get_queue_state(opts.test_channel)
 
-    assert state['channel'] == opts.test_channel
-    assert 'stream_length' in state
-    assert 'scheduled_count' in state
-    assert 'pending_count' in state
-    assert 'runners' in state
-    assert 'consumer_groups' in state
+    assert state['channel'] == opts.test_channel, f"Expected channel='{opts.test_channel}', got '{state.get('channel')}'. Full state: {state}"
+    assert 'stream_length' in state, f"Missing 'stream_length' in queue state. Available keys: {list(state.keys())}, state: {state}"
+    assert 'scheduled_count' in state, f"Missing 'scheduled_count' in queue state. Available keys: {list(state.keys())}, state: {state}"
+    assert 'pending_count' in state, f"Missing 'pending_count' in queue state. Available keys: {list(state.keys())}, state: {state}"
+    assert 'runners' in state, f"Missing 'runners' in queue state. Available keys: {list(state.keys())}, state: {state}"
+    assert 'consumer_groups' in state, f"Missing 'consumer_groups' in queue state. Available keys: {list(state.keys())}, state: {state}"
 
 
 @th.django_unit_test()
@@ -111,10 +111,10 @@ def test_runner_tracking(opts):
             test_runner = runner
             break
 
-    assert test_runner is not None
-    assert test_runner['jobs_processed'] == 5
-    assert test_runner['jobs_failed'] == 1
-    assert test_runner['alive'] is True
+    assert test_runner is not None, f"Test runner '{runner_id}' not found in runners list. Found runners: {[r.get('runner_id') for r in runners]}, all runners: {runners}"
+    assert test_runner['jobs_processed'] == 5, f"Expected jobs_processed=5, got {test_runner.get('jobs_processed')}. Runner data: {test_runner}"
+    assert test_runner['jobs_failed'] == 1, f"Expected jobs_failed=1, got {test_runner.get('jobs_failed')}. Runner data: {test_runner}"
+    assert test_runner['alive'] is True, f"Expected runner to be alive=True, got {test_runner.get('alive')}. Runner data: {test_runner}"
 
     # Clean up
     opts.redis.delete(hb_key)
@@ -156,12 +156,12 @@ def test_job_status_retrieval(opts):
     # Get status through manager
     status = manager.job_status(job.id)
 
-    assert status is not None
-    assert status['id'] == job.id
-    assert status['status'] == 'running'
-    assert status['channel'] == opts.test_channel
-    assert 'events' in status
-    assert len(status['events']) >= 2
+    assert status is not None, f"Job status should not be None for job {job.id}. Manager: {manager}"
+    assert status['id'] == job.id, f"Expected job ID '{job.id}', got '{status.get('id')}'. Full status: {status}"
+    assert status['status'] == 'running', f"Expected status='running', got '{status.get('status')}'. Job: {job.id}, full status: {status}"
+    assert status['channel'] == opts.test_channel, f"Expected channel='{opts.test_channel}', got '{status.get('channel')}'. Job: {job.id}, status: {status}"
+    assert 'events' in status, f"Missing 'events' in job status. Available keys: {list(status.keys())}, job: {job.id}, status: {status}"
+    assert len(status['events']) >= 2, f"Expected >=2 events, got {len(status.get('events', []))}. Job: {job.id}, events: {status.get('events')}"
 
 
 @th.django_unit_test()
@@ -183,15 +183,15 @@ def test_job_cancellation_via_manager(opts):
 
     # Cancel through manager
     result = manager.cancel_job(job.id)
-    assert result is True
+    assert result is True, f"Job cancellation should succeed, got {result}. Job: {job.id}, manager: {manager}"
 
     # Verify cancellation
     job.refresh_from_db()
-    assert job.cancel_requested is True
+    assert job.cancel_requested is True, f"Job cancel_requested should be True after cancellation, got {job.cancel_requested}. Job: {job.id}, status: {job.status}"
 
     # Try cancelling non-existent job
     result = manager.cancel_job('nonexistent123')
-    assert result is False
+    assert result is False, f"Cancelling non-existent job should return False, got {result}. Job ID: 'nonexistent123'"
 
 
 @th.django_unit_test()
@@ -219,13 +219,13 @@ def test_job_retry_functionality(opts):
 
     # Should reset the job for retry
     job.refresh_from_db()
-    assert job.status == 'pending'
-    assert job.attempt == 0
-    assert job.last_error == ''
+    assert job.status == 'pending', f"Expected job status='pending' after retry, got '{job.status}'. Job: {job.id}, retry result: {result}"
+    assert job.attempt == 0, f"Expected attempt=0 after retry reset, got {job.attempt}. Job: {job.id}"
+    assert job.last_error == '', f"Expected last_error to be cleared after retry, got '{job.last_error}'. Job: {job.id}"
 
     # If delay was specified, run_at should be set
     if result:
-        assert job.run_at is not None
+        assert job.run_at is not None, f"Expected run_at to be set when retry with delay succeeds. Job: {job.id}, run_at: {job.run_at}, delay: 5s"
 
 
 @th.django_unit_test()
@@ -272,13 +272,13 @@ def test_system_statistics(opts):
     # Get stats
     stats = manager.get_stats()
 
-    assert 'totals' in stats
-    assert stats['totals']['completed'] >= 1
-    assert stats['totals']['failed'] >= 1
-    assert stats['totals']['running'] >= 1
-    assert 'channels' in stats
-    assert 'runners' in stats
-    assert 'scheduler' in stats
+    assert 'totals' in stats, f"Missing 'totals' in system stats. Available keys: {list(stats.keys())}, stats: {stats}"
+    assert stats['totals']['completed'] >= 1, f"Expected >=1 completed jobs, got {stats['totals'].get('completed')}. Totals: {stats['totals']}"
+    assert stats['totals']['failed'] >= 1, f"Expected >=1 failed jobs, got {stats['totals'].get('failed')}. Totals: {stats['totals']}"
+    assert stats['totals']['running'] >= 1, f"Expected >=1 running jobs, got {stats['totals'].get('running')}. Totals: {stats['totals']}"
+    assert 'channels' in stats, f"Missing 'channels' in system stats. Available keys: {list(stats.keys())}, stats: {stats}"
+    assert 'runners' in stats, f"Missing 'runners' in system stats. Available keys: {list(stats.keys())}, stats: {stats}"
+    assert 'scheduler' in stats, f"Missing 'scheduler' in system stats. Available keys: {list(stats.keys())}, stats: {stats}"
 
 
 @th.django_unit_test()
@@ -294,8 +294,8 @@ def test_scheduler_lock_mechanism(opts):
 
     # Acquire lock
     acquired = sched1._acquire_lock()
-    assert acquired is True
-    assert sched1.has_lock is True
+    assert acquired is True, f"First scheduler should acquire lock successfully, got {acquired}. Scheduler: {sched1.scheduler_id}"
+    assert sched1.has_lock is True, f"First scheduler should have lock after acquiring, got {sched1.has_lock}. Scheduler: {sched1.scheduler_id}"
 
     # Second scheduler should fail
     sched2 = Scheduler(
@@ -303,16 +303,16 @@ def test_scheduler_lock_mechanism(opts):
         scheduler_id='scheduler_2'
     )
     acquired = sched2._acquire_lock()
-    assert acquired is False
-    assert sched2.has_lock is False
+    assert acquired is False, f"Second scheduler should fail to acquire lock, got {acquired}. Scheduler: {sched2.scheduler_id}, first has lock: {sched1.has_lock}"
+    assert sched2.has_lock is False, f"Second scheduler should not have lock after failed acquire, got {sched2.has_lock}. Scheduler: {sched2.scheduler_id}"
 
     # Release from first
     sched1._release_lock()
-    assert sched1.has_lock is False
+    assert sched1.has_lock is False, f"First scheduler should not have lock after release, got {sched1.has_lock}. Scheduler: {sched1.scheduler_id}"
 
     # Now second can acquire
     acquired = sched2._acquire_lock()
-    assert acquired is True
+    assert acquired is True, f"Second scheduler should acquire lock after first releases, got {acquired}. Scheduler: {sched2.scheduler_id}"
 
     # Clean up
     sched2._release_lock()
@@ -348,11 +348,10 @@ def test_scheduler_job_movement(opts):
 
     # Job should be removed from ZSET
     remaining_score = opts.redis.get_client().zscore(sched_key, job.id)
-    assert remaining_score is None
+    assert remaining_score is None, f"Job {job.id} should be removed from scheduled ZSET after processing, but still has score {remaining_score}. ZSET: {sched_key}"
 
-    # Update scheduler count
-    scheduler.jobs_scheduled += 1
-    assert scheduler.jobs_scheduled == 1
+    # Verify scheduler count was automatically incremented by _process_channel
+    assert scheduler.jobs_scheduled == 1, f"Expected jobs_scheduled=1 after processing one job, got {scheduler.jobs_scheduled}. Scheduler: {scheduler}"
 
 
 @th.django_unit_test()
@@ -394,7 +393,7 @@ def test_stuck_job_detection(opts):
     # Should find our stuck job
     # Note: This might not work in all Redis versions
     if stuck:
-        assert len(stuck) >= 1
+        assert len(stuck) >= 1, f"Expected >=1 stuck jobs after simulating stuck consumer, got {len(stuck)}. Channel: {opts.test_channel}, stuck jobs: {stuck}"
 
     # Clean up
     opts.redis.delete(stream_key)
@@ -421,16 +420,16 @@ def test_channel_health_check(opts):
     # Get health status
     health = manager.get_channel_health(opts.test_channel)
 
-    assert health['channel'] == opts.test_channel
-    assert 'status' in health
-    assert 'messages' in health
-    assert 'runners' in health
-    assert 'alerts' in health
+    assert health['channel'] == opts.test_channel, f"Expected channel='{opts.test_channel}', got '{health.get('channel')}'. Health: {health}"
+    assert 'status' in health, f"Missing 'status' in channel health. Available keys: {list(health.keys())}, health: {health}"
+    assert 'messages' in health, f"Missing 'messages' in channel health. Available keys: {list(health.keys())}, health: {health}"
+    assert 'runners' in health, f"Missing 'runners' in channel health. Available keys: {list(health.keys())}, health: {health}"
+    assert 'alerts' in health, f"Missing 'alerts' in channel health. Available keys: {list(health.keys())}, health: {health}"
 
     # Status should reflect job count
     if health['messages']['unclaimed'] > 0 and health['runners']['active'] == 0:
         # Should have alert about no runners
-        assert len(health['alerts']) > 0
+        assert len(health['alerts']) > 0, f"Expected alerts when unclaimed messages with no active runners. Health: {health}"
 
 
 @th.django_unit_test()
@@ -480,9 +479,9 @@ def test_runner_control_commands(opts):
     thread.join(timeout=2.0)
 
     # Verify command was received and responded
-    assert command_received['flag'] is True
-    assert command_received['command'] == 'ping'
-    assert result is True  # Got pong response
+    assert command_received['flag'] is True, f"Command should have been received by runner. Command data: {command_received}, runner: {runner_id}"
+    assert command_received['command'] == 'ping', f"Expected command='ping', got '{command_received['command']}'. Runner: {runner_id}, command data: {command_received}"
+    assert result is True, f"Ping should return True when pong response received, got {result}. Runner: {runner_id}, command data: {command_received}"
 
 
 @th.django_unit_test()
@@ -498,4 +497,4 @@ def test_cleanup_manager_data(opts):
     opts.redis.delete(opts.keys.sched(opts.test_channel))
     opts.redis.delete(opts.keys.scheduler_lock())
 
-    print(f"Cleaned up {deleted_jobs} manager test jobs")
+    # print(f"Cleaned up {deleted_jobs} manager test jobs")

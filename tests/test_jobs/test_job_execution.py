@@ -83,22 +83,22 @@ def test_simple_job_execution_pattern(opts):
         body = job.payload.get('body', '')
 
         # Check for cancellation
-        if job.cancel_requested:
+        if job.check_cancel_requested():
             job.metadata['cancelled'] = True
             job.metadata['cancelled_at'] = datetime.now(timezone.utc).isoformat()
             return "cancelled"
-
+        time.sleep(0.01)
         sent_count = 0
         failed_recipients = []
 
         for recipient in recipients:
             try:
                 # Simulate sending email
-                print(f"Sending email to {recipient}")
+                # print(f"Sending email to {recipient}")
                 sent_count += 1
 
                 # Check cancellation periodically for long lists
-                if sent_count % 10 == 0 and job.cancel_requested:
+                if sent_count % 10 == 0 and job.check_cancel_requested():
                     job.metadata['cancelled_at_recipient'] = sent_count
                     break
 
@@ -117,10 +117,10 @@ def test_simple_job_execution_pattern(opts):
     # Execute handler
     result = send_email(job)
 
-    assert result == "completed"
-    assert job.metadata['sent_count'] == 1
-    assert job.metadata['failed_count'] == 0
-    assert 'completed_at' in job.metadata
+    assert result == "completed", f"Job execution failed: expected 'completed', got '{result}'. Job: {job.id}, metadata: {job.metadata}"
+    assert job.metadata['sent_count'] == 1, f"Expected sent_count=1, got {job.metadata.get('sent_count')}. Full metadata: {job.metadata}"
+    assert job.metadata['failed_count'] == 0, f"Expected failed_count=0, got {job.metadata.get('failed_count')}. Full metadata: {job.metadata}"
+    assert 'completed_at' in job.metadata, f"Missing 'completed_at' in job metadata. Available keys: {list(job.metadata.keys())}"
 
     # Simulate engine marking as completed
     job.status = 'completed'
@@ -135,8 +135,8 @@ def test_simple_job_execution_pattern(opts):
         runner_id=job.runner_id
     )
 
-    assert job.is_terminal is True
-    assert job.duration_ms > 0
+    assert job.is_terminal is True, f"Job should be terminal but is_terminal={job.is_terminal}. Job status: {job.status}, finished_at: {job.finished_at}"
+    assert job.duration_ms > 0, f"Job duration should be > 0, got {job.duration_ms}ms. Started: {job.started_at}, Finished: {job.finished_at}"
 
 
 @th.django_unit_test()
@@ -176,7 +176,7 @@ def test_job_with_cancellation_check(opts):
 
             while processed < total_size:
                 # Check for cancellation
-                if job.cancel_requested:
+                if job.check_cancel_requested():
                     job.metadata['cancelled'] = True
                     job.metadata['processed_bytes'] = processed
                     job.metadata['cancelled_at'] = datetime.now(timezone.utc).isoformat()
@@ -207,10 +207,10 @@ def test_job_with_cancellation_check(opts):
     # Execute with cancellation
     result = process_file_upload(job)
 
-    assert result == "cancelled"
-    assert job.metadata['cancelled'] is True
-    assert 'processed_bytes' in job.metadata
-    assert job.metadata['processed_bytes'] < 1000  # Didn't complete
+    assert result == "cancelled", f"Expected job to be cancelled, got '{result}'. Job: {job.id}, cancel_requested: {job.check_cancel_requested()}, metadata: {job.metadata}"
+    assert job.metadata['cancelled'] is True, f"Expected cancelled=True in metadata, got {job.metadata.get('cancelled')}. Full metadata: {job.metadata}"
+    assert 'processed_bytes' in job.metadata, f"Missing 'processed_bytes' in job metadata. Available keys: {list(job.metadata.keys())}"
+    assert job.metadata['processed_bytes'] < 1000, f"Expected processed_bytes < 1000 (incomplete), got {job.metadata.get('processed_bytes')}. Job was cancelled but processed too much data"
 
 
 @th.django_unit_test()
@@ -253,7 +253,7 @@ def test_job_error_handling_and_retry(opts):
     # Execute and handle failure
     try:
         result = fetch_external_api(job)
-        assert False, "Should have raised exception"
+        assert False, f"Expected exception but got result: {result}. Job: {job.id}, func: {job.func}, payload: {job.payload}"
     except Exception as e:
         # This is what job_engine.py does on failure
         job.last_error = str(e)
@@ -287,9 +287,9 @@ def test_job_error_handling_and_retry(opts):
                 details={'retry_at': job.run_at.isoformat(), 'backoff': jitter}
             )
 
-            assert job.status == 'pending'
-            assert job.run_at is not None
-            assert job.run_at > timezone.now()
+            assert job.status == 'pending', f"Expected status='pending' after retry setup, got '{job.status}'. Job: {job.id}, attempt: {job.attempt}, max_retries: {job.max_retries}"
+            assert job.run_at is not None, f"Expected run_at to be set for retry, got None. Job: {job.id}, attempt: {job.attempt}"
+            assert job.run_at > timezone.now(), f"Expected run_at to be in future, got {job.run_at} (now: {timezone.now()}). Job: {job.id}"
 
         else:
             # Max retries exceeded
@@ -306,7 +306,7 @@ def test_job_error_handling_and_retry(opts):
                 details={'max_retries_exceeded': True}
             )
 
-            assert job.status == 'failed'
+            assert job.status == 'failed', f"Expected status='failed' after max retries exceeded, got '{job.status}'. Job: {job.id}, attempt: {job.attempt}, max_retries: {job.max_retries}"
 
 
 @th.django_unit_test()
@@ -320,8 +320,8 @@ def test_dynamic_function_loading(opts):
 
     try:
         func = load_job_function(func_path)
-        assert callable(func)
-        assert func.__name__ == 'send_email'
+        assert callable(func), f"Expected loaded function to be callable, got {type(func)} for path: {func_path}"
+        assert func.__name__ == 'send_email', f"Expected function name 'send_email', got '{func.__name__}' for path: {func_path}"
     except ImportError as e:
         # If examples aren't available, test with a mock
         print(f"Could not load real function: {e}")
@@ -329,9 +329,9 @@ def test_dynamic_function_loading(opts):
     # Test invalid function path
     try:
         func = load_job_function('invalid.module.nonexistent')
-        assert False, "Should have raised ImportError"
+        assert False, f"Expected ImportError for invalid function path 'invalid.module.nonexistent', but got function: {func}"
     except ImportError as e:
-        assert "Cannot load job function" in str(e)
+        assert "Cannot load job function" in str(e), f"Expected error message to contain 'Cannot load job function', got: {str(e)}"
 
 
 @th.django_unit_test()
@@ -375,7 +375,7 @@ def test_job_progress_updates(opts):
 
         for i, step in enumerate(steps):
             # Check cancellation
-            if job.cancel_requested:
+            if job.check_cancel_requested():
                 job.metadata['cancelled_at_step'] = step
                 return "cancelled"
 
@@ -399,10 +399,10 @@ def test_job_progress_updates(opts):
     # Execute
     result = generate_report(job)
 
-    assert result == "completed"
-    assert job.metadata['progress'] == "100%"
-    assert job.metadata['current_step'] == 'Creating output file'
-    assert 'report_file' in job.metadata
+    assert result == "completed", f"Report generation failed: expected 'completed', got '{result}'. Job: {job.id}, metadata: {job.metadata}"
+    assert job.metadata['progress'] == "100%", f"Expected progress='100%', got '{job.metadata.get('progress')}'. Job: {job.id}, metadata: {job.metadata}"
+    assert job.metadata['current_step'] == 'Creating output file', f"Expected current_step='Creating output file', got '{job.metadata.get('current_step')}'. Job: {job.id}"
+    assert 'report_file' in job.metadata, f"Missing 'report_file' in job metadata. Available keys: {list(job.metadata.keys())}. Job: {job.id}"
 
 
 @th.django_unit_test()
@@ -436,8 +436,8 @@ def test_job_expiration_check(opts):
         # Would also ACK message in real engine
         # self._ack_message(stream_key, msg_id)
 
-    assert job.status == 'expired'
-    assert job.is_terminal is True
+    assert job.status == 'expired', f"Expected status='expired' for expired job, got '{job.status}'. Job: {job.id}, expires_at: {job.expires_at}, now: {timezone.now()}"
+    assert job.is_terminal is True, f"Expired job should be terminal but is_terminal={job.is_terminal}. Job status: {job.status}, finished_at: {job.finished_at}"
 
 
 @th.django_unit_test()
@@ -480,15 +480,15 @@ def test_broadcast_job_execution(opts):
     # Execute on this "runner"
     result = broadcast_notification(job)
 
-    assert result == "broadcast_completed"
-    assert len(job.metadata['executed_by']) == 1
-    assert job.metadata['executed_by'][0]['runner'] == 'runner_001'
+    assert result == "broadcast_completed", f"Broadcast job failed: expected 'broadcast_completed', got '{result}'. Job: {job.id}, broadcast: {job.broadcast}, metadata: {job.metadata}"
+    assert len(job.metadata['executed_by']) == 1, f"Expected 1 execution entry, got {len(job.metadata.get('executed_by', []))}. Job: {job.id}, executed_by: {job.metadata.get('executed_by')}"
+    assert job.metadata['executed_by'][0]['runner'] == 'runner_001', f"Expected runner 'runner_001', got '{job.metadata['executed_by'][0].get('runner')}'. Full entry: {job.metadata['executed_by'][0]}"
 
     # Simulate another runner executing
     job.runner_id = 'runner_002'
     result = broadcast_notification(job)
 
-    assert len(job.metadata['executed_by']) == 2
+    assert len(job.metadata['executed_by']) == 2, f"Expected 2 execution entries after second runner, got {len(job.metadata.get('executed_by', []))}. Job: {job.id}, executed_by: {job.metadata.get('executed_by')}"
 
 
 @th.django_unit_test()
@@ -534,7 +534,7 @@ def test_job_with_database_operations(opts):
         # Simulate batch processing
         while batch_count < 3:  # Limit for test
             # Check for cancellation
-            if job.cancel_requested:
+            if job.check_cancel_requested():
                 job.metadata['cancelled'] = True
                 job.metadata['deleted_count'] = deleted_count
                 return "cancelled"
@@ -564,17 +564,17 @@ def test_job_with_database_operations(opts):
     # Execute
     result = cleanup_old_records(job)
 
-    assert result == "completed"
-    assert job.metadata['batch_count'] == 3
-    assert job.metadata['total_deleted'] == 300  # 3 batches * 100
-    assert job.metadata['dry_run'] is True
+    assert result == "completed", f"Database cleanup job failed: expected 'completed', got '{result}'. Job: {job.id}, payload: {job.payload}, metadata: {job.metadata}"
+    assert job.metadata['batch_count'] == 3, f"Expected batch_count=3, got {job.metadata.get('batch_count')}. Job: {job.id}, metadata: {job.metadata}"
+    assert job.metadata['total_deleted'] == 300, f"Expected total_deleted=300 (3 batches * 100), got {job.metadata.get('total_deleted')}. Job: {job.id}, metadata: {job.metadata}"
+    assert job.metadata['dry_run'] is True, f"Expected dry_run=True, got {job.metadata.get('dry_run')}. Job: {job.id}, payload: {job.payload}"
 
 
 @th.django_unit_test()
 def test_job_execution_wrapper_pattern(opts):
     """Test the full execution wrapper pattern from job_engine.py."""
     from mojo.apps.jobs.models import Job, JobEvent
-    from django.db import transaction
+    from django.db import transaction, close_old_connections
 
     # Create job
     job_id = uuid.uuid4().hex
@@ -667,10 +667,10 @@ def test_job_execution_wrapper_pattern(opts):
 
     # Verify execution
     job.refresh_from_db()
-    assert job.status == 'completed'
-    assert job.metadata['executed'] is True
-    assert job.attempt == 1
-    assert job.runner_id == 'test_runner'
+    assert job.status == 'completed', f"Expected job status='completed', got '{job.status}'. Job: {job.id}, started_at: {job.started_at}, finished_at: {job.finished_at}"
+    assert job.metadata['executed'] is True, f"Expected executed=True in metadata, got {job.metadata.get('executed')}. Job: {job.id}, metadata: {job.metadata}"
+    assert job.attempt == 1, f"Expected attempt=1, got {job.attempt}. Job: {job.id}, max_retries: {job.max_retries}"
+    assert job.runner_id == 'test_runner', f"Expected runner_id='test_runner', got '{job.runner_id}'. Job: {job.id}"
 
 
 @th.django_unit_test()
@@ -687,5 +687,5 @@ def test_cleanup_execution_data(opts):
         opts.redis.delete(opts.keys.stream_broadcast(channel))
         opts.redis.delete(opts.keys.sched(channel))
 
-    print(f"Cleaned up {deleted_jobs} execution test jobs")
-    print(f"Total test executions: {opts.execution_count}")
+    # print(f"Cleaned up {deleted_jobs} execution test jobs")
+    # print(f"Total test executions: {opts.execution_count}")

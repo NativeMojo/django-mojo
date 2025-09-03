@@ -6,7 +6,6 @@ from testit import helpers as th
 from datetime import datetime, timedelta
 from django.utils import timezone
 import uuid
-import json
 
 
 @th.django_unit_setup()
@@ -558,7 +557,6 @@ def test_payload_validation(opts):
     """Test payload size validation."""
     from mojo.apps.jobs import publish
     from django.conf import settings
-    import json
 
     # Get max size from settings
     max_bytes = getattr(settings, 'JOBS_PAYLOAD_MAX_BYTES', 16384)
@@ -616,5 +614,3 @@ def test_cleanup(opts):
         opts.redis.delete(opts.keys.stream(channel))
         opts.redis.delete(opts.keys.stream_broadcast(channel))
         opts.redis.delete(opts.keys.sched(channel))
-
-    print(f"Cleaned up {deleted_jobs} test jobs")

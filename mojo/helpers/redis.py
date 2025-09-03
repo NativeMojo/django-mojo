@@ -1,10 +1,500 @@
-from redis import ConnectionPool, StrictRedis
+"""
+Redis connection pooling and typed operations for the Mojo framework.
+Provides both simple connections and a full-featured adapter with type safety.
+"""
+import json
+from typing import Any, Dict, List, Optional, Tuple, Union
+from contextlib import contextmanager
+
+import redis
+from redis import ConnectionPool, Redis
+from redis.exceptions import ResponseError
+
 from mojo.helpers.settings import settings
+from mojo.helpers import logit
+
+# Global connection pool
 REDIS_POOL = None
 
 
+def _decode_redis_value(value):
+    """
+    Recursively decode Redis byte values to strings.
+
+    Args:
+        value: Redis return value (may contain bytes)
+
+    Returns:
+        Decoded value with bytes converted to strings
+    """
+    if isinstance(value, bytes):
+        return value.decode('utf-8')
+    elif isinstance(value, dict):
+        return {
+            _decode_redis_value(k): _decode_redis_value(v)
+            for k, v in value.items()
+        }
+    elif isinstance(value, (list, tuple)):
+        decoded = [_decode_redis_value(item) for item in value]
+        return tuple(decoded) if isinstance(value, tuple) else decoded
+    else:
+        return value
+
+
 def get_connection():
+    """
+    Get a Redis connection using shared connection pooling.
+
+    Returns:
+        Redis client instance
+    """
     global REDIS_POOL
     if REDIS_POOL is None:
         REDIS_POOL = ConnectionPool(**settings.REDIS_DB)
-    return StrictRedis(connection_pool=REDIS_POOL)
+    return Redis(connection_pool=REDIS_POOL)
+
+
+class RedisAdapter:
+    """
+    Redis adapter with typed operations and automatic serialization.
+    Uses the framework's connection pooling via get_connection().
+    """
+
+    def get_client(self) -> Redis:
+        """
+        Get a Redis client instance using framework connection pooling.
+
+        Returns:
+            Redis client
+        """
+        return get_connection()
+
+    @contextmanager
+    def pipeline(self, transaction: bool = True):
+        """
+        Context manager for Redis pipeline operations.
+
+        Args:
+            transaction: Whether to use MULTI/EXEC transaction
+
+        Yields:
+            Redis pipeline object
+        """
+        pipe = self.get_client().pipeline(transaction=transaction)
+        try:
+            yield pipe
+            pipe.execute()
+        except Exception as e:
+            logit.error(f"Pipeline execution failed: {e}")
+            raise
+        finally:
+            pipe.reset()
+
+    # Stream operations
+    def xadd(self, stream: str, fields: Dict[str, Any], id: str = '*',
+             maxlen: Optional[int] = None) -> str:
+        """
+        Add entry to a stream.
+
+        Args:
+            stream: Stream key
+            fields: Field-value pairs
+            id: Entry ID (default '*' for auto-generation)
+            maxlen: Trim stream to approximately this length
+
+        Returns:
+            Stream entry ID
+        """
+        # Serialize complex values to JSON
+        serialized = {}
+        for k, v in fields.items():
+            if isinstance(v, (dict, list)):
+                serialized[k] = json.dumps(v)
+            else:
+                serialized[k] = v
+
+        return self.get_client().xadd(
+            stream, serialized, id=id, maxlen=maxlen, approximate=False
+        )
+
+    def xreadgroup(self, group: str, consumer: str, streams: Dict[str, str],
+                   count: Optional[int] = None, block: Optional[int] = None) -> List[Tuple[str, List]]:
+        """
+        Read from streams as part of a consumer group.
+
+        Args:
+            group: Consumer group name
+            consumer: Consumer name
+            streams: Dict of stream names to IDs (use '>' for new messages)
+            count: Max messages to return
+            block: Block for this many milliseconds (None = don't block)
+
+        Returns:
+            List of (stream_name, messages) tuples with decoded strings
+        """
+        result = self.get_client().xreadgroup(
+            group, consumer, streams, count=count, block=block
+        )
+        return _decode_redis_value(result)
+
+    def xack(self, stream: str, group: str, *ids) -> int:
+        """
+        Acknowledge messages in a stream.
+
+        Args:
+            stream: Stream key
+            group: Consumer group name
+            *ids: Message IDs to acknowledge
+
+        Returns:
+            Number of messages acknowledged
+        """
+        return self.get_client().xack(stream, group, *ids)
+
+    def xclaim(self, stream: str, group: str, consumer: str, min_idle: int,
+               *ids, **kwargs) -> List:
+        """
+        Claim pending messages.
+
+        Args:
+            stream: Stream key
+            group: Consumer group name
+            consumer: Consumer claiming the messages
+            min_idle: Minimum idle time in milliseconds
+            *ids: Message IDs to claim
+            **kwargs: Additional options
+
+        Returns:
+            List of claimed messages with decoded strings
+        """
+        result = self.get_client().xclaim(
+            stream, group, consumer, min_idle, *ids, **kwargs
+        )
+        return _decode_redis_value(result)
+
+    def xpending(self, stream: str, group: str) -> Dict[str, Any]:
+        """
+        Get pending message summary for a consumer group.
+
+        Args:
+            stream: Stream key
+            group: Consumer group name
+
+        Returns:
+            Pending message summary with decoded strings
+        """
+        result = self.get_client().xpending(stream, group)
+        return _decode_redis_value(result)
+
+    def xinfo_stream(self, stream: str) -> Dict[str, Any]:
+        """
+        Get stream information.
+
+        Args:
+            stream: Stream key
+
+        Returns:
+            Stream info dict with decoded strings
+        """
+        result = self.get_client().xinfo_stream(stream)
+        return _decode_redis_value(result)
+
+    def xgroup_create(self, stream: str, group: str, id: str = '0',
+                      mkstream: bool = True) -> bool:
+        """
+        Create a consumer group.
+
+        Args:
+            stream: Stream key
+            group: Consumer group name
+            id: Starting message ID
+            mkstream: Create stream if it doesn't exist
+
+        Returns:
+            True if created, False if already exists
+        """
+        try:
+            self.get_client().xgroup_create(
+                stream, group, id=id, mkstream=mkstream
+            )
+            return True
+        except ResponseError as e:
+            if "BUSYGROUP" in str(e):
+                # Group already exists
+                return False
+            raise
+
+    # ZSET operations
+    def zadd(self, key: str, mapping: Dict[str, float], **kwargs) -> int:
+        """
+        Add members to a sorted set.
+
+        Args:
+            key: ZSET key
+            mapping: Dict of member -> score
+            **kwargs: Additional options (NX, XX, CH, INCR)
+
+        Returns:
+            Number of elements added
+        """
+        return self.get_client().zadd(key, mapping, **kwargs)
+
+    def zpopmin(self, key: str, count: int = 1) -> List[Tuple[str, float]]:
+        """
+        Pop members with lowest scores.
+
+        Args:
+            key: ZSET key
+            count: Number of members to pop
+
+        Returns:
+            List of (member, score) tuples with decoded member names
+        """
+        result = self.get_client().zpopmin(key, count)
+        # Decode member names but keep scores as numbers
+        return [(member.decode('utf-8') if isinstance(member, bytes) else member, score)
+                for member, score in result]
+
+    def zcard(self, key: str) -> int:
+        """
+        Get sorted set cardinality.
+
+        Args:
+            key: ZSET key
+
+        Returns:
+            Number of members
+        """
+        return self.get_client().zcard(key)
+
+    # Hash operations
+    def hset(self, key: str, mapping: Dict[str, Any]) -> int:
+        """
+        Set hash fields.
+
+        Args:
+            key: Hash key
+            mapping: Field-value pairs
+
+        Returns:
+            Number of fields added
+        """
+        # Serialize complex values
+        serialized = {}
+        for k, v in mapping.items():
+            if v is None:
+                serialized[k] = ''
+            elif isinstance(v, bool):
+                serialized[k] = '1' if v else '0'
+            elif isinstance(v, (dict, list)):
+                serialized[k] = json.dumps(v)
+            else:
+                serialized[k] = str(v)
+
+        return self.get_client().hset(key, mapping=serialized)
+
+    def hget(self, key: str, field: str) -> Optional[str]:
+        """
+        Get hash field value.
+
+        Args:
+            key: Hash key
+            field: Field name
+
+        Returns:
+            Field value or None
+        """
+        value = self.get_client().hget(key, field)
+        return value.decode('utf-8') if value else None
+
+    def hgetall(self, key: str) -> Dict[str, str]:
+        """
+        Get all hash fields.
+
+        Args:
+            key: Hash key
+
+        Returns:
+            Dict of field -> value
+        """
+        raw = self.get_client().hgetall(key)
+        # Decode bytes to strings
+        return {
+            k.decode('utf-8'): v.decode('utf-8')
+            for k, v in raw.items()
+        }
+
+    def hdel(self, key: str, *fields) -> int:
+        """
+        Delete hash fields.
+
+        Args:
+            key: Hash key
+            *fields: Field names to delete
+
+        Returns:
+            Number of fields deleted
+        """
+        return self.get_client().hdel(key, *fields)
+
+    # Key operations
+    def set(self, key: str, value: Any, ex: Optional[int] = None,
+            px: Optional[int] = None, nx: bool = False, xx: bool = False) -> bool:
+        """
+        Set a key value.
+
+        Args:
+            key: Key name
+            value: Value to set
+            ex: Expire time in seconds
+            px: Expire time in milliseconds
+            nx: Only set if key doesn't exist
+            xx: Only set if key exists
+
+        Returns:
+            True if set, False otherwise
+        """
+        if isinstance(value, (dict, list)):
+            value = json.dumps(value)
+
+        result = self.get_client().set(
+            key, value, ex=ex, px=px, nx=nx, xx=xx
+        )
+        return result is True or (isinstance(result, bytes) and result == b'OK')
+
+    def get(self, key: str) -> Optional[str]:
+        """
+        Get a key value.
+
+        Args:
+            key: Key name
+
+        Returns:
+            Value or None
+        """
+        value = self.get_client().get(key)
+        return value.decode('utf-8') if value else None
+
+    def delete(self, *keys) -> int:
+        """
+        Delete keys.
+
+        Args:
+            *keys: Key names to delete
+
+        Returns:
+            Number of keys deleted
+        """
+        return self.get_client().delete(*keys)
+
+    def expire(self, key: str, seconds: int) -> bool:
+        """
+        Set key expiration.
+
+        Args:
+            key: Key name
+            seconds: TTL in seconds
+
+        Returns:
+            True if expiration was set
+        """
+        return self.get_client().expire(key, seconds)
+
+    def pexpire(self, key: str, milliseconds: int) -> bool:
+        """
+        Set key expiration in milliseconds.
+
+        Args:
+            key: Key name
+            milliseconds: TTL in milliseconds
+
+        Returns:
+            True if expiration was set
+        """
+        return self.get_client().pexpire(key, milliseconds)
+
+    def ttl(self, key: str) -> int:
+        """
+        Get key TTL in seconds.
+
+        Args:
+            key: Key name
+
+        Returns:
+            TTL in seconds (-2 if doesn't exist, -1 if no expiry)
+        """
+        return self.get_client().ttl(key)
+
+    def exists(self, *keys) -> int:
+        """
+        Check if keys exist.
+
+        Args:
+            *keys: Key names to check
+
+        Returns:
+            Number of keys that exist
+        """
+        return self.get_client().exists(*keys)
+
+    # Pub/Sub operations
+    def publish(self, channel: str, message: Union[str, Dict]) -> int:
+        """
+        Publish message to a channel.
+
+        Args:
+            channel: Channel name
+            message: Message to publish
+
+        Returns:
+            Number of subscribers that received the message
+        """
+        if isinstance(message, dict):
+            message = json.dumps(message)
+
+        return self.get_client().publish(channel, message)
+
+    def pubsub(self) -> redis.client.PubSub:
+        """
+        Get a pub/sub connection.
+
+        Returns:
+            PubSub object
+        """
+        return self.get_client().pubsub()
+
+    # Utility methods
+    def ping(self) -> bool:
+        """
+        Test Redis connection.
+
+        Returns:
+            True if connected
+        """
+        try:
+            return self.get_client().ping()
+        except Exception:
+            return False
+
+
+# Framework-level singleton
+_default_adapter = None
+
+
+def get_adapter() -> RedisAdapter:
+    """
+    Get the default Redis adapter instance.
+
+    Returns:
+        RedisAdapter instance
+    """
+    global _default_adapter
+    if not _default_adapter:
+        _default_adapter = RedisAdapter()
+    return _default_adapter
+
+
+def reset_adapter():
+    """Reset the default adapter (useful for testing)."""
+    global _default_adapter
+    _default_adapter = None
