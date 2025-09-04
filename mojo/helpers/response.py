@@ -8,6 +8,7 @@ class JsonResponse(HttpResponse):
             raise TypeError(
                 'In order to allow non-dict objects to be serialized set the '
                 'safe parameter to False.'
+                f'Invalid data type: {type(data)}'
             )
         kwargs.setdefault('content_type', 'application/json')
         if not isinstance(data, objict):

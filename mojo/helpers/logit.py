@@ -72,7 +72,7 @@ def debug(*args):
     global _debug_logger
     if _debug_logger is None:
         _debug_logger = get_logger("debug", "debug.log", debug=True)
-    _debug_logger.debug(*args)
+    _debug_logger.info(*args)
 
 def error(*args):
     """Log error messages to error.log"""
@@ -174,6 +174,9 @@ class Logger:
         self.logger.debug(self._build_log(*args))
 
     def warning(self, *args):
+        self.logger.warning(self._build_log(*args))
+
+    def warn(self, *args):
         self.logger.warning(self._build_log(*args))
 
     def error(self, *args):

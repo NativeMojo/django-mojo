@@ -4,7 +4,7 @@ from django.db import models
 from mojo.helpers.settings import settings
 from mojo.models import MojoModel
 from mojo.helpers import dates, request as rhelper
-from mojo.apps import tasks
+from mojo.apps import jobs
 from mojo.helpers.location.geolocation import refresh_geolocation_for_ip
 from fnmatch import filter
 
@@ -17,7 +17,7 @@ def trigger_refresh_task(ip_address):
     """
     Publishes a task to refresh the geolocation data for a given IP address.
     """
-    tasks.publish_local(refresh_geolocation_for_ip, ip_address)
+    jobs.publish_local(refresh_geolocation_for_ip, ip_address)
 
 
 class GeoLocatedIP(models.Model, MojoModel):

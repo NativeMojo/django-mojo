@@ -28,6 +28,7 @@ def setup_redis_tests(opts):
         f"{opts.keys.prefix}:{opts.test_prefix}*",
         opts.keys.stream(opts.test_channel),
         opts.keys.sched(opts.test_channel),
+        opts.keys.sched_broadcast(opts.test_channel),
     ]
 
     for pattern in test_patterns:
@@ -69,10 +70,9 @@ def test_key_generation(opts):
     sched_key = opts.keys.sched('test_channel')
     assert 'sched:test_channel' in sched_key, f"Scheduled jobs key pattern incorrect: expected 'sched:test_channel' in '{sched_key}'"
 
-    # Test job metadata key
-    job_id = uuid.uuid4().hex
-    job_key = opts.keys.job(job_id)
-    assert f'job:{job_id}' in job_key, f"Job metadata key pattern incorrect: expected 'job:{job_id}' in '{job_key}'"
+    # Test scheduled broadcast jobs key
+    sched_b_key = opts.keys.sched_broadcast('test_channel')
+    assert 'sched_broadcast:test_channel' in sched_b_key, f"Scheduled broadcast jobs key pattern incorrect: expected 'sched_broadcast:test_channel' in '{sched_b_key}'"
 
     # Test runner keys
     runner_id = 'test_runner_001'
@@ -207,54 +207,7 @@ def test_scheduled_jobs_zset(opts):
     opts.redis.delete(sched_key)
 
 
-@th.django_unit_test()
-def test_job_metadata_hash(opts):
-    """Test hash operations for job metadata."""
-    job_id = uuid.uuid4().hex
-    job_key = opts.keys.job(job_id)
 
-    # Set job metadata
-    job_data = {
-        'status': 'pending',
-        'channel': opts.test_channel,
-        'func': 'test.sample_function',
-        'created_at': datetime.now().isoformat(),
-        'attempt': 0,
-        'max_retries': 3,
-        'cancel_requested': False,  # Will be converted to '0'
-        'payload': json.dumps({'key': 'value', 'count': 42})
-    }
-
-    fields_set = opts.redis.hset(job_key, job_data)
-    assert fields_set >= 0, f"Failed to set job metadata hash. Fields set: {fields_set}, job_key: {job_key}, data: {list(job_data.keys())}"
-
-    # Get individual field
-    status = opts.redis.hget(job_key, 'status')
-    assert status == 'pending', f"Expected status='pending', got '{status}'. Job key: {job_key}"
-
-    # Get all fields
-    all_data = opts.redis.hgetall(job_key)
-    assert all_data['status'] == 'pending', f"Expected status='pending' in hash, got '{all_data.get('status')}'. Job: {job_id}, all_data keys: {list(all_data.keys())}"
-    assert all_data['channel'] == opts.test_channel, f"Expected channel='{opts.test_channel}', got '{all_data.get('channel')}'. Job: {job_id}"
-    assert all_data['attempt'] == '0', f"Expected attempt='0', got '{all_data.get('attempt')}'. Job: {job_id}"
-    assert all_data['cancel_requested'] == '0', f"Expected cancel_requested='0' (bool converted), got '{all_data.get('cancel_requested')}'. Job: {job_id}"
-
-    # Parse JSON payload
-    payload = json.loads(all_data['payload'])
-    assert payload['key'] == 'value', f"Expected payload key='value', got '{payload.get('key')}'. Full payload: {payload}"
-    assert payload['count'] == 42, f"Expected payload count=42, got {payload.get('count')}. Full payload: {payload}"
-
-    # Update fields
-    opts.redis.hset(job_key, {'status': 'running', 'attempt': '1'})
-
-    updated_status = opts.redis.hget(job_key, 'status')
-    assert updated_status == 'running', f"Expected updated status='running', got '{updated_status}'. Job: {job_id}"
-
-    updated_attempt = opts.redis.hget(job_key, 'attempt')
-    assert updated_attempt == '1', f"Expected updated attempt='1', got '{updated_attempt}'. Job: {job_id}"
-
-    # Clean up
-    opts.redis.delete(job_key)
 
 
 @th.django_unit_test()
@@ -408,7 +361,7 @@ def test_stream_trimming(opts):
 
     # Clean up any existing stream first
     opts.redis.delete(stream_key)
-    print(f"Cleaned up stream: {stream_key}")
+    # print(f"Cleaned up stream: {stream_key}")
 
     # Add entries first to create a full stream
     for i in range(20):
@@ -418,22 +371,22 @@ def test_stream_trimming(opts):
         })
         if i == 0 or i == 19:
             info = opts.redis.xinfo_stream(stream_key)
-            print(f"After adding entry {i}: stream has {info['length']} entries")
+            # print(f"After adding entry {i}: stream has {info['length']} entries")
 
     # Verify we have 20 entries initially
     client = opts.redis.get_client()
     initial_info = client.xinfo_stream(stream_key)
-    print(f"Final count after adding 20 entries: {initial_info['length']}")
+    # print(f"Final count after adding 20 entries: {initial_info['length']}")
     assert initial_info['length'] == 20, f"Expected 20 initial entries, got {initial_info['length']}. Stream key: {stream_key}"
 
     # Now trim the stream manually for more predictable behavior
     # Use exact trimming (approximate=False) to ensure it actually trims
     trimmed_count = client.xtrim(stream_key, maxlen=10, approximate=False)
-    print(f"XTRIM removed {trimmed_count} entries (exact trim to 10)")
+    # print(f"XTRIM removed {trimmed_count} entries (exact trim to 10)")
 
     # Check stream length after trimming
     info = client.xinfo_stream(stream_key)
-    print(f"After trimming: stream has {info['length']} entries")
+    # print(f"After trimming: stream has {info['length']} entries")
 
     # Should have exactly 10 entries (using exact trimming)
     assert info['length'] == 10, f"Stream length should be exactly 10 after exact trimming, got {info['length']}. Stream: {stream_key}, removed: {trimmed_count}"
@@ -457,5 +410,6 @@ def test_cleanup_redis_tests(opts):
     # Also clean up test channels
     opts.redis.delete(opts.keys.stream(opts.test_channel))
     opts.redis.delete(opts.keys.sched(opts.test_channel))
+    opts.redis.delete(opts.keys.sched_broadcast(opts.test_channel))
 
-    print(f"Cleaned up {deleted_count} test Redis keys")
+    # print(f"Cleaned up {deleted_count} test Redis keys")

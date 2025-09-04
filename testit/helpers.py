@@ -206,10 +206,24 @@ def get_mock_user():
     Returns:
         objict: A mock user object with basic attributes.
     """
+    from mojo.helpers import crypto
     user = objict()
     user.id = 1
     user.username = "mockuser"
     user.email = "mockuser@example.com"
     user.is_authenticated = True
+    user.password = crypto.random_string(16)
     user.has_permission = lambda perm: True
+    return user
+
+def get_admin_user():
+    """
+    Creates a mock admin user object.
+
+    Returns:
+        objict: A mock admin user object with basic attributes.
+    """
+    user = get_mock_user()
+    user.is_superuser = True
+    user.is_staff = True
     return user

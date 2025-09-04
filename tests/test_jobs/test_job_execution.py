@@ -36,6 +36,7 @@ def setup_execution_tests(opts):
             opts.redis.delete(opts.keys.stream(channel))
             opts.redis.delete(opts.keys.stream_broadcast(channel))
             opts.redis.delete(opts.keys.sched(channel))
+            opts.redis.delete(opts.keys.sched_broadcast(channel))
         except:
             pass
 
@@ -686,6 +687,7 @@ def test_cleanup_execution_data(opts):
         opts.redis.delete(opts.keys.stream(channel))
         opts.redis.delete(opts.keys.stream_broadcast(channel))
         opts.redis.delete(opts.keys.sched(channel))
+        opts.redis.delete(opts.keys.sched_broadcast(channel))
 
     # print(f"Cleaned up {deleted_jobs} execution test jobs")
     # print(f"Total test executions: {opts.execution_count}")

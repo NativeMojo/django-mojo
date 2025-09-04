@@ -40,6 +40,7 @@ def send_email(job: Job) -> str:
             # send_mail(recipient, subject, body, template)
             print(f"Sending email to {recipient}")
             sent_count += 1
+            time.sleep(2)
 
             # Check cancellation periodically for long lists
             if sent_count % 10 == 0 and job.cancel_requested:

@@ -1,16 +1,17 @@
 from mojo import decorators as md
 from mojo.helpers.response import JsonResponse
-from mojo.apps.jobs.models import Job, JobEvent
+from mojo.apps.jobs.models import Job
 from mojo.apps.jobs.manager import get_manager
-from mojo.apps.jobs.adapters import get_adapter
-from mojo.apps.jobs.keys import JobKeys
 from django.utils import timezone
 from django.db.models import Q
-from datetime import datetime, timedelta
+from mojo.apps.jobs.adapters import get_adapter
+from mojo.apps.jobs.keys import JobKeys
+
+from datetime import datetime
 
 
 # Get runtime configuration
-@md.GET('jobs/control/config')
+@md.GET('control/config')
 @md.requires_perms('manage_jobs')
 def on_get_config(request):
     """Get current jobs system configuration."""
@@ -53,12 +54,12 @@ def on_get_config(request):
 
 
 # Clear stuck jobs
-@md.POST('jobs/control/clear-stuck')
+@md.POST('control/clear-stuck')
 @md.requires_perms('manage_jobs')
 @md.requires_params('channel')
 def on_clear_stuck_jobs(request):
     """
-    Clear stuck jobs from a channel.
+    Clear stuck jobs from a channel using JobManager methods.
 
     Params:
         channel: Channel to clear stuck jobs from
@@ -69,71 +70,40 @@ def on_clear_stuck_jobs(request):
         idle_threshold_ms = int(request.DATA.get('idle_threshold_ms', 60000))
 
         manager = get_manager()
-        redis = get_adapter()
-        keys = JobKeys()
-
-        # Find stuck jobs
-        stuck = manager._find_stuck_jobs(channel, idle_threshold_ms)
-
-        if not stuck:
-            return JsonResponse({
-                'status': True,
-                'message': 'No stuck jobs found',
-                'cleared': 0
-            })
-
-        # Reclaim stuck jobs
-        stream_key = keys.stream(channel)
-        group_key = keys.group_workers(channel)
-        cleared = 0
-
-        for job_info in stuck:
-            try:
-                # Try to claim the message
-                claimed = redis.xclaim(
-                    stream_key,
-                    group_key,
-                    'reclaimer',
-                    idle_threshold_ms,
-                    job_info['message_id']
-                )
-
-                if claimed:
-                    # ACK to remove from pending
-                    redis.xack(stream_key, group_key, job_info['message_id'])
-                    cleared += 1
-
-                    # Update job status in DB
-                    # Extract job_id from message if possible
-                    for msg_id, data in claimed:
-                        job_id = data.get(b'job_id', b'').decode('utf-8')
-                        if job_id:
-                            try:
-                                job = Job.objects.get(id=job_id)
-                                if job.status == 'running':
-                                    job.status = 'failed'
-                                    job.last_error = f'Job was stuck (idle for {idle_threshold_ms}ms)'
-                                    job.finished_at = timezone.now()
-                                    job.save(update_fields=['status', 'last_error', 'finished_at'])
-
-                                    JobEvent.objects.create(
-                                        job=job,
-                                        channel=channel,
-                                        event='failed',
-                                        details={'reason': 'stuck', 'idle_ms': idle_threshold_ms}
-                                    )
-                            except Job.DoesNotExist:
-                                pass
-
-            except Exception as e:
-                # Log but continue with other stuck jobs
-                pass
+        result = manager.clear_stuck_jobs(channel, idle_threshold_ms=idle_threshold_ms)
 
         return JsonResponse({
             'status': True,
-            'message': f'Cleared {cleared} stuck jobs from {channel}',
-            'cleared': cleared,
-            'total_stuck': len(stuck)
+            'message': result.get('message', f'Cleared {result.get("cleared", 0)} stuck jobs from {channel}'),
+            'data': result
+        })
+
+    except Exception as e:
+        return JsonResponse({
+            'status': False,
+            'error': str(e)
+        }, status=400)
+
+
+# Add a simpler manual reclaim endpoint
+@md.POST('jobs/control/manual-reclaim')
+@md.requires_perms('manage_jobs')
+@md.requires_params('channel')
+def on_manual_reclaim_jobs(request):
+    """
+    Manually reclaim all pending jobs in a channel.
+    Uses the clear_stuck_jobs method from JobManager.
+    """
+    try:
+        channel = request.DATA['channel']
+
+        manager = get_manager()
+        result = manager.clear_stuck_jobs(channel, idle_threshold_ms=0)  # Clear all pending jobs
+
+        return JsonResponse({
+            'status': True,
+            'message': result.get('message', f'Manually reclaimed {result.get("cleared", 0)} jobs from {channel}'),
+            'data': result
         })
 
     except Exception as e:
@@ -144,53 +114,31 @@ def on_clear_stuck_jobs(request):
 
 
 # Purge old job data
-@md.POST('jobs/control/purge')
+@md.POST('control/purge')
 @md.requires_perms('manage_jobs')
 @md.requires_params('days_old')
 def on_purge_old_jobs(request):
     """
-    Purge old job data from the database.
-
-    Params:
-        days_old: Delete jobs older than this many days
-        status: Optional status filter (completed, failed, cancelled)
-        dry_run: If true, only count without deleting
+    Purge old job data via JobManager.
     """
     try:
         days_old = int(request.DATA['days_old'])
         status_filter = request.DATA.get('status')
-        dry_run = request.DATA.get('dry_run', False)
+        dry_run = bool(request.DATA.get('dry_run', False))
 
-        # Calculate cutoff date
-        cutoff = timezone.now() - timedelta(days=days_old)
+        manager = get_manager()
+        result = manager.purge_old_jobs(days_old=days_old, status=status_filter, dry_run=dry_run)
 
-        # Build query
-        query = Q(created__lt=cutoff)
-        if status_filter:
-            query &= Q(status=status_filter)
-
-        # Get jobs to delete
-        jobs_to_delete = Job.objects.filter(query)
-        count = jobs_to_delete.count()
-
-        if dry_run:
-            # Just return count
+        if result.get('status'):
             return JsonResponse({
                 'status': True,
-                'message': f'Would delete {count} jobs older than {days_old} days',
-                'count': count,
-                'dry_run': True
+                'data': result
             })
-
-        # Actually delete (cascades to JobEvent)
-        deleted, details = jobs_to_delete.delete()
-
-        return JsonResponse({
-            'status': True,
-            'message': f'Deleted {deleted} records older than {days_old} days',
-            'deleted': deleted,
-            'details': details
-        })
+        else:
+            return JsonResponse({
+                'status': False,
+                'error': result.get('error', 'Unknown error')
+            }, status=400)
 
     except Exception as e:
         return JsonResponse({
@@ -200,11 +148,11 @@ def on_purge_old_jobs(request):
 
 
 # Reset failed jobs
-@md.POST('jobs/control/reset-failed')
+@md.POST('control/reset-failed')
 @md.requires_perms('manage_jobs')
 def on_reset_failed_jobs(request):
     """
-    Reset failed jobs to pending status for retry.
+    Reset failed jobs to pending status for retry and requeue via JobManager.
 
     Params:
         channel: Optional channel filter
@@ -224,44 +172,36 @@ def on_reset_failed_jobs(request):
             since_dt = datetime.fromisoformat(since)
             query &= Q(created__gte=since_dt)
 
-        # Get failed jobs
-        failed_jobs = Job.objects.filter(query).order_by('-created')[:limit]
+        # Capture affected channels for requeue
+        affected_channels = list(
+            Job.objects.filter(query).values_list('channel', flat=True).distinct()
+        )
 
-        reset_count = 0
-        redis = get_adapter()
-        keys = JobKeys()
+        # Reset to pending in bulk
+        reset_qs = Job.objects.filter(query).order_by('-created')[:limit]
+        reset_count = reset_qs.update(
+            status='pending',
+            attempt=0,
+            last_error='',
+            stack_trace='',
+            run_at=None
+        )
 
-        for job in failed_jobs:
-            # Reset to pending
-            job.status = 'pending'
-            job.attempt = 0
-            job.last_error = ''
-            job.stack_trace = ''
-            job.run_at = None
-            job.save(update_fields=['status', 'attempt', 'last_error', 'stack_trace', 'run_at'])
+        # Requeue using JobManager
+        manager = get_manager()
+        requeue_results = []
 
-            # Re-queue in Redis
-            stream_key = keys.stream(job.channel)
-            redis.xadd(stream_key, {
-                'job_id': job.id,
-                'func': job.func,
-                'created': timezone.now().isoformat()
-            })
-
-            # Add event
-            JobEvent.objects.create(
-                job=job,
-                channel=job.channel,
-                event='retry',
-                details={'reset': True, 'original_status': 'failed'}
-            )
-
-            reset_count += 1
+        if channel:
+            requeue_results.append(manager.requeue_db_pending(channel, limit=reset_count))
+        else:
+            for ch in affected_channels:
+                requeue_results.append(manager.requeue_db_pending(ch, limit=None))
 
         return JsonResponse({
             'status': True,
             'message': f'Reset {reset_count} failed jobs to pending',
-            'reset_count': reset_count
+            'reset_count': reset_count,
+            'requeue': requeue_results
         })
 
     except Exception as e:
@@ -272,7 +212,7 @@ def on_reset_failed_jobs(request):
 
 
 # Clear Redis queues
-@md.POST('jobs/control/clear-queue')
+@md.POST('control/clear-queue')
 @md.requires_perms('manage_jobs')
 @md.requires_params('channel')
 def on_clear_queue(request):
@@ -294,36 +234,13 @@ def on_clear_queue(request):
                 'error': 'Must confirm with confirm="yes"'
             }, status=400)
 
-        redis = get_adapter()
-        keys = JobKeys()
-
-        # Delete streams
-        stream_key = keys.stream(channel)
-        broadcast_key = keys.stream_broadcast(channel)
-        sched_key = keys.sched(channel)
-
-        deleted_stream = redis.delete(stream_key)
-        deleted_broadcast = redis.delete(broadcast_key)
-        deleted_sched = redis.delete(sched_key)
-
-        # Update pending jobs in DB
-        pending_count = Job.objects.filter(
-            channel=channel,
-            status='pending'
-        ).update(
-            status='cancelled',
-            finished_at=timezone.now()
-        )
+        manager = get_manager()
+        result = manager.clear_channel(channel, cancel_db_pending=True)
 
         return JsonResponse({
-            'status': True,
+            'status': result.get('status', True),
             'message': f'Cleared queue for channel {channel}',
-            'deleted': {
-                'stream': bool(deleted_stream),
-                'broadcast': bool(deleted_broadcast),
-                'scheduled': bool(deleted_sched),
-                'pending_jobs': pending_count
-            }
+            'data': result
         })
 
     except Exception as e:
@@ -334,53 +251,44 @@ def on_clear_queue(request):
 
 
 # Get queue sizes
-@md.GET('jobs/control/queue-sizes')
+@md.GET('control/queue-sizes')
 @md.requires_perms('view_jobs', 'manage_jobs')
 def on_get_queue_sizes(request):
-    """Get current queue sizes for all channels."""
+    """Get current queue sizes for all channels via JobManager."""
     try:
-        from django.conf import settings
-        redis = get_adapter()
-        keys = JobKeys()
+        manager = get_manager()
+        result = manager.get_queue_sizes()
+        if result.get('status'):
+            return JsonResponse({
+                'status': True,
+                'data': result.get('data', {})
+            })
+        else:
+            return JsonResponse({
+                'status': False,
+                'error': result.get('error', 'Unknown error')
+            }, status=400)
+    except Exception as e:
+        return JsonResponse({
+            'status': False,
+            'error': str(e)
+        }, status=400)
 
-        channels = getattr(settings, 'JOBS_CHANNELS', ['default'])
-        sizes = {}
 
-        for channel in channels:
-            stream_key = keys.stream(channel)
-            sched_key = keys.sched(channel)
-
-            try:
-                # Get stream length
-                stream_info = redis.xinfo_stream(stream_key)
-                stream_len = stream_info.get('length', 0)
-            except:
-                stream_len = 0
-
-            # Get scheduled count
-            sched_count = redis.zcard(sched_key)
-
-            # Get DB counts
-            db_counts = Job.objects.filter(channel=channel).values('status').annotate(
-                count=models.Count('id')
-            )
-
-            status_counts = {item['status']: item['count'] for item in db_counts}
-
-            sizes[channel] = {
-                'stream': stream_len,
-                'scheduled': sched_count,
-                'db_pending': status_counts.get('pending', 0),
-                'db_running': status_counts.get('running', 0),
-                'db_completed': status_counts.get('completed', 0),
-                'db_failed': status_counts.get('failed', 0)
-            }
-
+# List discovered channels (from registered streams)
+@md.GET('control/channels')
+@md.requires_perms('manage_jobs', 'view_jobs')
+def on_get_channels(request):
+    """
+    Discover channels by scanning Redis for registered streams.
+    """
+    try:
+        manager = get_manager()
+        channels = manager.get_registered_channels()
         return JsonResponse({
             'status': True,
-            'data': sizes
+            'data': channels
         })
-
     except Exception as e:
         return JsonResponse({
             'status': False,
@@ -389,7 +297,7 @@ def on_get_queue_sizes(request):
 
 
 # Force scheduler leadership
-@md.POST('jobs/control/force-scheduler-lead')
+@md.POST('control/force-scheduler-lead')
 @md.requires_perms('manage_jobs')
 def on_force_scheduler_lead(request):
     """
@@ -429,7 +337,7 @@ def on_force_scheduler_lead(request):
 
 
 # Test job execution
-@md.POST('jobs/control/test')
+@md.POST('control/test')
 @md.requires_perms('manage_jobs')
 def on_test_job(request):
     """

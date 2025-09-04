@@ -79,6 +79,18 @@ class JobKeys:
         """
         return f"{self.prefix}:sched:{channel}"
 
+    def sched_broadcast(self, channel: str) -> str:
+        """
+        Get the scheduled jobs ZSET key for broadcast jobs on a channel.
+
+        Args:
+            channel: The channel name
+
+        Returns:
+            Redis ZSET key for scheduled/delayed broadcast jobs
+        """
+        return f"{self.prefix}:sched_broadcast:{channel}"
+
     def job(self, job_id: str) -> str:
         """
         Get the hash key for a specific job's metadata.
@@ -114,6 +126,18 @@ class JobKeys:
             Redis key for runner heartbeat (with TTL)
         """
         return f"{self.prefix}:runner:{runner_id}:hb"
+
+    def channel_pause(self, channel: str) -> str:
+        """
+        Get the pause flag key for a channel.
+
+        Args:
+            channel: The channel name
+
+        Returns:
+            Redis key that indicates the channel is paused when set
+        """
+        return f"{self.prefix}:channel:{channel}:paused"
 
     def scheduler_lock(self) -> str:
         """

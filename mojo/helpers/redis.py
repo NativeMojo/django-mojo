@@ -172,19 +172,95 @@ class RedisAdapter:
         )
         return _decode_redis_value(result)
 
-    def xpending(self, stream: str, group: str) -> Dict[str, Any]:
+    def xpending(self, stream: str, group: str, start: str = None, end: str = None,
+                 count: int = None, consumer: str = None) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
         """
-        Get pending message summary for a consumer group.
+        Get pending message info for a consumer group.
 
         Args:
             stream: Stream key
             group: Consumer group name
+            start: Start ID for range query (optional, enables detailed mode)
+            end: End ID for range query (optional)
+            count: Max messages to return (optional)
+            consumer: Filter by consumer (optional)
 
         Returns:
-            Pending message summary with decoded strings
+            Summary dict if no range specified, or list of detailed pending message dicts
         """
-        result = self.get_client().xpending(stream, group)
-        return _decode_redis_value(result)
+        client = self.get_client()
+        if start is not None:
+            # Detailed pending info with range
+            # Prefer redis-py's xpending_range when available for structured output
+            detailed_messages: List[Dict[str, Any]] = []
+            used_structured_api = False
+            try:
+                if hasattr(client, "xpending_range"):
+                    # redis-py >= 4 provides xpending_range(name, groupname, min, max, count, consumername=None)
+                    res = client.xpending_range(
+                        stream, group, start, end or '+', count or 10,
+                        consumername=consumer
+                    )
+                    used_structured_api = True
+                    # Normalize to our schema
+                    for item in res or []:
+                        # redis-py uses keys like 'message_id', 'consumer', 'idle', 'times_delivered'
+                        msg_id = _decode_redis_value(item.get('message_id'))
+                        cons = _decode_redis_value(item.get('consumer'))
+                        idle = item.get('idle')
+                        deliveries = item.get('times_delivered')
+                        detailed_messages.append({
+                            'message_id': msg_id,
+                            'consumer': cons,
+                            'idle_time': int(idle or 0),
+                            'delivery_count': int(deliveries or 0),
+                        })
+            except Exception as e:
+                logit.debug(f"xpending_range failed for {stream}/{group}: {e}")
+                used_structured_api = False
+                detailed_messages = []
+
+            if not used_structured_api:
+                # Fallback: raw XPENDING command returning list entries
+                args = [stream, group, start, end or '+', count or 10]
+                if consumer:
+                    args.append(consumer)
+                try:
+                    result = client.execute_command('XPENDING', *args)
+                except Exception as e:
+                    # Handle case where stream/group doesn't exist or other Redis errors
+                    logit.debug(f"XPENDING detailed query failed for {stream}/{group}: {e}")
+                    return []
+
+                # Convert detailed response to structured format
+                # Each item in result is: [message_id, consumer, idle_time, delivery_count]
+                if result:
+                    for item in result:
+                        try:
+                            if isinstance(item, (list, tuple)) and len(item) >= 4:
+                                msg_id = _decode_redis_value(item[0])
+                                cons = _decode_redis_value(item[1])
+                                idle = int(item[2] or 0)
+                                deliveries = int(item[3] or 0)
+                                detailed_messages.append({
+                                    'message_id': msg_id,
+                                    'consumer': cons,
+                                    'idle_time': idle,
+                                    'delivery_count': deliveries
+                                })
+                        except Exception as ie:
+                            logit.debug(f"Failed to parse XPENDING detailed item {item}: {ie}")
+
+            return detailed_messages
+        else:
+            # Basic pending summary
+            try:
+                result = client.xpending(stream, group)
+                return _decode_redis_value(result)
+            except Exception as e:
+                # Handle case where stream/group doesn't exist or other Redis errors
+                logit.debug(f"XPENDING summary query failed for {stream}/{group}: {e}")
+                return {'pending': 0, 'min_idle_time': 0, 'max_idle_time': 0, 'consumers': []}
 
     def xinfo_stream(self, stream: str) -> Dict[str, Any]:
         """

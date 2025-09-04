@@ -619,6 +619,7 @@ class MojoModel:
         no_save_fields = self.get_rest_meta_prop("NO_SAVE_FIELDS", ["id", "pk", "created", "uuid"])
         post_save_actions = self.get_rest_meta_prop("POST_SAVE_ACTIONS", ['action'])
         post_save_data = {}
+        action_resp = None  # an action may have a specific response
         # Iterate through data_dict keys instead of model fields
         for key, value in data_dict.items():
             # Skip fields that shouldn't be saved
@@ -648,15 +649,13 @@ class MojoModel:
         self.on_rest_saved(self.__changed_fields__, created)
         for key, value in post_save_data.items():
             # post save fields can only be called via on_action_
-            set_field_method = getattr(self, f'on_action_{key}', None)
-            if callable(set_field_method):
-                old_value = getattr(self, key, None)
-                set_field_method(value)
-                new_value = getattr(self, key, None)
-                self._set_field_change(key, old_value, new_value)
+            handler = getattr(self, f'on_action_{key}', None)
+            if callable(handler):
+                action_resp = handler(value)
 
         if self.get_rest_meta_prop("LOG_CHANGES", False) and self.has_changed():
             self.log(kind="model:changed", log=self.get_changes(data_dict))
+        return action_resp
 
     def on_rest_save_field(self, key, value, request):
         # First check for custom setter method
@@ -705,8 +704,10 @@ class MojoModel:
             setattr(self, name, instance)
 
     def on_rest_save_and_respond(self, request):
-        self.on_rest_save(request, request.DATA)
-        return self.on_rest_get(request)
+        resp = self.on_rest_save(request, request.DATA)
+        if resp is None:
+            return self.on_rest_get(request)
+        return JsonResponse(resp)
 
     def on_rest_save_related_field(self, field, field_value, request):
         if isinstance(field_value, dict):

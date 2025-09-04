@@ -31,7 +31,9 @@ def setup_manager_tests(opts):
 
     # Clear Redis test data
     opts.redis.delete(opts.keys.stream(opts.test_channel))
+    opts.redis.delete(opts.keys.stream_broadcast(opts.test_channel))
     opts.redis.delete(opts.keys.sched(opts.test_channel))
+    opts.redis.delete(opts.keys.sched_broadcast(opts.test_channel))
     opts.redis.delete(opts.keys.scheduler_lock())
 
 
@@ -494,7 +496,9 @@ def test_cleanup_manager_data(opts):
 
     # Clean up Redis
     opts.redis.delete(opts.keys.stream(opts.test_channel))
+    opts.redis.delete(opts.keys.stream_broadcast(opts.test_channel))
     opts.redis.delete(opts.keys.sched(opts.test_channel))
+    opts.redis.delete(opts.keys.sched_broadcast(opts.test_channel))
     opts.redis.delete(opts.keys.scheduler_lock())
 
     # print(f"Cleaned up {deleted_jobs} manager test jobs")

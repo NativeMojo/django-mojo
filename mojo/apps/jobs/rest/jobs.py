@@ -1,5 +1,6 @@
 from mojo import decorators as md
 from mojo.helpers.response import JsonResponse
+from mojo.helpers import logit
 from mojo.apps.jobs.models import Job, JobEvent
 from mojo.apps.jobs.manager import get_manager
 from mojo.apps.jobs import publish, cancel, status
@@ -9,110 +10,24 @@ import json
 
 
 # Basic CRUD for Jobs (with RestMeta permissions)
-@md.URL('jobs/job')
-@md.URL('jobs/job/<int:pk>')
+@md.URL('job')
+@md.URL('job/<str:pk>')
 def on_job(request, pk=None):
     """Standard CRUD operations for jobs with automatic permission handling."""
+
     return Job.on_rest_request(request, pk)
 
 
 # Basic CRUD for Job Events
-@md.URL('jobs/event')
-@md.URL('jobs/event/<int:pk>')
+@md.URL('event')
+@md.URL('event/<int:pk>')
 def on_job_event(request, pk=None):
     """Standard CRUD operations for job events."""
     return JobEvent.on_rest_request(request, pk)
 
 
-# Publish a new job
-@md.POST('jobs/publish')
-@md.requires_perms('manage_jobs')
-@md.requires_params('func', 'payload')
-def on_publish_job(request):
-    """Publish a new job for asynchronous execution."""
-    try:
-        from datetime import datetime
-
-        # Extract parameters
-        func = request.DATA['func']
-        payload = request.DATA['payload']
-        channel = request.DATA.get('channel', 'default')
-        delay = request.DATA.get('delay')
-        run_at = request.DATA.get('run_at')
-        broadcast = request.DATA.get('broadcast', False)
-        max_retries = request.DATA.get('max_retries')
-        backoff_base = request.DATA.get('backoff_base')
-        backoff_max = request.DATA.get('backoff_max')
-        expires_in = request.DATA.get('expires_in')
-        expires_at = request.DATA.get('expires_at')
-        max_exec_seconds = request.DATA.get('max_exec_seconds')
-        idempotency_key = request.DATA.get('idempotency_key')
-
-        # Parse run_at if provided as string
-        if run_at and isinstance(run_at, str):
-            run_at = datetime.fromisoformat(run_at)
-
-        # Parse expires_at if provided as string
-        if expires_at and isinstance(expires_at, str):
-            expires_at = datetime.fromisoformat(expires_at)
-
-        # Build kwargs
-        kwargs = {
-            'func': func,
-            'payload': payload,
-            'channel': channel,
-            'broadcast': broadcast
-        }
-
-        # Add optional parameters
-        if delay is not None:
-            kwargs['delay'] = int(delay)
-        if run_at is not None:
-            kwargs['run_at'] = run_at
-        if max_retries is not None:
-            kwargs['max_retries'] = int(max_retries)
-        if backoff_base is not None:
-            kwargs['backoff_base'] = float(backoff_base)
-        if backoff_max is not None:
-            kwargs['backoff_max'] = int(backoff_max)
-        if expires_in is not None:
-            kwargs['expires_in'] = int(expires_in)
-        if expires_at is not None:
-            kwargs['expires_at'] = expires_at
-        if max_exec_seconds is not None:
-            kwargs['max_exec_seconds'] = int(max_exec_seconds)
-        if idempotency_key:
-            kwargs['idempotency_key'] = idempotency_key
-
-        # Publish the job
-        job_id = publish(**kwargs)
-
-        # Get job details for response
-        job = Job.objects.get(id=job_id)
-
-        return JsonResponse({
-            'status': True,
-            'job_id': job_id,
-            'data': {
-                'id': job.id,
-                'func': job.func,
-                'channel': job.channel,
-                'status': job.status,
-                'run_at': job.run_at.isoformat() if job.run_at else None,
-                'expires_at': job.expires_at.isoformat() if job.expires_at else None,
-                'created': job.created.isoformat()
-            }
-        })
-
-    except Exception as e:
-        return JsonResponse({
-            'status': False,
-            'error': str(e)
-        }, status=400)
-
-
 # Get job status
-@md.GET('jobs/status/<str:job_id>')
+@md.GET('status/<str:job_id>')
 @md.requires_perms('manage_jobs', 'view_jobs')
 def on_get_job_status(request, job_id):
     """Get the current status of a job."""
@@ -138,7 +53,7 @@ def on_get_job_status(request, job_id):
 
 
 # Cancel a job
-@md.POST('jobs/cancel')
+@md.POST('cancel')
 @md.requires_perms('manage_jobs')
 @md.requires_params('job_id')
 def on_cancel_job(request):
@@ -160,11 +75,11 @@ def on_cancel_job(request):
 
 
 # Retry a job
-@md.POST('jobs/retry')
+@md.POST('retry')
 @md.requires_perms('manage_jobs')
 @md.requires_params('job_id')
 def on_retry_job(request):
-    """Retry a failed or cancelled job."""
+    """Retry a failed or canceled job."""
     try:
         job_id = request.DATA['job_id']
         delay = request.DATA.get('delay')
@@ -192,7 +107,7 @@ def on_retry_job(request):
 
 
 # List jobs with filtering
-@md.GET('jobs/list')
+@md.GET('list')
 @md.requires_perms('manage_jobs', 'view_jobs')
 def on_list_jobs(request):
     """Query jobs with filtering options."""
@@ -247,7 +162,7 @@ def on_list_jobs(request):
 
 
 # Get job events
-@md.GET('jobs/job/<str:job_id>/events')
+@md.GET('job/<str:job_id>/events')
 @md.requires_perms('manage_jobs', 'view_jobs')
 def on_get_job_events(request, job_id):
     """Get the event history for a specific job."""
@@ -291,7 +206,7 @@ def on_get_job_events(request, job_id):
 
 
 # Get channel health
-@md.GET('jobs/health/<str:channel>')
+@md.GET('health/<str:channel>')
 @md.requires_perms('manage_jobs', 'view_jobs')
 def on_channel_health(request, channel):
     """Get comprehensive health metrics for a channel."""
@@ -312,7 +227,7 @@ def on_channel_health(request, channel):
 
 
 # Get all channels health
-@md.GET('jobs/health')
+@md.GET('health')
 @md.requires_perms('manage_jobs', 'view_jobs')
 def on_health_overview(request):
     """Get health overview for all configured channels."""
@@ -361,7 +276,7 @@ def on_health_overview(request):
 
 
 # Get active runners
-@md.GET('jobs/runners')
+@md.GET('runners')
 @md.requires_perms('manage_jobs', 'view_jobs')
 def on_list_runners(request):
     """List all active runners with their status."""
@@ -371,6 +286,10 @@ def on_list_runners(request):
         # Optional channel filter
         channel = request.DATA.get('channel')
         runners = manager.get_runners(channel=channel)
+
+        # Set id field for each runner
+        for r in runners:
+            r["id"] = r["runner_id"]
 
         return JsonResponse({
             'status': True,
@@ -386,7 +305,7 @@ def on_list_runners(request):
 
 
 # Ping a specific runner
-@md.POST('jobs/runners/ping')
+@md.POST('runners/ping')
 @md.requires_perms('manage_jobs')
 @md.requires_params('runner_id')
 def on_ping_runner(request):
@@ -412,7 +331,7 @@ def on_ping_runner(request):
 
 
 # Shutdown a runner
-@md.POST('jobs/runners/shutdown')
+@md.POST('runners/shutdown')
 @md.requires_perms('manage_jobs')
 @md.requires_params('runner_id')
 def on_shutdown_runner(request):
@@ -437,7 +356,7 @@ def on_shutdown_runner(request):
 
 
 # Broadcast command to all runners
-@md.POST('jobs/runners/broadcast')
+@md.POST('runners/broadcast')
 @md.requires_perms('manage_jobs')
 @md.requires_params('command')
 def on_broadcast_command(request):
@@ -473,7 +392,7 @@ def on_broadcast_command(request):
 
 
 # Get system stats
-@md.GET('jobs/stats')
+@md.GET('stats')
 @md.requires_perms('manage_jobs', 'view_jobs')
 def on_system_stats(request):
     """Get overall system statistics."""
@@ -491,3 +410,23 @@ def on_system_stats(request):
             'status': False,
             'error': str(e)
         }, status=400)
+
+
+
+@md.POST('test')
+@md.requires_perms('manage_jobs', 'view_jobs')
+def on_system_test(request):
+    from mojo.apps import jobs
+    jobs.publish(
+        "mojo.apps.jobs.examples.sample_jobs.send_email",
+        {
+            "recipients": ["user@example.com"],
+            "subject": "Test Email",
+            "body": "This is a test email."
+        },
+        channel='email'
+    )
+    return JsonResponse({
+        'status': True,
+        'message': 'Test job should be running.'
+    })

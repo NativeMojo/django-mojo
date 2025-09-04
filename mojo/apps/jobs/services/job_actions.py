@@ -38,16 +38,7 @@ class JobActionsService:
         job.cancel_requested = True
         job.save(update_fields=['cancel_requested', 'modified'])
 
-        # Update Redis if available
-        try:
-            from mojo.apps.jobs.adapters import get_adapter
-            from mojo.apps.jobs.keys import JobKeys
 
-            redis = get_adapter()
-            keys = JobKeys()
-            redis.hset(keys.job(job.id), {'cancel_requested': '1'})
-        except Exception as e:
-            logit.warn(f"Failed to set cancel flag in Redis for {job.id}: {e}")
 
         # Record event
         from mojo.apps.jobs.models import JobEvent
@@ -69,7 +60,7 @@ class JobActionsService:
     @staticmethod
     def retry_job(job, delay: Optional[int] = None) -> Dict[str, Any]:
         """
-        Retry a failed or cancelled job.
+        Retry a failed or canceled job.
 
         Args:
             job: Job model instance

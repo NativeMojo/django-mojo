@@ -32,6 +32,12 @@ JOBS_XPENDING_IDLE_MS = 60000         # Reclaim jobs idle for 1 minute
 JOBS_RUNNER_HEARTBEAT_SEC = 5         # Heartbeat interval
 JOBS_SCHEDULER_LOCK_TTL_MS = 5000     # Scheduler leadership lock TTL
 
+# Webhook-specific Configuration
+JOBS_WEBHOOK_MAX_RETRIES = 5          # More retries for webhooks (network issues)
+JOBS_WEBHOOK_DEFAULT_TIMEOUT = 30     # Default webhook timeout in seconds
+JOBS_WEBHOOK_MAX_TIMEOUT = 300        # Maximum allowed webhook timeout
+JOBS_WEBHOOK_USER_AGENT = "Django-MOJO-Webhook/1.0"  # Default User-Agent header
+
 # Channels Configuration
 JOBS_CHANNELS = [
     'default',
@@ -159,6 +165,18 @@ JOBS_CHANNELS
     List of configured channels. Used by scheduler and manager
     to know which channels to monitor.
     Default: ['default']
+
+Redis Keys (KISS approach)
+    With the KISS design, Redis is used for transport and timing only (Postgres is the source of truth).
+    - Scheduling uses two ZSETs per channel (prefixed by JOBS_REDIS_PREFIX):
+        • sched:{channel} for non-broadcast delayed jobs
+        • sched_broadcast:{channel} for broadcast delayed jobs
+      The ZSET score is the scheduled time in epoch milliseconds (run_at_ms).
+    - Immediate jobs are written directly to streams:
+        • stream:{channel}
+        • stream:{channel}:broadcast
+    - To pause a channel during maintenance, a pause flag key is set:
+        • channel:{channel}:paused (value "1" when paused)
 """
 
 # Performance Tuning Guide

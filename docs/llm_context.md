@@ -2,6 +2,8 @@
 
 This file distills the core philosophy, structure, and conventions necessary for any LLM or contributor to produce code, docs, or refactors that fit perfectly in the Django-MOJO framework.
 
+MOST IMPORTANT: FOLLOW -> KEEP IT SIMPLE STUPID (KISS)
+
 ---
 
 ## Project Philosophy
@@ -180,3 +182,5 @@ _Reference this file before making any LLM- or contributor-initiated changes to 
 IMPORTANT:
  - this is a django framework not a django project, ask use to run any django project related commmands
  - Never create migration files, ask user to.
+
+MOST IMPORTANT: FOLLOW -> KEEP IT SIMPLE STUPID (KISS)

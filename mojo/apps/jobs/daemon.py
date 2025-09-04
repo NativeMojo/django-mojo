@@ -14,7 +14,7 @@ from typing import Callable, Optional
 from pathlib import Path
 
 from mojo.helpers import logit
-
+logger = logit.get_logger("jobs", "jobs.log")
 
 class DaemonContext:
     """
@@ -84,7 +84,7 @@ class DaemonContext:
                 # Parent process exits
                 sys.exit(0)
         except OSError as e:
-            logit.error(f"First fork failed: {e}")
+            logger.error(f"First fork failed: {e}")
             sys.exit(1)
 
         # Decouple from parent environment
@@ -99,7 +99,7 @@ class DaemonContext:
                 # Parent process exits
                 sys.exit(0)
         except OSError as e:
-            logit.error(f"Second fork failed: {e}")
+            logger.error(f"Second fork failed: {e}")
             sys.exit(1)
 
         # Redirect standard file descriptors
@@ -116,7 +116,7 @@ class DaemonContext:
         os.dup2(so.fileno(), sys.stdout.fileno())
         os.dup2(se.fileno(), sys.stderr.fileno())
 
-        logit.info(f"Process daemonized with PID: {os.getpid()}")
+        logger.info(f"Process daemonized with PID: {os.getpid()}")
 
     def _write_pidfile(self):
         """Write PID file with exclusive lock."""
@@ -139,13 +139,13 @@ class DaemonContext:
             # Register cleanup
             atexit.register(self._remove_pidfile)
 
-            logit.info(f"PID file created: {self.pidfile} (PID: {pid})")
+            logger.info(f"PID file created: {self.pidfile} (PID: {pid})")
 
         except IOError as e:
             if e.errno == 11:  # Resource temporarily unavailable
-                logit.error(f"Another instance is already running (PID file: {self.pidfile})")
+                logger.error(f"Another instance is already running (PID file: {self.pidfile})")
             else:
-                logit.error(f"Failed to write PID file: {e}")
+                logger.error(f"Failed to write PID file: {e}")
             sys.exit(1)
 
     def _remove_pidfile(self):
@@ -162,9 +162,9 @@ class DaemonContext:
         if self.pidfile and os.path.exists(self.pidfile):
             try:
                 os.remove(self.pidfile)
-                logit.info(f"PID file removed: {self.pidfile}")
+                logger.info(f"PID file removed: {self.pidfile}")
             except Exception as e:
-                logit.warn(f"Failed to remove PID file: {e}")
+                logger.warn(f"Failed to remove PID file: {e}")
 
 
 class DaemonRunner:
@@ -223,15 +223,15 @@ class DaemonRunner:
 
         with context:
             if self.daemon:
-                logit.info(f"{self.name} started as background daemon (PID: {os.getpid()})")
+                logger.info(f"{self.name} started as background daemon (PID: {os.getpid()})")
             else:
-                logit.info(f"{self.name} started in foreground mode (PID: {os.getpid()})")
+                logger.info(f"{self.name} started in foreground mode (PID: {os.getpid()})")
 
             try:
                 # Run the main function
                 self.run_func()
             except Exception as e:
-                logit.error(f"{self.name} crashed: {e}")
+                logger.error(f"{self.name} crashed: {e}")
                 sys.exit(1)
             finally:
                 if self.stop_func and not self._stop_requested:
@@ -240,7 +240,7 @@ class DaemonRunner:
     def stop(self):
         """Stop a running daemon by PID file."""
         if not self.pidfile or not os.path.exists(self.pidfile):
-            logit.error(f"PID file not found: {self.pidfile}")
+            logger.error(f"PID file not found: {self.pidfile}")
             return False
 
         try:
@@ -249,7 +249,7 @@ class DaemonRunner:
 
             # Send SIGTERM
             os.kill(pid, signal.SIGTERM)
-            logit.info(f"Sent SIGTERM to {self.name} (PID: {pid})")
+            logger.info(f"Sent SIGTERM to {self.name} (PID: {pid})")
 
             # Wait for process to stop
             for i in range(10):
@@ -257,20 +257,20 @@ class DaemonRunner:
                     os.kill(pid, 0)  # Check if process exists
                     time.sleep(1)
                 except ProcessLookupError:
-                    logit.info(f"{self.name} stopped successfully")
+                    logger.info(f"{self.name} stopped successfully")
                     return True
 
             # Force kill if still running
             try:
                 os.kill(pid, signal.SIGKILL)
-                logit.warn(f"Force killed {self.name} (PID: {pid})")
+                logger.warn(f"Force killed {self.name} (PID: {pid})")
             except ProcessLookupError:
                 pass
 
             return True
 
         except Exception as e:
-            logit.error(f"Failed to stop {self.name}: {e}")
+            logger.error(f"Failed to stop {self.name}: {e}")
             return False
 
     def status(self) -> bool:
@@ -300,16 +300,16 @@ class DaemonRunner:
     def restart(self):
         """Restart the daemon."""
         if self.status():
-            logit.info(f"Stopping {self.name}...")
+            logger.info(f"Stopping {self.name}...")
             self.stop()
             time.sleep(2)
 
-        logit.info(f"Starting {self.name}...")
+        logger.info(f"Starting {self.name}...")
         self.start()
 
     def _handle_signal(self, signum, frame):
         """Handle shutdown signals."""
-        logit.info(f"{self.name} received signal {signum}, shutting down gracefully")
+        logger.info(f"{self.name} received signal {signum}, shutting down gracefully")
         self._stop_requested = True
 
         if self.stop_func:

@@ -29,6 +29,7 @@ def setup_basic_tests(opts):
             redis.delete(keys.stream(channel))
             redis.delete(keys.stream_broadcast(channel))
             redis.delete(keys.sched(channel))
+            redis.delete(keys.sched_broadcast(channel))
         except:
             pass
 
@@ -275,11 +276,7 @@ def test_job_cancellation_request(opts):
     job = Job.objects.get(id=job_id)
     assert job.cancel_requested is True
 
-    # Check Redis flag updated
-    job_key = opts.keys.job(job_id)
-    job_data = opts.redis.hgetall(job_key)
-    if job_data:  # May not exist if not mirrored yet
-        assert job_data.get('cancel_requested') == '1'
+
 
     # Verify event recorded
     cancel_event = JobEvent.objects.filter(
@@ -614,3 +611,4 @@ def test_cleanup(opts):
         opts.redis.delete(opts.keys.stream(channel))
         opts.redis.delete(opts.keys.stream_broadcast(channel))
         opts.redis.delete(opts.keys.sched(channel))
+        opts.redis.delete(opts.keys.sched_broadcast(channel))

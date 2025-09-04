@@ -2,12 +2,13 @@
 Local in-process job queue for lightweight tasks.
 
 No persistence, no retries, no distribution - just a simple
-background thread for ultra-short work.
+single worker thread with a queue for ultra-short work.
 """
 import queue
 import threading
 import traceback
-from typing import Any, Callable, Optional, Tuple
+import time
+from typing import Any, Callable, Optional
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -24,15 +25,15 @@ class LocalJob:
     func: Callable
     args: tuple
     kwargs: dict
-    created_at: datetime
+    delay_seconds: float = 0.0
 
 
 class LocalQueue:
     """
-    In-process job queue with single worker thread.
+    Simple in-process job queue with single worker thread.
 
     For ultra-lightweight tasks that don't need persistence,
-    retries, or distributed execution.
+    retries, or distributed execution. Uses time.sleep() for delays.
     """
 
     def __init__(self, maxsize: Optional[int] = None):
@@ -85,7 +86,7 @@ class LocalQueue:
 
             # Put a sentinel to unblock the worker if waiting
             try:
-                self.queue.put_nowait(None)
+                self.queue.put_nowait(None)  # Sentinel value
             except queue.Full:
                 pass
 
@@ -99,7 +100,7 @@ class LocalQueue:
                       f"errors={self._error_count})")
 
     def put(self, func: Callable, args: tuple, kwargs: dict,
-            job_id: str) -> bool:
+            job_id: str, run_at: Optional[datetime] = None) -> bool:
         """
         Add a job to the queue.
 
@@ -108,6 +109,7 @@ class LocalQueue:
             args: Positional arguments
             kwargs: Keyword arguments
             job_id: Job identifier
+            run_at: When to execute the job (None for immediate)
 
         Returns:
             True if queued, False if queue is full
@@ -115,12 +117,19 @@ class LocalQueue:
         if not self.started:
             self.start()
 
+        # Calculate delay in seconds
+        delay_seconds = 0.0
+        if run_at:
+            now = timezone.now()
+            if run_at > now:
+                delay_seconds = (run_at - now).total_seconds()
+
         job = LocalJob(
             job_id=job_id,
             func=func,
             args=args,
             kwargs=kwargs,
-            created_at=timezone.now()
+            delay_seconds=delay_seconds
         )
 
         try:
@@ -145,26 +154,28 @@ class LocalQueue:
         Returns:
             Dict with queue stats
         """
-        return {
-            'size': self.size(),
-            'maxsize': self.queue.maxsize,
-            'processed': self._processed_count,
-            'errors': self._error_count,
-            'running': self.started,
-            'worker_alive': self.worker_thread.is_alive() if self.worker_thread else False
-        }
+        with self._lock:
+            return {
+                'size': self.size(),
+                'maxsize': self.queue.maxsize,
+                'processed': self._processed_count,
+                'errors': self._error_count,
+                'running': self.started,
+                'worker_alive': self.worker_thread.is_alive() if self.worker_thread else False
+            }
 
     def _worker(self):
         """
         Worker thread main loop.
 
         Continuously processes jobs from the queue until stopped.
+        Simple approach: get job, sleep if needed, execute, repeat.
         """
         logit.info("Local job worker thread started")
 
         while not self.stop_event.is_set():
             try:
-                # Get job with timeout to check stop event periodically
+                # Get job from queue with timeout
                 try:
                     job = self.queue.get(timeout=1.0)
                 except queue.Empty:
@@ -172,17 +183,39 @@ class LocalQueue:
 
                 # Check for shutdown sentinel
                 if job is None:
+                    logit.debug("Worker received shutdown sentinel")
                     break
+
+                # Sleep if job has a delay
+                if job.delay_seconds > 0:
+                    logit.debug(f"Job {job.job_id} sleeping for {job.delay_seconds:.2f}s")
+
+                    # Sleep in small chunks to allow for quick shutdown
+                    sleep_remaining = job.delay_seconds
+                    while sleep_remaining > 0 and not self.stop_event.is_set():
+                        sleep_time = min(0.1, sleep_remaining)  # Sleep max 100ms at a time
+                        time.sleep(sleep_time)
+                        sleep_remaining -= sleep_time
+
+                    # If we were asked to stop during sleep, break
+                    if self.stop_event.is_set():
+                        break
 
                 # Execute the job
                 self._execute_job(job)
-                self._processed_count += 1
+
+                with self._lock:
+                    self._processed_count += 1
+
+                # Mark task as done for queue.join() if anyone uses it
+                self.queue.task_done()
 
             except Exception as e:
                 # This should never happen (caught in _execute_job)
                 # but just in case...
                 logit.error(f"Unexpected error in local job worker: {e}")
-                self._error_count += 1
+                with self._lock:
+                    self._error_count += 1
 
         logit.info("Local job worker thread exiting")
 
@@ -197,9 +230,7 @@ class LocalQueue:
 
         try:
             # Log execution start
-            duration_waiting = (start_time - job.created_at).total_seconds()
-            logit.debug(f"Executing local job {job.job_id} "
-                       f"(waited {duration_waiting:.2f}s)")
+            logit.debug(f"Executing local job {job.job_id}")
 
             # Close old database connections before execution
             from django.db import close_old_connections
@@ -217,14 +248,14 @@ class LocalQueue:
 
             # Emit metric
             try:
-                from mojo.metrics.redis_metrics import record_metrics
-                record_metrics(
+                from mojo.apps import metrics
+                metrics.record(
                     slug="jobs.local.completed",
                     when=timezone.now(),
                     count=1,
                     category="jobs"
                 )
-                record_metrics(
+                metrics.record(
                     slug="jobs.local.duration_ms",
                     when=timezone.now(),
                     count=int(duration * 1000),
@@ -237,7 +268,8 @@ class LocalQueue:
 
         except Exception as e:
             # Log error
-            self._error_count += 1
+            with self._lock:
+                self._error_count += 1
             duration = (timezone.now() - start_time).total_seconds()
 
             error_msg = str(e)
@@ -248,8 +280,8 @@ class LocalQueue:
 
             # Emit error metric
             try:
-                from mojo.metrics.redis_metrics import record_metrics
-                record_metrics(
+                from mojo.apps import metrics
+                metrics.record(
                     slug="jobs.local.failed",
                     when=timezone.now(),
                     count=1,
@@ -283,7 +315,6 @@ class LocalQueueManager:
         with self._lock:
             if self._queue is None:
                 self._queue = LocalQueue()
-                self._queue.start()
             return self._queue
 
     def stop_queue(self, timeout: float = 5.0):

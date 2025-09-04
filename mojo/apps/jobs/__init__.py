@@ -21,6 +21,7 @@ from .adapters import get_adapter
 __all__ = [
     'publish',
     'publish_local',
+    'publish_webhook',
     'cancel',
     'status',
 ]
@@ -112,7 +113,7 @@ def publish(
 
     # Apply defaults
     if max_retries is None:
-        max_retries = getattr(settings, 'JOBS_DEFAULT_MAX_RETRIES', 3)
+        max_retries = getattr(settings, 'JOBS_DEFAULT_MAX_RETRIES', 0)
     if backoff_base is None:
         backoff_base = getattr(settings, 'JOBS_DEFAULT_BACKOFF_BASE', 2.0)
     if backoff_max is None:
@@ -162,22 +163,14 @@ def publish(
         redis = get_adapter()
         keys = JobKeys()
 
-        # Store minimal metadata in Redis hash (no payload!)
-        redis.hset(keys.job(job_id), {
-            'status': 'pending',
-            'channel': channel,
-            'func': func_path,
-            'expires_at': expires_at.isoformat() if expires_at else '',
-            'run_at': run_at.isoformat() if run_at else '',
-            'attempt': 0,
-            'cancel_requested': '0'
-        })
+        # No per-job Redis hash (KISS): DB is source of truth
 
         # Route based on scheduling
         if run_at and run_at > now:
-            # Add to scheduled ZSET
+            # Add to scheduled ZSET (two-ZSET routing)
             score = run_at.timestamp() * 1000  # milliseconds
-            redis.zadd(keys.sched(channel), {job_id: score})
+            target_zset = keys.sched_broadcast(channel) if broadcast else keys.sched(channel)
+            redis.zadd(target_zset, {job_id: score})
 
             # Record scheduled event
             JobEvent.objects.create(
@@ -217,7 +210,7 @@ def publish(
         )
 
         metrics.record(
-            slug="jobs.published.{channel}",
+            slug=f"jobs.published.{channel}",
             when=now,
             count=1,
             category="jobs"
@@ -234,20 +227,28 @@ def publish(
     return job_id
 
 
-def publish_local(func: Union[str, Callable], *args, **kwargs) -> str:
+def publish_local(func: Union[str, Callable], *args,
+                 run_at: Optional[datetime] = None,
+                 delay: Optional[int] = None,
+                 **kwargs) -> str:
     """
     Publish a job to the local in-process queue.
+
+    Simple approach: spawns a thread that sleeps if delay is specified,
+    then executes the function.
 
     Args:
         func: Job function (module path or callable)
         *args: Positional arguments for the job
+        run_at: When to execute the job (None for immediate)
+        delay: Delay in seconds before execution (ignored if run_at is provided)
         **kwargs: Keyword arguments for the job
 
     Returns:
         Job ID (for compatibility, though local jobs aren't persistent)
 
     Raises:
-        RuntimeError: If local queue is full
+        ImportError: If function cannot be loaded
     """
     from .local_queue import get_local_queue
     import importlib
@@ -269,13 +270,128 @@ def publish_local(func: Union[str, Callable], *args, **kwargs) -> str:
     # Generate a pseudo job ID
     job_id = f"local-{uuid.uuid4().hex[:8]}"
 
-    # Queue the job
-    queue = get_local_queue()
-    if not queue.put(func_obj, args, kwargs, job_id):
-        raise RuntimeError("Local job queue is full")
+    # Calculate run_at time
+    if run_at is None and delay is not None:
+        from django.utils import timezone
+        from datetime import timedelta
+        run_at = timezone.now() + timedelta(seconds=delay)
 
-    logit.info(f"Queued local job {job_id} ({func_path})")
+    # Queue the job (always succeeds with new simple approach)
+    queue = get_local_queue()
+    queue.put(func_obj, args, kwargs, job_id, run_at=run_at)
+
+    if run_at:
+        logit.info(f"Scheduled local job {job_id} ({func_path}) for {run_at}")
+    else:
+        logit.info(f"Queued local job {job_id} ({func_path})")
     return job_id
+
+
+def publish_webhook(
+    url: str,
+    data: Dict[str, Any],
+    *,
+    headers: Optional[Dict[str, str]] = None,
+    channel: str = "webhooks",
+    delay: Optional[int] = None,
+    run_at: Optional[datetime] = None,
+    timeout: Optional[int] = 30,
+    max_retries: Optional[int] = None,
+    backoff_base: Optional[float] = None,
+    backoff_max: Optional[int] = None,
+    expires_in: Optional[int] = None,
+    expires_at: Optional[datetime] = None,
+    idempotency_key: Optional[str] = None,
+    webhook_id: Optional[str] = None
+) -> str:
+    """
+    Publish a webhook job to POST data to an external URL.
+
+    Args:
+        url: Target webhook URL
+        data: Data to POST (will be JSON encoded)
+        headers: Optional HTTP headers (default includes Content-Type: application/json)
+        channel: Channel to publish to (default: "webhooks")
+        delay: Delay in seconds from now
+        run_at: Specific time to run the webhook (overrides delay)
+        timeout: Request timeout in seconds (default: 30)
+        max_retries: Maximum retry attempts (default from settings or 5 for webhooks)
+        backoff_base: Base for exponential backoff (default 2.0)
+        backoff_max: Maximum backoff in seconds (default 3600)
+        expires_in: Seconds until webhook expires (default from settings)
+        expires_at: Specific expiration time (overrides expires_in)
+        idempotency_key: Optional key for exactly-once semantics
+        webhook_id: Optional webhook identifier for tracking
+
+    Returns:
+        Job ID (UUID string without dashes)
+
+    Raises:
+        ValueError: If URL is invalid or data cannot be serialized
+        RuntimeError: If publishing fails
+
+    Example:
+        job_id = publish_webhook(
+            url="https://api.example.com/webhooks/user-signup",
+            data={"user_id": 123, "email": "user@example.com", "event": "signup"},
+            headers={"Authorization": "Bearer secret"},
+            max_retries=3
+        )
+    """
+    # Validate URL
+    if not url or not isinstance(url, str):
+        raise ValueError("URL must be a non-empty string")
+
+    if not url.startswith(('http://', 'https://')):
+        raise ValueError("URL must start with http:// or https://")
+
+    # Validate data can be JSON serialized
+    import json
+    try:
+        json.dumps(data)
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"Data must be JSON serializable: {e}")
+
+    # Build headers with defaults
+    webhook_headers = {
+        'Content-Type': 'application/json',
+        'User-Agent': 'Django-MOJO-Webhook/1.0'
+    }
+    if headers:
+        webhook_headers.update(headers)
+
+    # Build payload for webhook handler
+    payload = {
+        'url': url,
+        'data': data,
+        'headers': webhook_headers,
+        'timeout': timeout or 30,
+        'webhook_id': webhook_id
+    }
+
+    # Set webhook-specific defaults
+    if max_retries is None:
+        max_retries = getattr(settings, 'JOBS_WEBHOOK_MAX_RETRIES', 5)
+
+    # Validate timeout limits
+    max_allowed_timeout = getattr(settings, 'JOBS_WEBHOOK_MAX_TIMEOUT', 300)
+    if timeout > max_allowed_timeout:
+        raise ValueError(f"Timeout cannot exceed {max_allowed_timeout} seconds")
+
+    # Use the main publish function with webhook handler
+    return publish(
+        func='mojo.apps.jobs.handlers.webhook.post_webhook',
+        payload=payload,
+        channel=channel,
+        delay=delay,
+        run_at=run_at,
+        max_retries=max_retries,
+        backoff_base=backoff_base,
+        backoff_max=backoff_max,
+        expires_in=expires_in,
+        expires_at=expires_at,
+        idempotency_key=idempotency_key
+    )
 
 
 def cancel(job_id: str) -> bool:
@@ -308,13 +424,7 @@ def cancel(job_id: str) -> bool:
         job.cancel_requested = True
         job.save(update_fields=['cancel_requested', 'modified'])
 
-        # Update Redis if job is active
-        try:
-            redis = get_adapter()
-            keys = JobKeys()
-            redis.hset(keys.job(job_id), {'cancel_requested': '1'})
-        except Exception as e:
-            logit.warn(f"Failed to set cancel flag in Redis for {job_id}: {e}")
+        # DB-only cancellation (KISS): handlers check DB flag
 
         # Record event
         JobEvent.objects.create(
@@ -337,51 +447,15 @@ def cancel(job_id: str) -> bool:
 
 def status(job_id: str) -> Optional[Dict[str, Any]]:
     """
-    Get the current status of a job.
-
-    Tries Redis first for speed, falls back to database.
+    Get the current status of a job from the database (source of truth).
 
     Args:
         job_id: Job ID to check
 
     Returns:
-        Status dict with keys:
-            - id: Job ID
-            - status: Current status
-            - channel: Job channel
-            - func: Function name
-            - created: Creation time
-            - started_at: Execution start time (if started)
-            - finished_at: Completion time (if finished)
-            - attempt: Current attempt number
-            - last_error: Last error message (if any)
-            - metadata: Custom metadata
-        Or None if job not found
+        Status dict with keys: id, status, channel, func, created, started_at,
+        finished_at, attempt, last_error, metadata; or None if not found.
     """
-    # Try Redis first
-    try:
-        redis = get_adapter()
-        keys = JobKeys()
-        job_data = redis.hgetall(keys.job(job_id))
-
-        if job_data:
-            import json
-            return {
-                'id': job_id,
-                'status': job_data.get('status', 'unknown'),
-                'channel': job_data.get('channel', ''),
-                'func': job_data.get('func', ''),
-                'created': job_data.get('created_at', ''),
-                'started_at': job_data.get('started_at', ''),
-                'finished_at': job_data.get('finished_at', ''),
-                'attempt': int(job_data.get('attempt', 0)),
-                'last_error': job_data.get('last_error', ''),
-                'metadata': json.loads(job_data.get('metadata', '{}'))
-            }
-    except Exception as e:
-        logit.warn(f"Failed to get status from Redis for {job_id}: {e}")
-
-    # Fall back to database
     try:
         from .models import Job
         job = Job.objects.get(id=job_id)

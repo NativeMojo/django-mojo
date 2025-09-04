@@ -44,7 +44,7 @@ class Scheduler:
             scheduler_id: Unique scheduler identifier (auto-generated if not provided)
         """
         self.channels = channels or self._get_all_channels()
-        self.scheduler_id = scheduler_id or f"scheduler-{uuid.uuid4().hex[:8]}"
+        self.scheduler_id = scheduler_id or self._generate_scheduler_id()
         self.redis = get_adapter()
         self.keys = JobKeys()
 
@@ -80,6 +80,15 @@ class Scheduler:
 
         # Default channels
         return ['default']
+
+    def _generate_scheduler_id(self) -> str:
+        """Generate a consistent scheduler ID based on hostname."""
+        import socket
+        hostname = socket.gethostname()
+        # Clean hostname for use in ID (remove dots, make lowercase)
+        clean_hostname = hostname.lower().replace('.', '-').replace('_', '-')
+
+        return f"{clean_hostname}-scheduler"
 
     def start(self):
         """
@@ -274,27 +283,39 @@ class Scheduler:
             now: Current datetime
             now_ms: Current time in milliseconds
         """
+        # Skip channel if paused
+        try:
+            if self.redis.get(self.keys.channel_pause(channel)):
+                return
+        except Exception:
+            pass
+        # Process non-broadcast delayed jobs
         sched_key = self.keys.sched(channel)
-
-        # Pop all due jobs from ZSET
         while True:
-            # ZPOPMIN returns list of (member, score) tuples
             results = self.redis.zpopmin(sched_key, count=10)
-
             if not results:
                 break
-
             for job_id, score in results:
-                # Check if job is due
                 if score > now_ms:
-                    # Not due yet, put it back
                     self.redis.zadd(sched_key, {job_id: score})
                     return  # Nothing else will be due either
+                stream_key = self.keys.stream(channel)
+                self._enqueue_job(job_id, channel, now, stream_key, score)
 
-                # Process due job
-                self._enqueue_job(job_id, channel, now)
+        # Process broadcast delayed jobs
+        sched_b_key = self.keys.sched_broadcast(channel)
+        while True:
+            results = self.redis.zpopmin(sched_b_key, count=10)
+            if not results:
+                break
+            for job_id, score in results:
+                if score > now_ms:
+                    self.redis.zadd(sched_b_key, {job_id: score})
+                    return  # Nothing else will be due either
+                stream_key = self.keys.stream_broadcast(channel)
+                self._enqueue_job(job_id, channel, now, stream_key, score)
 
-    def _enqueue_job(self, job_id: str, channel: str, now: datetime):
+    def _enqueue_job(self, job_id: str, channel: str, now: datetime, stream_key: str, scheduled_at_ms: float):
         """
         Move a job from scheduled to stream.
 
@@ -302,47 +323,30 @@ class Scheduler:
             job_id: Job ID to enqueue
             channel: Channel the job belongs to
             now: Current datetime
+            stream_key: Target Redis stream key
+            scheduled_at_ms: Scheduled time as epoch milliseconds (from ZSET score)
         """
         try:
-            # Load job data
-            job_data = self._load_job(job_id)
-            if not job_data:
-                logit.warn(f"Scheduled job {job_id} not found")
-                return
-
-            # Check expiration
-            if self._is_expired(job_data, now):
-                self._mark_expired(job_id, channel)
-                self.jobs_expired += 1
-                return
-
-            # Determine target stream
-            broadcast = job_data.get('broadcast') == '1'
-            if broadcast:
-                stream_key = self.keys.stream_broadcast(channel)
-            else:
-                stream_key = self.keys.stream(channel)
-
-            # Add to stream
+            # Add to stream (minimal fields; DB is source of truth)
             self.redis.xadd(stream_key, {
                 'job_id': job_id,
-                'func': job_data.get('func', ''),
                 'scheduled': now.isoformat()
             }, maxlen=getattr(settings, 'JOBS_STREAM_MAXLEN', 100000))
-
-            # Update status in Redis
-            self.redis.hset(self.keys.job(job_id), {'status': 'pending'})
 
             # Record event in database
             try:
                 job = Job.objects.get(id=job_id)
+                scheduled_at_dt = datetime.fromtimestamp(scheduled_at_ms / 1000.0)
+                if timezone.is_naive(scheduled_at_dt):
+                    scheduled_at_dt = timezone.make_aware(scheduled_at_dt)
                 JobEvent.objects.create(
                     job=job,
                     channel=channel,
                     event='queued',
                     details={
                         'scheduler_id': self.scheduler_id,
-                        'stream': stream_key
+                        'stream': stream_key,
+                        'scheduled_at': scheduled_at_dt.isoformat()
                     }
                 )
             except Exception as e:
@@ -364,12 +368,7 @@ class Scheduler:
 
     def _load_job(self, job_id: str) -> Optional[dict]:
         """Load job data from Redis or database."""
-        # Try Redis first
-        job_hash = self.redis.hgetall(self.keys.job(job_id))
-
-        if job_hash:
-            return job_hash
-
+        # DB-only (KISS): skip Redis per-job hash
         # Fall back to database
         try:
             job = Job.objects.get(id=job_id)
@@ -400,11 +399,7 @@ class Scheduler:
     def _mark_expired(self, job_id: str, channel: str):
         """Mark a job as expired."""
         try:
-            # Update Redis
-            self.redis.hset(self.keys.job(job_id), {
-                'status': 'expired',
-                'finished_at': timezone.now().isoformat()
-            })
+            # Redis per-job hash removed (KISS): DB is source of truth
 
             # Update database
             job = Job.objects.get(id=job_id)

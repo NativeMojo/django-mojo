@@ -3,7 +3,7 @@ Job and JobEvent models for the jobs system.
 """
 from django.db import models
 from mojo.models import MojoModel
-from mojo.helpers import logit
+from mojo.helpers import dates
 
 
 class Job(models.Model, MojoModel):
@@ -48,7 +48,7 @@ class Job(models.Model, MojoModel):
     # Retry configuration
     attempt = models.IntegerField(default=0,
                                  help_text="Current attempt number")
-    max_retries = models.IntegerField(default=3,
+    max_retries = models.IntegerField(default=0,
                                       help_text="Maximum retry attempts")
     backoff_base = models.FloatField(default=2.0,
                                      help_text="Base for exponential backoff")
@@ -155,6 +155,11 @@ class Job(models.Model, MojoModel):
             delta = self.finished_at - self.started_at
             return int(delta.total_seconds() * 1000)
         return 0
+
+    @property
+    def is_expired(self) -> bool:
+        """Check if job has expired."""
+        return self.expires_at and dates.utcnow() > self.expires_at
 
     def check_cancel_requested(self) -> bool:
         """
