@@ -177,15 +177,21 @@ def on_reset_failed_jobs(request):
             Job.objects.filter(query).values_list('channel', flat=True).distinct()
         )
 
-        # Reset to pending in bulk
-        reset_qs = Job.objects.filter(query).order_by('-created')[:limit]
-        reset_count = reset_qs.update(
-            status='pending',
-            attempt=0,
-            last_error='',
-            stack_trace='',
-            run_at=None
+        # Reset to pending in bulk (select IDs first, then update)
+        reset_ids = list(
+            Job.objects.filter(query)
+            .order_by('-created')
+            .values_list('id', flat=True)[:limit]
         )
+        reset_count = 0
+        if reset_ids:
+            reset_count = Job.objects.filter(id__in=reset_ids).update(
+                status='pending',
+                attempt=0,
+                last_error='',
+                stack_trace='',
+                run_at=None
+            )
 
         # Requeue using JobManager
         manager = get_manager()

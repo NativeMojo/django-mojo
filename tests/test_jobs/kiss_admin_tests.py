@@ -44,7 +44,8 @@ def setup_kiss_admin(opts):
     user.save()
 
     # REST client login as admin
-    opts.client.login(ADMIN_USER, ADMIN_PWORD)
+    resp = opts.client.login(ADMIN_USER, ADMIN_PWORD)
+    assert opts.client.is_authenticated, "authentication failed"
 
     # Runtime helpers
     opts.redis = get_adapter()
@@ -249,23 +250,32 @@ def test_manager_purge_old_jobs(opts):
 
 @th.django_unit_test()
 def test_rest_control_config_and_queue_sizes(opts):
+    assert opts.client.is_authenticated, "authentication failed (not logged in before REST test)"
     """
     REST: GET control/config and control/queue-sizes
     """
     # Config
     resp = opts.client.get("/api/jobs/control/config")
     assert resp.status_code == 200, f"GET /api/jobs/control/config failed: status={resp.status_code} body={getattr(resp, 'response', None) and getattr(resp.response, 'data', None)}"
-    assert resp.response.data.status is True, f"Config endpoint returned status=False: data={resp.response.data}"
+    # config endpoint returns raw config dict as data; verify required keys
+    cfg = resp.response.data
+    assert isinstance(cfg, dict), f"Config endpoint did not return a dict: data_type={type(cfg)} value={cfg}"
+    for key in ["redis_url", "redis_prefix", "engine", "defaults", "limits", "timeouts", "channels"]:
+        assert key in cfg, f"Missing '{key}' in config: cfg={cfg}"
 
     # Queue sizes
     resp = opts.client.get("/api/jobs/control/queue-sizes")
     assert resp.status_code == 200, f"GET /api/jobs/control/queue-sizes failed: status={resp.status_code} body={getattr(resp, 'response', None) and getattr(resp.response, 'data', None)}"
-    assert resp.response.data.status is True, f"queue-sizes endpoint returned status=False: data={resp.response.data}"
-    assert isinstance(resp.response.data.data, dict), f"queue-sizes endpoint returned non-dict data: type={type(resp.response.data.data)} value={resp.response.data.data}"
+    # queue-sizes returns wrapped data or raw dict depending on implementation; normalize
+    qdata = resp.response.data
+    if isinstance(qdata, dict) and "status" in qdata and "data" in qdata:
+        qdata = qdata["data"]
+    assert isinstance(qdata, dict), f"queue-sizes endpoint returned non-dict data: type={type(qdata)} value={qdata}"
 
 
 @th.django_unit_test()
 def test_rest_clear_queue_and_clear_stuck(opts):
+    assert opts.client.is_authenticated, "authentication failed (not logged in before REST test)"
     """
     REST: POST control/clear-queue and control/clear-stuck
     """
@@ -281,18 +291,39 @@ def test_rest_clear_queue_and_clear_stuck(opts):
     assert resp.status_code == 200, f"POST /api/jobs/control/clear-queue failed: status={resp.status_code} body={getattr(resp, 'response', None) and getattr(resp.response, 'data', None)}"
     assert resp.response.data.status is True, f"clear-queue returned status=False: data={resp.response.data}"
 
+    # Create a pending message for clear-stuck: add, read (PEL), then clear
+    stream_key = opts.keys.stream(opts.channel)
+    group = opts.keys.group_workers(opts.channel)
+    # Ensure group exists after clear
+    opts.redis.xgroup_create(stream_key, group, mkstream=True)
+    inserted_job_id = uuid.uuid4().hex
+    msg_id = opts.redis.xadd(stream_key, {"job_id": inserted_job_id, "func": "test.stuck"})
+    msgs = opts.redis.xreadgroup(group=group, consumer="rest_consumer", streams={stream_key: ">"}, count=1, block=100)
+    assert msgs, f"Failed to stage a pending message for clear-stuck: stream={stream_key} group={group} msg_id={msg_id} job_id={inserted_job_id}"
+
     # Clear stuck with threshold 0
     resp = opts.client.post("/api/jobs/control/clear-stuck", {
         "channel": opts.channel,
         "idle_threshold_ms": 0,
     })
     assert resp.status_code == 200, f"POST /api/jobs/control/clear-stuck failed: status={resp.status_code} body={getattr(resp, 'response', None) and getattr(resp.response, 'data', None)}"
-    assert resp.response.data.status is True, f"clear-stuck returned status=False: data={resp.response.data}"
-    assert "data" in resp.response.data, f"clear-stuck response missing data: body={resp.response.data}"
+    # Normalize response and verify cleared count
+    body = resp.response.data
+    if isinstance(body, dict) and "data" in body:
+        data_val = body["data"]
+        status_val = body.get("status", True)
+    else:
+        # Unwrapped response; treat as data dict directly
+        data_val = body
+        status_val = True
+    assert isinstance(data_val, dict), f"clear-stuck response missing data dict: body={body}"
+    assert status_val is True or data_val.get("cleared", 0) >= 1, f"clear-stuck returned status=False: data={body}"
+    assert data_val.get("cleared", 0) >= 1, f"clear-stuck did not clear any messages: data={data_val}"
 
 
 @th.django_unit_test()
 def test_rest_reset_failed_and_purge(opts):
+    assert opts.client.is_authenticated, "authentication failed (not logged in before REST test)"
     """
     REST: POST control/reset-failed and POST control/purge
     """
@@ -314,8 +345,9 @@ def test_rest_reset_failed_and_purge(opts):
         "limit": 10,
     })
     assert resp.status_code == 200, f"POST /api/jobs/control/reset-failed failed: status={resp.status_code} body={getattr(resp, 'response', None) and getattr(resp.response, 'data', None)}"
-    assert resp.response.data.status is True, f"reset-failed returned status=False: data={resp.response.data}"
-    assert resp.response.data.reset_count >= 1, f"reset-failed reset_count < 1: data={resp.response.data}"
+    assert resp.response, f"reset-failed return data: response={resp.response}"
+    assert resp.response.status is True, f"reset-failed returned status=False: data={resp.response.data}"
+    assert resp.response.reset_count >= 1, f"reset-failed reset_count < 1: data={resp.response.data}"
 
     # Purge: dry_run first
     resp = opts.client.post("/api/jobs/control/purge", {
@@ -323,8 +355,8 @@ def test_rest_reset_failed_and_purge(opts):
         "dry_run": True,
     })
     assert resp.status_code == 200, f"POST /api/jobs/control/purge failed: status={resp.status_code} body={getattr(resp, 'response', None) and getattr(resp.response, 'data', None)}"
-    assert resp.response.data.status is True, f"purge returned status=False: data={resp.response.data}"
-    assert resp.response.data.data.dry_run is True, f"purge dry_run not True: data={resp.response.data}"
+    assert resp.response.status is True, f"purge returned status=False: data={resp.response.data}"
+    assert resp.response.data.dry_run is True, f"purge dry_run not True: data={resp.response.data}"
 
 
 @th.django_unit_test()

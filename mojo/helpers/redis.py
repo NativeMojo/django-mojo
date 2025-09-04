@@ -343,6 +343,19 @@ class RedisAdapter:
         """
         return self.get_client().zcard(key)
 
+    def zscore(self, key: str, member: str) -> Optional[float]:
+        """
+        Get the score of a member in a sorted set.
+
+        Args:
+            key: ZSET key
+            member: Member whose score to retrieve
+
+        Returns:
+            The score as a float, or None if the member does not exist
+        """
+        return self.get_client().zscore(key, member)
+
     # Hash operations
     def hset(self, key: str, mapping: Dict[str, Any]) -> int:
         """

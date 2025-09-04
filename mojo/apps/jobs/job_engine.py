@@ -527,7 +527,11 @@ class JobEngine:
             List of (stream_key, msg_id, job_id) tuples
         """
         claimed = []
-        for channel in self.channels:
+        # Prioritize 'priority' channel first if present
+        channels_ordered = list(self.channels)
+        if 'priority' in channels_ordered:
+            channels_ordered = ['priority'] + [c for c in channels_ordered if c != 'priority']
+        for channel in channels_ordered:
             if len(claimed) >= count:
                 break
             channel_messages = self.claim_jobs_by_channel(channel, count - len(claimed))
