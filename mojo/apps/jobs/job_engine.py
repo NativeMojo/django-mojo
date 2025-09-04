@@ -555,13 +555,18 @@ class JobEngine:
 
     def execute_job(self, stream_key: str, msg_id: str, job_id: str):
         """Execute job and handle all state updates."""
+        job = None
         try:
             # Load job from database
             close_old_connections()
             job = Job.objects.select_for_update().get(id=job_id)
+        except Exception as e:
+            logit.error(f"Failed to load job {job_id}: {e}")
+            self._handle_job_failure(job_id, stream_key, msg_id, e)
 
-            # Check if already processed or cancelled
-            if job.status in ('completed', 'cancelled'):
+        try:
+            # Check if already processed or canceled
+            if job.status in ('completed', 'canceled'):
                 self._ack_message(stream_key, msg_id)
                 return
 
@@ -617,7 +622,7 @@ class JobEngine:
             job.status = 'completed'
             job.finished_at = dates.utcnow()
             job.save(update_fields=['status', 'finished_at', 'metadata'])
-
+            logger.info(f"Job {job.id} completed")
             # Event: completed
             try:
                 JobEvent.objects.create(
@@ -635,12 +640,12 @@ class JobEngine:
             self._ack_message(stream_key, msg_id)
 
             # Metrics
-            duration_ms = int((job.finished_at - job.started_at).total_seconds() * 1000)
             metrics.record("jobs.completed", count=1)
             metrics.record(f"jobs.channel.{job.channel}.completed", count=1)
-            metrics.record("jobs.duration_ms", count=duration_ms)
+            metrics.record("jobs.duration_ms", count=job.duration_ms)
 
         except Exception as e:
+            job.add_log(f"Failed to complete job: {e}", kind="error")
             self._handle_job_failure(job_id, stream_key, msg_id, e)
 
     def _handle_job_failure(self, job_id: str, stream_key: str,

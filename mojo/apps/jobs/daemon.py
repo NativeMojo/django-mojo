@@ -213,11 +213,25 @@ class DaemonRunner:
         stdout = self.logfile if self.daemon and self.logfile else '/dev/null'
         stderr = self.logfile if self.daemon and self.logfile else '/dev/null'
 
+        # Darwin safety: allow fork without exec for Objective-C initialized runtimes
+        if self.daemon and sys.platform == 'darwin' and 'OBJC_DISABLE_INITIALIZE_FORK_SAFETY' not in os.environ:
+            os.environ['OBJC_DISABLE_INITIALIZE_FORK_SAFETY'] = 'YES'
+            logger.info("Set OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES for Darwin fork-safety")
+
+        # Optional working directory from settings
+        working_dir = '/'
+        try:
+            from mojo.helpers.settings import settings as mojo_settings
+            working_dir = mojo_settings.get('JOBS_DAEMON_WORKDIR', '/')
+        except Exception:
+            working_dir = '/'
+
         # Create daemon context
         context = DaemonContext(
             pidfile=self.pidfile,
             stdout=stdout,
             stderr=stderr,
+            working_dir=working_dir,
             detach=self.daemon
         )
 
@@ -230,8 +244,8 @@ class DaemonRunner:
             try:
                 # Run the main function
                 self.run_func()
-            except Exception as e:
-                logger.error(f"{self.name} crashed: {e}")
+            except Exception:
+                logger.exception(f"{self.name} crashed")
                 sys.exit(1)
             finally:
                 if self.stop_func and not self._stop_requested:

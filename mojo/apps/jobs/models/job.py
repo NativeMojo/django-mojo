@@ -4,6 +4,7 @@ Job and JobEvent models for the jobs system.
 from django.db import models
 from mojo.models import MojoModel
 from mojo.helpers import dates
+from typing import Optional, Dict, Any
 
 
 class Job(models.Model, MojoModel):
@@ -109,17 +110,20 @@ class Job(models.Model, MojoModel):
         # Graphs for different use cases
         GRAPHS = {
             'default': {
+                'extra': ['duration_ms'],
                 'fields': [
                     'id', 'channel', 'func', 'status',
-                    'created', 'modified', 'attempt'
+                    'created', 'modified', 'attempt',
+                    'started_at', 'finished_at', 'run_at'
                 ]
             },
             'detail': {
+                'extra': ['duration_ms'],
                 'fields': [
                     'id', 'channel', 'func', 'payload', 'status',
                     'run_at', 'expires_at', 'attempt', 'max_retries',
                     'broadcast', 'cancel_requested', 'max_exec_seconds',
-                    'runner_id', 'last_error', 'metadata',
+                    'runner_id', 'last_error', 'metadata'
                     'created', 'modified', 'started_at', 'finished_at'
                 ]
             },
@@ -252,6 +256,34 @@ class Job(models.Model, MojoModel):
         from mojo.apps.jobs.services import JobActionsService
         return JobActionsService.publish_job_from_template(self, value)
 
+    def add_log(self, message: str, kind: str = 'info', meta: Optional[dict] = None):
+        """
+        Append a log entry for this job.
+
+        Args:
+            message: Log message text
+            kind: One of 'debug','info','warn','error' (default: 'info')
+            meta: Optional small dict for structured context
+        """
+        # Normalize kind to known values
+        kind_norm = (kind or 'info').lower()
+        if kind_norm not in ('debug', 'info', 'warn', 'error'):
+            kind_norm = 'info'
+
+        # Persist log entry
+        JobLog.objects.create(
+            job=self,
+            channel=self.channel,
+            kind=kind_norm,
+            message=str(message),
+            meta=meta or {}
+        )
+
+        # Touch modified for easier tracking
+        self.save(update_fields=['modified'])
+
+        return True
+
 
 class JobEvent(models.Model, MojoModel):
     """
@@ -342,3 +374,68 @@ class JobEvent(models.Model, MojoModel):
 
     def __str__(self):
         return f"JobEvent {self.event} for {self.job_id} at {self.at}"
+
+
+class JobLog(models.Model, MojoModel):
+    """
+    Append-only log entries for individual jobs with optional structured context.
+    Useful for partial failures (e.g., per-recipient send outcomes).
+    """
+
+    # Link to parent job
+    job = models.ForeignKey(Job, on_delete=models.CASCADE, related_name='logs')
+
+    # Denormalized channel for efficient filtering
+    channel = models.CharField(max_length=100, db_index=True)
+
+    # When it happened
+    created = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    # Log kind/severity
+    kind = models.CharField(
+        max_length=16,
+        db_index=True,
+        choices=[
+            ('debug', 'Debug'),
+            ('info', 'Info'),
+            ('warn', 'Warn'),
+            ('error', 'Error'),
+        ],
+        default='info',
+        help_text="Log level/kind"
+    )
+
+    # Message content
+    message = models.TextField(help_text="Log message")
+
+    # Optional structured metadata (keep small)
+    meta = models.JSONField(default=dict, blank=True, help_text="Optional structured context")
+
+    # Standard timestamps
+    created = models.DateTimeField(auto_now_add=True, editable=False, db_index=True)
+    modified = models.DateTimeField(auto_now=True, db_index=True)
+
+    class Meta:
+        db_table = 'jobs_joblog'
+        ordering = ['-created']
+        indexes = [
+            models.Index(fields=['job', '-created']),
+            models.Index(fields=['channel', 'kind', '-created']),
+            models.Index(fields=['-created']),
+        ]
+
+    class RestMeta:
+        VIEW_PERMS = ['manage_jobs', 'view_jobs']
+        SAVE_PERMS = []  # Logs should be written via add_log / system actions
+        DELETE_PERMS = ['manage_jobs']
+        GRAPHS = {
+            'default': {
+                'fields': ['id', 'job_id', 'at', 'kind', 'message']
+            },
+            'detail': {
+                'fields': ['id', 'job_id', 'channel', 'at', 'kind', 'message', 'meta']
+            }
+        }
+
+    def __str__(self):
+        return f"JobLog {self.kind} for {self.job_id} at {self.at}"

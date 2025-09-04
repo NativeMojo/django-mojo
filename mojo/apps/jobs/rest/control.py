@@ -281,6 +281,78 @@ def on_get_queue_sizes(request):
         }, status=400)
 
 
+# Rebuild scheduled ZSETs from DB truth
+@md.POST('control/rebuild-scheduled')
+@md.requires_perms('manage_jobs')
+def on_rebuild_scheduled(request):
+    """
+    Rebuild Redis scheduled ZSETs from DB pending jobs with future run_at.
+
+    Params:
+        channel: Optional channel to restrict rebuild
+        limit: Optional max number of jobs per channel
+    """
+    try:
+        manager = get_manager()
+        channel = request.DATA.get('channel')
+        limit = request.DATA.get('limit')
+        limit_val = int(limit) if limit is not None else None
+
+        result = manager.rebuild_scheduled(channel=channel, limit=limit_val)
+
+        if result.get('status', True):
+            return JsonResponse({
+                'status': True,
+                'data': result
+            })
+        else:
+            return JsonResponse({
+                'status': False,
+                'error': "; ".join(result.get('errors', [])) or 'Unknown error',
+                'data': result
+            }, status=400)
+    except Exception as e:
+        return JsonResponse({
+            'status': False,
+            'error': str(e)
+        }, status=400)
+
+
+# Cleanup consumer groups and stale consumers
+@md.POST('control/cleanup-consumers')
+@md.requires_perms('manage_jobs')
+def on_cleanup_consumers(request):
+    """
+    Cleanup Redis Stream consumer groups and consumers.
+
+    Optional params:
+        channel: If provided, only clean this channel
+        destroy_empty_groups: If true, destroys empty groups after cleanup (default: true)
+    """
+    try:
+        manager = get_manager()
+        channel = request.DATA.get('channel')
+        destroy = request.DATA.get('destroy_empty_groups', True)
+        destroy = bool(destroy) if isinstance(destroy, bool) else str(destroy).lower() in ('1', 'true', 'yes', 'on')
+        result = manager.cleanup_consumer_groups(channel=channel, destroy_empty_groups=destroy)
+        if result.get('status', True):
+            return JsonResponse({
+                'status': True,
+                'data': result
+            })
+        else:
+            return JsonResponse({
+                'status': False,
+                'error': "; ".join(result.get('errors', [])) or 'Unknown error',
+                'data': result
+            }, status=400)
+    except Exception as e:
+        return JsonResponse({
+            'status': False,
+            'error': str(e)
+        }, status=400)
+
+
 # List discovered channels (from registered streams)
 @md.GET('control/channels')
 @md.requires_perms('manage_jobs', 'view_jobs')

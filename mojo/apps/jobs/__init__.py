@@ -7,15 +7,23 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, Optional, Union
 
-from django.conf import settings
 from django.utils import timezone
 from django.db import transaction
 
 from mojo.helpers import logit
-from mojo.helpers.settings import settings as mojo_settings
+from mojo.helpers.settings import settings
 from mojo.apps import metrics
 from .keys import JobKeys
 from .adapters import get_adapter
+
+# Module-level settings for readability
+JOB_CHANNELS = settings.get('JOBS_CHANNELS', ['default'])
+JOBS_PAYLOAD_MAX_BYTES = settings.get('JOBS_PAYLOAD_MAX_BYTES', 16384)
+JOBS_DEFAULT_EXPIRES_SEC = settings.get('JOBS_DEFAULT_EXPIRES_SEC', 900)
+JOBS_DEFAULT_MAX_RETRIES = settings.get('JOBS_DEFAULT_MAX_RETRIES', 0)
+JOBS_DEFAULT_BACKOFF_BASE = settings.get('JOBS_DEFAULT_BACKOFF_BASE', 2.0)
+JOBS_DEFAULT_BACKOFF_MAX = settings.get('JOBS_DEFAULT_BACKOFF_MAX', 3600)
+JOBS_STREAM_MAXLEN = settings.get('JOBS_STREAM_MAXLEN', 100000)
 
 
 __all__ = [
@@ -84,9 +92,14 @@ def publish(
     # Check payload size
     import json
     payload_json = json.dumps(payload)
-    max_bytes = getattr(settings, 'JOBS_PAYLOAD_MAX_BYTES', 16384)
+    max_bytes = JOBS_PAYLOAD_MAX_BYTES
     if len(payload_json.encode('utf-8')) > max_bytes:
         raise ValueError(f"Payload exceeds maximum size of {max_bytes} bytes")
+
+    # Validate channel against configured channels
+    configured_channels = JOB_CHANNELS if isinstance(JOB_CHANNELS, list) else [JOB_CHANNELS]
+    if channel not in configured_channels:
+        raise ValueError(f"Invalid jobs channel '{channel}'. Must be one of: {', '.join(configured_channels)}")
 
     # Generate job ID
     job_id = uuid.uuid4().hex  # UUID without dashes
@@ -108,16 +121,16 @@ def publish(
     elif expires_in:
         expires_at = now + timedelta(seconds=expires_in)
     else:
-        default_expire = getattr(settings, 'JOBS_DEFAULT_EXPIRES_SEC', 900)
+        default_expire = JOBS_DEFAULT_EXPIRES_SEC
         expires_at = now + timedelta(seconds=default_expire)
 
     # Apply defaults
     if max_retries is None:
-        max_retries = getattr(settings, 'JOBS_DEFAULT_MAX_RETRIES', 0)
+        max_retries = JOBS_DEFAULT_MAX_RETRIES
     if backoff_base is None:
-        backoff_base = getattr(settings, 'JOBS_DEFAULT_BACKOFF_BASE', 2.0)
+        backoff_base = JOBS_DEFAULT_BACKOFF_BASE
     if backoff_max is None:
-        backoff_max = getattr(settings, 'JOBS_DEFAULT_BACKOFF_MAX', 3600)
+        backoff_max = JOBS_DEFAULT_BACKOFF_MAX
 
     # Create job in database
     try:
@@ -180,7 +193,8 @@ def publish(
                 details={'run_at': run_at.isoformat()}
             )
 
-            logit.info(f"Scheduled job {job_id} on {channel} for {run_at}")
+            logit.info(f"Scheduled job {job_id} on {channel} for {run_at} "
+                       f"(zset={'sched_broadcast' if broadcast else 'sched'})")
         else:
             # Add to stream for immediate execution
             stream_key = keys.stream_broadcast(channel) if broadcast else keys.stream(channel)
@@ -188,7 +202,7 @@ def publish(
                 'job_id': job_id,
                 'func': func_path,  # For logging only
                 'created': now.isoformat()
-            }, maxlen=getattr(settings, 'JOBS_STREAM_MAXLEN', 100000))
+            }, maxlen=JOBS_STREAM_MAXLEN)
 
             # Record queued event
             JobEvent.objects.create(
@@ -198,7 +212,7 @@ def publish(
                 details={'stream': stream_key}
             )
 
-            logit.info(f"Queued job {job_id} on {channel} (broadcast={broadcast})")
+            logit.info(f"Queued job {job_id} on {channel} (broadcast={broadcast}) to stream {stream_key}")
 
         # Emit metric
 

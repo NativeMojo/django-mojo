@@ -1,7 +1,8 @@
 from mojo import decorators as md
 from mojo.helpers.response import JsonResponse
 from mojo.helpers import logit
-from mojo.apps.jobs.models import Job, JobEvent
+from mojo.helpers.settings import settings
+from mojo.apps.jobs.models import Job, JobEvent, JobLog
 from mojo.apps.jobs.manager import get_manager
 from mojo.apps.jobs import publish, cancel, status
 from django.utils import timezone
@@ -24,6 +25,14 @@ def on_job(request, pk=None):
 def on_job_event(request, pk=None):
     """Standard CRUD operations for job events."""
     return JobEvent.on_rest_request(request, pk)
+
+
+# Basic CRUD for Job Logs
+@md.URL('logs')
+@md.URL('logs/<int:pk>')
+def on_job_logs(request, pk=None):
+    """Standard CRUD operations for job logs."""
+    return JobLog.on_rest_request(request, pk)
 
 
 # Get job status
@@ -105,104 +114,6 @@ def on_retry_job(request):
             'error': str(e)
         }, status=400)
 
-
-# List jobs with filtering
-@md.GET('list')
-@md.requires_perms('manage_jobs', 'view_jobs')
-def on_list_jobs(request):
-    """Query jobs with filtering options."""
-    try:
-        from datetime import datetime
-
-        # Get filter parameters
-        channel = request.DATA.get('channel')
-        status_filter = request.DATA.get('status')
-        since = request.DATA.get('since')
-        limit = int(request.DATA.get('limit', 100))
-
-        # Build query
-        query = Q()
-        if channel:
-            query &= Q(channel=channel)
-        if status_filter:
-            query &= Q(status=status_filter)
-        if since:
-            since_dt = datetime.fromisoformat(since)
-            query &= Q(created__gte=since_dt)
-
-        # Execute query
-        jobs = Job.objects.filter(query).order_by('-created')[:limit]
-
-        # Serialize results
-        data = []
-        for job in jobs:
-            data.append({
-                'id': job.id,
-                'func': job.func,
-                'channel': job.channel,
-                'status': job.status,
-                'attempt': job.attempt,
-                'created': job.created.isoformat(),
-                'started_at': job.started_at.isoformat() if job.started_at else None,
-                'finished_at': job.finished_at.isoformat() if job.finished_at else None,
-                'last_error': job.last_error
-            })
-
-        return JsonResponse({
-            'status': True,
-            'count': len(data),
-            'data': data
-        })
-
-    except Exception as e:
-        return JsonResponse({
-            'status': False,
-            'error': str(e)
-        }, status=400)
-
-
-# Get job events
-@md.GET('job/<str:job_id>/events')
-@md.requires_perms('manage_jobs', 'view_jobs')
-def on_get_job_events(request, job_id):
-    """Get the event history for a specific job."""
-    try:
-        # Verify job exists
-        try:
-            job = Job.objects.get(id=job_id)
-        except Job.DoesNotExist:
-            return JsonResponse({
-                'status': False,
-                'error': 'Job not found'
-            }, status=404)
-
-        # Get events
-        events = JobEvent.objects.filter(job=job).order_by('at')
-
-        # Serialize events
-        data = []
-        for i, event in enumerate(events):
-            data.append({
-                'id': i + 1,
-                'event': event.event,
-                'at': event.at.isoformat(),
-                'runner_id': event.runner_id,
-                'attempt': event.attempt,
-                'details': event.details
-            })
-
-        return JsonResponse({
-            'status': True,
-            'job_id': job_id,
-            'count': len(data),
-            'data': data
-        })
-
-    except Exception as e:
-        return JsonResponse({
-            'status': False,
-            'error': str(e)
-        }, status=400)
 
 
 # Get channel health
@@ -414,18 +325,86 @@ def on_system_stats(request):
 
 
 @md.POST('test')
-@md.requires_perms('manage_jobs', 'view_jobs')
+@md.requires_perms('manage_jobs')
 def on_system_test(request):
     from mojo.apps import jobs
     jobs.publish(
-        "mojo.apps.jobs.examples.sample_jobs.send_email",
+        "mojo.apps.jobs.examples.sample_jobs.simulate_long_job",
         {
-            "recipients": ["user@example.com"],
-            "subject": "Test Email",
-            "body": "This is a test email."
+            "delay": 15
         },
-        channel='email'
+        channel='priority'
     )
+    return JsonResponse({
+        'status': True,
+        'message': 'Test job should be running.'
+    })
+
+
+@md.POST('tests')
+@md.requires_perms('manage_jobs')
+def on_system_tests(request):
+    from mojo.apps import jobs
+    import random
+
+    base_job_list = [
+        {
+            "func": "mojo.apps.jobs.examples.sample_jobs.send_email",
+            "payload": {
+                "recipients": ["user@example.com"],
+                "subject": "Test Email",
+                "body": "This is a test email."
+            },
+            "channel": 'email'
+        },
+        {
+            "func": "mojo.apps.jobs.examples.sample_jobs.process_file_upload",
+            "payload": {
+                "file_path": "/path/to/file"
+            },
+            "channel": 'priority'
+        },
+        {
+            "func": "mojo.apps.jobs.examples.sample_jobs.process_file_upload",
+            "payload": {
+                "file_error_path": "/path/to/file"
+            },
+            "channel": 'default'
+        }
+    ]
+
+    fetch_job = {
+        "func": "mojo.apps.jobs.examples.sample_jobs.fetch_external_api",
+        "payload": {
+            "url": "https://nativemojo.com/"
+        },
+        "channel": 'webhooks'
+    }
+
+    job_list = []
+    channels = settings.get("JOBS_CHANNELS", ["email"])
+    for channel in channels:
+        j = random.choice(base_job_list)
+        j["channel"] = channel
+        job_list.append(j)
+
+    job_list.append(fetch_job)
+    # lets schedule some jobs as well
+    # for i in range(10):
+    #     j = random.choice(base_job_list)
+    #     j = j.copy()
+    #     j["delay"] = random.randint(30, 300)
+    #     job_list.append(j)
+
+    # for i in range(50):
+    #     j = random.choice(base_job_list)
+    #     job_list.append(j.copy())
+
+
+
+
+    for jd in job_list:
+        jobs.publish(**jd)
     return JsonResponse({
         'status': True,
         'message': 'Test job should be running.'

@@ -129,6 +129,9 @@ class JobManager:
             'broadcast_length': 0,
             'scheduled_count': 0,
             'pending_count': 0,
+            'unclaimed_count': 0,
+            'inflight_count': 0,
+            'queued_count': 0,
             'runners': 0,
             'consumer_groups': []
         }
@@ -145,6 +148,47 @@ class JobManager:
                 pending_info = self.redis.xpending(stream_key, group_key)
                 if pending_info:
                     state['pending_count'] = pending_info.get('pending', 0)
+                    state['inflight_count'] = state['pending_count']
+
+                # Refined unclaimed computation:
+                # - If no consumer group exists or xinfo_groups is empty: unclaimed = stream_length (no one to claim)
+                # - Else if last-delivered-id equals stream last-entry id: unclaimed = 0 (everything delivered/acked)
+                # - Else fallback: max(stream_length - pending_count, 0)
+                try:
+                    groups_info = self.redis.get_client().xinfo_groups(stream_key)
+                except Exception:
+                    groups_info = []
+
+                if not groups_info:
+                    state['unclaimed_count'] = state['stream_length']
+                    state['queued_count'] = state['unclaimed_count']
+                else:
+                    # last-entry id from XINFO STREAM (may be None if empty)
+                    last_entry_id = info.get('last-entry', None)
+                    if last_entry_id:
+                        # last-entry may be a tuple (id, fields) in some clients; normalize to id string
+                        if isinstance(last_entry_id, (list, tuple)) and len(last_entry_id) >= 1:
+                            last_entry_id = last_entry_id[0]
+                        if isinstance(last_entry_id, bytes):
+                            last_entry_id = last_entry_id.decode('utf-8')
+                    # If any group has last-delivered-id == last_entry_id, we consider no unclaimed backlog
+                    last_delivered_matches = False
+                    for g in groups_info or []:
+                        try:
+                            g_last = g.get('last-delivered-id')
+                            if isinstance(g_last, bytes):
+                                g_last = g_last.decode('utf-8')
+                            if last_entry_id and g_last and str(g_last) == str(last_entry_id):
+                                last_delivered_matches = True
+                                break
+                        except Exception:
+                            continue
+
+                    if last_delivered_matches:
+                        state['unclaimed_count'] = 0
+                    else:
+                        state['unclaimed_count'] = max(0, state['stream_length'] - state['pending_count'])
+                    state['queued_count'] = state['unclaimed_count']
 
             except Exception as e:
                 logit.debug(f"Stream {stream_key} not found or has no data: {e}")
@@ -911,6 +955,8 @@ class JobManager:
             'runners': [],
             'totals': {
                 'pending': 0,
+                'queued': 0,
+                'inflight': 0,
                 'running': 0,
                 'completed': 0,
                 'failed': 0,
@@ -927,20 +973,44 @@ class JobManager:
             # Get stats for each configured channel
             channels = getattr(settings, 'JOBS_CHANNELS', ['default', 'email', 'webhooks', 'priority'])
             for channel in channels:
-                state = self.get_queue_state(channel)
-                stats['channels'][channel] = state
+                    state = self.get_queue_state(channel)
 
-                # Aggregate totals
-                stats['totals']['scheduled'] += state['scheduled_count']
-                stats['totals']['pending'] += state['stream_length']
+                    # Include DB running count per channel for better visibility
+                    try:
+                        state['db_running'] = Job.objects.filter(channel=channel, status='running').count()
+                    except Exception:
+                        state['db_running'] = 0
+
+                    stats['channels'][channel] = state
+
+                    # Aggregate totals
+                    stats['totals']['scheduled'] += state['scheduled_count']
+                    # queued_count = unclaimed_count; inflight_count = pending_count
+                    queued = state.get('queued_count', state.get('unclaimed_count', max(0, state.get('stream_length', 0) - state.get('pending_count', 0))))
+                    inflight = state.get('inflight_count', state.get('pending_count', 0))
+                    stats['totals']['queued'] += queued
+                    stats['totals']['inflight'] += inflight
+                    # Keep 'pending' as alias for queued for backward compatibility
+                    stats['totals']['pending'] += queued
 
             # Get all runners
             all_runners = self.get_runners()
             stats['runners'] = all_runners
-            stats['totals']['runners_active'] = len([r for r in all_runners if r['alive']])
+            alive_runners = [r for r in all_runners if r.get('alive')]
+            alive_ids = [r.get('runner_id') for r in alive_runners if r.get('runner_id')]
+            stats['totals']['runners_active'] = len(alive_runners)
 
-            # Database totals
-            stats['totals']['running'] = Job.objects.filter(status='running').count()
+            # Database totals with active vs stale running split
+            running_total = Job.objects.filter(status='running').count()
+            if alive_ids:
+                running_active = Job.objects.filter(status='running', runner_id__in=alive_ids).count()
+            else:
+                running_active = 0
+            running_stale = max(0, running_total - running_active)
+
+            stats['totals']['running'] = running_total
+            stats['totals']['running_active'] = running_active
+            stats['totals']['running_stale'] = running_stale
             stats['totals']['completed'] = Job.objects.filter(status='completed').count()
             stats['totals']['failed'] = Job.objects.filter(status='failed').count()
 
@@ -1195,6 +1265,329 @@ class JobManager:
         except Exception as e:
             return {'status': False, 'error': str(e)}
 
+
+def _jobmanager_cleanup_consumer_groups(self, channel: Optional[str] = None, destroy_empty_groups: bool = True) -> Dict[str, Any]:
+    """
+    Clean up Redis Stream consumer groups and consumers.
+
+    - If channel is provided, operates on that channel only.
+    - Otherwise, iterates discovered channels (or settings fallback).
+    - Removes consumers with no pending messages.
+    - Optionally destroys empty groups after consumer cleanup.
+
+    Returns:
+        Dict with per-channel cleanup results and any errors.
+    """
+    results: Dict[str, Any] = {'status': True, 'channels': {}, 'errors': []}
+    try:
+        # Determine channels to process
+        try:
+            from django.conf import settings as dj_settings
+        except Exception:
+            dj_settings = None
+
+        if channel:
+            channels = [channel]
+        else:
+            channels = self.get_registered_channels()
+            if not channels and dj_settings:
+                channels = getattr(dj_settings, 'JOBS_CHANNELS', ['default'])
+
+        client = self.redis.get_client()
+
+        for ch in channels:
+            channel_result: Dict[str, Any] = {
+                'stream': self.keys.stream(ch),
+                'groups_processed': 0,
+                'consumers_removed': 0,
+                'groups_destroyed': 0,
+                'errors': []
+            }
+            stream_key = self.keys.stream(ch)
+
+            # Fetch groups for this stream
+            try:
+                groups = client.xinfo_groups(stream_key)
+            except Exception as e:
+                # If stream doesn't exist, nothing to clean
+                channel_result['errors'].append(f"xinfo_groups failed: {e}")
+                results['channels'][ch] = channel_result
+                continue
+
+            # Normalize groups to dicts with string keys
+            norm_groups = []
+            try:
+                for g in groups or []:
+                    if isinstance(g, dict):
+                        name = g.get('name')
+                        if isinstance(name, bytes):
+                            name = name.decode('utf-8')
+                        consumers_count = g.get('consumers', 0)
+                        pending = g.get('pending', 0)
+                        last_id = g.get('last-delivered-id')
+                        if isinstance(last_id, bytes):
+                            last_id = last_id.decode('utf-8')
+                        norm_groups.append({
+                            'name': name,
+                            'consumers': int(consumers_count or 0),
+                            'pending': int(pending or 0),
+                            'last_delivered_id': last_id or ''
+                        })
+            except Exception as e:
+                channel_result['errors'].append(f"group normalization failed: {e}")
+                results['channels'][ch] = channel_result
+                continue
+
+            # Process each group
+            for g in norm_groups:
+                group_name = g['name']
+                channel_result['groups_processed'] += 1
+                try:
+                    consumers = client.xinfo_consumers(stream_key, group_name)
+                except Exception as e:
+                    channel_result['errors'].append(f"xinfo_consumers({group_name}) failed: {e}")
+                    consumers = []
+
+                # Remove consumers with no pending messages
+                removed = 0
+                try:
+                    for c in consumers or []:
+                        cname = c.get('name')
+                        if isinstance(cname, bytes):
+                            cname = cname.decode('utf-8')
+                        pending_c = int(c.get('pending', 0) or 0)
+                        if pending_c == 0 and cname:
+                            try:
+                                client.execute_command('XGROUP', 'DELCONSUMER', stream_key, group_name, cname)
+                                removed += 1
+                            except Exception as e:
+                                channel_result['errors'].append(f"DELCONSUMER {group_name}/{cname} failed: {e}")
+                    channel_result['consumers_removed'] += removed
+                except Exception as e:
+                    channel_result['errors'].append(f"consumer removal loop failed for {group_name}: {e}")
+
+                # Optionally destroy empty group
+                if destroy_empty_groups:
+                    try:
+                        # Refresh group info to check if any consumers remain
+                        refreshed_groups = client.xinfo_groups(stream_key)
+                        grp = None
+                        for rg in refreshed_groups or []:
+                            nm = rg.get('name')
+                            if isinstance(nm, bytes):
+                                nm = nm.decode('utf-8')
+                            if nm == group_name:
+                                grp = rg
+                                break
+                        remaining = int(grp.get('consumers', 0) or 0) if grp else 0
+                        if remaining == 0:
+                            try:
+                                client.execute_command('XGROUP', 'DESTROY', stream_key, group_name)
+                                channel_result['groups_destroyed'] += 1
+                            except Exception as e:
+                                channel_result['errors'].append(f"XGROUP DESTROY {group_name} failed: {e}")
+                    except Exception as e:
+                        channel_result['errors'].append(f"post-clean xinfo_groups failed: {e}")
+
+            results['channels'][ch] = channel_result
+
+    except Exception as e:
+        results['status'] = False
+        results['errors'].append(str(e))
+
+    return results
+
+# Attach as a method on JobManager for runtime use
+JobManager.cleanup_consumer_groups = _jobmanager_cleanup_consumer_groups
+
+def _jobmanager_rebuild_scheduled(self, channel: Optional[str] = None, limit: Optional[int] = None) -> Dict[str, Any]:
+    """
+    Rebuild scheduled ZSETs from DB truth for pending jobs with future run_at.
+    Useful if ZSETs were not populated during publish or after outages.
+
+    Args:
+        channel: Optional channel to restrict rebuild
+        limit: Optional max number of jobs per channel
+
+    Returns:
+        Dict with per-channel counts and errors.
+    """
+    results: Dict[str, Any] = {'status': True, 'channels': {}, 'errors': []}
+    try:
+        from django.utils import timezone
+        now = timezone.now()
+
+        # Determine channels
+        if channel:
+            channels = [channel]
+        else:
+            channels = self.get_registered_channels()
+            if not channels:
+                try:
+                    from django.conf import settings as dj_settings
+                    channels = getattr(dj_settings, 'JOBS_CHANNELS', ['default'])
+                except Exception:
+                    channels = ['default']
+
+        for ch in channels:
+            ch_result = {'scheduled_added': 0, 'broadcast_added': 0, 'errors': []}
+            try:
+                # Query jobs pending with future run_at
+                qs = Job.objects.filter(channel=ch, status='pending', run_at__gt=now).order_by('run_at')
+                if limit is not None:
+                    qs = qs[:int(limit)]
+
+                sched_key = self.keys.sched(ch)
+                sched_b_key = self.keys.sched_broadcast(ch)
+
+                for job in qs:
+                    try:
+                        score = job.run_at.timestamp() * 1000.0
+                        # Skip if already present
+                        exists = self.redis.zscore(sched_b_key if job.broadcast else sched_key, job.id)
+                        if exists is not None:
+                            continue
+                        # Insert into appropriate ZSET
+                        if job.broadcast:
+                            self.redis.zadd(sched_b_key, {job.id: score})
+                            ch_result['broadcast_added'] += 1
+                        else:
+                            self.redis.zadd(sched_key, {job.id: score})
+                            ch_result['scheduled_added'] += 1
+                    except Exception as ie:
+                        ch_result['errors'].append(f"{job.id}: {ie}")
+
+            except Exception as ce:
+                ch_result['errors'].append(str(ce))
+
+            results['channels'][ch] = ch_result
+
+    except Exception as e:
+        results['status'] = False
+        results['errors'].append(str(e))
+
+    return results
+
+# Attach as a method on JobManager for runtime use
+JobManager.rebuild_scheduled = _jobmanager_rebuild_scheduled
+
+def _jobmanager_recover_stale_running(self, channel: Optional[str] = None, max_age_seconds: Optional[int] = None) -> Dict[str, Any]:
+    """
+    Recover stale running jobs (DB shows status='running' but no inflight messages in Redis).
+    For each channel (or a specific channel), if inflight_count == 0, reset DB running jobs
+    to pending and requeue them to the stream immediately.
+
+    Args:
+        channel: Optional channel to restrict recovery
+        max_age_seconds: Optional age threshold (only recover jobs started before now - max_age_seconds)
+
+    Returns:
+        Dict with per-channel recovery results and any errors:
+        {
+          status: True/False,
+          channels: {
+            channel: {
+              examined: N,
+              recovered: M,
+              errors: [...]
+            },
+            ...
+          },
+          errors: [...]
+        }
+    """
+    results: Dict[str, Any] = {'status': True, 'channels': {}, 'errors': []}
+    try:
+        # Determine channels
+        if channel:
+            channels = [channel]
+        else:
+            try:
+                channels = self.get_registered_channels()
+            except Exception:
+                channels = []
+            if not channels:
+                try:
+                    from django.conf import settings as dj_settings
+                    channels = getattr(dj_settings, 'JOBS_CHANNELS', ['default'])
+                except Exception:
+                    channels = ['default']
+
+        now = timezone.now()
+        for ch in channels:
+            ch_result: Dict[str, Any] = {'examined': 0, 'recovered': 0, 'errors': []}
+            try:
+                # Check inflight (PEL) for this channel
+                state = self.get_queue_state(ch)
+                inflight = int(state.get('inflight_count', 0) or 0)
+
+                # Only recover when no inflight (avoid racing real running work)
+                if inflight > 0:
+                    results['channels'][ch] = ch_result
+                    continue
+
+                # Build query for DB running jobs
+                from django.db.models import Q
+                q = Q(channel=ch, status='running')
+                if max_age_seconds is not None and max_age_seconds > 0:
+                    cutoff = now - timedelta(seconds=int(max_age_seconds))
+                    q &= Q(started_at__lt=cutoff)
+
+                running_qs = Job.objects.filter(q).order_by('started_at')
+                ch_result['examined'] = running_qs.count()
+
+                # Requeue each recovered job
+                for job in running_qs:
+                    try:
+                        # Reset DB status to pending
+                        job.status = 'pending'
+                        job.runner_id = None
+                        job.cancel_requested = False
+                        job.started_at = None
+                        job.finished_at = None
+                        job.last_error = job.last_error or ''
+                        job.stack_trace = job.stack_trace or ''
+                        job.save(update_fields=['status', 'runner_id', 'cancel_requested', 'started_at', 'finished_at', 'last_error', 'stack_trace', 'modified'])
+
+                        # Push to stream immediately
+                        stream_key = self.keys.stream(job.channel) if not job.broadcast else self.keys.stream_broadcast(job.channel)
+                        try:
+                            self.redis.xadd(stream_key, {
+                                'job_id': job.id,
+                                'func': job.func,
+                                'recovered': now.isoformat()
+                            })
+                        except Exception as xe:
+                            ch_result['errors'].append(f"xadd failed for {job.id}: {xe}")
+
+                        # Event
+                        try:
+                            JobEvent.objects.create(
+                                job=job,
+                                channel=job.channel,
+                                event='retry',
+                                details={'reason': 'recover_stale_running'}
+                            )
+                        except Exception as ee:
+                            ch_result['errors'].append(f"event failed for {job.id}: {ee}")
+
+                        ch_result['recovered'] += 1
+                    except Exception as je:
+                        ch_result['errors'].append(f"{job.id}: {je}")
+
+            except Exception as ce:
+                ch_result['errors'].append(str(ce))
+
+            results['channels'][ch] = ch_result
+
+    except Exception as e:
+        results['status'] = False
+        results['errors'].append(str(e))
+
+    return results
+
+# Attach as a method on JobManager for runtime use
+JobManager.recover_stale_running = _jobmanager_recover_stale_running
 
 # Module-level singleton
 _manager = None

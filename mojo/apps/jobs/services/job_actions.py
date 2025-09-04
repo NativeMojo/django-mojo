@@ -21,41 +21,106 @@ class JobActionsService:
         """
         Cancel a job.
 
+        Behavior:
+          - If job is terminal: refuse
+          - If job is running:
+              - If runner heartbeat is not alive, force cancel (status='canceled')
+              - If runner alive, set cancel_requested=True (cooperative cancel)
+          - If job is not running (e.g., pending/scheduled/failed/expired): set status='canceled'
+
+        Also attempts to remove from scheduled ZSETs when applicable.
+
         Args:
             job: Job model instance
 
         Returns:
             dict: Response with status and message
         """
-        # Check if job is in terminal state
+        # Check terminal
         if job.is_terminal:
             return {
                 'status': False,
                 'error': f'Cannot cancel job in {job.status} state'
             }
 
-        # Set cancel flag
-        job.cancel_requested = True
-        job.save(update_fields=['cancel_requested', 'modified'])
+        now = timezone.now()
+        previous_status = job.status
+        forced = False
 
+        try:
+            # Determine if runner is alive when job is marked running
+            runner_alive = False
+            if job.status == 'running' and job.runner_id:
+                from mojo.apps.jobs.adapters import get_adapter
+                from mojo.apps.jobs.keys import JobKeys
+                redis = get_adapter()
+                keys = JobKeys()
+                hb = redis.get(keys.runner_hb(job.runner_id))
+                runner_alive = bool(hb)
 
+            if job.status == 'running':
+                if runner_alive:
+                    # Cooperative cancel for running job
+                    job.cancel_requested = True
+                    job.save(update_fields=['cancel_requested', 'modified'])
+                else:
+                    # Force cancel stale running job
+                    job.status = 'canceled'
+                    job.finished_at = now
+                    job.cancel_requested = True
+                    job.runner_id = None
+                    job.save(update_fields=['status', 'finished_at', 'cancel_requested', 'runner_id', 'modified'])
+                    forced = True
+            else:
+                # Not running: cancel immediately
+                job.status = 'canceled'
+                job.finished_at = now
+                job.cancel_requested = True
+                job.runner_id = None
+                job.save(update_fields=['status', 'finished_at', 'cancel_requested', 'runner_id', 'modified'])
 
-        # Record event
-        from mojo.apps.jobs.models import JobEvent
-        JobEvent.objects.create(
-            job=job,
-            channel=job.channel,
-            event='canceled',
-            details={'requested_at': timezone.now().isoformat()}
-        )
+                # Best-effort: remove from scheduled ZSETs if it was scheduled
+                try:
+                    from mojo.apps.jobs.adapters import get_adapter
+                    from mojo.apps.jobs.keys import JobKeys
+                    redis = get_adapter()
+                    keys = JobKeys()
+                    # Remove from both sched sets; only one will match
+                    redis.zadd  # touch to appease linters; real calls below
+                    redis.zrem = redis.get_client().zrem  # ensure we have zrem via client
+                    redis.get_client().zrem(keys.sched(job.channel), job.id)
+                    redis.get_client().zrem(keys.sched_broadcast(job.channel), job.id)
+                except Exception as e:
+                    logit.debug(f"Cancel cleanup (sched zrem) failed for {job.id}: {e}")
 
-        logit.info(f"Cancellation requested for job {job.id}")
+            # Record event
+            from mojo.apps.jobs.models import JobEvent
+            JobEvent.objects.create(
+                job=job,
+                channel=job.channel,
+                event='canceled',
+                details={
+                    'requested_at': now.isoformat(),
+                    'forced': forced,
+                    'previous_status': previous_status
+                }
+            )
 
-        return {
-            'status': True,
-            'message': f'Job {job.id} cancellation requested',
-            'job_id': job.id
-        }
+            logit.info(f"Cancellation {'forced' if forced else 'requested'} for job {job.id} (prev={previous_status})")
+
+            return {
+                'status': True,
+                'message': f"Job {job.id} {'canceled' if job.status == 'canceled' else 'cancellation requested'}",
+                'job_id': job.id,
+                'forced': forced
+            }
+
+        except Exception as e:
+            logit.error(f"Failed to cancel job {job.id}: {e}")
+            return {
+                'status': False,
+                'error': f'Failed to cancel job: {str(e)}'
+            }
 
     @staticmethod
     def retry_job(job, delay: Optional[int] = None) -> Dict[str, Any]:

@@ -10,7 +10,7 @@ Usage:
 Global Commands:
     status              Check status of all daemons
     stop                Stop all running daemons
-    start               Start both engine and scheduler as daemons
+    # start (deprecated): Use component commands instead
 
 Component Commands:
     engine start        Start just the engine as daemon
@@ -23,7 +23,6 @@ Component Commands:
 Examples:
     # Global control
     python -m mojo.apps.jobs.cli status
-    python -m mojo.apps.jobs.cli start
     python -m mojo.apps.jobs.cli stop
 
     # Component control
@@ -40,6 +39,7 @@ import sys
 import argparse
 import signal
 import time
+import subprocess
 from pathlib import Path
 from typing import Optional, List
 
@@ -128,7 +128,7 @@ def setup_signal_handlers(engine=None, scheduler=None):
     signal.signal(signal.SIGINT, signal_handler)
 
 
-def start_engine_daemon(verbose=False):
+def start_engine_daemon(verbose=False, logfile_override: Optional[str] = None):
     """Start engine as daemon process."""
     if is_engine_running():
         if verbose:
@@ -137,6 +137,7 @@ def start_engine_daemon(verbose=False):
 
     from mojo.apps.jobs.job_engine import JobEngine
     from mojo.apps.jobs.daemon import DaemonRunner
+    from mojo.helpers import paths
 
     # Get channels from settings
     try:
@@ -154,7 +155,8 @@ def start_engine_daemon(verbose=False):
     pidfile = f"/tmp/job-engine-{engine.runner_id}.pid"
 
     # Get logfile from settings
-    logfile = getattr(settings, 'JOBS_ENGINE_LOGFILE', None)
+    # logfile = logfile_override if logfile_override is not None else getattr(settings, 'JOBS_ENGINE_LOGFILE', None)
+    logfile = paths.LOG_ROOT / 'job_engine.log'
 
     # Setup daemon runner
     runner = DaemonRunner(
@@ -186,6 +188,7 @@ def start_scheduler_daemon(verbose=False):
 
     from mojo.apps.jobs.scheduler import Scheduler
     from mojo.apps.jobs.daemon import DaemonRunner
+    from mojo.helpers import paths
 
     # Get channels from settings
     try:
@@ -203,7 +206,8 @@ def start_scheduler_daemon(verbose=False):
     pidfile = f"/tmp/job-scheduler-{scheduler.scheduler_id}.pid"
 
     # Get logfile from settings
-    logfile = getattr(settings, 'JOBS_SCHEDULER_LOGFILE', None)
+    # logfile = getattr(settings, 'JOBS_SCHEDULER_LOGFILE', None)
+    logfile = paths.LOG_ROOT / 'job_scheduler.log'
 
     # Setup daemon runner
     runner = DaemonRunner(
@@ -442,12 +446,30 @@ def stop_scheduler_daemon(verbose=False):
 
 
 def start_command(verbose=False):
-    """Start both engine and scheduler as daemons."""
+    """Start both engine and scheduler as daemons (separate processes)."""
     if verbose:
         print("🚀 Starting both engine and scheduler as daemons...")
 
-    engine_success = start_engine_daemon(verbose)
-    scheduler_success = start_scheduler_daemon(verbose)
+    args_common = ["-v"] if verbose else []
+    python = sys.executable
+    module = "mojo.apps.jobs.cli"
+
+    # Launch engine in separate process
+    engine_result = subprocess.run(
+        [python, "-m", module, "engine", "start"] + args_common,
+        stdout=None if verbose else subprocess.DEVNULL,
+        stderr=None if verbose else subprocess.DEVNULL,
+    )
+
+    # Launch scheduler in separate process
+    scheduler_result = subprocess.run(
+        [python, "-m", module, "scheduler", "start"] + args_common,
+        stdout=None if verbose else subprocess.DEVNULL,
+        stderr=None if verbose else subprocess.DEVNULL,
+    )
+
+    engine_success = (engine_result.returncode == 0)
+    scheduler_success = (scheduler_result.returncode == 0)
 
     if engine_success and scheduler_success:
         if verbose:
@@ -455,7 +477,8 @@ def start_command(verbose=False):
         return True
     else:
         if verbose:
-            print("❌ Failed to start one or more components")
+            print(f"❌ Failed to start one or more components "
+                  f"(engine_rc={engine_result.returncode}, scheduler_rc={scheduler_result.returncode})")
         return False
 
 
@@ -509,6 +532,13 @@ Examples:
         choices=['status', 'stop', 'start', 'engine', 'scheduler'],
         help='Command to execute'
     )
+    # Engine-only options
+    parser.add_argument(
+        '--logfile',
+        type=str,
+        default=None,
+        help='Log file path for engine daemon mode (overrides settings)'
+    )
     parser.add_argument(
         'action',
         nargs='?',
@@ -546,10 +576,13 @@ Examples:
         elif command == 'stop':
             return stop_command(verbose)
         elif command == 'start':
-            return start_command(verbose)
+            # Deprecated global start
+            if verbose:
+                print("⚠️  'start' is deprecated. Use 'engine start' and 'scheduler start' instead.")
+            return False
         elif command == 'engine':
             if action == 'start':
-                return start_engine_daemon(verbose)
+                return start_engine_daemon(verbose, logfile_override=parsed_args.logfile)
             elif action == 'foreground':
                 return start_engine_foreground(verbose)
             elif action == 'stop':

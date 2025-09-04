@@ -8,6 +8,7 @@ import time
 import requests
 from typing import Optional
 from mojo.apps.jobs.models import Job
+from turtledemo.chaos import f
 
 
 def send_email(job: Job) -> str:
@@ -36,6 +37,7 @@ def send_email(job: Job) -> str:
 
     for recipient in recipients:
         try:
+            job.add_log(f"sent to {recipient} successfully")
             # Your actual email sending logic here
             # send_mail(recipient, subject, body, template)
             print(f"Sending email to {recipient}")
@@ -59,6 +61,20 @@ def send_email(job: Job) -> str:
 
     return "completed"
 
+
+def simulate_long_job(job: Job) -> str:
+    """
+    Simulate a long-running job.
+
+    Expected payload:
+        duration: Duration in seconds
+    """
+    duration = job.payload.get('duration', 10)
+
+    # Simulate long-running task
+    time.sleep(duration)
+
+    job.add_log("Job completed")
 
 def process_file_upload(job: Job) -> str:
     """
@@ -93,7 +109,7 @@ def process_file_upload(job: Job) -> str:
                 return "cancelled"
 
             # Process chunk (simulate work)
-            time.sleep(0.1)  # Simulate processing time
+            time.sleep(0.3)  # Simulate processing time
             processed += chunk_size
 
             # Update progress
@@ -112,6 +128,7 @@ def process_file_upload(job: Job) -> str:
     except Exception as e:
         job.metadata['error'] = str(e)
         job.metadata['failed_at'] = datetime.now(timezone.utc).isoformat()
+        job.log(f"Error processing job: {e}")
         raise  # Re-raise to trigger retry logic
 
 
@@ -130,7 +147,7 @@ def fetch_external_api(job: Job) -> str:
     method = job.payload.get('method', 'GET')
     headers = job.payload.get('headers', {})
     data = job.payload.get('data')
-    timeout = job.payload.get('timeout', 30)
+    timeout = job.payload.get('timeout', 20)
 
     job.metadata['request_started'] = datetime.now(timezone.utc).isoformat()
     job.metadata['attempt'] = job.attempt
@@ -161,7 +178,7 @@ def fetch_external_api(job: Job) -> str:
             elif isinstance(response_data, list):
                 job.metadata['response_count'] = len(response_data)
         except:
-            pass
+            job.add_log("not a valid JSON response")
 
         return "success"
 

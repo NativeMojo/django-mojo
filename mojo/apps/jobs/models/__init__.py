@@ -1,6 +1,6 @@
 """
 Jobs models.
 """
-from .job import Job, JobEvent
+from .job import Job, JobEvent, JobLog
 
-__all__ = ['Job', 'JobEvent']
+__all__ = ['Job', 'JobEvent', 'JobLog']

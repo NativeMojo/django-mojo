@@ -15,16 +15,22 @@ import threading
 from datetime import datetime, timedelta
 from typing import List, Optional, Set
 
-from django.conf import settings
 from django.utils import timezone
 from django.db import close_old_connections
 
 from mojo.helpers import logit
+from mojo.helpers.settings import settings
 from .daemon import DaemonRunner
 from .keys import JobKeys
 from .adapters import get_adapter
 from .models import Job, JobEvent
 
+# Module-level settings (readability)
+JOBS_CHANNELS = settings.get('JOBS_CHANNELS', ['default'])
+JOBS_SCHEDULER_LOCK_TTL_MS = settings.get('JOBS_SCHEDULER_LOCK_TTL_MS', 5000)
+JOBS_STREAM_MAXLEN = settings.get('JOBS_STREAM_MAXLEN', 100000)
+
+logger = logit.get_logger("scheduler", "scheduler.log")
 
 class Scheduler:
     """
@@ -50,7 +56,7 @@ class Scheduler:
 
         # Lock configuration
         self.lock_key = self.keys.scheduler_lock()
-        self.lock_ttl_ms = getattr(settings, 'JOBS_SCHEDULER_LOCK_TTL_MS', 5000)
+        self.lock_ttl_ms = JOBS_SCHEDULER_LOCK_TTL_MS
         self.lock_renew_interval = self.lock_ttl_ms / 1000 / 2  # Renew at half TTL
         self.lock_value = uuid.uuid4().hex  # Unique value for this scheduler
 
@@ -68,13 +74,13 @@ class Scheduler:
         self.base_sleep_ms = 250
         self.max_sleep_ms = 500
 
-        logit.info(f"Scheduler initialized: id={self.scheduler_id}, "
+        logger.info(f"Scheduler initialized: id={self.scheduler_id}, "
                   f"channels={self.channels}")
 
     def _get_all_channels(self) -> List[str]:
         """Get all configured channels from settings or discover from Redis."""
         # Try settings first
-        configured = getattr(settings, 'JOBS_CHANNELS', None)
+        configured = JOBS_CHANNELS
         if configured:
             return configured
 
@@ -97,10 +103,10 @@ class Scheduler:
         Acquires leadership lock and begins processing scheduled jobs.
         """
         if self.running:
-            logit.warn("Scheduler already running")
+            logger.warn("Scheduler already running")
             return
 
-        logit.info(f"Starting Scheduler {self.scheduler_id}")
+        logger.info(f"Starting Scheduler {self.scheduler_id}")
         self.running = True
         self.start_time = timezone.now()
         self.stop_event.clear()
@@ -112,9 +118,9 @@ class Scheduler:
         try:
             self._main_loop_with_lock()
         except KeyboardInterrupt:
-            logit.info("Scheduler interrupted by user")
+            logger.info("Scheduler interrupted by user")
         except Exception as e:
-            logit.error(f"Scheduler crashed: {e}")
+            logger.error(f"Scheduler crashed: {e}")
             raise
         finally:
             self.stop()
@@ -124,7 +130,7 @@ class Scheduler:
         if not self.running:
             return
 
-        logit.info(f"Stopping Scheduler {self.scheduler_id}...")
+        logger.info(f"Stopping Scheduler {self.scheduler_id}...")
         self.running = False
         self.stop_event.set()
 
@@ -132,13 +138,13 @@ class Scheduler:
         if self.has_lock:
             self._release_lock()
 
-        logit.info(f"Scheduler {self.scheduler_id} stopped. "
+        logger.info(f"Scheduler {self.scheduler_id} stopped. "
                   f"Scheduled: {self.jobs_scheduled}, Expired: {self.jobs_expired}")
 
     def _setup_signal_handlers(self):
         """Register signal handlers for graceful shutdown."""
         def handle_signal(signum, frame):
-            logit.info(f"Scheduler received signal {signum}, shutting down")
+            logger.info(f"Scheduler received signal {signum}, shutting down")
             self.stop()
             sys.exit(0)
 
@@ -163,7 +169,7 @@ class Scheduler:
 
             if result:
                 self.has_lock = True
-                logit.info(f"Scheduler {self.scheduler_id} acquired lock")
+                logger.info(f"Scheduler {self.scheduler_id} acquired lock")
 
                 # Emit metric
                 try:
@@ -178,7 +184,7 @@ class Scheduler:
             return False
 
         except Exception as e:
-            logit.error(f"Failed to acquire scheduler lock: {e}")
+            logger.error(f"Failed to acquire scheduler lock: {e}")
             return False
 
     def _renew_lock(self) -> bool:
@@ -201,12 +207,12 @@ class Scheduler:
                 return True
             else:
                 # Lock stolen or expired
-                logit.warn(f"Scheduler {self.scheduler_id} lost lock")
+                logger.warn(f"Scheduler {self.scheduler_id} lost lock")
                 self.has_lock = False
                 return False
 
         except Exception as e:
-            logit.error(f"Failed to renew scheduler lock: {e}")
+            logger.error(f"Failed to renew scheduler lock: {e}")
             self.has_lock = False
             return False
 
@@ -221,12 +227,12 @@ class Scheduler:
 
             if current_value and current_value == self.lock_value:
                 self.redis.delete(self.lock_key)
-                logit.info(f"Scheduler {self.scheduler_id} released lock")
+                logger.info(f"Scheduler {self.scheduler_id} released lock")
 
             self.has_lock = False
 
         except Exception as e:
-            logit.error(f"Failed to release scheduler lock: {e}")
+            logger.error(f"Failed to release scheduler lock: {e}")
 
     def _main_loop_with_lock(self):
         """Main loop with lock acquisition and renewal."""
@@ -257,7 +263,7 @@ class Scheduler:
                 time.sleep(sleep_ms / 1000.0)
 
             except Exception as e:
-                logit.error(f"Error in scheduler main loop: {e}")
+                logger.error(f"Error in scheduler main loop: {e}")
                 time.sleep(1)
 
     def _process_scheduled_jobs(self):
@@ -272,7 +278,7 @@ class Scheduler:
             try:
                 self._process_channel(channel, now, now_ms)
             except Exception as e:
-                logit.error(f"Failed to process channel {channel}: {e}")
+                logger.error(f"Failed to process channel {channel}: {e}")
 
     def _process_channel(self, channel: str, now: datetime, now_ms: float):
         """
@@ -295,12 +301,18 @@ class Scheduler:
             results = self.redis.zpopmin(sched_key, count=10)
             if not results:
                 break
+            not_due = {}
             for job_id, score in results:
                 if score > now_ms:
-                    self.redis.zadd(sched_key, {job_id: score})
-                    return  # Nothing else will be due either
-                stream_key = self.keys.stream(channel)
-                self._enqueue_job(job_id, channel, now, stream_key, score)
+                    # Collect not-due items to reinsert after the loop
+                    not_due[job_id] = score
+                else:
+                    stream_key = self.keys.stream(channel)
+                    self._enqueue_job(job_id, channel, now, stream_key, score)
+            # Re-add all not-due jobs and break (remaining entries are ordered)
+            if not_due:
+                self.redis.zadd(sched_key, not_due)
+                break
 
         # Process broadcast delayed jobs
         sched_b_key = self.keys.sched_broadcast(channel)
@@ -308,12 +320,18 @@ class Scheduler:
             results = self.redis.zpopmin(sched_b_key, count=10)
             if not results:
                 break
+            not_due_b = {}
             for job_id, score in results:
                 if score > now_ms:
-                    self.redis.zadd(sched_b_key, {job_id: score})
-                    return  # Nothing else will be due either
-                stream_key = self.keys.stream_broadcast(channel)
-                self._enqueue_job(job_id, channel, now, stream_key, score)
+                    # Collect not-due items to reinsert after the loop
+                    not_due_b[job_id] = score
+                else:
+                    stream_key = self.keys.stream_broadcast(channel)
+                    self._enqueue_job(job_id, channel, now, stream_key, score)
+            # Re-add all not-due jobs and break (remaining entries are ordered)
+            if not_due_b:
+                self.redis.zadd(sched_b_key, not_due_b)
+                break
 
     def _enqueue_job(self, job_id: str, channel: str, now: datetime, stream_key: str, scheduled_at_ms: float):
         """
@@ -331,7 +349,7 @@ class Scheduler:
             self.redis.xadd(stream_key, {
                 'job_id': job_id,
                 'scheduled': now.isoformat()
-            }, maxlen=getattr(settings, 'JOBS_STREAM_MAXLEN', 100000))
+            }, maxlen=JOBS_STREAM_MAXLEN)
 
             # Record event in database
             try:
@@ -350,10 +368,10 @@ class Scheduler:
                     }
                 )
             except Exception as e:
-                logit.warn(f"Failed to record queued event for {job_id}: {e}")
+                logger.warn(f"Failed to record queued event for {job_id}: {e}")
 
             self.jobs_scheduled += 1
-            logit.debug(f"Enqueued job {job_id} to {stream_key}")
+            logger.debug(f"Enqueued job {job_id} to {stream_key}")
 
             # Emit metric
             try:
@@ -364,7 +382,7 @@ class Scheduler:
                 pass
 
         except Exception as e:
-            logit.error(f"Failed to enqueue job {job_id}: {e}")
+            logger.error(f"Failed to enqueue job {job_id}: {e}")
 
     def _load_job(self, job_id: str) -> Optional[dict]:
         """Load job data from Redis or database."""
@@ -415,7 +433,7 @@ class Scheduler:
                 details={'scheduler_id': self.scheduler_id}
             )
 
-            logit.info(f"Job {job_id} expired at scheduler")
+            logger.info(f"Job {job_id} expired at scheduler")
 
             # Emit metric
             try:
@@ -425,7 +443,7 @@ class Scheduler:
                 pass
 
         except Exception as e:
-            logit.error(f"Failed to mark job {job_id} as expired: {e}")
+            logger.error(f"Failed to mark job {job_id} as expired: {e}")
 
 
 def main():
