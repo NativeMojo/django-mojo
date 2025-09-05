@@ -1,8 +1,9 @@
 """
 JobEngine - The runner daemon for executing jobs.
 
-This module implements the core job execution engine that consumes
-jobs from Redis Streams and executes registered handlers.
+Plan B engine: consumes jobs from Redis Lists (per-channel queues),
+tracks in-flight jobs in a ZSET with visibility timeout, and executes
+registered handlers.
 """
 import sys
 import signal
@@ -38,6 +39,7 @@ JOBS_CHANNELS = settings.get('JOBS_CHANNELS', ['default'])
 JOBS_ENGINE_MAX_WORKERS = settings.get('JOBS_ENGINE_MAX_WORKERS', 10)
 JOBS_ENGINE_CLAIM_BUFFER = settings.get('JOBS_ENGINE_CLAIM_BUFFER', 2)
 JOBS_RUNNER_HEARTBEAT_SEC = settings.get('JOBS_RUNNER_HEARTBEAT_SEC', 5)
+JOBS_VISIBILITY_TIMEOUT_MS = settings.get('JOBS_VISIBILITY_TIMEOUT_MS', 30000)
 
 
 def load_job_function(func_path: str) -> Callable:
@@ -57,8 +59,9 @@ class JobEngine:
     """
     Job execution engine that runs as a daemon process.
 
-    Consumes jobs from Redis Streams and executes handlers dynamically
-    with support for retries, cancellation, and parallel execution.
+    Plan B: Consumes jobs from Redis List queues and executes handlers dynamically
+    with support for retries, cancellation, and parallel execution. Tracks in-flight
+    jobs in a ZSET to enable crash recovery via a reaper.
     """
 
     def __init__(self, channels: Optional[List[str]] = None,
@@ -135,9 +138,6 @@ class JobEngine:
         self.start_time = dates.utcnow()
         self.stop_event.clear()
 
-        # Ensure consumer groups exist
-        self._setup_consumer_groups()
-
         # Start heartbeat thread
         self._start_heartbeat()
 
@@ -198,9 +198,6 @@ class JobEngine:
         # Stop control listener
         if self.control_thread and self.control_thread.is_alive():
             self.control_thread.join(timeout=5.0)
-
-        # Clean up consumer registrations and reclaim pending jobs
-        self._cleanup_consumer_groups()
 
         # Clean up Redis keys
         try:
@@ -269,29 +266,8 @@ class JobEngine:
                 logger.warning(f"Failed to cleanup consumer groups for {channel}: {e}")
 
     def _setup_consumer_groups(self):
-        """Ensure all required consumer groups exist."""
-        for channel in self.channels:
-            # Workers group for normal stream
-            stream_key = self.keys.stream(channel)
-            group_key = self.keys.group_workers(channel)
-            try:
-                self.redis.xgroup_create(stream_key, group_key, id='0', mkstream=True)
-                logger.info(f"Created consumer group {group_key} for {stream_key}")
-            except Exception as e:
-                # Group likely already exists, which is fine
-                logger.info(f"Consumer group {group_key} already exists: {e}")
-
-            # Per-runner group for broadcast stream
-            broadcast_stream = self.keys.stream_broadcast(channel)
-            runner_group = self.keys.group_runner(channel, self.runner_id)
-            try:
-                self.redis.xgroup_create(broadcast_stream, runner_group, id='0', mkstream=True)
-                logger.info(f"Created runner group {runner_group} for {broadcast_stream}")
-            except Exception as e:
-                # Group likely already exists, which is fine
-                logger.info(f"Runner group {runner_group} already exists: {e}")
-
-            logger.info(f"Consumer groups ready for channel: {channel}")
+        """No-op in Plan B (List + ZSET)."""
+        logger.info("Plan B mode: no consumer groups to set up.")
 
     def _setup_signal_handlers(self):
         """Register signal handlers for graceful shutdown."""
@@ -304,13 +280,20 @@ class JobEngine:
         signal.signal(signal.SIGINT, handle_signal)
 
     def _start_heartbeat(self):
-        """Start the heartbeat thread."""
+        """Start the heartbeat and reaper threads."""
         self.heartbeat_thread = threading.Thread(
             target=self._heartbeat_loop,
             name=f"Heartbeat-{self.runner_id}",
             daemon=True
         )
         self.heartbeat_thread.start()
+        # Reaper thread for visibility timeout
+        self.reaper_thread = threading.Thread(
+            target=self._reaper_loop,
+            name=f"Reaper-{self.runner_id}",
+            daemon=True
+        )
+        self.reaper_thread.start()
 
     def _heartbeat_loop(self):
         """Heartbeat thread main loop."""
@@ -404,8 +387,8 @@ class JobEngine:
             logger.error(f"Failed to handle control message: {e}")
 
     def _main_loop(self):
-        """Main processing loop - claims jobs based on capacity."""
-        logger.info(f"JobEngine {self.runner_id} entering main loop")
+        """Main processing loop - claims jobs from List queues based on capacity."""
+        logger.info(f"JobEngine {self.runner_id} entering main loop (Plan B)")
 
         while self.running and not self.stop_event.is_set():
             try:
@@ -417,104 +400,49 @@ class JobEngine:
                     time.sleep(0.1)
                     continue
 
-                # Claim jobs up to available capacity
-                available = self.max_claimed - active_count
-                claim_batch = JOBS_ENGINE_CLAIM_BATCH
-                messages = self.claim_jobs(min(available, claim_batch))
+                # Compose BRPOP order (priority first)
+                channels_ordered = list(self.channels)
+                if 'priority' in channels_ordered:
+                    channels_ordered = ['priority'] + [c for c in channels_ordered if c != 'priority']
+                queue_keys = [self.keys.queue(ch) for ch in channels_ordered]
 
-                if messages:
-                    logger.info(f"Claimed {len(messages)} jobs")
-                # else:
-                #     logger.info(f"No jobs claimed (active: {active_count}, max: {self.max_claimed})")
+                # Claim one job at a time to avoid over-claiming
+                popped = self.redis.brpop(queue_keys, timeout=1)
+                if not popped:
+                    continue
 
-                for stream_key, msg_id, job_id in messages:
-                    # Submit to thread pool
-                    future = self.executor.submit(
-                        self.execute_job,
-                        stream_key, msg_id, job_id
-                    )
+                queue_key, job_id = popped
+                # Determine channel from key
+                channel = queue_key.split(':')[-1]
 
-                    # Track active job
-                    with self.active_lock:
-                        self.active_jobs[job_id] = {
-                            'future': future,
-                            'started': dates.utcnow(),
-                            'stream': stream_key,
-                            'msg_id': msg_id
-                        }
+                # Track in-flight (visibility)
+                try:
+                    self.redis.zadd(self.keys.processing(channel), {job_id: int(time.time() * 1000)})
+                except Exception as e:
+                    logger.warning(f"Failed to add job {job_id} to processing ZSET: {e}")
 
-                    # Cleanup callback
-                    future.add_done_callback(
-                        lambda f, jid=job_id: self._job_completed(jid)
-                    )
+                # Submit to thread pool
+                future = self.executor.submit(
+                    self.execute_job,
+                    channel, job_id
+                )
 
-                # If no jobs were claimed, sleep
-                if not messages:
-                    time.sleep(0.5)
+                with self.active_lock:
+                    self.active_jobs[job_id] = {
+                        'future': future,
+                        'started': dates.utcnow(),
+                        'channel': channel
+                    }
+
+                future.add_done_callback(lambda f, jid=job_id: self._job_completed(jid))
 
             except Exception as e:
                 logger.error(f"Error in main loop: {e}")
-                time.sleep(1)  # Brief pause before retry
+                time.sleep(0.5)
 
     def claim_jobs_by_channel(self, channel: str, count: int) -> List[Tuple[str, str, str]]:
-        """
-        Claim up to 'count' jobs from Redis streams.
-
-        Args:
-            channel: Channel to claim jobs from
-            count: Maximum number of jobs to claim
-
-        Returns:
-            List of (stream_key, msg_id, job_id) tuples
-        """
-        claimed = []
-
-        stream_key = self.keys.stream(channel)
-        group = self.keys.group_workers(channel)
-
-        # Respect paused channels
-        try:
-            if self.redis.get(self.keys.channel_pause(channel)):
-                return claimed
-        except Exception:
-            pass
-
-        try:
-            # Check if stream exists and has messages first
-            try:
-                stream_info = self.redis.xinfo_stream(stream_key)
-                stream_length = stream_info.get('length', 0)
-                if stream_length == 0:
-                    return claimed
-            except Exception as e:
-                logger.error(f"Channel {channel} stream doesn't exist or error: {e}")
-                return claimed
-
-            # Non-blocking read
-            messages = self.redis.xreadgroup(
-                group=group,
-                consumer=self.runner_id,
-                streams={stream_key: '>'},
-                count=count,
-                block=100  # 100ms timeout
-            )
-            if messages:
-                stream_data = messages[0]  # Should be [stream_key, [(msg_id, data), ...]]
-                message_list = stream_data[1]
-                for msg_id, data in message_list:
-                    # Try both string and bytes keys for job_id
-                    job_id = data.get('job_id') or data.get(b'job_id', b'')
-                    # Handle bytes conversion if needed
-                    if isinstance(job_id, bytes):
-                        job_id = job_id.decode('utf-8')
-                    if job_id:
-                        claimed.append((stream_key, msg_id, job_id))
-                    else:
-                        logger.warning(f"Message {msg_id} has no job_id: {data}")
-
-        except Exception as e:
-            logger.exception(f"Failed to claim jobs from {channel}: {e}")
-        return claimed
+        """Plan B: not used. Kept for compatibility."""
+        return []
 
     def claim_jobs(self, count: int) -> List[Tuple[str, str, str]]:
         """
@@ -539,22 +467,11 @@ class JobEngine:
         return claimed
 
     def _ack_message(self, stream_key: str, msg_id: str):
-        """Acknowledge a message in the stream."""
-        try:
-            # Determine group based on stream type
-            if ':broadcast' in stream_key:
-                channel = stream_key.split(':')[-2]
-                group = self.keys.group_runner(channel, self.runner_id)
-            else:
-                channel = stream_key.split(':')[-1]
-                group = self.keys.group_workers(channel)
+        """Plan B: not used. Kept for compatibility."""
+        return
 
-            self.redis.xack(stream_key, group, msg_id)
-        except Exception as e:
-            logit.error(f"Failed to ACK message {msg_id}: {e}")
-
-    def execute_job(self, stream_key: str, msg_id: str, job_id: str):
-        """Execute job and handle all state updates."""
+    def execute_job(self, channel: str, job_id: str):
+        """Execute job and handle all state updates (Plan B)."""
         job = None
         try:
             # Load job from database
@@ -562,12 +479,21 @@ class JobEngine:
             job = Job.objects.select_for_update().get(id=job_id)
         except Exception as e:
             logit.error(f"Failed to load job {job_id}: {e}")
-            self._handle_job_failure(job_id, stream_key, msg_id, e)
+            # Remove from processing to avoid leak
+            try:
+                self.redis.zrem(self.keys.processing(channel), job_id)
+            except Exception:
+                pass
+            return
 
         try:
             # Check if already processed or canceled
             if job.status in ('completed', 'canceled'):
-                self._ack_message(stream_key, msg_id)
+                # Already finished; remove from processing if present
+                try:
+                    self.redis.zrem(self.keys.processing(channel), job_id)
+                except Exception:
+                    pass
                 return
 
             # Check expiration
@@ -589,8 +515,11 @@ class JobEngine:
                 except Exception:
                     pass
 
-                # ACK after DB update
-                self._ack_message(stream_key, msg_id)
+                # Remove from processing after DB update
+                try:
+                    self.redis.zrem(self.keys.processing(channel), job_id)
+                except Exception:
+                    pass
                 metrics.record("jobs.expired")
                 return
 
@@ -609,7 +538,7 @@ class JobEngine:
                     event='running',
                     runner_id=self.runner_id,
                     attempt=job.attempt,
-                    details={'stream': stream_key, 'msg_id': msg_id}
+                    details={'queue': self.keys.queue(channel)}
                 )
             except Exception:
                 pass
@@ -636,8 +565,11 @@ class JobEngine:
             except Exception:
                 pass
 
-            # ACK message (after DB update)
-            self._ack_message(stream_key, msg_id)
+            # Remove from processing after DB update
+            try:
+                self.redis.zrem(self.keys.processing(channel), job_id)
+            except Exception:
+                pass
 
             # Metrics
             metrics.record("jobs.completed", count=1)
@@ -645,12 +577,15 @@ class JobEngine:
             metrics.record("jobs.duration_ms", count=job.duration_ms)
 
         except Exception as e:
-            job.add_log(f"Failed to complete job: {e}", kind="error")
-            self._handle_job_failure(job_id, stream_key, msg_id, e)
+            try:
+                if job:
+                    job.add_log(f"Failed to complete job: {e}", kind="error")
+            except Exception:
+                pass
+            self._handle_job_failure(job_id, channel, e)
 
-    def _handle_job_failure(self, job_id: str, stream_key: str,
-                           msg_id: str, error: Exception):
-        """Handle job failure with retries."""
+    def _handle_job_failure(self, job_id: str, channel: str, error: Exception):
+        """Handle job failure with retries (Plan B)."""
         try:
             job = Job.objects.select_for_update().get(id=job_id)
 
@@ -717,8 +652,11 @@ class JobEngine:
                 metrics.record("jobs.failed")
                 metrics.record(f"jobs.channel.{job.channel}.failed")
 
-            # Always ACK to prevent redelivery
-            self._ack_message(stream_key, msg_id)
+            # Always remove from processing to prevent leaks
+            try:
+                self.redis.zrem(self.keys.processing(channel), job_id)
+            except Exception:
+                pass
 
         except Exception as e:
             logit.error(f"Failed to handle job failure: {e}")
@@ -728,3 +666,45 @@ class JobEngine:
         with self.active_lock:
             self.active_jobs.pop(job_id, None)
         self.jobs_processed += 1
+
+    def _reaper_loop(self):
+        """Requeue stale in-flight jobs based on visibility timeout (Plan B)."""
+        while self.running and not self.stop_event.is_set():
+            try:
+                now_ms = int(time.time() * 1000)
+                cutoff = now_ms - JOBS_VISIBILITY_TIMEOUT_MS
+                for ch in self.channels:
+                    # Fetch stale entries: claimed earlier than cutoff
+                    try:
+                        stale_ids = self.redis.zrangebyscore(self.keys.processing(ch), float("-inf"), cutoff, limit=100)
+                    except Exception as e:
+                        logger.debug(f"Reaper fetch failed for {ch}: {e}")
+                        stale_ids = []
+                    for jid in stale_ids:
+                        try:
+                            # Remove from processing and requeue
+                            self.redis.zrem(self.keys.processing(ch), jid)
+                            self.redis.rpush(self.keys.queue(ch), jid)
+                            # Add event trail (best effort)
+                            try:
+                                job = Job.objects.get(id=jid)
+                                JobEvent.objects.create(
+                                    job=job,
+                                    channel=ch,
+                                    event='retry',
+                                    runner_id=self.runner_id,
+                                    attempt=job.attempt,
+                                    details={'reason': 'reaper_timeout'}
+                                )
+                            except Exception:
+                                pass
+                            logger.info(f"Reaper requeued stale job {jid} on {ch}")
+                        except Exception as e:
+                            logger.warning(f"Reaper failed to requeue {jid} on {ch}: {e}")
+            except Exception as e:
+                logger.warning(f"Reaper loop error: {e}")
+            # Sleep a bit before next pass
+            for _ in range(5):
+                if self.stop_event.is_set():
+                    break
+                time.sleep(1)

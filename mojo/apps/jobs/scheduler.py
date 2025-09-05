@@ -1,5 +1,5 @@
 """
-Scheduler daemon for moving due jobs from ZSET to Streams.
+Scheduler daemon for moving due jobs from ZSET to List queues (Plan B).
 
 Runs as a single active instance using Redis leadership lock.
 Continuously monitors scheduled jobs and enqueues them when due.
@@ -13,13 +13,13 @@ import uuid
 import random
 import threading
 from datetime import datetime, timedelta
-from typing import List, Optional, Set
+from typing import List, Optional, Set, Dict
 
 from django.utils import timezone
 from django.db import close_old_connections
+from mojo.helpers.settings import settings
 
 from mojo.helpers import logit
-from mojo.helpers.settings import settings
 from .daemon import DaemonRunner
 from .keys import JobKeys
 from .adapters import get_adapter
@@ -295,63 +295,100 @@ class Scheduler:
                 return
         except Exception:
             pass
-        # Process non-broadcast delayed jobs
+        # Process non-broadcast delayed jobs (Plan B: enqueue to List queue)
         sched_key = self.keys.sched(channel)
         while True:
             results = self.redis.zpopmin(sched_key, count=10)
             if not results:
                 break
-            not_due = {}
+            not_due: Dict[str, float] = {}
             for job_id, score in results:
                 if score > now_ms:
                     # Collect not-due items to reinsert after the loop
                     not_due[job_id] = score
                 else:
-                    stream_key = self.keys.stream(channel)
-                    self._enqueue_job(job_id, channel, now, stream_key, score)
+                    queue_key = self.keys.queue(channel)
+                    # Enqueue to List queue
+                    try:
+                        self.redis.rpush(queue_key, job_id)
+                    except Exception as e:
+                        logger.error(f"Failed to enqueue job {job_id} to queue {queue_key}: {e}")
+                        # If enqueue fails, reinsert back to sched to avoid loss
+                        not_due[job_id] = score
+                        continue
+                    # Record DB event
+                    try:
+                        job = Job.objects.get(id=job_id)
+                        scheduled_at_dt = datetime.fromtimestamp(score / 1000.0)
+                        if timezone.is_naive(scheduled_at_dt):
+                            scheduled_at_dt = timezone.make_aware(scheduled_at_dt)
+                        JobEvent.objects.create(
+                            job=job,
+                            channel=channel,
+                            event='queued',
+                            details={
+                                'scheduler_id': self.scheduler_id,
+                                'queue': queue_key,
+                                'scheduled_at': scheduled_at_dt.isoformat()
+                            }
+                        )
+                    except Exception as e:
+                        logger.warn(f"Failed to record queued event for {job_id}: {e}")
+                    self.jobs_scheduled += 1
             # Re-add all not-due jobs and break (remaining entries are ordered)
             if not_due:
                 self.redis.zadd(sched_key, not_due)
                 break
 
-        # Process broadcast delayed jobs
+        # Process broadcast delayed jobs (Plan B: if broadcast retained, enqueue to same queue or a special one)
         sched_b_key = self.keys.sched_broadcast(channel)
         while True:
             results = self.redis.zpopmin(sched_b_key, count=10)
             if not results:
                 break
-            not_due_b = {}
+            not_due_b: Dict[str, float] = {}
             for job_id, score in results:
                 if score > now_ms:
-                    # Collect not-due items to reinsert after the loop
                     not_due_b[job_id] = score
                 else:
-                    stream_key = self.keys.stream_broadcast(channel)
-                    self._enqueue_job(job_id, channel, now, stream_key, score)
-            # Re-add all not-due jobs and break (remaining entries are ordered)
+                    # For simplicity, enqueue broadcast to the same queue; adjust if broadcast logic changes
+                    queue_key = self.keys.queue(channel)
+                    try:
+                        self.redis.rpush(queue_key, job_id)
+                    except Exception as e:
+                        logger.error(f"Failed to enqueue broadcast job {job_id} to queue {queue_key}: {e}")
+                        not_due_b[job_id] = score
+                        continue
+                    try:
+                        job = Job.objects.get(id=job_id)
+                        scheduled_at_dt = datetime.fromtimestamp(score / 1000.0)
+                        if timezone.is_naive(scheduled_at_dt):
+                            scheduled_at_dt = timezone.make_aware(scheduled_at_dt)
+                        JobEvent.objects.create(
+                            job=job,
+                            channel=channel,
+                            event='queued',
+                            details={
+                                'scheduler_id': self.scheduler_id,
+                                'queue': queue_key,
+                                'scheduled_at': scheduled_at_dt.isoformat(),
+                                'broadcast': True
+                            }
+                        )
+                    except Exception as e:
+                        logger.warn(f"Failed to record queued event for broadcast {job_id}: {e}")
+                    self.jobs_scheduled += 1
             if not_due_b:
                 self.redis.zadd(sched_b_key, not_due_b)
                 break
 
     def _enqueue_job(self, job_id: str, channel: str, now: datetime, stream_key: str, scheduled_at_ms: float):
         """
-        Move a job from scheduled to stream.
-
-        Args:
-            job_id: Job ID to enqueue
-            channel: Channel the job belongs to
-            now: Current datetime
-            stream_key: Target Redis stream key
-            scheduled_at_ms: Scheduled time as epoch milliseconds (from ZSET score)
+        Legacy helper retained for compatibility. Not used in Plan B path.
         """
         try:
-            # Add to stream (minimal fields; DB is source of truth)
-            self.redis.xadd(stream_key, {
-                'job_id': job_id,
-                'scheduled': now.isoformat()
-            }, maxlen=JOBS_STREAM_MAXLEN)
-
-            # Record event in database
+            queue_key = self.keys.queue(channel)
+            self.redis.rpush(queue_key, job_id)
             try:
                 job = Job.objects.get(id=job_id)
                 scheduled_at_dt = datetime.fromtimestamp(scheduled_at_ms / 1000.0)
@@ -363,24 +400,14 @@ class Scheduler:
                     event='queued',
                     details={
                         'scheduler_id': self.scheduler_id,
-                        'stream': stream_key,
+                        'queue': queue_key,
                         'scheduled_at': scheduled_at_dt.isoformat()
                     }
                 )
             except Exception as e:
                 logger.warn(f"Failed to record queued event for {job_id}: {e}")
-
             self.jobs_scheduled += 1
-            logger.debug(f"Enqueued job {job_id} to {stream_key}")
-
-            # Emit metric
-            try:
-                from mojo.metrics.redis_metrics import record_metrics
-                record_metrics('jobs.scheduled', now, 1, category='jobs',
-                             args=[channel])
-            except Exception:
-                pass
-
+            logger.debug(f"Enqueued job {job_id} to {queue_key}")
         except Exception as e:
             logger.error(f"Failed to enqueue job {job_id}: {e}")
 

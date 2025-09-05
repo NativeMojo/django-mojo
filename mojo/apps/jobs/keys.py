@@ -18,6 +18,9 @@ class JobKeys:
         """
         self.prefix = prefix or getattr(settings, 'JOBS_REDIS_PREFIX', 'mojo:jobs')
 
+    # ----------------------------
+    # Streams (legacy/compat only)
+    # ----------------------------
     def stream(self, channel: str) -> str:
         """
         Get the stream key for a channel.
@@ -67,6 +70,23 @@ class JobKeys:
         """
         return f"{self.prefix}:cg:{channel}:runner:{runner_id}"
 
+    # ----------------------------
+    # Plan B: List + ZSET keys
+    # ----------------------------
+    def queue(self, channel: str) -> str:
+        """
+        Immediate jobs list (queue).
+        RPUSH to enqueue, BRPOP to claim.
+        """
+        return f"{self.prefix}:queue:{channel}"
+
+    def processing(self, channel: str) -> str:
+        """
+        In-flight tracking ZSET for visibility timeout.
+        ZADD on claim, ZREM on completion.
+        """
+        return f"{self.prefix}:processing:{channel}"
+
     def sched(self, channel: str) -> str:
         """
         Get the scheduled jobs ZSET key for a channel.
@@ -81,16 +101,19 @@ class JobKeys:
 
     def sched_broadcast(self, channel: str) -> str:
         """
-        Get the scheduled jobs ZSET key for broadcast jobs on a channel.
-
-        Args:
-            channel: The channel name
-
-        Returns:
-            Redis ZSET key for scheduled/delayed broadcast jobs
+        Scheduled jobs ZSET for broadcast (optional).
         """
         return f"{self.prefix}:sched_broadcast:{channel}"
 
+    def reaper_lock(self, channel: str) -> str:
+        """
+        Per-channel lock key for the reaper (to avoid races).
+        """
+        return f"{self.prefix}:lock:reaper:{channel}"
+
+    # ----------------------------
+    # Job metadata / control
+    # ----------------------------
     def job(self, job_id: str) -> str:
         """
         Get the hash key for a specific job's metadata.
@@ -126,18 +149,6 @@ class JobKeys:
             Redis key for runner heartbeat (with TTL)
         """
         return f"{self.prefix}:runner:{runner_id}:hb"
-
-    def channel_pause(self, channel: str) -> str:
-        """
-        Get the pause flag key for a channel.
-
-        Args:
-            channel: The channel name
-
-        Returns:
-            Redis key that indicates the channel is paused when set
-        """
-        return f"{self.prefix}:channel:{channel}:paused"
 
     def scheduler_lock(self) -> str:
         """

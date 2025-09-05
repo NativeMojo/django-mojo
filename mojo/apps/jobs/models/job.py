@@ -356,7 +356,7 @@ class JobEvent(models.Model, MojoModel):
         GRAPHS = {
             'default': {
                 'fields': [
-                    'id', 'event', 'at', 'runner_id', 'attempt'
+                    'id', 'event', 'at', 'runner_id', 'attempt', 'details'
                 ]
             },
             'detail': {
@@ -430,12 +430,12 @@ class JobLog(models.Model, MojoModel):
         DELETE_PERMS = ['manage_jobs']
         GRAPHS = {
             'default': {
-                'fields': ['id', 'job_id', 'at', 'kind', 'message']
+                'fields': ['id', 'job_id', 'created', 'kind', 'message']
             },
             'detail': {
-                'fields': ['id', 'job_id', 'channel', 'at', 'kind', 'message', 'meta']
+                'fields': ['id', 'job_id', 'channel', 'created', 'kind', 'message', 'meta']
             }
         }
 
     def __str__(self):
-        return f"JobLog {self.kind} for {self.job_id} at {self.at}"
+        return f"JobLog {self.kind} for {self.job_id} at {self.created}"

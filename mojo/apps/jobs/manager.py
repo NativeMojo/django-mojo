@@ -115,121 +115,37 @@ class JobManager:
             channel: Channel name
 
         Returns:
-            Dict with queue statistics:
-                - stream_length: Number of messages in main stream
-                - broadcast_length: Number of messages in broadcast stream
-                - scheduled_count: Number of scheduled jobs
-                - pending_count: Number of pending messages (being processed)
+            Dict with queue statistics (Plan B):
+                - queued_count: Number of messages waiting in the list queue (LLEN)
+                - inflight_count: Number of in-flight messages (ZCARD of processing)
+                - scheduled_count: Number of scheduled/delayed jobs (ZCARD of sched + sched_broadcast)
                 - runners: Number of active runners
-                - consumer_groups: List of consumer group info
         """
         state = {
             'channel': channel,
-            'stream_length': 0,
-            'broadcast_length': 0,
-            'scheduled_count': 0,
-            'pending_count': 0,
-            'unclaimed_count': 0,
-            'inflight_count': 0,
             'queued_count': 0,
+            'inflight_count': 0,
+            'scheduled_count': 0,
             'runners': 0,
-            'consumer_groups': []
         }
 
         try:
-            # Main stream info
-            stream_key = self.keys.stream(channel)
-            try:
-                info = self.redis.xinfo_stream(stream_key)
-                state['stream_length'] = info.get('length', 0)
-
-                # Get pending count from consumer group
-                group_key = self.keys.group_workers(channel)
-                pending_info = self.redis.xpending(stream_key, group_key)
-                if pending_info:
-                    state['pending_count'] = pending_info.get('pending', 0)
-                    state['inflight_count'] = state['pending_count']
-
-                # Refined unclaimed computation:
-                # - If no consumer group exists or xinfo_groups is empty: unclaimed = stream_length (no one to claim)
-                # - Else if last-delivered-id equals stream last-entry id: unclaimed = 0 (everything delivered/acked)
-                # - Else fallback: max(stream_length - pending_count, 0)
-                try:
-                    groups_info = self.redis.get_client().xinfo_groups(stream_key)
-                except Exception:
-                    groups_info = []
-
-                if not groups_info:
-                    state['unclaimed_count'] = state['stream_length']
-                    state['queued_count'] = state['unclaimed_count']
-                else:
-                    # last-entry id from XINFO STREAM (may be None if empty)
-                    last_entry_id = info.get('last-entry', None)
-                    if last_entry_id:
-                        # last-entry may be a tuple (id, fields) in some clients; normalize to id string
-                        if isinstance(last_entry_id, (list, tuple)) and len(last_entry_id) >= 1:
-                            last_entry_id = last_entry_id[0]
-                        if isinstance(last_entry_id, bytes):
-                            last_entry_id = last_entry_id.decode('utf-8')
-                    # If any group has last-delivered-id == last_entry_id, we consider no unclaimed backlog
-                    last_delivered_matches = False
-                    for g in groups_info or []:
-                        try:
-                            g_last = g.get('last-delivered-id')
-                            if isinstance(g_last, bytes):
-                                g_last = g_last.decode('utf-8')
-                            if last_entry_id and g_last and str(g_last) == str(last_entry_id):
-                                last_delivered_matches = True
-                                break
-                        except Exception:
-                            continue
-
-                    if last_delivered_matches:
-                        state['unclaimed_count'] = 0
-                    else:
-                        state['unclaimed_count'] = max(0, state['stream_length'] - state['pending_count'])
-                    state['queued_count'] = state['unclaimed_count']
-
-            except Exception as e:
-                logit.debug(f"Stream {stream_key} not found or has no data: {e}")
-
-            # Broadcast stream info
-            broadcast_key = self.keys.stream_broadcast(channel)
-            try:
-                info = self.redis.xinfo_stream(broadcast_key)
-                state['broadcast_length'] = info.get('length', 0)
-            except Exception as e:
-                logit.debug(f"Broadcast stream {broadcast_key} not found: {e}")
-
-            # Scheduled jobs count (sum non-broadcast and broadcast)
+            # Plan B counts: List + ZSET
+            queue_key = self.keys.queue(channel)
+            processing_key = self.keys.processing(channel)
             sched_key = self.keys.sched(channel)
             sched_b_key = self.keys.sched_broadcast(channel)
+            # Exact counts
+            state['queued_count'] = self.redis.llen(queue_key) or 0
+            state['inflight_count'] = self.redis.zcard(processing_key) or 0
             state['scheduled_count'] = (self.redis.zcard(sched_key) or 0) + (self.redis.zcard(sched_b_key) or 0)
-
             # Active runners for this channel
             runners = self.get_runners(channel)
             state['runners'] = len([r for r in runners if r.get('alive')])
-
-            # Consumer group details
-            try:
-                # Main stream consumer group
-                groups_info = self.redis.get_client().xinfo_groups(stream_key)
-                for group in groups_info:
-                    state['consumer_groups'].append({
-                        'name': group.get('name').decode('utf-8'),
-                        'consumers': group.get('consumers', 0),
-                        'pending': group.get('pending', 0),
-                        'last_delivered_id': group.get('last-delivered-id').decode('utf-8')
-                    })
-            except Exception as e:
-                logit.debug(f"Failed to get consumer group info: {e}")
-
-            # Add metrics
+            # Add metrics (DB-derived)
             state['metrics'] = self._get_channel_metrics(channel)
-
         except Exception as e:
             logit.error(f"Failed to get queue state for {channel}: {e}")
-
         return state
 
     def get_channel_health(self, channel: str) -> Dict[str, Any]:
@@ -307,7 +223,7 @@ class JobManager:
 
     def _find_stuck_jobs(self, channel: str, idle_threshold_ms: int = 60000) -> List[Dict]:
         """
-        Find jobs that have been claimed but not processed.
+        Plan B: Find jobs that are in-flight (processing ZSET) longer than the idle threshold.
 
         Args:
             channel: Channel name
@@ -316,59 +232,41 @@ class JobManager:
         Returns:
             List of stuck job details
         """
-        stream_key = self.keys.stream(channel)
-        group_key = self.keys.group_workers(channel)
-
-        stuck = []
+        stuck: List[Dict] = []
         try:
-            # Get detailed pending info using improved adapter method
-            pending_details = self.redis.xpending(stream_key, group_key, '-', '+', 100)
+            now_ms = int(time.time() * 1000)
+            cutoff = now_ms - max(0, int(idle_threshold_ms))
+            processing_key = self.keys.processing(channel)
 
-            if pending_details:
-                logit.debug(f"XPENDING response for {channel}: {pending_details}")
-                # pending_details is now a list of dicts with structured data
-                for job in pending_details:
-                    if job['idle_time'] >= idle_threshold_ms:
-                        stuck.append({
-                            'message_id': job['message_id'],
-                            'consumer': job['consumer'],
-                            'idle_ms': job['idle_time'],
-                            'delivery_count': job['delivery_count']
-                        })
+            if idle_threshold_ms <= 0:
+                # Return all in-flight entries
+                ids = self.redis.zrangebyscore(processing_key, float("-inf"), float("inf"))
+                for jid in ids:
+                    stuck.append({'job_id': jid, 'idle_ms': None})
+                return stuck
+
+            # Return entries older than cutoff
+            ids = self.redis.zrangebyscore(processing_key, float("-inf"), cutoff)
+            for jid in ids:
+                # We don't store claim timestamp in the member by default; idle_ms calculation is approximate
+                stuck.append({'job_id': jid, 'idle_ms': idle_threshold_ms})
         except Exception as e:
             logit.error(f"Failed to check stuck jobs for channel {channel}: {e}")
-            # Fallback to basic pending info
-            try:
-                pending_info = self.redis.xpending(stream_key, group_key)
-                if pending_info and pending_info.get('pending', 0) > 0:
-                    # Can't get details, but report that there are pending jobs
-                    stuck.append({
-                        'message_id': 'unknown',
-                        'consumer': 'unknown',
-                        'idle_ms': 0,
-                        'delivery_count': 0,
-                        'note': f"Total pending: {pending_info['pending']}"
-                    })
-            except Exception as fallback_e:
-                logit.debug(f"Fallback pending check also failed for {channel}: {fallback_e}")
-                pass
 
         return stuck
 
     def clear_stuck_jobs(self, channel: str, idle_threshold_ms: int = 60000) -> Dict[str, Any]:
         """
-        Clear stuck jobs from a channel by reclaiming and ACKing them.
+        Plan B: Clear stuck in-flight jobs from a channel by re-queueing or removing
+        entries from the processing ZSET based on an idle threshold.
 
         Args:
             channel: Channel name to clear
-            idle_threshold_ms: Consider stuck if idle longer than this (0 to clear all)
+            idle_threshold_ms: Consider stuck if older than this many ms (0 to clear all)
 
         Returns:
-            Dict with results: {'cleared': int, 'details': [...]}
+            Dict with results: {'cleared': int, 'details': [...], 'errors': [...]}
         """
-        stream_key = self.keys.stream(channel)
-        group_key = self.keys.group_workers(channel)
-
         results = {
             'channel': channel,
             'cleared': 0,
@@ -377,271 +275,49 @@ class JobManager:
         }
 
         try:
-            # Get all pending jobs
-            client = self.redis.get_client()
+            now_ms = int(time.time() * 1000)
+            processing_key = self.keys.processing(channel)
+            queue_key = self.keys.queue(channel)
 
-            # First get basic pending info
-            pending_info = self.redis.xpending(stream_key, group_key)
-            if not pending_info or pending_info.get('pending', 0) == 0:
-                results['message'] = f"No pending jobs found in {channel}"
-                return results
-
-            # Get detailed pending info (support multiple Redis response formats)
-            pending_details_raw = None
-            try:
-                pending_details_raw = self.redis.xpending(stream_key, group_key, '-', '+', 100)
-            except Exception as e:
-                logit.debug(f"xpending detail fetch failed via adapter: {e}")
-                pending_details_raw = None
-            if not pending_details_raw:
-                try:
-                    pending_details_raw = client.execute_command('XPENDING', stream_key, group_key, '-', '+', '100')
-                except Exception as e:
-                    logit.debug(f"XPENDING raw fetch failed: {e}")
-                    pending_details_raw = []
-
-            # Normalize to list of dicts: {'message_id', 'consumer', 'idle_time', 'delivery_count'}
-            pending_list = []
-            for item in pending_details_raw or []:
-                try:
-                    if isinstance(item, dict):
-                        mid = item.get('message_id') or item.get('id') or item.get(b'message_id') or item.get(b'id')
-                        cons = item.get('consumer') or item.get(b'consumer')
-                        idle = item.get('idle_time') or item.get('idle') or item.get(b'idle_time') or item.get(b'idle')
-                        dlv = item.get('delivery_count') or item.get('deliveries') or item.get(b'delivery_count') or item.get(b'deliveries')
-                        if isinstance(mid, bytes):
-                            mid = mid.decode('utf-8')
-                        if isinstance(cons, bytes):
-                            cons = cons.decode('utf-8')
-                        idle = int(idle) if idle is not None else 0
-                        dlv = int(dlv) if dlv is not None else 0
-                        pending_list.append({'message_id': mid, 'consumer': cons, 'idle_time': idle, 'delivery_count': dlv})
-                    elif isinstance(item, (list, tuple)) and len(item) >= 4:
-                        mid, cons, idle, dlv = item[0], item[1], item[2], item[3]
-                        if isinstance(mid, bytes):
-                            mid = mid.decode('utf-8')
-                        if isinstance(cons, bytes):
-                            cons = cons.decode('utf-8')
-                        try:
-                            idle = int(idle)
-                        except Exception:
-                            idle = int(idle or 0)
-                        try:
-                            dlv = int(dlv)
-                        except Exception:
-                            dlv = int(dlv or 0)
-                        pending_list.append({'message_id': mid, 'consumer': cons, 'idle_time': idle, 'delivery_count': dlv})
-                except Exception as e:
-                    logit.debug(f"Failed to normalize XPENDING item {item}: {e}")
-
-            if not pending_list:
-                # Fallback: Use XPENDING summary consumers to fetch detailed entries per-consumer
-                try:
-                    consumers = []
-                    if isinstance(pending_info, dict):
-                        raw_consumers = pending_info.get('consumers', [])
-                        for c in raw_consumers:
-                            try:
-                                name = c.get('name') if isinstance(c, dict) else None
-                                if isinstance(name, bytes):
-                                    name = name.decode('utf-8')
-                                if name:
-                                    consumers.append(name)
-                            except Exception:
-                                continue
-                    # Query per-consumer details if we have consumer names
-                    for cname in consumers:
-                        try:
-                            # Try adapter with consumer arg
-                            details = None
-                            try:
-                                details = self.redis.xpending(stream_key, group_key, '-', '+', 100, cname)  # type: ignore
-                            except Exception:
-                                details = None
-                            if not details:
-                                details = client.execute_command('XPENDING', stream_key, group_key, '-', '+', '100', cname)
-                            for item in details or []:
-                                try:
-                                    if isinstance(item, dict):
-                                        mid = item.get('message_id') or item.get('id') or item.get(b'message_id') or item.get(b'id')
-                                        cons = item.get('consumer') or item.get(b'consumer') or cname
-                                        idle = item.get('idle_time') or item.get('idle') or item.get(b'idle_time') or item.get(b'idle')
-                                        dlv = item.get('delivery_count') or item.get('deliveries') or item.get(b'delivery_count') or item.get(b'deliveries')
-                                        if isinstance(mid, bytes):
-                                            mid = mid.decode('utf-8')
-                                        if isinstance(cons, bytes):
-                                            cons = cons.decode('utf-8')
-                                        idle = int(idle) if idle is not None else 0
-                                        dlv = int(dlv) if dlv is not None else 0
-                                        pending_list.append({'message_id': mid, 'consumer': cons, 'idle_time': idle, 'delivery_count': dlv})
-                                    elif isinstance(item, (list, tuple)) and len(item) >= 4:
-                                        mid, cons, idle, dlv = item[0], item[1], item[2], item[3]
-                                        if isinstance(mid, bytes):
-                                            mid = mid.decode('utf-8')
-                                        if isinstance(cons, bytes):
-                                            cons = cons.decode('utf-8')
-                                        idle = int(idle or 0)
-                                        dlv = int(dlv or 0)
-                                        pending_list.append({'message_id': mid, 'consumer': cons, 'idle_time': idle, 'delivery_count': dlv})
-                                except Exception:
-                                    continue
-                        except Exception:
-                            continue
-                except Exception as e:
-                    logit.debug(f"XPENDING consumer fallback failed: {e}")
-                if not pending_list:
-                    results['message'] = f"No detailed pending jobs found in {channel}"
-                    return results
-
-            logit.info(f"Found {len(pending_list)} pending jobs in {channel}")
-
-            # Get current active runner for this channel
-            active_runners = self.get_runners(channel)
-            current_runner = None
-            for runner in active_runners:
-                if runner.get('alive'):
-                    current_runner = runner['runner_id']
-                    break
-
-            if not current_runner:
-                current_runner = f"cleanup-{uuid.uuid4().hex[:8]}"
-                results['warnings'] = [f"No active runner found, using temporary consumer: {current_runner}"]
-
-            # Process each stuck job
-            message_ids = []
-            job_details = []
-
-            # Process each pending entry after threshold filter
-            for entry in pending_list:
-                try:
-                    idle_val = entry.get('idle_time', 0) or 0
-                    if idle_threshold_ms and int(idle_val) < int(idle_threshold_ms):
-                        continue
-                    mid = entry.get('message_id')
-                    if mid:
-                        message_ids.append(mid)
-                        job_details.append({
-                            'message_id': mid,
-                            'consumer': entry.get('consumer'),
-                            'idle_ms': idle_val,
-                            'delivery_count': entry.get('delivery_count', 0)
-                        })
-
-                except Exception as e:
-                    results['errors'].append(f"Failed to parse pending entry: {e}")
-
-            if not message_ids:
-                results['message'] = f"No valid message IDs found in {channel}"
-                return results
-
-            # Claim all messages to current consumer
-            try:
-                claimed = client.execute_command(
-                    'XCLAIM', stream_key, group_key, current_runner,
-                    '1',  # Force claim (1ms idle time)
-                    *message_ids
-                )
-                logit.info(f"Claimed {len(message_ids)} messages in {channel}")
-            except Exception as e:
-                results['errors'].append(f"Failed to claim messages: {e}")
-                claimed = []
-
-            # ACK all messages to remove from pending
-            try:
-                ack_result = client.execute_command(
-                    'XACK', stream_key, group_key, *message_ids
-                )
-                logit.info(f"ACK'd {ack_result} messages in {channel}")
-                results['cleared'] = ack_result
-            except Exception as e:
-                results['errors'].append(f"Failed to ACK messages: {e}")
-
-            # Update jobs in database
-            job_updates = 0
-            if claimed and len(claimed) > 0:
-                logit.info(f"Processing {len(claimed)} claimed messages")
-                for i, msg_data in enumerate(claimed):
-                    try:
-                        # XCLAIM returns list of [msg_id, [field1, value1, field2, value2, ...]]
-                        if not msg_data or len(msg_data) < 2:
-                            logit.debug(f"Skipping empty message data at index {i}: {msg_data}")
-                            continue
-
-                        msg_id = msg_data[0]
-                        fields = msg_data[1]
-
-                        # Ensure fields is a list and has even length (key-value pairs)
-                        if not isinstance(fields, list) or len(fields) % 2 != 0:
-                            logit.debug(f"Invalid fields format for message {msg_id}: {fields}")
-                            continue
-
-                        # Extract job_id from message fields
-                        job_id = None
-                        for j in range(0, len(fields), 2):
-                            if j + 1 < len(fields):  # Ensure we have a value
-                                field_key = fields[j]
-                                field_value = fields[j + 1]
-
-                                # Handle bytes conversion
-                                if isinstance(field_key, bytes):
-                                    field_key = field_key.decode('utf-8')
-                                if isinstance(field_value, bytes):
-                                    field_value = field_value.decode('utf-8')
-
-                                if field_key == 'job_id':
-                                    job_id = field_value
-                                    break
-
-                        if job_id:
-                            try:
-                                from .models import Job, JobEvent
-                                job = Job.objects.get(id=job_id)
-
-                                # Mark as failed so it can be retried
-                                job.status = 'failed'
-                                job.last_error = 'Job was stuck in pending state and manually cleared'
-                                job.save(update_fields=['status', 'last_error', 'modified'])
-
-                                # Add event
-                                JobEvent.objects.create(
-                                    job=job,
-                                    channel=channel,
-                                    event='failed',
-                                    details={
-                                        'reason': 'stuck_job_cleared',
-                                        'message_id': msg_id.decode('utf-8') if isinstance(msg_id, bytes) else str(msg_id),
-                                        'cleared_by': current_runner
-                                    }
-                                )
-                                job_updates += 1
-                                logit.debug(f"Updated job {job_id} status to failed")
-                            except Job.DoesNotExist:
-                                logit.warn(f"Job {job_id} not found in database")
-                            except Exception as job_e:
-                                results['errors'].append(f"Failed to update job {job_id}: {job_e}")
-                        else:
-                            logit.debug(f"No job_id found in message {msg_id}")
-
-                    except Exception as e:
-                        results['errors'].append(f"Failed to process message at index {i}: {e}")
-                        logit.error(f"Error processing claimed message {i}: {e}")
+            # Determine score range to clear
+            if idle_threshold_ms and idle_threshold_ms > 0:
+                cutoff = now_ms - int(idle_threshold_ms)
+                candidates = self.redis.zrangebyscore(processing_key, float("-inf"), cutoff)
             else:
-                logit.info("No messages were claimed from XCLAIM command")
+                candidates = self.redis.zrangebyscore(processing_key, float("-inf"), float("inf"))
 
-            results['details'] = job_details
-            results['job_updates'] = job_updates
-            results['consumer_used'] = current_runner
-            results['message'] = f"Cleared {results['cleared']} stuck jobs from {channel}, updated {job_updates} jobs in DB"
+            if not candidates:
+                results['message'] = f"No in-flight jobs found in {channel} matching threshold"
+                return results
 
-            logit.info(f"Successfully cleared {results['cleared']} stuck jobs from {channel}")
+            for jid in candidates:
+                try:
+                    # Remove from processing and requeue
+                    self.redis.zrem(processing_key, jid)
+                    self.redis.rpush(queue_key, jid)
+                    results['cleared'] += 1
+                    results['details'].append({'job_id': jid, 'requeued': True})
+                    # Write event trail (best effort)
+                    try:
+                        job = Job.objects.get(id=jid)
+                        JobEvent.objects.create(
+                            job=job,
+                            channel=channel,
+                            event='retry',
+                            details={'reason': 'manual_clear_stuck'}
+                        )
+                    except Exception:
+                        pass
+                except Exception as e:
+                    results['errors'].append(f"{jid}: {e}")
+
+            results['message'] = f"Requeued {results['cleared']} in-flight jobs from {channel}"
 
         except Exception as e:
             import traceback
-            error_detail = f"Failed to clear stuck jobs: {e}"
-            stack_trace = traceback.format_exc()
-            results['errors'].append(error_detail)
-            results['stack_trace'] = stack_trace
-            logit.error(f"Failed to clear stuck jobs from {channel}: {e}\n{stack_trace}")
+            results['errors'].append(str(e))
+            results['stack_trace'] = traceback.format_exc()
+            logit.error(f"Failed to clear stuck jobs from {channel}: {e}")
 
         return results
 

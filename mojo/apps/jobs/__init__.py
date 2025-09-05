@@ -171,16 +171,16 @@ def publish(
         logit.error(f"Failed to create job in database: {e}")
         raise RuntimeError(f"Failed to create job: {e}")
 
-    # Mirror to Redis
+    # Mirror to Redis (Plan B: List + ZSET + Scheduled ZSET)
     try:
         redis = get_adapter()
         keys = JobKeys()
 
         # No per-job Redis hash (KISS): DB is source of truth
 
-        # Route based on scheduling
+        # Route based on scheduling (Plan B: List + ZSET for immediate/scheduled)
         if run_at and run_at > now:
-            # Add to scheduled ZSET (two-ZSET routing)
+            # Add to scheduled ZSET (two-ZSET routing remains)
             score = run_at.timestamp() * 1000  # milliseconds
             target_zset = keys.sched_broadcast(channel) if broadcast else keys.sched(channel)
             redis.zadd(target_zset, {job_id: score})
@@ -196,23 +196,19 @@ def publish(
             logit.info(f"Scheduled job {job_id} on {channel} for {run_at} "
                        f"(zset={'sched_broadcast' if broadcast else 'sched'})")
         else:
-            # Add to stream for immediate execution
-            stream_key = keys.stream_broadcast(channel) if broadcast else keys.stream(channel)
-            redis.xadd(stream_key, {
-                'job_id': job_id,
-                'func': func_path,  # For logging only
-                'created': now.isoformat()
-            }, maxlen=JOBS_STREAM_MAXLEN)
+            # Immediate execution: enqueue to List queue (Plan B)
+            queue_key = keys.queue(channel)
+            redis.rpush(queue_key, job_id)
 
-            # Record queued event
+            # Record queued event (for immediate queue)
             JobEvent.objects.create(
                 job=job,
                 channel=channel,
                 event='queued',
-                details={'stream': stream_key}
+                details={'queue': queue_key}
             )
 
-            logit.info(f"Queued job {job_id} on {channel} (broadcast={broadcast}) to stream {stream_key}")
+            logit.info(f"Queued job {job_id} on {channel} (broadcast={broadcast}) to queue {queue_key}")
 
         # Emit metric
 

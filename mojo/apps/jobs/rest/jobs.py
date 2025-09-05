@@ -333,7 +333,8 @@ def on_system_test(request):
         {
             "delay": 15
         },
-        channel='priority'
+        channel='priority',
+        delay=30
     )
     return JsonResponse({
         'status': True,
@@ -390,15 +391,15 @@ def on_system_tests(request):
 
     job_list.append(fetch_job)
     # lets schedule some jobs as well
-    # for i in range(10):
-    #     j = random.choice(base_job_list)
-    #     j = j.copy()
-    #     j["delay"] = random.randint(30, 300)
-    #     job_list.append(j)
+    for i in range(10):
+        j = random.choice(base_job_list)
+        j = j.copy()
+        j["delay"] = random.randint(30, 300)
+        job_list.append(j)
 
-    # for i in range(50):
-    #     j = random.choice(base_job_list)
-    #     job_list.append(j.copy())
+    for i in range(50):
+        j = random.choice(base_job_list)
+        job_list.append(j.copy())
 
 
 

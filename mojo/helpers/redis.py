@@ -356,6 +356,85 @@ class RedisAdapter:
         """
         return self.get_client().zscore(key, member)
 
+    # List operations (Plan B)
+    def rpush(self, key: str, *values: Any) -> int:
+        """
+        Push one or more values to the right end of a list.
+
+        Args:
+            key: List key
+            *values: One or more values to push
+
+        Returns:
+            The length of the list after the push operations
+        """
+        return self.get_client().rpush(key, *values)
+
+    def brpop(self, keys: List[str], timeout: int = 1) -> Optional[Tuple[str, str]]:
+        """
+        Blocking right pop on one or more lists.
+
+        Args:
+            keys: List of keys to BRPOP from (first non-empty wins)
+            timeout: Timeout in seconds (0 = block indefinitely)
+
+        Returns:
+            (key, value) tuple as strings, or None if timed out
+        """
+        res = self.get_client().brpop(keys, timeout=timeout)
+        if not res:
+            return None
+        k, v = res
+        key = k.decode('utf-8') if isinstance(k, bytes) else k
+        val = v.decode('utf-8') if isinstance(v, bytes) else v
+        return (key, val)
+
+    def llen(self, key: str) -> int:
+        """
+        Get the length of a list.
+
+        Args:
+            key: List key
+
+        Returns:
+            Length of the list
+        """
+        return self.get_client().llen(key)
+
+    # ZSET helpers (Plan B)
+    def zrem(self, key: str, member: str) -> int:
+        """
+        Remove a member from a sorted set.
+
+        Args:
+            key: ZSET key
+            member: Member to remove
+
+        Returns:
+            Number of members removed (0 or 1)
+        """
+        return self.get_client().zrem(key, member)
+
+    def zrangebyscore(self, key: str, min_score: float, max_score: float, limit: Optional[int] = None) -> List[str]:
+        """
+        Return members in a sorted set within the given scores.
+
+        Args:
+            key: ZSET key
+            min_score: Minimum score (inclusive)
+            max_score: Maximum score (inclusive)
+            limit: Optional maximum number of members to return
+
+        Returns:
+            List of members as strings
+        """
+        client = self.get_client()
+        if limit is not None:
+            res = client.zrangebyscore(key, min_score, max_score, start=0, num=int(limit))
+        else:
+            res = client.zrangebyscore(key, min_score, max_score)
+        return [m.decode('utf-8') if isinstance(m, bytes) else m for m in res]
+
     # Hash operations
     def hset(self, key: str, mapping: Dict[str, Any]) -> int:
         """
