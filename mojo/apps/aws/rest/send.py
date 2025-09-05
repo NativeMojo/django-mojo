@@ -1,3 +1,4 @@
+from mojo.apps.aws.services import send_template_email
 from typing import Any, Dict, List, Optional
 
 from mojo import decorators as md
@@ -7,7 +8,7 @@ from mojo.helpers.aws.ses import EmailSender
 from mojo.helpers.settings import settings
 from mojo.helpers import logit
 
-logger = logit.get_logger(__name__)
+logger = logit.get_logger("email", "email.log")
 
 
 def _as_list(value: Any) -> List[str]:
@@ -68,17 +69,6 @@ def on_send_email(request):
     if not mailbox.allow_outbound:
         return JsonResponse({"error": "Outbound sending is disabled for this mailbox", "code": 403}, status=403)
 
-    domain: EmailDomain = mailbox.domain
-    region = domain.region or getattr(settings, "AWS_REGION", "us-east-1")
-
-    # Domain verification check (optional bypass)
-    if not data.get("allow_unverified", False):
-        if (domain.status or "").lower() != "verified":
-            return JsonResponse({
-                "error": "Domain is not verified for sending in SES",
-                "domain": domain.name,
-                "domain_status": domain.status,
-            }, status=400)
 
     to = _as_list(data.get("to"))
     cc = _as_list(data.get("cc"))
@@ -92,120 +82,20 @@ def on_send_email(request):
     body_text = data.get("body_text")
     body_html = data.get("body_html")
     template_name = (data.get("template_name") or "").strip() or None
-    ses_template_name = (data.get("ses_template_name") or "").strip() or None
     template_context = data.get("template_context") or {}
-    if isinstance(template_context, str) and '{' in template_context:
-        import json
-        try:
-            template_context = json.loads(template_context)
-        except json.JSONDecodeError:
-            template_context = {}
 
-    # If not using a template, require subject or at least one of body_text/body_html.
-    # Try DB EmailTemplate first if template_name is provided
-    db_template = None
     if template_name:
-        db_template = EmailTemplate.objects.filter(name=template_name).first()
-        if db_template:
-            try:
-                rendered = db_template.render_all(template_context)
-                subject = (rendered.get("subject") or "").strip()
-                body_text = rendered.get("text")
-                body_html = rendered.get("html")
-            except Exception as e:
-                return JsonResponse({"error": f"DB template render failed: {e}"}, status=400)
-
-    # Validate payload if no DB template and no SES template; must have subject or one body
-    if not db_template and not ses_template_name and not (subject or body_text or body_html):
-        return JsonResponse({
-            "error": "Provide either a template_name (DB), ses_template_name (SES), or a subject/body_text/body_html payload"
-        }, status=400)
-
-    # Optional AWS creds override
-    access_key = data.get("aws_access_key") or settings.AWS_KEY
-    secret_key = data.get("aws_secret_key") or settings.AWS_SECRET
-
-    sender = EmailSender(access_key=access_key, secret_key=secret_key, region=region)
-
-    # Create SentMessage record first
-    sent = SentMessage.objects.create(
-        mailbox=mailbox,
-        to_addresses=to,
-        cc_addresses=cc,
-        bcc_addresses=bcc,
-        subject=subject or None,
-        body_text=body_text,
-        body_html=body_html,
-        template_name=template_name or ses_template_name,
-        template_context=template_context if isinstance(template_context, dict) else {},
-        status=SentMessage.STATUS_SENDING,
-    )
-
-    try:
-        if db_template is not None:
-            # Use rendered DB EmailTemplate with standard send_email
-            resp = sender.send_email(
-                source=from_email,
-                to_addresses=to,
-                subject=subject or "",
-                body_text=body_text,
-                body_html=body_html,
-                cc_addresses=cc or None,
-                bcc_addresses=bcc or None,
-                reply_to_addresses=reply_to or None,
-            )
-        elif ses_template_name:
-            # Fall back to AWS SES managed template only when explicitly provided
-            resp = sender.send_template_email(
-                source=from_email,
-                to_addresses=to,
-                template_name=ses_template_name,
-                template_data=template_context if isinstance(template_context, dict) else {},
-                cc_addresses=cc or None,
-                bcc_addresses=bcc or None,
-                reply_to_addresses=reply_to or None,
-            )
-        else:
-            # Plain subject/body (no template usage)
-            resp = sender.send_email(
-                source=from_email,
-                to_addresses=to,
-                subject=subject or "",
-                body_text=body_text,
-                body_html=body_html,
-                cc_addresses=cc or None,
-                bcc_addresses=bcc or None,
-                reply_to_addresses=reply_to or None,
-            )
-
-        message_id = resp.get("MessageId")
-        if message_id:
-            sent.ses_message_id = message_id
-            # Let SNS delivery/bounce/complaint update final status
-            sent.status = SentMessage.STATUS_SENDING
-            sent.save(update_fields=["ses_message_id", "status", "modified"])
-            return JsonResponse({
-                "status": True,
-                "data": {
-                    "id": sent.id,
-                    "ses_message_id": message_id,
-                    "status": sent.status,
-                }
-            })
-        else:
-            # Failure from SES helper (returned {'Error': ...} or unexpected shape)
-            sent.status = SentMessage.STATUS_FAILED
-            sent.status_reason = resp.get("Error") or str(resp)
-            sent.save(update_fields=["status", "status_reason", "modified"])
-            return JsonResponse({
-                "error": "SES send failed",
-                "details": sent.status_reason,
-                "sent_id": sent.id
-            }, status=502)
-
-    except Exception as e:
-        logger.error(f"Send error for mailbox={from_email}: {e}")
-        sent.status = SentMessage.STATUS_FAILED
-        sent.status_reason = str(e)
-        sent.save(update_fields=["status", "status_reason", "modified"])
-        return JsonResponse({"error": str(e), "sent_id": sent.id}, status=500)
+        res = mailbox.send_template_email(
+            to, template_name, template_context,
+            cc, bcc, reply_to)
+    else:
+        res = mailbox.send_email(
+            to=to,
+            subject=subject,
+            body_text=body_text,
+            body_html=body_html,
+            cc=cc,
+            bcc=bcc,
+            reply_to=reply_to
+        )
+    return res.on_rest_get(request)

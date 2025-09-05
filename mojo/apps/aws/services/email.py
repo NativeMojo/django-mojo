@@ -59,7 +59,8 @@ from mojo.helpers.settings import settings
 from mojo.helpers import logit
 
 
-logger = logit.get_logger(__name__)
+logger = logit.get_logger("email", "email.log")
+
 
 
 # Exceptions
@@ -103,8 +104,7 @@ def _choose_region(mb: Mailbox, region: Optional[str]) -> str:
 def _check_domain_verified(mb: Mailbox, allow_unverified: bool):
     if allow_unverified:
         return
-    domain_status = (mb.domain.status or "").lower() if isinstance(mb.domain, EmailDomain) else ""
-    if domain_status != "verified":
+    if not mb.domain.is_verified:
         raise DomainNotVerified(f"Domain {mb.domain.name if mb.domain_id else '(unknown)'} is not verified for sending (status={mb.domain.status})")
 
 

@@ -97,11 +97,11 @@ class GeoLocatedIP(models.Model, MojoModel):
         return True
 
     @classmethod
-    def geolocate(cls, ip_address, auto_refresh=False):
+    def geolocate(cls, ip_address, auto_refresh=False, subdomain_only=False):
         # Extract subnet from IP address using simple string parsing
         subnet = ip_address[:ip_address.rfind('.')]
         geo_ip = GeoLocatedIP.objects.filter(ip_address=ip_address).first()
-        if not geo_ip and GEOLOCATION_ALLOW_SUBNET_LOOKUP:
+        if not geo_ip and (GEOLOCATION_ALLOW_SUBNET_LOOKUP or subdomain_only):
             geo_ip = GeoLocatedIP.objects.filter(subnet=subnet).last()
             if geo_ip:
                 geo_ip.id = None

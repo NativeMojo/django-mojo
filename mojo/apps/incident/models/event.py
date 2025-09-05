@@ -4,6 +4,7 @@ from mojo.models import MojoModel
 from mojo.helpers import dates
 from mojo.helpers.settings import settings
 from mojo.apps import metrics
+from mojo.apps.account.models import GeoLocatedIP
 
 
 INCIDENT_LEVEL_THRESHOLD = settings.get('INCIDENT_LEVEL_THRESHOLD', 7)
@@ -23,6 +24,7 @@ class Event(models.Model, MojoModel):
     source_ip = models.CharField(max_length=16, null=True, default=None, db_index=True)
     hostname = models.CharField(max_length=16, null=True, default=None, db_index=True)
     uid = models.IntegerField(default=None, null=True, db_index=True)
+    country_code = models.CharField(max_length=2, default=None, null=True, db_index=True)
 
     title = models.TextField(default=None, null=True)
     details = models.TextField(default=None, null=True)
@@ -41,6 +43,16 @@ class Event(models.Model, MojoModel):
         VIEW_PERMS = ["view_incidents"]
         CREATE_PERMS = None
 
+    _geo_ip = None
+    @property
+    def geo_ip(self):
+        if self._geo_ip is None and self.source_ip:
+            try:
+                self._geo_ip = GeoLocatedIP.geolocate(self.source_ip, subdomain_only=True)
+            except Exception:
+                pass
+        return self._geo_ip
+
     def sync_metadata(self):
         # Gather all field values into the metadata
         field_values = {
@@ -51,6 +63,17 @@ class Event(models.Model, MojoModel):
             'details': self.details,
             'model_name': self.model_name,
             'model_id': self.model_id        }
+
+        if not self.country_code and self.geo_ip:
+            self.country_code = self.geo_ip.country_code
+            field_values["country_code"] = self.geo_ip.country_code
+            field_values["country"] = self.geo_ip.country
+            field_values["category"] = self.geo_ip.category
+            field_values["city"] = self.geo_ip.city
+            field_values["region"] = self.geo_ip.region
+            field_values["latitude"] = self.geo_ip.latitude
+            field_values["longitude"] = self.geo_ip.longitude
+
         # Update the metadata with these values
         self.metadata.update(field_values)
 
@@ -70,11 +93,21 @@ class Event(models.Model, MojoModel):
         if settings.INCIDENT_EVENT_METRICS:
             metrics.record('incident_events', account="incident",
                 min_granularity=settings.get("INCIDENT_METRICS_MIN_GRANULARITY", "hours"))
+            if self.country_code:
+                metrics.record(f'incident_events:country:{self.country_code}',
+                    account="incident",
+                    category="incident_events_by_country",
+                    min_granularity=settings.get("INCIDENT_METRICS_MIN_GRANULARITY", "hours"))
 
     def record_incident_metrics(self):
         if settings.INCIDENT_EVENT_METRICS:
             metrics.record('incidents', account="incident",
                 min_granularity=settings.get("INCIDENT_METRICS_MIN_GRANULARITY", "hours"))
+            if self.country_code:
+                metrics.record(f'incident:country:{self.country_code}',
+                    account="incident",
+                    category="incidents_by_country",
+                    min_granularity=settings.get("INCIDENT_METRICS_MIN_GRANULARITY", "hours"))
 
     def get_or_create_incident(self, rule_set=None):
         """
@@ -95,6 +128,7 @@ class Event(models.Model, MojoModel):
                 priority=self.level,
                 state=0,
                 category=self.category,
+                country_code=self.country_code,
                 title=self.title,
                 details=self.details,
                 hostname=self.hostname,

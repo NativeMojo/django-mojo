@@ -12,7 +12,8 @@ from mojo.helpers.aws.inbound_email import process_inbound_email_from_s3
 # from mojo.apps.aws.models import SentMessage  # Uncomment when implementing status updates
 # from mojo.apps.aws.models import IncomingEmail  # Uncomment when implementing inbound storage
 
-logger = logit.get_logger(__name__)
+logger = logit.get_logger("email", "email.log")
+
 
 # Simple in-memory cache for SNS signing certificates
 # Key: SigningCertURL, Value: (fetched_at_epoch_seconds, pem_bytes)

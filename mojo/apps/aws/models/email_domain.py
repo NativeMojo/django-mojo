@@ -166,6 +166,10 @@ class EmailDomain(MojoSecrets, MojoModel):
     def aws_region(self):
         return self.region or getattr(settings, 'AWS_REGION', 'us-east-1')
 
+    @property
+    def is_verified(self):
+        return self.status in ["verified", "ready"]
+
     def set_aws_key(self, key):
         self.set_secret('aws_key', key)
 
