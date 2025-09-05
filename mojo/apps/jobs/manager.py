@@ -746,21 +746,28 @@ class JobManager:
         try:
             self.pause_channel(channel)
 
-            stream_key = self.keys.stream(channel)
-            broadcast_key = self.keys.stream_broadcast(channel)
+            # Delete Plan B keys and legacy streams
+            stream_key = self.keys.stream(channel)  # legacy
+            broadcast_key = self.keys.stream_broadcast(channel)  # legacy
             sched_key = self.keys.sched(channel)
             sched_b_key = self.keys.sched_broadcast(channel)
+            queue_key = self.keys.queue(channel)
+            processing_key = self.keys.processing(channel)
 
             deleted_stream = self.redis.delete(stream_key)
             deleted_broadcast = self.redis.delete(broadcast_key)
             deleted_sched = self.redis.delete(sched_key)
-            deleted_sched_broadcast = self.redis.delete(sched_b_key)
+            deleted_sched_b = self.redis.delete(sched_b_key)
+            deleted_queue = self.redis.delete(queue_key)
+            deleted_processing = self.redis.delete(processing_key)
 
             result['deleted'] = {
                 'stream': bool(deleted_stream),
                 'broadcast': bool(deleted_broadcast),
                 'scheduled': bool(deleted_sched),
-                'scheduled_broadcast': bool(deleted_sched_broadcast),
+                'scheduled_broadcast': bool(deleted_sched_b),
+                'queue': bool(deleted_queue),
+                'processing': bool(deleted_processing),
             }
 
             if cancel_db_pending:

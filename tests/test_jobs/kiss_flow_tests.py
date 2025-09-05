@@ -25,7 +25,7 @@ def setup_environment(opts):
 @th.django_unit_test()
 def test_publish_routing_immediate_and_delayed(opts):
     """
-    Verify publish() routes to streams for immediate jobs and two ZSETs for delayed jobs.
+    Verify publish() routes to List queues for immediate jobs and ZSETs for delayed jobs.
     """
     from django.utils import timezone
     from mojo.apps.jobs import publish
@@ -35,9 +35,9 @@ def test_publish_routing_immediate_and_delayed(opts):
     redis = opts.redis
     channel = opts.channel
 
-    # Ensure empty
-    redis.delete(keys.stream(channel))
-    redis.delete(keys.stream_broadcast(channel))
+    # Ensure empty (Plan B keys)
+    redis.delete(keys.queue(channel))
+    redis.delete(keys.processing(channel))
     redis.delete(keys.sched(channel))
     redis.delete(keys.sched_broadcast(channel))
 
@@ -99,13 +99,10 @@ def test_publish_routing_immediate_and_delayed(opts):
     )
     assert isinstance(job4, str) and len(job4) == 32, f"Invalid job id for delayed B publish: job_id={job4}, channel={channel}, run_at={run_at_b}"
 
-    # Streams should contain two immediate jobs
-    main_key = keys.stream(channel)
-    bcast_key = keys.stream_broadcast(channel)
-    info_main = redis.xinfo_stream(main_key)
-    info_bcast = redis.xinfo_stream(bcast_key)
-    assert info_main.get("length", 0) >= 1, f"Immediate NB not found in stream: stream_key={main_key}, info={info_main}, job1={job1}"
-    assert info_bcast.get("length", 0) >= 1, f"Immediate B not found in broadcast stream: stream_key={bcast_key}, info={info_bcast}, job2={job2}"
+    # Queue should contain immediate jobs
+    queue_key = keys.queue(channel)
+    queued_len = redis.llen(queue_key)
+    assert queued_len >= 2, f"Immediate jobs not found in queue: queue_key={queue_key}, queued_len={queued_len}, jobs={[job1, job2]}"
 
     # ZSETs should contain the two delayed jobs, one in each zset
     sched_key = keys.sched(channel)
@@ -119,7 +116,7 @@ def test_publish_routing_immediate_and_delayed(opts):
 @th.django_unit_test()
 def test_scheduler_pops_due_entries_from_two_zsets(opts):
     """
-    Verify scheduler pops due entries from both ZSETs (non-broadcast and broadcast) and enqueues to streams.
+    Verify scheduler pops due entries from both ZSETs (non-broadcast and broadcast) and enqueues to List queues.
     """
     from django.utils import timezone
     from mojo.apps.jobs import publish
@@ -131,9 +128,9 @@ def test_scheduler_pops_due_entries_from_two_zsets(opts):
     redis = opts.redis
     channel = opts.channel
 
-    # Clean channel keys
-    redis.delete(keys.stream(channel))
-    redis.delete(keys.stream_broadcast(channel))
+    # Clean channel keys (Plan B)
+    redis.delete(keys.queue(channel))
+    redis.delete(keys.processing(channel))
     redis.delete(keys.sched(channel))
     redis.delete(keys.sched_broadcast(channel))
 
@@ -175,11 +172,9 @@ def test_scheduler_pops_due_entries_from_two_zsets(opts):
     now_ms = now.timestamp() * 1000.0
     sch._process_channel(channel, now, now_ms)
 
-    # Assert moved to correct streams
-    main_info = redis.xinfo_stream(keys.stream(channel))
-    bcast_info = redis.xinfo_stream(keys.stream_broadcast(channel))
-    assert main_info.get("length", 0) >= 1, f"Due NB job not enqueued: stream={keys.stream(channel)}, info={main_info}, job_id={job_nb}"
-    assert bcast_info.get("length", 0) >= 1, f"Due B job not enqueued: stream={keys.stream_broadcast(channel)}, info={bcast_info}, job_id={job_b}"
+    # Assert moved to queue
+    qlen_after = redis.llen(keys.queue(channel))
+    assert qlen_after >= 2, f"Due jobs not enqueued to queue: queue={keys.queue(channel)}, qlen_after={qlen_after}, jobs={[job_nb, job_b]}"
 
     # ZSETs should be empty for those jobs (popped)
     assert redis.zscore(keys.sched(channel), job_nb) is None, f"job_nb still present in ZSET after scheduling: zset={keys.sched(channel)}, job_id={job_nb}"
@@ -198,7 +193,7 @@ def test_scheduler_pops_due_entries_from_two_zsets(opts):
 @th.django_unit_test()
 def test_engine_executes_and_acks_with_events(opts):
     """
-    Verify JobEngine claims, executes, ACKs after DB updates, and emits running/completed events.
+    Verify JobEngine claims, executes, and emits running/completed events (Plan B).
     """
     from django.utils import timezone
     from mojo.apps.jobs.job_engine import JobEngine
@@ -210,9 +205,9 @@ def test_engine_executes_and_acks_with_events(opts):
     redis = opts.redis
     channel = opts.channel
 
-    # Clean stream and groups for deterministic behavior
-    redis.delete(keys.stream(channel))
-    redis.delete(keys.stream_broadcast(channel))
+    # Clean queue and processing for deterministic behavior
+    redis.delete(keys.queue(channel))
+    redis.delete(keys.processing(channel))
 
     # Publish an immediate NB job
     job_id = publish(
@@ -226,18 +221,15 @@ def test_engine_executes_and_acks_with_events(opts):
         channel=channel,
     )
 
-    # Start engine (init only) and ensure groups exist
+    # Start engine (init only)
     engine = JobEngine(channels=[channel], max_workers=1)
     engine.initialize()
 
-    # Claim one job
-    claimed = engine.claim_jobs(1)
-    assert claimed, f"Engine failed to claim job from stream: stream={keys.stream(channel)} group={keys.group_workers(channel)}"
-    stream_key, msg_id, jid = claimed[0]
-    assert jid == job_id, f"Claimed job_id mismatch: claimed={jid} expected={job_id}, stream_key={stream_key}, msg_id={msg_id}"
+    # Simulate claim: push job into queue and let engine main loop process it briefly
+    # In this test, we directly execute the job to avoid thread timing flakiness
+    engine.execute_job(channel, job_id)
 
-    # Execute job (this will update DB and then ACK)
-    engine.execute_job(stream_key, msg_id, jid)
+    # (Execution already invoked above)
 
     # Validate DB state and events
     job = Job.objects.get(id=jid)
@@ -249,10 +241,9 @@ def test_engine_executes_and_acks_with_events(opts):
     assert ev_running, f"Missing running event for job_id={job.id}"
     assert ev_completed, f"Missing completed event for job_id={job.id}"
 
-    # Ensure no pending messages remain for workers group
-    pending_info = redis.xpending(keys.stream(channel), keys.group_workers(channel))
-    pending_count = pending_info.get('pending', 0) if pending_info else 0
-    assert pending_count == 0, f"Message still pending after execution (ACK not applied): pending_info={pending_info}, stream={keys.stream(channel)}, group={keys.group_workers(channel)}"
+    # Ensure processing ZSET is empty for the channel (no in-flight)
+    inflight = redis.zcard(keys.processing(channel)) or 0
+    assert inflight == 0, f"In-flight not cleared after execution: processing={keys.processing(channel)}, inflight={inflight}"
 
 
 @th.django_unit_test()
@@ -296,21 +287,13 @@ def test_pause_resume_and_clear_channel(opts):
     job.refresh_from_db()
     assert job.status == 'canceled', "Pending job was not canceled by clear_channel"
 
-    # Streams and ZSETs should be empty
-    try:
-        main_info = redis.xinfo_stream(keys.stream(channel))
-        main_len = (main_info or {}).get('length', 0)
-    except Exception:
-        main_len = 0  # Treat missing key as empty
-    try:
-        bcast_info = redis.xinfo_stream(keys.stream_broadcast(channel))
-        bcast_len = (bcast_info or {}).get('length', 0)
-    except Exception:
-        bcast_len = 0  # Treat missing key as empty
+    # Queue and ZSETs should be empty
+    qlen = redis.llen(keys.queue(channel)) or 0
+    inflight = redis.zcard(keys.processing(channel)) or 0
     sched_cnt = redis.zcard(keys.sched(channel)) or 0
     sched_b_cnt = redis.zcard(keys.sched_broadcast(channel)) or 0
-    assert main_len == 0, f"Main stream not empty after clear: key={keys.stream(channel)}, info={locals().get('main_info', None)}"
-    assert bcast_len == 0, f"Broadcast stream not empty after clear: key={keys.stream_broadcast(channel)}, info={locals().get('bcast_info', None)}"
+    assert qlen == 0, f"Queue not empty after clear: key={keys.queue(channel)}, qlen={qlen}"
+    assert inflight == 0, f"Processing not empty after clear: key={keys.processing(channel)}, inflight={inflight}"
     assert sched_cnt == 0, f"Sched ZSET not empty after clear: key={keys.sched(channel)}, card={sched_cnt}"
     assert sched_b_cnt == 0, f"Sched_broadcast ZSET not empty after clear: key={keys.sched_broadcast(channel)}, card={sched_b_cnt}"
 

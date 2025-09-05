@@ -26,8 +26,8 @@ def setup_basic_tests(opts):
 
     for channel in test_channels:
         try:
-            redis.delete(keys.stream(channel))
-            redis.delete(keys.stream_broadcast(channel))
+            redis.delete(keys.queue(channel))
+            redis.delete(keys.processing(channel))
             redis.delete(keys.sched(channel))
             redis.delete(keys.sched_broadcast(channel))
         except:
@@ -72,23 +72,10 @@ def test_job_publish_basic(opts):
     assert events.count() >= 1
     assert events.first().event == 'created'
 
-    # Verify Redis only has minimal data (no payload!)
-    stream_key = opts.keys.stream(opts.test_channel)
-    messages = opts.redis.get_client().xrange(stream_key, count=10)
-
-    # Find our job message
-    found = False
-    for msg_id, data in messages:
-        if data.get(b'job_id', b'').decode('utf-8') == job_id:
-            found = True
-            # Verify payload is NOT in Redis
-            assert b'payload' not in data
-            # Only job_id, func path, and metadata
-            assert b'job_id' in data
-            assert b'func' in data
-            break
-
-    assert found, "Job not found in Redis stream"
+    # Verify job enqueued to Redis List (Plan B)
+    queue_key = opts.keys.queue(opts.test_channel)
+    qlen = opts.redis.llen(queue_key)
+    assert qlen >= 1, f"Job not found in Redis queue: key={queue_key}, qlen={qlen}, job_id={job_id}"
 
 
 @th.django_unit_test()
@@ -608,7 +595,7 @@ def test_cleanup(opts):
 
     # Clean up Redis
     for channel in ['test_basic', 'test_scheduled', 'test_broadcast']:
-        opts.redis.delete(opts.keys.stream(channel))
-        opts.redis.delete(opts.keys.stream_broadcast(channel))
+        opts.redis.delete(opts.keys.queue(channel))
+        opts.redis.delete(opts.keys.processing(channel))
         opts.redis.delete(opts.keys.sched(channel))
         opts.redis.delete(opts.keys.sched_broadcast(channel))

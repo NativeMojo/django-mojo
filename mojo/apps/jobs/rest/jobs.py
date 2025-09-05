@@ -329,12 +329,21 @@ def on_system_stats(request):
 def on_system_test(request):
     from mojo.apps import jobs
     jobs.publish(
+        "mojo.apps.jobs.examples.sample_jobs.send_email",
+        {
+            "recipients": ["user@example.com"],
+            "subject": "Test Email",
+            "body": "This is a test email."
+        },
+        delay=30
+    )
+
+    jobs.publish(
         "mojo.apps.jobs.examples.sample_jobs.simulate_long_job",
         {
             "delay": 15
         },
-        channel='priority',
-        delay=30
+        channel='priority'
     )
     return JsonResponse({
         'status': True,

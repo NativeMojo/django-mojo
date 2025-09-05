@@ -111,6 +111,12 @@ class JobKeys:
         """
         return f"{self.prefix}:lock:reaper:{channel}"
 
+    def channel_pause(self, channel: str) -> str:
+        """
+        Get the pause flag key for a channel.
+        """
+        return f"{self.prefix}:channel:{channel}:paused"
+
     # ----------------------------
     # Job metadata / control
     # ----------------------------

@@ -10,6 +10,7 @@ from mojo.helpers.response import JsonResponse
 from functools import wraps
 from mojo.helpers import modules
 from mojo.models import rest
+from django.http import HttpResponse
 from mojo.apps import metrics
 
 logger = logit.get_logger("error", "error.log")
@@ -64,7 +65,10 @@ def dispatch_error_handler(func):
         try:
             if API_METRICS:
                 metrics.record("api_calls", category="mojo_api", min_granularity=API_METRICS_GRANULARITY)
-            return func(request, *args, **kwargs)
+            resp = func(request, *args, **kwargs)
+            if not isinstance(resp, HttpResponse) and isinstance(resp, dict):
+                return JsonResponse(resp)
+            return resp
         except mojo.errors.MojoException as err:
             if API_METRICS:
                 metrics.record("api_errors", category="mojo_api", min_granularity=API_METRICS_GRANULARITY)

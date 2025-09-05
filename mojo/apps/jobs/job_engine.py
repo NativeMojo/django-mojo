@@ -312,6 +312,20 @@ class JobEngine:
                     'last_heartbeat': dates.utcnow().isoformat()
                 }), ex=self.heartbeat_interval * 3)  # TTL = 3x interval
 
+                # Touch visibility timeout for active jobs to prevent premature reaping
+                try:
+                    now_ms = int(time.time() * 1000)
+                    # Snapshot active jobs to minimize lock hold time
+                    with self.active_lock:
+                        active_snapshot = [(jid, meta.get('channel')) for jid, meta in self.active_jobs.items()]
+                    for jid, ch in active_snapshot:
+                        if not ch:
+                            continue
+                        # Update in-flight ZSET score to extend visibility timeout
+                        self.redis.zadd(self.keys.processing(ch), {jid: now_ms})
+                except Exception as te:
+                    logger.debug(f"Heartbeat touch failed: {te}")
+
             except Exception as e:
                 logger.warning(f"Heartbeat update failed: {e}")
 
@@ -674,6 +688,16 @@ class JobEngine:
                 now_ms = int(time.time() * 1000)
                 cutoff = now_ms - JOBS_VISIBILITY_TIMEOUT_MS
                 for ch in self.channels:
+                    # Acquire short-lived lock to avoid duplicate requeues across engines
+                    acquired = False
+                    try:
+                        acquired = self.redis.set(self.keys.reaper_lock(ch), self.runner_id, nx=True, px=2000)
+                    except Exception as le:
+                        logger.debug(f"Reaper lock error for {ch}: {le}")
+                        acquired = False
+                    if not acquired:
+                        # Another engine is handling this channel right now
+                        continue
                     # Fetch stale entries: claimed earlier than cutoff
                     try:
                         stale_ids = self.redis.zrangebyscore(self.keys.processing(ch), float("-inf"), cutoff, limit=100)

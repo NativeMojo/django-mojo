@@ -5,6 +5,7 @@ from mojo.helpers.settings import settings
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import transaction, models as dm
 import objict
+import datetime
 from mojo.helpers import dates, logit
 
 
@@ -13,6 +14,16 @@ ACTIVE_REQUEST = None
 LOGGING_CLASS = None
 MOJO_APP_STATUS_200_ON_ERROR = settings.MOJO_APP_STATUS_200_ON_ERROR
 MOJO_REST_LIST_PERM_DENY = settings.get("MOJO_REST_LIST_PERM_DENY", False)
+
+# use this when there is no ACTIVE_REQUEST
+SYSTEM_REQUEST = objict.objict()
+SYSTEM_REQUEST.user = objict.objict()
+SYSTEM_REQUEST.user.id = 1
+SYSTEM_REQUEST.user.username = "system"
+SYSTEM_REQUEST.user.email = ""
+SYSTEM_REQUEST.user.is_authenticated = True
+SYSTEM_REQUEST.user.has_permission = lambda perm: True
+SYSTEM_REQUEST.DATA = objict.objict()
 
 class MojoModel:
     """Base model class for REST operations with GraphSerializer integration."""
@@ -201,6 +212,8 @@ class MojoModel:
                 owner = getattr(instance, owner_field, None)
                 if owner is not None and owner.id == request.user.id:
                     return True
+            if hasattr(instance, "group"):
+                request.group = getattr(instance, "group", None)
 
         if request.group and hasattr(cls, "group"):
             allowed = request.group.user_has_permission(request.user, perms)
@@ -301,10 +314,26 @@ class MojoModel:
         else:
             perms = cls.get_rest_meta_prop("VIEW_PERMS", [])
             if perms and "owner" in perms and request.user.is_authenticated:
-                return cls.on_rest_list(request, cls.objects.filter(user=request.user))
+                owner_field = cls.get_rest_meta_prop("OWNER_FIELD", "user")
+                q = {owner_field: request.user}
+                return cls.on_rest_list(request, cls.objects.filter(**q))
         if MOJO_REST_LIST_PERM_DENY:
             return cls.rest_error_response(request, 403, error=f"GET permission denied: {cls.__name__}")
         return cls.on_rest_list_response(request, cls.objects.none())
+
+    def update_from_dict(self, dict_data):
+        request = ACTIVE_REQUEST or SYSTEM_REQUEST
+        return self.on_rest_save(request, dict_data)
+
+    @classmethod
+    def create_from_dict(cls, dict_data, **kwargs):
+        request = kwargs.pop('request', ACTIVE_REQUEST or SYSTEM_REQUEST)
+        instance = cls(**kwargs)
+        instance.on_rest_save(request, dict_data)
+        instance.on_rest_created()
+        if cls.get_rest_meta_prop("LOG_CHANGES", False):
+            instance.log(kind="model:created", log=f"{request.user.username} created {instance.pk}")
+        return instance
 
     @classmethod
     def create_from_request(cls, request, **kwargs):
@@ -326,7 +355,7 @@ class MojoModel:
         Returns:
             JsonResponse representing the result of the create operation.
         """
-        if cls.rest_check_permission(request, ["SAVE_PERMS", "VIEW_PERMS"]):
+        if cls.rest_check_permission(request, ["CREATE_PERMS", "SAVE_PERMS", "VIEW_PERMS"]):
             instance = cls.create_from_request(request)
             return instance.on_rest_get(request)
         return cls.rest_error_response(request, 403, error=f"CREATE permission denied: {cls.__name__}")
@@ -683,6 +712,10 @@ class MojoModel:
                     value = bool(value)
                 else:
                     value = bool(value)
+            elif value is not None:
+                if field.get_internal_type() in ["DateTimeField", "DateField"]:
+                    if not isinstance(value, (datetime.datetime, datetime.date)):
+                        value = dates.parse_datetime(value)
             self._set_field_change(key, getattr(self, key), value)
             setattr(self, key, value)
 
