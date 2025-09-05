@@ -206,6 +206,10 @@ class Mailbox(models.Model, MojoModel):
         if not self.allow_outbound:
             raise email_service.OutboundNotAllowed(f"Outbound sending is disabled for mailbox {self.email}")
 
+        aws_access_key = self.domain.aws_access_key
+        aws_secret_key = self.domain.aws_secret_key
+        aws_region = self.domain.aws_region
+
         return email_service.send_email(
             from_email=self.email,
             to=to,
@@ -215,6 +219,9 @@ class Mailbox(models.Model, MojoModel):
             cc=cc,
             bcc=bcc,
             reply_to=reply_to,
+            aws_access_key=aws_access_key,
+            aws_secret_key=aws_secret_key,
+            region=aws_region,
             **kwargs
         )
 
@@ -262,6 +269,10 @@ class Mailbox(models.Model, MojoModel):
             if EmailTemplate.objects.filter(name=domain_template_name).exists():
                 final_template_name = domain_template_name
 
+        aws_access_key = self.domain.aws_access_key
+        aws_secret_key = self.domain.aws_secret_key
+        aws_region = self.domain.aws_region
+
         return email_service.send_with_template(
             from_email=self.email,
             to=to,
@@ -270,5 +281,8 @@ class Mailbox(models.Model, MojoModel):
             cc=cc,
             bcc=bcc,
             reply_to=reply_to,
+            aws_access_key=aws_access_key,
+            aws_secret_key=aws_secret_key,
+            region=aws_region,
             **kwargs
         )

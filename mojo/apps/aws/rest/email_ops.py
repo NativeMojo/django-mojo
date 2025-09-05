@@ -77,8 +77,9 @@ def on_email_domain_onboard(request, pk: int):
     endpoints = _parse_endpoints(payload)
 
     # Optional AWS creds override (defaults to project settings)
-    access_key = payload.get("aws_access_key")
-    secret_key = payload.get("aws_secret_key")
+    access_key = domain.aws_key or getattr(settings, "AWS_KEY", None)
+    secret_key = domain.aws_secret or getattr(settings, "AWS_SECRET", None)
+
 
     if receiving_enabled and not s3_bucket:
         return JsonResponse({"error": "s3_inbound_bucket is required when receiving_enabled is true"}, status=400)
@@ -165,8 +166,10 @@ def on_email_domain_audit(request, pk: int):
         return JsonResponse({"error": "EmailDomain not found", "code": 404}, status=404)
 
     region = payload.get("region") or domain.region or getattr(settings, "AWS_REGION", "us-east-1")
-    access_key = payload.get("aws_access_key")
-    secret_key = payload.get("aws_secret_key")
+
+    # Optional AWS creds override (defaults to project settings)
+    access_key = domain.aws_key or getattr(settings, "AWS_KEY", None)
+    secret_key = domain.aws_secret or getattr(settings, "AWS_SECRET", None)
 
     desired_receiving = None
     if domain.receiving_enabled and domain.s3_inbound_bucket:
@@ -278,8 +281,9 @@ def on_email_domain_reconcile(request, pk: int):
     mail_from_subdomain = payload.get("mail_from_subdomain", "feedback")
 
     endpoints = _parse_endpoints(payload)
-    access_key = payload.get("aws_access_key")
-    secret_key = payload.get("aws_secret_key")
+    # Optional AWS creds override (defaults to project settings)
+    access_key = domain.aws_key or getattr(settings, "AWS_KEY", None)
+    secret_key = domain.aws_secret or getattr(settings, "AWS_SECRET", None)
 
     if receiving_enabled and not s3_bucket:
         return JsonResponse({"error": "s3_inbound_bucket is required when receiving_enabled is true"}, status=400)

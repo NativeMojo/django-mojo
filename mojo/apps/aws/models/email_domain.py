@@ -2,6 +2,7 @@ from django.db import models
 from mojo.models import MojoModel, MojoSecrets
 from mojo.helpers.settings import settings
 from mojo.helpers.aws.ses_domain import audit_domain_config, reconcile_domain_config
+from mojo.helpers import aws
 
 
 class EmailDomain(MojoSecrets, MojoModel):
@@ -137,9 +138,39 @@ class EmailDomain(MojoSecrets, MojoModel):
                     "metadata",
                     "created",
                     "modified",
+                ],
+                "extra": [
+                    "aws_key",
+                    "aws_secret_masked"
                 ]
             },
         }
+
+    @property
+    def aws_key(self):
+        return self.get_secret('aws_key')
+
+    @property
+    def aws_secret(self):
+        return self.get_secret('aws_secret')
+
+    @property
+    def aws_secret_masked(self):
+        secret = self.get_secret('aws_secret', '')
+        if len(secret) > 4:
+            return '*' * (len(secret) - 4) + secret[-4:]
+        return secret
+
+
+    @property
+    def aws_region(self):
+        return self.region or getattr(settings, 'AWS_REGION', 'us-east-1')
+
+    def set_aws_key(self, key):
+        self.set_secret('aws_key', key)
+
+    def set_aws_secret(self, secret):
+        self.set_secret('aws_secret', secret)
 
     def on_rest_created(self):
         """
@@ -147,8 +178,7 @@ class EmailDomain(MojoSecrets, MojoModel):
         This keeps AWS-side resources aligned without requiring a separate call.
         """
         try:
-            region = self.region or getattr(settings, 'AWS_REGION', 'us-east-1')
-
+            region = self.aws_region
             # Audit current state (best-effort; ignore failures)
             try:
                 desired_receiving = None
