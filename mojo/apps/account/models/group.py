@@ -365,6 +365,8 @@ class Group(MojoSecrets, MojoModel):
 
     def check_view_permission(self, perms, request):
         # check if the user is a member of the group
+        if request.user.has_permission(perms):
+            return True
         ms = self.get_member_for_user(request.user)
         if ms is None:
             return False

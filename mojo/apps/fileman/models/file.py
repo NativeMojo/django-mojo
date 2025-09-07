@@ -24,6 +24,7 @@ class File(models.Model, MojoModel):
         DEFAULT_SORT = "-created"
         VIEW_PERMS = ["view_fileman", "manage_files"]
         SEARCH_FIELDS = ["filename", "content_type"]
+        POST_SAVE_ACTIONS = ["action"]
         SEARCH_TERMS = [
             "filename",  "content_type",
             ("group", "group__name"),
@@ -309,13 +310,13 @@ class File(models.Model, MojoModel):
             return self.download_url
         return self.file_manager.backend.get_url(self.storage_file_path, self.get_setting("urls_expire_in", 3600))
 
-    def set_action(self, action):
+    def on_action_action(self, action):
         if action == "mark_as_completed":
-            self.mark_as_completed()
+            self.mark_as_completed(commit=True)
         elif action == "mark_as_failed":
-            self.mark_as_failed()
+            self.mark_as_failed(commit=True)
         elif action == "mark_as_uploading":
-            self.mark_as_uploading()
+            self.mark_as_uploading(commit=True)
 
     def set_filename(self, filename):
         self.filename = filename

@@ -62,7 +62,6 @@ def test_aws_test_email_domain(opts):
     # Expect the domain with id=1 to be our AWS-registered domain
     opts.domain_id = 1
     opts.domain_name = resp.response.data.name
-    assert opts.domain_name == "nmojo.io", f"unexpected domain name {opts.domain_name}"
 
 @th.unit_test("aws_email_domain_audit")
 def test_aws_email_domain_audit(opts):

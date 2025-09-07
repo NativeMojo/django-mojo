@@ -67,12 +67,12 @@ class Event(models.Model, MojoModel):
         if not self.country_code and self.geo_ip:
             self.country_code = self.geo_ip.country_code
             field_values["country_code"] = self.geo_ip.country_code
-            field_values["country"] = self.geo_ip.country
-            field_values["category"] = self.geo_ip.category
+            field_values["country_name"] = self.geo_ip.country_name
             field_values["city"] = self.geo_ip.city
             field_values["region"] = self.geo_ip.region
             field_values["latitude"] = self.geo_ip.latitude
             field_values["longitude"] = self.geo_ip.longitude
+            field_values["timezone"] = self.geo_ip.timezone
 
         # Update the metadata with these values
         self.metadata.update(field_values)

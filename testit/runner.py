@@ -45,8 +45,8 @@ def setup_parser():
                         help="Run only this app/module")
     parser.add_argument("--method", type=str, default=None,
                         help="Run only a specific test method")
-    parser.add_argument("-t", "--test", type=str, default=None,
-                        help="Specify a specific test method to run")
+    parser.add_argument("-t", "--test", action="append", dest="test_modules",
+                        help="Specify test modules or specific tests (can be used multiple times)")
     parser.add_argument("-q", "--quick", action="store_true",
                         help="Run only tests flagged as critical/quick")
     parser.add_argument("-x", "--extra", type=str, default=None,
@@ -65,6 +65,8 @@ def setup_parser():
                         help="Do not run Mojo app tests")
     parser.add_argument("--onlymojo", action="store_true",
                         help="Only run Mojo app tests")
+    parser.add_argument("--ignore", action="append", dest="ignore_modules",
+                        help="Ignore specific test modules (can be used multiple times)")
     return parser.parse_args()
 
 
@@ -226,19 +228,33 @@ def main(opts):
         sys.path.insert(0, parent_test_root)
         parent_test_modules = sorted([d for d in os.listdir(parent_test_root) if os.path.isdir(os.path.join(parent_test_root, d))])
 
-    if opts.module and opts.test:
+    # Handle multiple --test arguments
+    if opts.test_modules:
+        for test_spec in opts.test_modules:
+            if '.' in test_spec:
+                module_name, test_name = test_spec.split('.', 1)
+                run_module_tests_by_name(opts, module_name, test_name)
+            else:
+                run_tests_for_module(opts, test_spec, TEST_ROOT, parent_test_root)
+    elif opts.module and opts.test:
         run_module_tests_by_name(opts, opts.module, opts.test)
     elif opts.module:
         run_tests_for_module(opts, opts.module, TEST_ROOT, parent_test_root)
     else:
         test_root = os.path.join(paths.APPS_ROOT, "tests")
         test_modules = sorted([d for d in os.listdir(test_root) if os.path.isdir(os.path.join(test_root, d))])
+
+        # Filter out ignored modules
+        ignored_modules = opts.ignore_modules or []
+
         if parent_test_modules and not opts.nomojo:
             for module_name in parent_test_modules:
-                run_tests_for_module(opts, module_name, parent_test_root)
+                if module_name not in ignored_modules:
+                    run_tests_for_module(opts, module_name, parent_test_root)
         if not opts.onlymojo:
             for module_name in test_modules:
-                run_tests_for_module(opts, module_name, test_root)
+                if module_name not in ignored_modules:
+                    run_tests_for_module(opts, module_name, test_root)
 
     # Summary Output
     print("\n" + "=" * 80)

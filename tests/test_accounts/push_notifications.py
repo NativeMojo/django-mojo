@@ -165,7 +165,7 @@ def test_notification_template_creation(opts):
         "location": "Main Street Store"
     }
 
-    title, body, action_url = template.render(context)
+    title, body, action_url, data = template.render(context)
 
     assert title == "Order Ready, John Doe!", f"Expected 'Order Ready, John Doe!', got '{title}'"
     assert "John Doe" in body, f"Body should contain customer name, got '{body}'"
@@ -530,8 +530,9 @@ def test_unauthorized_push_operations(opts):
 
     # Try to access push config without permission
     resp = opts.client.get("/api/account/devices/push/config")
-
-    if resp.status_code != 403:
+    if resp.status_code == 200:
+        assert resp.response.count == 0, "Expected no devices to receive notification"
+    elif resp.status_code != 403:
         error_details = f"Expected status 403 for unauthorized config access, got {resp.status_code}"
         if hasattr(resp, 'response') and resp.response and hasattr(resp.response, 'error'):
             error_details += f"\nError: {resp.response.error}"

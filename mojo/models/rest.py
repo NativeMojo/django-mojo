@@ -391,10 +391,18 @@ class MojoModel:
         cls.debug("on_rest_list:start")
         if queryset is None:
             queryset = cls.objects.all()
-        if request.group is not None and hasattr(cls, "group"):
-            if "group" in request.DATA:
-                del request.DATA["group"]
-            queryset = queryset.filter(group=request.group)
+        # for better query perfomance we want raw request GET data
+        request.QUERY_PARAMS = request.GET.copy()
+        if request.group is not None:
+            GROUP_FIELD = cls.get_rest_meta_prop("GROUP_FIELD", None)
+            if GROUP_FIELD or hasattr(cls, "group"):
+                if "group" in request.QUERY_PARAMS:
+                    del request.QUERY_PARAMS["group"]
+                if GROUP_FIELD:
+                    q = {GROUP_FIELD: request.group}
+                else:
+                    q = {"group": request.group}
+                queryset = queryset.filter(**q)
         queryset = cls.on_rest_list_filter(request, queryset)
         queryset = cls.on_rest_list_date_range_filter(request, queryset)
         queryset = cls.on_rest_list_sort(request, queryset)
@@ -467,15 +475,17 @@ class MojoModel:
             The filtered queryset.
         """
         filters = {}
-        for key, value in request.DATA.items():
+        for key, value in request.QUERY_PARAMS.items():
             # Split key to check for foreign key relationships
+            if "." in key:
+                key = key.replace(".", "__")
             key_parts = key.split('__')
             field_name = key_parts[0]
             if hasattr(cls, field_name):
                 filters[key] = value
             elif field_name in cls.__rest_field_names__ and cls._meta.get_field(field_name).is_relation:
                 filters[key] = value
-        # logger.info("filters", filters)
+        logger.info("filters", filters)
         queryset = cls.on_rest_list_search(request, queryset)
         return queryset.filter(**filters)
 
@@ -759,8 +769,10 @@ class MojoModel:
             field.related_model.on_rest_related_save(self, field.name, field_value, related_instance)
         elif isinstance(field_value, int) or (isinstance(field_value, str)):
             # self.debug(f"Related Model: {field.related_model.__name__}, Field Value: {field_value}")
+            field_value = int(field_value)
             if not bool(field_value):
                 # None, "", 0 will set it to None
+                logger.info(f"Setting field {field.name} to None")
                 setattr(self, field.name, None)
                 return
             field_value = int(field_value)

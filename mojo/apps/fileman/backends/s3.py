@@ -425,6 +425,21 @@ class S3StorageBackend(StorageBackend):
 
         return len(errors) == 0, errors
 
+    def test_connection(self):
+        try:
+            self.client.head_bucket(Bucket=self.bucket_name)
+            return True
+        except NoCredentialsError:
+            raise ValueError("Invalid AWS credentials")
+        except ClientError as e:
+            error_code = e.response['Error']['Code']
+            if error_code == '404':
+                raise ValueError(f"S3 bucket '{self.bucket_name}' does not exist")
+            elif error_code == '403':
+                raise ValueError(f"Access denied to S3 bucket '{self.bucket_name}'")
+            else:
+                raise ValueError(f"S3 connection error: {e}")
+
     def make_path_public(self):
         # Get the current bucket policy (if any)
         try:
@@ -488,3 +503,197 @@ class S3StorageBackend(StorageBackend):
                 self.client.download_fileobj(self.bucket_name, file_path, local_file)
         except ClientError as e:
             raise Exception(f"Failed to download file from S3: {e}")
+
+    # -------------------------------
+    # CORS MANAGEMENT FOR DIRECT UPLOADS
+    # -------------------------------
+    def get_cors_configuration(self) -> Optional[Dict[str, Any]]:
+        """
+        Return the current CORS configuration for the bucket, or None if not set.
+        """
+        try:
+            resp = self.client.get_bucket_cors(Bucket=self.bucket_name)
+            return resp
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") == "NoSuchCORSConfiguration":
+                return None
+            raise
+
+    def _default_direct_upload_cors_rule(
+        self,
+        allowed_origins: List[str],
+        allowed_methods: Optional[List[str]] = None,
+        allowed_headers: Optional[List[str]] = None,
+        expose_headers: Optional[List[str]] = None,
+        max_age_seconds: int = 3000,
+    ) -> Dict[str, Any]:
+        """
+        Build a single CORS rule suitable for direct uploads via pre-signed PUT/POST.
+        Note: S3 CORS applies at the bucket level, not per-prefix. Access is still
+        enforced by IAM policies and the fact that we use pre-signed URLs.
+        """
+        if not allowed_origins or not any(str(o).strip() for o in allowed_origins):
+            raise ValueError("allowed_origins must contain at least one origin")
+        methods = allowed_methods or ["PUT", "HEAD"]
+        headers = allowed_headers or ["*"]  # simplest and safest for signed uploads
+        expose = expose_headers or ["ETag", "x-amz-request-id", "x-amz-id-2", "x-amz-version-id"]
+
+        return {
+            "CORSRules": [
+                {
+                    "AllowedOrigins": allowed_origins,
+                    "AllowedMethods": methods,
+                    "AllowedHeaders": headers,
+                    "ExposeHeaders": expose,
+                    "MaxAgeSeconds": max_age_seconds,
+                }
+            ]
+        }
+
+    def check_cors_configuration_for_direct_upload(
+        self,
+        allowed_origins: List[str],
+        required_methods: Optional[List[str]] = None,
+        required_headers: Optional[List[str]] = None,
+    ) -> Tuple[bool, List[str], Optional[Dict[str, Any]]]:
+        """
+        Validate current CORS config can support direct uploads from the given origins.
+
+        Returns:
+            (ok, issues, current_config)
+        """
+        if not allowed_origins or not any(str(o).strip() for o in allowed_origins):
+            raise ValueError("allowed_origins must contain at least one origin")
+        issues: List[str] = []
+        config = self.get_cors_configuration()
+        if config is None:
+            return False, ["No CORS configuration set on this bucket."], None
+
+        if required_methods is None:
+            required_methods = ["POST", "HEAD"] if self.server_side_encryption else ["PUT", "HEAD"]
+        required_methods = [m.upper() for m in required_methods]
+        # For PUT we often need Content-Type. For POST, headers are not required (fields are in the form).
+        # Using "*" for AllowedHeaders is the simplest and reduces edge cases.
+        if required_headers is None:
+            required_headers = [] if self.server_side_encryption else ["content-type"]
+        required_headers = [h.lower() for h in required_headers]
+
+        # Flatten rules
+        cors_rules: List[Dict[str, Any]] = config.get("CORSRules", [])
+
+        def origin_is_covered(origin: str) -> bool:
+            for rule in cors_rules:
+                origins = rule.get("AllowedOrigins", [])
+                if "*" in origins or origin in origins:
+                    # methods
+                    methods = [m.upper() for m in rule.get("AllowedMethods", [])]
+                    if not all(m in methods for m in required_methods):
+                        continue
+                    # headers
+                    hdrs = [h.lower() for h in rule.get("AllowedHeaders", [])]
+                    if "*" in hdrs:
+                        return True
+                    if not all(h in hdrs for h in required_headers):
+                        continue
+                    return True
+            return False
+
+        for origin in allowed_origins:
+            if not origin_is_covered(origin):
+                issues.append(f"Origin not covered for direct upload: {origin}")
+
+        return (len(issues) == 0), issues, config
+
+    def update_cors_configuration_for_direct_upload(
+        self,
+        allowed_origins: List[str],
+        allowed_methods: Optional[List[str]] = None,
+        allowed_headers: Optional[List[str]] = None,
+        expose_headers: Optional[List[str]] = None,
+        max_age_seconds: int = 3000,
+        merge: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Ensure CORS allows direct uploads from allowed_origins.
+        If merge=True, append our rule to any existing rules instead of replacing.
+        """
+        # Validate input
+        if not allowed_origins or not any(str(o).strip() for o in allowed_origins):
+            raise ValueError("allowed_origins must contain at least one origin")
+        # If current config already satisfies requirements, do nothing
+        ok, issues, current = self.check_cors_configuration_for_direct_upload(
+            allowed_origins=allowed_origins,
+            required_methods=allowed_methods,
+            required_headers=allowed_headers,
+        )
+        if ok:
+            return {
+                "changed": False,
+                "message": "Existing CORS configuration already supports direct uploads.",
+                "issues": [],
+                "applied_configuration": current,
+            }
+
+        new_rule_config = self._default_direct_upload_cors_rule(
+            allowed_origins=allowed_origins,
+            allowed_methods=allowed_methods or (["POST", "HEAD"] if self.server_side_encryption else ["PUT", "HEAD"]),
+            allowed_headers=allowed_headers or ["*"],
+            expose_headers=expose_headers,
+            max_age_seconds=max_age_seconds,
+        )
+
+        if merge and current:
+            merged = dict(CORSRules=[*current.get("CORSRules", []), *new_rule_config["CORSRules"]])
+            self.client.put_bucket_cors(Bucket=self.bucket_name, CORSConfiguration=merged)
+            applied = merged
+        else:
+            # Replace entirely with our single rule
+            self.client.put_bucket_cors(Bucket=self.bucket_name, CORSConfiguration=new_rule_config)
+            applied = new_rule_config
+
+        return {
+            "changed": True,
+            "message": "CORS configuration updated to support direct uploads.",
+            "issues": issues,
+            "applied_configuration": applied,
+        }
+
+    def ensure_cors_for_direct_upload(
+        self,
+        allowed_origins: List[str],
+        allowed_methods: Optional[List[str]] = None,
+        allowed_headers: Optional[List[str]] = None,
+        expose_headers: Optional[List[str]] = None,
+        max_age_seconds: int = 3000,
+        merge: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Convenience wrapper that checks and updates CORS as needed.
+
+        Example:
+            backend.ensure_cors_for_direct_upload(
+                ["http://localhost:3000", "https://your-prod-domain.com"]
+            )
+        """
+        if not allowed_origins or not any(str(o).strip() for o in allowed_origins):
+            raise ValueError("allowed_origins must contain at least one origin")
+        result = self.update_cors_configuration_for_direct_upload(
+            allowed_origins=allowed_origins,
+            allowed_methods=allowed_methods,
+            allowed_headers=allowed_headers,
+            expose_headers=expose_headers,
+            max_age_seconds=max_age_seconds,
+            merge=merge,
+        )
+        # Re-check to confirm
+        ok, issues, current = self.check_cors_configuration_for_direct_upload(
+            allowed_origins=allowed_origins,
+            required_methods=allowed_methods,
+            required_headers=allowed_headers,
+        )
+        result.update({
+            "verified": ok,
+            "post_update_issues": issues,
+            "current_configuration": current,
+        })
+        return result
