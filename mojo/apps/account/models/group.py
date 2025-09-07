@@ -72,6 +72,21 @@ class Group(MojoSecrets, MojoModel):
             },
 
         }
+        FORMATS = {
+            "csv": [
+                "id",
+                "uuid",
+                "name",
+                "created",
+                "modified",
+                "last_activity",
+                "is_active",
+                "kind",
+                "parent.id",
+                "parent.name",
+                ("metadata.timezone", "timezone")
+            ]
+        }
 
     @property
     def timezone(self):

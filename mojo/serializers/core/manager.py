@@ -40,10 +40,18 @@ logger = logit.get_logger("serializer_manager", "serializer_manager.log")
 _registry_lock = RLock()
 
 # Default serializer configurations
+# DEFAULT_SERIALIZERS = {
+#     'simple': 'mojo.serializers.simple.GraphSerializer',
+#     'optimized': 'mojo.serializers.core.serializer.OptimizedGraphSerializer',
+#     'advanced': 'mojo.serializers.advanced.AdvancedGraphSerializer',
+# }
+
 DEFAULT_SERIALIZERS = {
-    'simple': 'mojo.serializers.simple.GraphSerializer',
-    'optimized': 'mojo.serializers.core.serializer.OptimizedGraphSerializer',
-    'advanced': 'mojo.serializers.advanced.AdvancedGraphSerializer',
+    'optimized': 'mojo.serializers.core.serializer.OptimizedGraphSerializer'
+}
+
+FORMAT_SERIALIZERS = {
+    'csv': 'mojo.serializers.formats.csv.CsvFormatter'
 }
 
 # Global serializer registry
@@ -160,6 +168,7 @@ class SerializerManager:
         self.default_serializer = default_serializer
         self.performance_tracking = enable_performance_tracking
         self.registry = _registry
+        self.serializer_class = None
 
         # Initialize default serializers if not already done
         self._ensure_default_serializers()
@@ -176,6 +185,12 @@ class SerializerManager:
                     serializer_class_or_path=import_path,
                     is_default=(name == 'optimized')  # Set optimized as default
                 )
+            for format, import_path in FORMAT_SERIALIZERS.items():
+                _registry.register(
+                    name=format,
+                    serializer_class_or_path=import_path
+                )
+
 
     def _load_configuration(self):
         """Load configuration from Django settings."""
@@ -200,6 +215,13 @@ class SerializerManager:
                 )
 
     def get_serializer(self, instance, graph: str = "default", many: bool = None,
+                      serializer_type: str = None, **kwargs):
+        if not self.serializer_class:
+            self.serializer_class = self.registry.get("optimized")
+        return self.serializer_class(instance, graph=graph, many=many, **kwargs)
+
+
+    def get_serializer_old(self, instance, graph: str = "default", many: bool = None,
                       serializer_type: str = None, **kwargs):
         """
         Get appropriate serializer for the given instance and parameters.
@@ -244,6 +266,12 @@ class SerializerManager:
                 logger.info("Falling back to simple serializer")
                 return fallback_class(instance, graph=graph, many=many)
             raise
+
+    def get_format_serializer(self, format: str):
+        SerializerClass = self.registry.get(format)
+        if SerializerClass:
+            return SerializerClass()
+        raise ValueError(f"Serializer for format '{format}' not found")
 
     def serialize(self, instance, graph: str = "default", many: bool = None,
                  serializer_type: str = None, **kwargs):

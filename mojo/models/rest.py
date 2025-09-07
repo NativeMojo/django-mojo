@@ -2,6 +2,7 @@
 from mojo.helpers.response import JsonResponse
 from mojo.serializers import get_serializer_manager
 from mojo.helpers.settings import settings
+from mojo import errors as me
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import transaction, models as dm
 import objict
@@ -61,6 +62,17 @@ class MojoModel:
                     return res
             return default
         return getattr(cls.RestMeta, name, default)
+
+    @classmethod
+    def get_rest_meta_graph(cls, graph_name):
+        graphs = cls.get_rest_meta_prop("GRAPHS", {})
+        if isinstance(graph_name, list):
+            for n in graph_name:
+                res = graphs.get(n, None)
+                if res is not None:
+                    return res
+            return None
+        return graphs.get(graph_name, None)
 
     @classmethod
     def rest_error_response(cls, request, status=500, **kwargs):
@@ -388,7 +400,6 @@ class MojoModel:
         Returns:
             JsonResponse representing the paginated and serialized list of objects.
         """
-        cls.debug("on_rest_list:start")
         if queryset is None:
             queryset = cls.objects.all()
         # for better query perfomance we want raw request GET data
@@ -406,7 +417,6 @@ class MojoModel:
         queryset = cls.on_rest_list_filter(request, queryset)
         queryset = cls.on_rest_list_date_range_filter(request, queryset)
         queryset = cls.on_rest_list_sort(request, queryset)
-        cls.debug("on_rest_list:end")
         return cls.on_rest_list_response(request, queryset)
 
     @classmethod
@@ -417,9 +427,23 @@ class MojoModel:
         page_end = page_start+page_size
         paged_queryset = queryset[page_start:page_end]
         graph = request.DATA.get("graph", "list")
+        format = request.DATA.get("format", "json")
         count = queryset.count()
         # Use serializer manager for optimal performance
         manager = get_serializer_manager()
+        if format != "json":
+            format_key = format.split("_")[0]
+            serializer = manager.get_format_serializer(format_key)
+            formats = cls.get_rest_meta_prop("FORMATS")
+            if formats is not None and format in formats:
+                fields = formats[format]
+            else:
+                graph = cls.get_rest_meta_graph(["basic", "default"])
+                if not graph or not graph.get("fields"):
+                    raise me.ValueException("No valid graph found")
+                fields = graph.get("fields")
+            logger.info(f"Serializing queryset with fields: {fields}")
+            return serializer.serialize_queryset(queryset, fields=fields, filename=request.DATA.get("filename", f"{cls.__name__}.csv"))
         serializer = manager.get_serializer(paged_queryset, graph=graph, many=True)
         resp = serializer.to_response(request, count=count, start=page_start, size=page_size)
         resp.log_context = {
