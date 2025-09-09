@@ -422,12 +422,12 @@ class MojoModel:
     @classmethod
     def on_rest_list_response(cls, request, queryset):
         # Implement pagination
-        page_size = request.DATA.get_typed("size", 10, int)
-        page_start = request.DATA.get_typed("start", 0, int)
+        page_size = request.DATA.get_typed(["size", "limit"], 10, int)
+        page_start = request.DATA.get_typed(["start", "offset"], 0, int)
         page_end = page_start+page_size
         paged_queryset = queryset[page_start:page_end]
         graph = request.DATA.get("graph", "list")
-        format = request.DATA.get("format", "json")
+        format = request.DATA.get("download_format", "json")
         count = queryset.count()
         # Use serializer manager for optimal performance
         manager = get_serializer_manager()
@@ -487,6 +487,22 @@ class MojoModel:
         return queryset
 
     @classmethod
+    def normalize_rest_value(cls, request, field_name, value):
+        field = cls.get_model_field(field_name)
+        if field.get_internal_type() == "BooleanField":
+            if isinstance(value, str):
+                value = value.lower() in ("true", "1")
+            elif isinstance(value, int):
+                value = bool(value)
+            else:
+                value = bool(value)
+        elif value is not None:
+            if field.get_internal_type() in ["DateTimeField", "DateField"]:
+                if not isinstance(value, (datetime.datetime, datetime.date)):
+                    value = dates.parse_datetime(value)
+        return value
+
+    @classmethod
     def on_rest_list_filter(cls, request, queryset):
         """
         Apply filtering logic based on request parameters, including foreign key fields.
@@ -498,6 +514,7 @@ class MojoModel:
         Returns:
             The filtered queryset.
         """
+        reserved_keys = ["start", "size", "download_format", "dr_start", "dr_end", "limit", "offset"]
         filters = {}
         for key, value in request.QUERY_PARAMS.items():
             # Split key to check for foreign key relationships
@@ -505,9 +522,12 @@ class MojoModel:
                 key = key.replace(".", "__")
             key_parts = key.split('__')
             field_name = key_parts[0]
+            if field_name in reserved_keys:
+                continue
             if hasattr(cls, field_name):
-                filters[key] = value
+                filters[key] = cls.normalize_rest_value(request, field_name, value)
             elif field_name in cls.__rest_field_names__ and cls._meta.get_field(field_name).is_relation:
+                # TODO Normalize relation field values
                 filters[key] = value
         logger.info("filters", filters)
         queryset = cls.on_rest_list_search(request, queryset)

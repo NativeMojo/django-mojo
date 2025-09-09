@@ -7,51 +7,9 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from contextlib import contextmanager
 
 import redis
-from redis import ConnectionPool, Redis
-from redis.exceptions import ResponseError
 
-from mojo.helpers.settings import settings
 from mojo.helpers import logit
-
-# Global connection pool
-REDIS_POOL = None
-
-
-def _decode_redis_value(value):
-    """
-    Recursively decode Redis byte values to strings.
-
-    Args:
-        value: Redis return value (may contain bytes)
-
-    Returns:
-        Decoded value with bytes converted to strings
-    """
-    if isinstance(value, bytes):
-        return value.decode('utf-8')
-    elif isinstance(value, dict):
-        return {
-            _decode_redis_value(k): _decode_redis_value(v)
-            for k, v in value.items()
-        }
-    elif isinstance(value, (list, tuple)):
-        decoded = [_decode_redis_value(item) for item in value]
-        return tuple(decoded) if isinstance(value, tuple) else decoded
-    else:
-        return value
-
-
-def get_connection():
-    """
-    Get a Redis connection using shared connection pooling.
-
-    Returns:
-        Redis client instance
-    """
-    global REDIS_POOL
-    if REDIS_POOL is None:
-        REDIS_POOL = ConnectionPool(**settings.REDIS_DB)
-    return Redis(connection_pool=REDIS_POOL)
+from .client import get_connection
 
 
 class RedisAdapter:
@@ -60,7 +18,7 @@ class RedisAdapter:
     Uses the framework's connection pooling via get_connection().
     """
 
-    def get_client(self) -> Redis:
+    def get_client(self):
         """
         Get a Redis client instance using framework connection pooling.
 
@@ -132,10 +90,9 @@ class RedisAdapter:
         Returns:
             List of (stream_name, messages) tuples with decoded strings
         """
-        result = self.get_client().xreadgroup(
+        return self.get_client().xreadgroup(
             group, consumer, streams, count=count, block=block
         )
-        return _decode_redis_value(result)
 
     def xack(self, stream: str, group: str, *ids) -> int:
         """
@@ -167,13 +124,12 @@ class RedisAdapter:
         Returns:
             List of claimed messages with decoded strings
         """
-        result = self.get_client().xclaim(
+        return self.get_client().xclaim(
             stream, group, consumer, min_idle, *ids, **kwargs
         )
-        return _decode_redis_value(result)
 
-    def xpending(self, stream: str, group: str, start: str = None, end: str = None,
-                 count: int = None, consumer: str = None) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
+    def xpending(self, stream: str, group: str, start: Optional[str] = None, end: Optional[str] = None,
+                 count: Optional[int] = None, consumer: Optional[str] = None) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
         """
         Get pending message info for a consumer group.
 
@@ -205,8 +161,8 @@ class RedisAdapter:
                     # Normalize to our schema
                     for item in res or []:
                         # redis-py uses keys like 'message_id', 'consumer', 'idle', 'times_delivered'
-                        msg_id = _decode_redis_value(item.get('message_id'))
-                        cons = _decode_redis_value(item.get('consumer'))
+                        msg_id = item.get('message_id')
+                        cons = item.get('consumer')
                         idle = item.get('idle')
                         deliveries = item.get('times_delivered')
                         detailed_messages.append({
@@ -238,8 +194,8 @@ class RedisAdapter:
                     for item in result:
                         try:
                             if isinstance(item, (list, tuple)) and len(item) >= 4:
-                                msg_id = _decode_redis_value(item[0])
-                                cons = _decode_redis_value(item[1])
+                                msg_id = item[0]
+                                cons = item[1]
                                 idle = int(item[2] or 0)
                                 deliveries = int(item[3] or 0)
                                 detailed_messages.append({
@@ -256,7 +212,7 @@ class RedisAdapter:
             # Basic pending summary
             try:
                 result = client.xpending(stream, group)
-                return _decode_redis_value(result)
+                return result
             except Exception as e:
                 # Handle case where stream/group doesn't exist or other Redis errors
                 logit.debug(f"XPENDING summary query failed for {stream}/{group}: {e}")
@@ -272,8 +228,7 @@ class RedisAdapter:
         Returns:
             Stream info dict with decoded strings
         """
-        result = self.get_client().xinfo_stream(stream)
-        return _decode_redis_value(result)
+        return self.get_client().xinfo_stream(stream)
 
     def xgroup_create(self, stream: str, group: str, id: str = '0',
                       mkstream: bool = True) -> bool:
@@ -294,7 +249,7 @@ class RedisAdapter:
                 stream, group, id=id, mkstream=mkstream
             )
             return True
-        except ResponseError as e:
+        except Exception as e:
             if "BUSYGROUP" in str(e):
                 # Group already exists
                 return False
@@ -326,10 +281,7 @@ class RedisAdapter:
         Returns:
             List of (member, score) tuples with decoded member names
         """
-        result = self.get_client().zpopmin(key, count)
-        # Decode member names but keep scores as numbers
-        return [(member.decode('utf-8') if isinstance(member, bytes) else member, score)
-                for member, score in result]
+        return self.get_client().zpopmin(key, count)
 
     def zcard(self, key: str) -> int:
         """
@@ -381,13 +333,7 @@ class RedisAdapter:
         Returns:
             (key, value) tuple as strings, or None if timed out
         """
-        res = self.get_client().brpop(keys, timeout=timeout)
-        if not res:
-            return None
-        k, v = res
-        key = k.decode('utf-8') if isinstance(k, bytes) else k
-        val = v.decode('utf-8') if isinstance(v, bytes) else v
-        return (key, val)
+        return self.get_client().brpop(keys, timeout=timeout)
 
     def llen(self, key: str) -> int:
         """
@@ -430,10 +376,9 @@ class RedisAdapter:
         """
         client = self.get_client()
         if limit is not None:
-            res = client.zrangebyscore(key, min_score, max_score, start=0, num=int(limit))
+            return client.zrangebyscore(key, min_score, max_score, start=0, num=int(limit))
         else:
-            res = client.zrangebyscore(key, min_score, max_score)
-        return [m.decode('utf-8') if isinstance(m, bytes) else m for m in res]
+            return client.zrangebyscore(key, min_score, max_score)
 
     # Hash operations
     def hset(self, key: str, mapping: Dict[str, Any]) -> int:
@@ -472,8 +417,7 @@ class RedisAdapter:
         Returns:
             Field value or None
         """
-        value = self.get_client().hget(key, field)
-        return value.decode('utf-8') if value else None
+        return self.get_client().hget(key, field)
 
     def hgetall(self, key: str) -> Dict[str, str]:
         """
@@ -485,12 +429,7 @@ class RedisAdapter:
         Returns:
             Dict of field -> value
         """
-        raw = self.get_client().hgetall(key)
-        # Decode bytes to strings
-        return {
-            k.decode('utf-8'): v.decode('utf-8')
-            for k, v in raw.items()
-        }
+        return self.get_client().hgetall(key)
 
     def hdel(self, key: str, *fields) -> int:
         """
@@ -540,8 +479,7 @@ class RedisAdapter:
         Returns:
             Value or None
         """
-        value = self.get_client().get(key)
-        return value.decode('utf-8') if value else None
+        return self.get_client().get(key)
 
     def delete(self, *keys) -> int:
         """
@@ -622,7 +560,7 @@ class RedisAdapter:
 
         return self.get_client().publish(channel, message)
 
-    def pubsub(self) -> redis.client.PubSub:
+    def pubsub(self):
         """
         Get a pub/sub connection.
 

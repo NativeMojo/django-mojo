@@ -140,16 +140,39 @@ configure_paths('/path/to/django/project')
 
 ## Redis Helper
 
-The `redis.py` module provides a simple way to manage Redis connections using a connection pool.
+The Redis helper provides a unified, connection-pooled Redis interface with typed operations and resource management capabilities.
 
-- **`get_connection()`**: Returns a Redis connection from the pool.
+**📖 [Complete Redis Documentation →](redis/README.md)**
+
+### Quick Start
 
 ```python
-from mojo.helpers.redis import get_connection
+from mojo.helpers.redis import get_connection, get_adapter
 
-# Retrieve a connection
+# Simple Redis operations  
 redis_conn = get_connection()
+redis_conn.set('key', 'value')
+
+# Advanced typed operations
+adapter = get_adapter()
+adapter.hset('user:123', {'name': 'John', 'email': 'john@example.com'})
 ```
+
+### Key Components
+
+- **Connection Management**: Shared connection pool with automatic response decoding
+- **Redis Adapter**: High-level typed operations for streams, hashes, sets, pub/sub
+- **Resource Pools**: Application-level resource management using Redis coordination
+
+### Features
+
+- **Stream Operations**: Perfect for event processing and message queues
+- **Hash Operations**: Structured data storage with automatic JSON serialization  
+- **Sorted Sets**: Rankings, scheduling, and prioritized queues
+- **Resource Pooling**: Manage Django model instances and application resources
+- **Pipeline Support**: Batch operations for optimal performance
+
+See the [complete Redis documentation](redis/README.md) for detailed examples, configuration options, and best practices.
 
 ## Request Helper
 
