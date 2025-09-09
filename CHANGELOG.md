@@ -1,5 +1,14 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.16 - September 09, 2025
+
+
+
+## v0.1.15 - September 09, 2025
+
+  * Major cleanup and new features see docs
+
+
 ## v0.1.14 - July 08, 2025
 
   CLEANUP and UnitTests for tasks
@@ -66,4 +75,3 @@
   ADDED: support for nested apps
   ADDED: version info to default api
   ADDED: testit support for django_unit_setup and django_unit_test in django env
-
