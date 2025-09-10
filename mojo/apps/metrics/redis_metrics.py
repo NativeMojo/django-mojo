@@ -27,7 +27,7 @@ def record(slug, when=None, count=1, category=None, account="global",
     when = utils.normalize_datetime(when, timezone)
     # Get Redis connection
     redis_conn = redis.get_connection()
-    pipeline = redis_conn.pipeline()
+    pipeline = redis_conn.pipeline(transaction=False)
     if category is not None:
         add_category_slug(category, slug, pipeline, account)
     add_metrics_slug(slug, pipeline, account)
@@ -297,7 +297,7 @@ def delete_category(category, redis_con=None, account="global"):
     if redis_con is None:
         redis_con = redis.get_connection()
     category_slug = utils.generate_category_slug(account, category)
-    pipeline = redis_con.pipeline()
+    pipeline = redis_con.pipeline(transaction=False)
     pipeline.delete(category_slug)  # Deletes the entire set
     pipeline.srem(utils.generate_category_key(account), category)  # Remove the category name from index
     pipeline.execute()

@@ -430,7 +430,7 @@ class RedisCacheBackend(CacheBackend):
             redis_keys = [f"{self.key_prefix}{key}" for key in keys]
 
             # Use pipeline for batch operations
-            pipe = self._redis_client.pipeline()
+            pipe = self._redis_client.pipeline(transaction=False)
             for redis_key in redis_keys:
                 pipe.get(redis_key)
 
@@ -468,7 +468,7 @@ class RedisCacheBackend(CacheBackend):
 
         try:
             # Use pipeline for batch operations
-            pipe = self._redis_client.pipeline()
+            pipe = self._redis_client.pipeline(transaction=False)
 
             for key, value in items.items():
                 redis_key = f"{self.key_prefix}{key}"
