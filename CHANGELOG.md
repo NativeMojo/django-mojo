@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.20 - September 10, 2025
+
+* BUG fixing serverless valkey/redis
+
+
 ## v0.1.19 - September 09, 2025
 
 * attempting to fix pipeline bugs
