@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.22 - September 10, 2025
+
+* FIX for serverless/clusters
+
+
 ## v0.1.21 - September 10, 2025
 
 * More servless bug fixes
