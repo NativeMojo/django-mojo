@@ -26,3 +26,4 @@ docs_site/
 .site_packages
 /pyrightconfig.json
 /set_venv_paths.sh
+.ropeproject

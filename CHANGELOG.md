@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.17 - September 09, 2025
+
+* Fix pyright auto importing wrong modules
+
+
 ## v0.1.16 - September 09, 2025
 
 

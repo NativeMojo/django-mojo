@@ -1,6 +1,6 @@
 [project]
 name = "django-nativemojo"
-version = "0.1.16"
+version = "0.1.17"
 description = "A REST framework for DJANGO with some extra apps that make it easy to provide a secure robust graph like RESIT API."
 authors = [{ name = "MOJO Dev Team", email = "gotmojo@nativemojo.com" }]
 readme = "README.md"
@@ -15,7 +15,6 @@ dependencies = [
     "pycryptodome (>=3.21.0,<4.0.0)",
     "pyobjict (>=2.0.2,<4.0.0)",
     "redis (>=3.5.3,<6.0.0)",
-    "django-cors-headers (>=4.7.0,<5.0.0)",
     "pytz (>=2025.1,<2026.0)",
     "ua-parser (>=1.0.1,<2.0.0)",
     "gevent (>=25.5.1,<26.0.0)",

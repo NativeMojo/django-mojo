@@ -1,4 +1,3 @@
-from turtledemo.chaos import g
 import hashlib
 from django.db import models
 from mojo.helpers.settings import settings
@@ -6,7 +5,6 @@ from mojo.models import MojoModel
 from mojo.helpers import dates, request as rhelper
 from mojo.apps import jobs
 from mojo.helpers.location.geolocation import refresh_geolocation_for_ip
-from fnmatch import filter
 
 GEOLOCATION_ALLOW_SUBNET_LOOKUP = settings.get('GEOLOCATION_ALLOW_SUBNET_LOOKUP', False)
 GEOLOCATION_DEVICE_LOCATION_AGE = settings.get('GEOLOCATION_DEVICE_LOCATION_AGE', 300)
