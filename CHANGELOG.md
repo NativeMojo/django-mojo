@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.18 - September 09, 2025
+
+fixing redis auth
+
+
 ## v0.1.17 - September 09, 2025
 
 * Fix pyright auto importing wrong modules
