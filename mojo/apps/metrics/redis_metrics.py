@@ -178,7 +178,9 @@ def get_value(slug, redis_con=None, account="global", default=None):
     value = redis_con.get(key)
 
     if value is not None:
-        return value.decode('utf-8')
+        if isinstance(value, bytes):
+            return value.decode('utf-8')
+        return value
     return default
 
 
@@ -316,7 +318,7 @@ def get_categories(redis_con=None, account="global"):
     """
     if redis_con is None:
         redis_con = redis.get_connection()
-    return {s.decode() for s in redis_con.smembers(utils.generate_category_key(account))}
+        return {s.decode() if isinstance(s, bytes) else s for s in redis_con.smembers(utils.generate_category_key(account))}
 
 
 def fetch_by_category(category, dt_start=None, dt_end=None, granularity="hours",
@@ -403,7 +405,8 @@ def get_view_perms(account, redis_con=None):
     view_perm_key = utils.generate_perm_view_key(account)
     perms = redis_con.get(view_perm_key)
     if perms:
-        perms = perms.decode('utf-8')
+        if isinstance(perms, bytes):
+            perms = perms.decode('utf-8')
         if ',' in perms:
             perms = perms.split(',')
     return perms
@@ -425,7 +428,8 @@ def get_write_perms(account, redis_con=None):
     write_perm_key = utils.generate_perm_write_key(account)
     perms = redis_con.get(write_perm_key)
     if perms:
-        perms = perms.decode('utf-8')
+        if isinstance(perms, bytes):
+            perms = perms.decode('utf-8')
         if ',' in perms:
             perms = perms.split(',')
     return perms
@@ -459,7 +463,7 @@ def list_accounts(redis_con=None):
     if redis_con is None:
         redis_con = redis.get_connection()
     accounts_key = utils.generate_accounts_key()
-    return [account.decode('utf-8') for account in redis_con.smembers(accounts_key)]
+    return [account.decode('utf-8') if isinstance(account, bytes) else account for account in redis_con.smembers(accounts_key)]
 
 def delete_account(account, redis_con=None):
     if redis_con is None:
@@ -491,7 +495,7 @@ def get_accounts_with_permissions(redis_con=None):
     while cursor != b'0':
         cursor, keys = redis_con.scan(cursor=cursor, match="mets:*:perm:v")
         for key in keys:
-            key_str = key.decode('utf-8')
+            key_str = key.decode('utf-8') if isinstance(key, bytes) else key
             # Extract account from key: mets:{account}:perm:v
             parts = key_str.split(':')
             if len(parts) >= 4:
@@ -501,7 +505,8 @@ def get_accounts_with_permissions(redis_con=None):
 
                 perms = redis_con.get(key)
                 if perms:
-                    perms = perms.decode('utf-8')
+                    if isinstance(perms, bytes):
+                        perms = perms.decode('utf-8')
                     if ',' in perms:
                         perms = perms.split(',')
                     accounts[account]["view_permissions"] = perms
@@ -511,7 +516,7 @@ def get_accounts_with_permissions(redis_con=None):
     while cursor != b'0':
         cursor, keys = redis_con.scan(cursor=cursor, match="mets:*:perm:w")
         for key in keys:
-            key_str = key.decode('utf-8')
+            key_str = key.decode('utf-8') if isinstance(key, bytes) else key
             # Extract account from key: mets:{account}:perm:w
             parts = key_str.split(':')
             if len(parts) >= 4:
@@ -521,7 +526,8 @@ def get_accounts_with_permissions(redis_con=None):
 
                 perms = redis_con.get(key)
                 if perms:
-                    perms = perms.decode('utf-8')
+                    if isinstance(perms, bytes):
+                        perms = perms.decode('utf-8')
                     if ',' in perms:
                         perms = perms.split(',')
                     accounts[account]["write_permissions"] = perms

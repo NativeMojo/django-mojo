@@ -20,6 +20,7 @@ MOJO_REST_LIST_PERM_DENY = settings.get("MOJO_REST_LIST_PERM_DENY", False)
 SYSTEM_REQUEST = objict.objict()
 SYSTEM_REQUEST.user = objict.objict()
 SYSTEM_REQUEST.user.id = 1
+SYSTEM_REQUEST.user.display_name = "System"
 SYSTEM_REQUEST.user.username = "system"
 SYSTEM_REQUEST.user.email = ""
 SYSTEM_REQUEST.user.is_authenticated = True
@@ -88,7 +89,9 @@ class MojoModel:
             JsonResponse representing the error.
         """
         payload = dict(kwargs)
-        payload["is_authenticated"] = request.user.is_authenticated
+        payload["is_authenticated"] = False
+        if request.user is not None:
+            payload["is_authenticated"] = request.user.is_authenticated
         payload["status"] = False
         if "code" not in payload:
             payload["code"] = status

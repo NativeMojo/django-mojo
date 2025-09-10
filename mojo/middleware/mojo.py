@@ -7,7 +7,12 @@ from mojo.helpers import dates, logit
 
 logger = logit.get_logger("debug", "debug.log")
 
-ANONYMOUS_USER = objict(is_authenticated=False)
+ANONYMOUS_USER = objict(
+    display_name="Anonymous",
+    username="anonymous",
+    email="anonymous@example.com",
+    is_authenticated=False,
+    has_permission=lambda: False)
 
 
 class MojoMiddleware:
