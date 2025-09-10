@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.21 - September 10, 2025
+
+* More servless bug fixes
+
+
 ## v0.1.20 - September 10, 2025
 
 * BUG fixing serverless valkey/redis
