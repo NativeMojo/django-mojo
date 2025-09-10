@@ -6,6 +6,15 @@ from typing import Optional
 from django.conf import settings
 
 
+QUEUE_TAG = "{jobs}"  # same slot for all queues (cluster-safe)
+
+def queue_key(name: str) -> str:
+    return f"{QUEUE_TAG}:queue:{name}"
+
+def dlq_key(name: str) -> str:
+    return f"{QUEUE_TAG}:dlq:{name}"
+
+
 class JobKeys:
     """Centralized Redis key builder for the jobs system."""
 
@@ -78,7 +87,7 @@ class JobKeys:
         Immediate jobs list (queue).
         RPUSH to enqueue, BRPOP to claim.
         """
-        return f"{self.prefix}:queue:{channel}"
+        return f"{self.prefix}:{QUEUE_TAG}:queue:{channel}"
 
     def processing(self, channel: str) -> str:
         """

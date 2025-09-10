@@ -1273,6 +1273,85 @@ def _jobmanager_recover_stale_running(self, channel: Optional[str] = None, max_a
 JobManager.recover_stale_running = _jobmanager_recover_stale_running
 
 # Module-level singleton
+
+def _jobmanager_migrate_list_queues(self, channel: Optional[str] = None, dry_run: bool = True, max_items: Optional[int] = None) -> Dict[str, Any]:
+    """
+    Migrate items from old untagged list queues (prefix:queue:{channel}) to new tagged queues
+    that include the cluster hash tag for BRPOP in Redis Cluster/Valkey Serverless.
+
+    Args:
+        channel: Optional single channel to migrate (default: all configured channels)
+        dry_run: If True, do not move items—just report counts
+        max_items: Optional cap on how many items to move per channel
+
+    Returns:
+        Dict with per-channel results and any errors.
+    """
+    results: Dict[str, Any] = {'status': True, 'channels': {}, 'errors': []}
+
+    try:
+        channels = [channel] if channel else getattr(settings, 'JOBS_CHANNELS', ['default'])
+        client = self.redis.get_client()
+
+        for ch in channels:
+            old_key = f"{self.keys.prefix}:queue:{ch}"
+            new_key = self.keys.queue(ch)
+
+            ch_result: Dict[str, Any] = {
+                'channel': ch,
+                'old_key': old_key,
+                'new_key': new_key,
+                'migrated': 0,
+                'old_len_before': 0,
+                'old_len_after': 0
+            }
+
+            try:
+                old_len = client.llen(old_key) or 0
+                ch_result['old_len_before'] = int(old_len)
+
+                if dry_run or old_len == 0:
+                    results['channels'][ch] = ch_result
+                    continue
+
+                moved = 0
+                while True:
+                    if max_items is not None and moved >= int(max_items):
+                        break
+                    item = client.rpop(old_key)
+                    if item is None:
+                        break
+                    client.lpush(new_key, item)
+                    moved += 1
+
+                ch_result['migrated'] = moved
+                ch_result['old_len_after'] = int(client.llen(old_key) or 0)
+                results['channels'][ch] = ch_result
+
+            except Exception as ce:
+                ch_result['error'] = str(ce)
+                results['channels'][ch] = ch_result
+                results['errors'].append(f"{ch}: {ce}")
+                results['status'] = False
+
+    except Exception as e:
+        results['status'] = False
+        results['errors'].append(str(e))
+
+    return results
+
+# Attach as a method on JobManager for runtime use
+JobManager.migrate_list_queues = _jobmanager_migrate_list_queues
+
+def migrate_list_queues(channel: Optional[str] = None, dry_run: bool = True, max_items: Optional[int] = None) -> Dict[str, Any]:
+    """
+    Convenience wrapper to migrate old list queues to new tagged queues.
+
+    Example:
+        from mojo.apps.jobs.manager import migrate_list_queues
+        migrate_list_queues(channel="default", dry_run=False)
+    """
+    return get_manager().migrate_list_queues(channel=channel, dry_run=dry_run, max_items=max_items)
 _manager = None
 
 
