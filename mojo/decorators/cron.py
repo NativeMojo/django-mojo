@@ -16,8 +16,8 @@ def schedule(minutes: str = '*', hours: str = '*', days: str = '*',
         Callable: The decorated function.
     """
     def decorator(func: Callable) -> Callable:
-        if not hasattr(decorator, 'scheduled_functions'):
-            decorator.scheduled_functions = []
+        if not hasattr(schedule, 'scheduled_functions'):
+            schedule.scheduled_functions = []
         cron_spec = {
             'func': func,
             'minutes': minutes,
@@ -26,6 +26,6 @@ def schedule(minutes: str = '*', hours: str = '*', days: str = '*',
             'months': months,
             'weekdays': weekdays
         }
-        decorator.scheduled_functions.append(cron_spec)
+        schedule.scheduled_functions.append(cron_spec)
         return func
     return decorator

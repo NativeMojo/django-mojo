@@ -1,5 +1,7 @@
 import datetime
+import importlib
 from typing import Callable, List, Dict, Any
+from django.apps import apps
 from mojo.decorators.cron import schedule
 
 def run_now() -> None:
@@ -77,3 +79,20 @@ def matches(cron_value: str, actual_value: int) -> bool:
     cron_values = cron_value.split(',')
 
     return str(actual_value) in cron_values
+
+def load_app_cron() -> None:
+    """
+    Load cronjob modules from all Django apps.
+
+    Iterates through each registered Django app and attempts to import
+    the APP_NAME.cronjobs module if it exists. This ensures that any
+    cron-decorated functions are properly registered with the scheduler.
+    """
+    for app_config in apps.get_app_configs():
+        app_name = app_config.name
+        cronjobs_module = f"{app_name}.cronjobs"
+        try:
+            importlib.import_module(cronjobs_module)
+        except ImportError:
+            # App doesn't have a cronjobs module, continue to next app
+            continue

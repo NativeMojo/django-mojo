@@ -118,11 +118,74 @@ if match_time(current_time, cron_spec):
     print("Current time matches the cron specification.")
 ```
 
+## App-Based Cronjobs
+
+### Loading Cronjobs from Django Apps
+
+MOJO Cron Scheduler supports automatic discovery of cronjobs from Django apps. Each Django app can define its cronjobs in a dedicated module.
+
+#### `load_app_cron`
+
+This function automatically discovers and imports cronjob modules from all registered Django apps.
+
+```python
+from mojo.helpers.cron import load_app_cron
+
+# Load all app cronjobs
+load_app_cron()
+```
+
+#### App Cronjob Structure
+
+To add cronjobs to a Django app:
+
+1. Create a `cronjobs.py` file in your app directory
+2. Define your scheduled functions using the `@schedule` decorator
+
+```
+myapp/
+├── __init__.py
+├── models.py
+├── views.py
+└── cronjobs.py  # Define your scheduled tasks here
+```
+
+#### Example App Cronjobs
+
+**myapp/cronjobs.py**:
+```python
+from mojo.decorators.cron import schedule
+
+@schedule(hours="2", minutes="0")
+def cleanup_old_data():
+    """Run daily at 2:00 AM to clean up old data."""
+    print("Cleaning up old data...")
+    # Your cleanup logic here
+
+@schedule(minutes="*/15")
+def send_notifications():
+    """Run every 15 minutes to send pending notifications."""
+    print("Sending notifications...")
+    # Your notification logic here
+```
+
+#### Integration with Django
+
+To ensure all app cronjobs are loaded when your Django application starts, call `load_app_cron()` in your application startup code (e.g., in your main `urls.py` or app configuration).
+
+```python
+from mojo.helpers.cron import load_app_cron
+
+# Load all cronjobs from Django apps
+load_app_cron()
+```
+
 ### Example Workflow
 
-1. Define scheduled tasks using `@schedule` decorator in your Python script.
-2. Periodically call `run_now()` (e.g., set up a loop or use a dedicated scheduler).
-3. `run_now()` will execute tasks whose times match the current time.
+1. Define scheduled tasks using `@schedule` decorator in your Python script or app's `cronjobs.py` module.
+2. Call `load_app_cron()` to discover and import all app cronjobs.
+3. Periodically call `run_now()` (e.g., set up a loop or use a dedicated scheduler).
+4. `run_now()` will execute tasks whose times match the current time.
 
 ### Conclusion
 
