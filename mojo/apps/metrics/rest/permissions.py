@@ -12,7 +12,7 @@ def on_permissions(request, account=None):
         if account is None:
             return on_list_permissions(request)
         return on_get_permissions(request, account)
-    if request.method == 'POST':
+    if request.method in ['POST', 'PUT']:
         if not account:
             account = request.DATA.get("account", None)
         if account:

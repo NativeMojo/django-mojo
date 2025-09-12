@@ -587,7 +587,7 @@ class JobEngine:
 
             # Metrics
             metrics.record("jobs.completed", count=1)
-            metrics.record(f"jobs.channel.{job.channel}.completed", count=1)
+            metrics.record(f"jobs.channel.{job.channel}.completed", category="jobs_channels", count=1)
             metrics.record("jobs.duration_ms", count=job.duration_ms)
 
         except Exception as e:
