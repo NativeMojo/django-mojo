@@ -1,192 +1,96 @@
-# MOJO Cron Scheduler
+# Mojo Cron (clean, simple)
 
-## Overview
+Use cron to trigger small, fast functions that live in YOUR_APP/asyncjobs.py.
+Those functions should finish in a few seconds. If they need to do real work,
+publish a background job instead (recommended).
 
-MOJO Cron Scheduler is a lightweight scheduling utility built to run periodic tasks in Python using cron syntax. It allows developers to easily schedule functions based on time intervals similar to Linux cron job specifications. This project comprises a `schedule` decorator for marking functions for scheduling and a simple execution engine to run tasks at specified intervals.
+See also: docs/jobs.md
 
-## Features
+## Philosophy
+- Cron: just a timer.
+- Jobs: do the heavy lifting.
+- Pattern: cron publishes a job → worker runs it.
 
-- **Easy Scheduling**: Use cron-like syntax to schedule Python functions with a simple decorator.
-- **Flexibility**: Define schedules for functions with minute, hour, day, month, and weekday granularity.
-- **Simplicity**: Minimal setup and clear function annotation.
-- **Execution**: Run scheduled functions at times that match their cron specifications.
+## Where to put cron functions
+In each Django app, define cron functions in asyncjobs.py.
 
-## Components
+Example layout:
+    myapp/
+    ├─ __init__.py
+    ├─ models.py
+    ├─ views.py
+    └─ asyncjobs.py   # your scheduled functions live here
 
-### `schedule` Decorator
+## Scheduling API (quick reference)
+Decorate a function with a cron-like schedule.
 
-The `schedule` decorator allows you to specify a cron-like schedule for when a function should be executed.
+    from mojo.decorators.cron import schedule
 
-#### Syntax
+    @schedule(minutes="*/5")                # every 5 minutes
+    @schedule(minutes="0", hours="2")       # daily at 02:00
+    @schedule(minutes="0", hours="9", weekdays="1-5")  # weekdays 09:00
 
-```python
-@schedule(minutes="*", hours="*", days="*", months="*", weekdays="*")
-def my_scheduled_function():
-    # Your code here
-```
+Accepted fields: minutes, hours, days, months, weekdays
+Accepted patterns: "*", "5", "1,15,30", "1-5", "*/15"
 
-#### Parameters
+Tip: keep the function itself fast and idempotent.
 
-- `minutes`: Cron pattern for minutes (0-59). Default is `*`, meaning every minute.
-- `hours`: Cron pattern for hours (0-23). Default is `*`, meaning every hour.
-- `days`: Cron pattern for days of the month (1-31). Default is `*`, meaning every day.
-- `months`: Cron pattern for months (1-12). Default is `*`, meaning every month.
-- `weekdays`: Cron pattern for days of the week (0-6, where 0 is Sunday). Default is `*`, meaning every weekday.
+## Cron that publishes jobs (recommended)
+Let the cron function push work to the jobs system.
 
-#### Returns
+    # myapp/asyncjobs.py
+    from mojo.decorators.cron import schedule
+    from mojo.apps.jobs import publish  # See docs/jobs.md
 
-- The original function, with its cron specification recorded for later execution.
+    @schedule(minutes="*/5")
+    def sync_billing():
+        # Do not sync here. Publish a job and return quickly.
+        publish("myapp.jobs.sync_billing", {"since": "5m"})
 
-### Usage Examples
+    @schedule(minutes="0", hours="2")
+    def cleanup_old_data():
+        publish("myapp.jobs.cleanup", {"older_than_days": 30})
 
-#### Every Minute
+    @schedule(minutes="0", hours="9", weekdays="1-5")
+    def send_daily_digest():
+        publish("myapp.jobs.send_daily_digest", {"tz": "America/Los_Angeles"})
 
-```python
-@schedule()
-def task_every_minute():
-    print("This task runs every minute.")
-```
+Why?
+- Fast cron runs are reliable and cheap.
+- Jobs can be retried, monitored, and parallelized.
 
-Equivalent to setting all cron parameters to `*`.
+## Loading and running cron
+Load all app asyncjobs and run matching functions for “now”.
 
-#### Every Hour on the 30th Minute
+    from mojo.helpers.cron import load_app_cron, run_now
 
-```python
-@schedule(minutes="30")
-def task_half_past_every_hour():
-    print("This task runs every hour on the 30th minute.")
-```
+    # Usually called during startup
+    load_app_cron()  # imports YOUR_APP.asyncjobs across installed apps
 
-Runs at 00:30, 01:30, ..., 23:30.
+    # Called every minute by your scheduler/runner
+    run_now()
 
-#### Daily at 9:00 AM
+Notes:
+- Ensure your deployment has a small runner that calls run_now() each minute.
+- load_app_cron() expects asyncjobs.py per app.
 
-```python
-@schedule(hours="9", minutes="0")
-def task_daily_morning():
-    print("This task runs every day at 9:00 AM.")
-```
+## Inline work (when absolutely minimal)
+If the work is trivial (a few DB rows, a quick ping), it can be done inline:
 
-#### Every Monday and Friday at 12:00 Noon
+    @schedule(minutes="30")
+    def ping_healthcheck():
+        # Keep it very short (<1–2s)
+        pass
 
-```python
-@schedule(weekdays="1,4", hours="12", minutes="0")
-def task_manfri_noon():
-    print("This task runs every Monday and Friday at 12:00 PM.")
-```
+If it grows, switch to publish().
 
-### Execution Helper
+## Best practices
+- Idempotent cron functions (safe to re-run)
+- Prefer publish() for anything non-trivial
+- Add small guards (time limits, batch sizes)
+- Keep schedules simple and readable
+- Log minimally; avoid noisy output
 
-#### `run_now`
-
-This helper function executes all scheduled functions that match the current time.
-
-```python
-from mojo.helpers.cron import run_now
-
-run_now()
-```
-
-Call `run_now()` when you want to check and run any scheduled tasks if they match the current time.
-
-### Utility Functions
-
-#### `find_scheduled_functions`
-
-Finds all functions scheduled to run at the current time.
-
-```python
-from mojo.helpers.cron import find_scheduled_functions
-
-functions_ready = find_scheduled_functions()
-for func in functions_ready:
-    func()
-```
-
-#### `match_time`
-
-Checks if a given time matches a cron-like specification.
-
-```python
-from mojo.helpers.cron import match_time
-import datetime
-
-current_time = datetime.datetime.now()
-cron_spec = {'minutes': '30', 'hours': '9', 'days': '*', 'months': '*', 'weekdays': '*'}
-
-if match_time(current_time, cron_spec):
-    print("Current time matches the cron specification.")
-```
-
-## App-Based Cronjobs
-
-### Loading Cronjobs from Django Apps
-
-MOJO Cron Scheduler supports automatic discovery of cronjobs from Django apps. Each Django app can define its cronjobs in a dedicated module.
-
-#### `load_app_cron`
-
-This function automatically discovers and imports cronjob modules from all registered Django apps.
-
-```python
-from mojo.helpers.cron import load_app_cron
-
-# Load all app cronjobs
-load_app_cron()
-```
-
-#### App Cronjob Structure
-
-To add cronjobs to a Django app:
-
-1. Create a `cronjobs.py` file in your app directory
-2. Define your scheduled functions using the `@schedule` decorator
-
-```
-myapp/
-├── __init__.py
-├── models.py
-├── views.py
-└── cronjobs.py  # Define your scheduled tasks here
-```
-
-#### Example App Cronjobs
-
-**myapp/cronjobs.py**:
-```python
-from mojo.decorators.cron import schedule
-
-@schedule(hours="2", minutes="0")
-def cleanup_old_data():
-    """Run daily at 2:00 AM to clean up old data."""
-    print("Cleaning up old data...")
-    # Your cleanup logic here
-
-@schedule(minutes="*/15")
-def send_notifications():
-    """Run every 15 minutes to send pending notifications."""
-    print("Sending notifications...")
-    # Your notification logic here
-```
-
-#### Integration with Django
-
-To ensure all app cronjobs are loaded when your Django application starts, call `load_app_cron()` in your application startup code (e.g., in your main `urls.py` or app configuration).
-
-```python
-from mojo.helpers.cron import load_app_cron
-
-# Load all cronjobs from Django apps
-load_app_cron()
-```
-
-### Example Workflow
-
-1. Define scheduled tasks using `@schedule` decorator in your Python script or app's `cronjobs.py` module.
-2. Call `load_app_cron()` to discover and import all app cronjobs.
-3. Periodically call `run_now()` (e.g., set up a loop or use a dedicated scheduler).
-4. `run_now()` will execute tasks whose times match the current time.
-
-### Conclusion
-
-The MOJO Cron Scheduler provides a simple and effective way to schedule and execute Python functions based on cron-like time definitions. Use the `schedule` decorator to define tasks and integrate `run_now()` into your application main loop for execution.
+## References
+- Jobs system and publish(): docs/jobs.md
+- Cron helper usage (advanced): mojo.helpers.cron
