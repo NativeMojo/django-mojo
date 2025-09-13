@@ -71,7 +71,8 @@ class JobManager:
             for key in all_keys:
                 try:
                     # Get heartbeat data
-                    data = self.redis.get(key.decode('utf-8') if isinstance(key, bytes) else key)
+                    key_str = key.decode('utf-8') if isinstance(key, bytes) else str(key)
+                    data = self.redis.get(key_str)
                     if not data:
                         continue
 
