@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.24 - September 12, 2025
+
+* New status commands
+
+
 ## v0.1.23 - September 12, 2025
 
 * BUGFIX saving metrics perms
