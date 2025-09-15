@@ -28,3 +28,14 @@ def requires_auth():
             return func(request, *args, **kwargs)
         return wrapper
     return decorator
+
+
+def requires_bearer(bearer):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(request, *args, **kwargs):
+            if request.bearer != bearer:
+                raise mojo.errors.PermissionDeniedException(f"invalid bearer token '{request.bearer}'")
+            return func(request, *args, **kwargs)
+        return wrapper
+    return decorator

@@ -17,9 +17,9 @@ class Job(models.Model, MojoModel):
     id = models.CharField(primary_key=True, max_length=32, editable=False)
 
     # Job targeting
-    channel = models.CharField(max_length=100, db_index=True,
+    channel = models.CharField(max_length=100,
                               help_text="Logical queue/channel name")
-    func = models.CharField(max_length=255, db_index=True,
+    func = models.CharField(max_length=255,
                            help_text="Registry key for the job function")
     payload = models.JSONField(default=dict, blank=True,
                               help_text="Job arguments/data (keep small)")
@@ -27,7 +27,6 @@ class Job(models.Model, MojoModel):
     # Current status
     status = models.CharField(
         max_length=16,
-        db_index=True,
         choices=[
             ('pending', 'Pending'),
             ('running', 'Running'),
@@ -41,9 +40,9 @@ class Job(models.Model, MojoModel):
     )
 
     # Scheduling & timing
-    run_at = models.DateTimeField(null=True, blank=True, db_index=True,
+    run_at = models.DateTimeField(null=True, blank=True,
                                  help_text="When to run this job (null = immediate)")
-    expires_at = models.DateTimeField(null=True, blank=True, db_index=True,
+    expires_at = models.DateTimeField(null=True, blank=True,
                                       help_text="Job expires if not run by this time")
 
     # Retry configuration
@@ -57,7 +56,7 @@ class Job(models.Model, MojoModel):
                                           help_text="Maximum backoff in seconds")
 
     # Behavior flags
-    broadcast = models.BooleanField(default=False, db_index=True,
+    broadcast = models.BooleanField(default=False,
                                    help_text="If true, all runners execute this job")
     cancel_requested = models.BooleanField(default=False,
                                           help_text="Cooperative cancel flag")
@@ -65,7 +64,7 @@ class Job(models.Model, MojoModel):
                                            help_text="Hard execution time limit")
 
     # Runner tracking
-    runner_id = models.CharField(max_length=64, null=True, blank=True, db_index=True,
+    runner_id = models.CharField(max_length=64, null=True, blank=True,
                                 help_text="ID of runner currently executing")
 
     # Error diagnostics (latest only)
@@ -79,8 +78,8 @@ class Job(models.Model, MojoModel):
                                help_text="Custom metadata from job execution")
 
     # Timestamps
-    created = models.DateTimeField(auto_now_add=True, editable=False, db_index=True)
-    modified = models.DateTimeField(auto_now=True, db_index=True)
+    created = models.DateTimeField(auto_now_add=True, editable=False)
+    modified = models.DateTimeField(auto_now=True)
     started_at = models.DateTimeField(null=True, blank=True,
                                       help_text="When job execution started")
     finished_at = models.DateTimeField(null=True, blank=True,
@@ -94,6 +93,15 @@ class Job(models.Model, MojoModel):
     class Meta:
         db_table = 'jobs_job'
         indexes = [
+            models.Index(fields=['channel']),
+            models.Index(fields=['func']),
+            models.Index(fields=['status']),
+            models.Index(fields=['run_at']),
+            models.Index(fields=['expires_at']),
+            models.Index(fields=['broadcast']),
+            models.Index(fields=['runner_id']),
+            models.Index(fields=['created']),
+            models.Index(fields=['modified']),
             models.Index(fields=['channel', 'status']),
             models.Index(fields=['status', 'run_at']),
             models.Index(fields=['runner_id', 'status']),

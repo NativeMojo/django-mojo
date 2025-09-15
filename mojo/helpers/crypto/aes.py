@@ -5,6 +5,7 @@ from Crypto.Protocol.KDF import PBKDF2
 from Crypto.Random import get_random_bytes
 from objict import objict
 import mojo.errors
+import hashlib
 
 PBKDF2_ITERATIONS = 100_000
 SALT_LENGTH = 16
@@ -58,3 +59,20 @@ def decrypt(enc_data_b64, password, ignore_errors=True):
 
 def derive_key(password, salt, key_length=32):
     return PBKDF2(password, salt, dkLen=key_length, count=PBKDF2_ITERATIONS)
+
+
+def decrypt_ecb(edata, key_str):
+    key = hashlib.sha256(key_str.encode("utf-8")).digest()  # 32 bytes
+    cipher = AES.new(key, AES.MODE_ECB)
+    pt = cipher.decrypt(b64decode(edata))
+    pad_len = pt[-1]
+    return pt[:-pad_len].decode("utf-8")
+
+def encrypt_ecb(data, key_str):
+    key = hashlib.sha256(key_str.encode("utf-8")).digest()  # 32 bytes
+    cipher = AES.new(key, AES.MODE_ECB)
+    # PKCS7 pad
+    pad_len = 16 - (len(data.encode("utf-8")) % 16)
+    padded = data.encode("utf-8") + bytes([pad_len]) * pad_len
+    ct = cipher.encrypt(padded)
+    return b64encode(ct).decode("utf-8")

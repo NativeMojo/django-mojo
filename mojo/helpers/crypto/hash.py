@@ -2,10 +2,9 @@ from Crypto.Hash import SHA256
 from Crypto.Random import get_random_bytes
 import hmac
 import hashlib
-from django.conf import settings
 
 
-def hash(value, salt=settings.SECRET_KEY):
+def hash(value, salt=None):
     """
     Returns a SHA-256 hash of the input value (string, int, or dict), optionally salted.
 
@@ -13,6 +12,9 @@ def hash(value, salt=settings.SECRET_KEY):
     :param salt: Optional[str or bytes] - a salt to strengthen the hash
     :return: str - the hex digest of the hash
     """
+    if salt is None:
+        from django.conf import settings
+        salt = settings.SECRET_KEY
     if isinstance(value, dict):
         # Sort the dictionary and prepare a string representation
         value_str = str(sorted(value.items())).encode('utf-8')

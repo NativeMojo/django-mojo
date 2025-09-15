@@ -44,6 +44,10 @@ class GeoLocatedIP(models.Model, MojoModel):
     data = models.JSONField(default=dict, blank=True)
     expires_at = models.DateTimeField(default=None, null=True, blank=True)
 
+    class Meta:
+        verbose_name = "Geolocated IP"
+        verbose_name_plural = "Geolocated IPs"
+
     class RestMeta:
         VIEW_PERMS = ['manage_users']
         GRAPHS = {
@@ -51,10 +55,6 @@ class GeoLocatedIP(models.Model, MojoModel):
 
             }
         }
-
-    class Meta:
-        verbose_name = "Geolocated IP"
-        verbose_name_plural = "Geolocated IPs"
 
     def __str__(self):
         return f"{self.ip_address} ({self.city}, {self.country_code})"

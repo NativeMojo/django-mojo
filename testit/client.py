@@ -20,7 +20,6 @@ class RestClient:
         self.access_token = None
         self.is_authenticated = False
         self.bearer = "bearer"
-        self.access_token = None
 
     def login(self, username, password):
         self.logout()

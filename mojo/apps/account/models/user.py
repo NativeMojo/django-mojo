@@ -545,7 +545,7 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
         )
 
     @classmethod
-    def validate_jwt(cls, token):
+    def validate_jwt(cls, token, request=None):
         token_manager = JWToken()
         jwt_data = token_manager.decode(token, validate=False)
         if jwt_data.uid is None:
@@ -558,4 +558,5 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
             if token_manager.is_expired:
                 return user, "Token expired"
             return user, "Token has invalid signature"
+        user.track(request)
         return user, None

@@ -6,21 +6,33 @@ import ujson
 
 
 class Log(dm.Model, MojoModel):
-    created = dm.DateTimeField(auto_now_add=True, db_index=True)
-    level = dm.CharField(max_length=12, default="info", db_index=True)
-    kind = dm.CharField(max_length=200, default=None, null=True, db_index=True)
+    created = dm.DateTimeField(auto_now_add=True)
+    level = dm.CharField(max_length=12, default="info")
+    kind = dm.CharField(max_length=200, default=None, null=True)
     method = dm.CharField(max_length=200, default=None, null=True)
-    path = dm.TextField(default=None, null=True, db_index=True)
+    path = dm.TextField(default=None, null=True)
     payload = dm.TextField(default=None, null=True)
-    ip = dm.CharField(max_length=32, default=None, null=True, db_index=True)
+    ip = dm.CharField(max_length=32, default=None, null=True)
     duid = dm.TextField(default=None, null=True)
-    uid = dm.IntegerField(default=0, db_index=True)
+    uid = dm.IntegerField(default=0)
     username = dm.TextField(default=None, null=True)
     user_agent = dm.TextField(default=None, null=True)
     log = dm.TextField(default=None, null=True)
-    model_name = dm.TextField(default=None, null=True, db_index=True)
-    model_id = dm.IntegerField(default=0, db_index=True)
+    model_name = dm.TextField(default=None, null=True)
+    model_id = dm.IntegerField(default=0)
     # expires = dm.DateTimeField(db_index=True)
+
+    class Meta:
+        indexes = [
+            dm.Index(fields=['created']),
+            dm.Index(fields=['level']),
+            dm.Index(fields=['kind']),
+            dm.Index(fields=['path']),
+            dm.Index(fields=['ip']),
+            dm.Index(fields=['uid']),
+            dm.Index(fields=['model_name', 'model_id']),  # composite index for fields searched together
+            dm.Index(fields=['created', 'kind']),  # composite index for common search/order combination
+        ]
 
     @classmethod
     def logit(cls, request, log, kind="log", model_name=None, model_id=0, level="info", **kwargs):

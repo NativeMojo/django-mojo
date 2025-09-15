@@ -1,26 +1,43 @@
 from django.utils.deprecation import MiddlewareMixin
 # from django.http import JsonResponse
 from mojo.helpers.response import JsonResponse
-from mojo.apps.account.utils.jwtoken import JWToken
 from mojo.apps.account.models.user import User
-from mojo.helpers import request as rhelper
-from mojo.helpers.request import get_user_agent
+from mojo.helpers.settings import settings
+from mojo.helpers import modules
+from marshal import load
 from objict import objict
 
 
+AUTH_BEARER_HANDLERS_MAP = settings.get("AUTH_BEARER_HANDLERS", {})
+AUTH_BEARER_HANDLERS = {
+    "bearer": User.validate_jwt
+}
+
+AUTH_BEARER_NAME_MAP = settings.get("AUTH_BEARER_NAME_MAP", {"bearer": "user"})
 
 class AuthenticationMiddleware(MiddlewareMixin):
     def process_request(self, request):
+        request.bearer = None
         token = request.META.get('HTTP_AUTHORIZATION', None)
         if token is None:
             return
         prefix, token = token.split()
+        prefix = prefix.lower()
+        if prefix not in AUTH_BEARER_HANDLERS:
+            if prefix not in AUTH_BEARER_HANDLERS_MAP:
+                return JsonResponse({'error': 'Invalid token type'}, status=401)
+            try:
+                AUTH_BEARER_HANDLERS[prefix] = modules.load_function(AUTH_BEARER_HANDLERS_MAP[prefix])
+            except Exception as e:
+                return JsonResponse({'error': "failed to load handler"}, status=500)
+
+        handler = AUTH_BEARER_HANDLERS[prefix]
         request.auth_token = objict(prefix=prefix, token=token)
-        if prefix.lower() != 'bearer':
-            return
-        # decode data to find the user
-        user, error = User.validate_jwt(token)
+
+        # decode data to find the instance
+        instance, error = handler(token, request)
         if error is not None:
             return JsonResponse({'error': error}, status=401)
-        request.user = user
-        user.track(request)
+        key = AUTH_BEARER_NAME_MAP.get(prefix, prefix)
+        setattr(request, key, instance)
+        request.bearer = prefix

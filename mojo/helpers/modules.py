@@ -93,3 +93,39 @@ def get_model(app_name, model_name):
 
 def get_model_instance(app_name, model_name, pk):
     return get_model(app_name, model_name).objects.filter(id=pk).last()
+
+
+def load_function(func_path):
+    """
+    Dynamically import a job function or static method.
+    Examples:
+    - 'mojo.apps.account.jobs.send_invite'
+    - 'mojo.apps.account.jobs.EmailService.send_invite'
+    """
+    try:
+        # Split the path into components
+        parts = func_path.split('.')
+
+        # Try different split points to find the module
+        for i in range(len(parts) - 1, 0, -1):
+            module_path = '.'.join(parts[:i])
+            remaining_path = parts[i:]
+
+            try:
+                module = importlib.import_module(module_path)
+
+                # Navigate through the remaining path (class.method or just method)
+                obj = module
+                for attr in remaining_path:
+                    obj = getattr(obj, attr)
+
+                return obj
+
+            except ImportError:
+                # Try the next split point
+                continue
+
+        # If no valid module found
+        raise ImportError(f"No valid module found in path '{func_path}'")
+    except (AttributeError, ValueError) as e:
+        raise ImportError(f"Cannot load job function '{func_path}': {e}")
