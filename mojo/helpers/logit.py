@@ -81,6 +81,13 @@ def error(*args):
         _error_logger = get_logger("error", "error.log")
     _error_logger.error(*args)
 
+def exception(*args):
+    """Log exception messages to error.log"""
+    global _error_logger
+    if _error_logger is None:
+        _error_logger = get_logger("error", "error.log")
+    _error_logger.exception(*args)
+
 
 # Mask sensitive data in the log
 def mask_sensitive_data(text):

@@ -1,5 +1,11 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.25 - September 16, 2025
+
+* Added: more helpers to testit
+* Added: more logic for redis pool and "with syntax"
+
+
 ## v0.1.24 - September 12, 2025
 
 * New status commands

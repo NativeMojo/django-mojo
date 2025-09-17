@@ -227,3 +227,19 @@ def get_admin_user():
     user.is_superuser = True
     user.is_staff = True
     return user
+
+
+def assert_true(value, msg):
+    assert bool(value), msg
+
+
+def assert_eq(actual, expected, msg):
+    assert actual == expected, f"{msg} | expected={expected} got={actual}"
+
+
+def assert_in(item, container, msg):
+    assert item in container, f"{msg} | missing={item} in {container}"
+
+
+def expect(value, got, name="field"):
+    assert value == got, f"{name} expected {value} got {got}"

@@ -1,4 +1,5 @@
 from typing import Optional, List, Set
+from contextlib import contextmanager
 from django.db import models
 from .client import get_connection
 
@@ -20,6 +21,10 @@ class RedisBasePool:
 
         self.available_list_key = f"{pool_key}:list"
         self.all_items_set_key = f"{pool_key}:set"
+
+    def is_ready(self) -> bool:
+        """Check if the pool is ready."""
+        return self.redis_client.exists(self.available_list_key) and self.redis_client.exists(self.all_items_set_key)
 
     def add(self, str_id: str) -> bool:
         """Add an item to the pool."""
@@ -96,12 +101,38 @@ class RedisBasePool:
             return result[1]
         return None
 
+    @contextmanager
+    def checkout_item(self, timeout: Optional[int] = None, raise_on_timeout: bool = True):
+        """Context manager for safely checking out and returning items."""
+        item = self.get_next_available(timeout)
+        if item is None:
+            if raise_on_timeout:
+                raise RuntimeError("No items available in pool")
+            else:
+                yield None
+                return
+
+        try:
+            yield item
+        finally:
+            self.checkin(item)
+
+    @contextmanager
+    def checkout_specific_item(self, str_id: str, timeout: Optional[int] = None):
+        """Context manager for checking out a specific item."""
+        if not self.checkout(str_id, timeout):
+            raise RuntimeError(f"Could not checkout item {str_id}")
+
+        try:
+            yield str_id
+        finally:
+            self.checkin(str_id)
+
 
 class RedisModelPool(RedisBasePool):
     """Django model-specific Redis pool."""
 
-    def __init__(self, model_cls: models.Model, query_dict: dict,
-                 pool_key: str, default_timeout: int = 30):
+    def __init__(self, model_cls, query_dict, pool_key=None, default_timeout=30):
         """
         Initialize the model pool.
 
@@ -111,6 +142,8 @@ class RedisModelPool(RedisBasePool):
             pool_key: Unique identifier for this pool
             default_timeout: Default timeout in seconds
         """
+        if pool_key is None:
+            pool_key = f"modelpool:{model_cls.__name__}"
         super().__init__(pool_key, default_timeout)
         self.model_cls = model_cls
         self.query_dict = query_dict
@@ -143,6 +176,11 @@ class RedisModelPool(RedisBasePool):
         self.redis_client.lrem(self.available_list_key, 0, item)
         self.redis_client.srem(self.all_items_set_key, item)
         return True
+
+    def list_checked_out_instances(self):
+        """List checked out items."""
+        all_items = self.list_checked_out()
+        return self.model_cls.objects.filter(pk__in=all_items)
 
     def get_next_instance(self, timeout: Optional[int] = None) -> Optional[models.Model]:
         """Get the next available model instance."""
@@ -185,6 +223,29 @@ class RedisModelPool(RedisBasePool):
         self.redis_client.lpush(self.available_list_key, item)
         return True
 
+    @contextmanager
+    def checkout_instance(self, timeout: Optional[int] = None):
+        """Context manager for safely checking out and returning model instances."""
+        instance = self.get_next_instance(timeout)
+        if instance is None:
+            raise RuntimeError("No instances available in pool")
+
+        try:
+            yield instance
+        finally:
+            self.return_instance(instance)
+
+    @contextmanager
+    def checkout_specific_instance(self, instance: models.Model):
+        """Context manager for checking out a specific model instance."""
+        if not self.get_specific_instance(instance):
+            raise RuntimeError(f"Could not checkout instance {instance.pk}")
+
+        try:
+            yield instance
+        finally:
+            self.return_instance(instance)
+
 
 # Example usage:
 if __name__ == "__main__":
@@ -199,13 +260,13 @@ if __name__ == "__main__":
     print("All items:", pool.list_all())
     print("Available:", pool.list_available())
 
-    # Get next available
-    item = pool.get_next_available(timeout=5)
-    print(f"Got item: {item}")
-
-    # Return to pool
-    if item:
-        pool.checkin(item)
+    # Using context manager (recommended)
+    try:
+        with pool.checkout_item(timeout=5) as item:
+            print(f"Got item: {item}")
+            # Do work with item - automatically returned even if exception occurs
+    except RuntimeError as e:
+        print(f"No items available: {e}")
 
     # Django model example:
     # model_pool = RedisModelPool(
@@ -217,9 +278,10 @@ if __name__ == "__main__":
     # # Initialize pool
     # model_pool.init_pool()
     #
-    # # Get instance
-    # instance = model_pool.get_next_instance(timeout=30)
-    # if instance:
-    #     print(f"Got instance: {instance}")
-    #     # Do work...
-    #     model_pool.return_instance(instance)
+    # # Using context manager (recommended)
+    # try:
+    #     with model_pool.checkout_instance(timeout=30) as instance:
+    #         print(f"Got instance: {instance}")
+    #         # Do work with instance - automatically returned
+    # except RuntimeError as e:
+    #     print(f"No instances available: {e}")
