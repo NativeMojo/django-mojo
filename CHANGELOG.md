@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.26 - September 17, 2025
+
+* Minor fixes in metrics and activity tracking
+
+
 ## v0.1.25 - September 16, 2025
 
 * Added: more helpers to testit
