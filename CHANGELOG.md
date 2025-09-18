@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.30 - September 18, 2025
+
+* ANother bug fix in jobs claiming jobs it cannot run
+
+
 ## v0.1.29 - September 18, 2025
 
 * BUGFIX infinite retries on import func errors

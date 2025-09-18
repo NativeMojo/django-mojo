@@ -92,9 +92,9 @@ class JobEngine:
         self.active_jobs = {}
         self.active_lock = Lock()
 
-        # Limit claimed jobs
-        claim_buffer = JOBS_ENGINE_CLAIM_BUFFER
-        self.max_claimed = self.max_workers * claim_buffer
+        # Limit claimed jobs to actual execution capacity
+        # Don't claim more than we can execute - let other engines help
+        self.max_claimed = self.max_workers
         self.claim_semaphore = Semaphore(self.max_claimed)
 
         # Control flags
