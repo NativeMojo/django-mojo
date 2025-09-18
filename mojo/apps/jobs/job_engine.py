@@ -720,25 +720,66 @@ class JobEngine:
                         stale_ids = []
                     for jid in stale_ids:
                         try:
-                            # Remove from processing and requeue
-                            self.redis.zrem(self.keys.processing(ch), jid)
-                            self.redis.rpush(self.keys.queue(ch), jid)
-                            # Add event trail (best effort)
+                            # Check if job should be retried before requeuing
                             try:
                                 job = Job.objects.get(id=jid)
+
+                                # Check if job is expired
+                                if job.is_expired:
+                                    logger.info(f"Reaper: Job {jid} expired, marking as expired instead of requeuing")
+                                    self.redis.zrem(self.keys.processing(ch), jid)
+                                    job.status = 'expired'
+                                    job.finished_at = dates.utcnow()
+                                    job.save(update_fields=['status', 'finished_at'])
+                                    JobEvent.objects.create(
+                                        job=job, channel=ch, event='expired',
+                                        runner_id=self.runner_id, attempt=job.attempt,
+                                        details={'reason': 'reaper_expired'}
+                                    )
+                                    continue
+
+                                # Check retry limits (prevent infinite requeuing)
+                                if job.attempt >= job.max_retries:
+                                    logger.info(f"Reaper: Job {jid} exceeded max retries ({job.attempt}/{job.max_retries}), marking as failed")
+                                    self.redis.zrem(self.keys.processing(ch), jid)
+                                    job.status = 'failed'
+                                    job.finished_at = dates.utcnow()
+                                    job.last_error = f"Exceeded max retries after reaper timeout (attempt {job.attempt})"
+                                    job.save(update_fields=['status', 'finished_at', 'last_error'])
+                                    JobEvent.objects.create(
+                                        job=job, channel=ch, event='failed',
+                                        runner_id=self.runner_id, attempt=job.attempt,
+                                        details={'reason': 'reaper_max_retries_exceeded'}
+                                    )
+                                    continue
+
+                                # Job can be retried - requeue it
+                                self.redis.zrem(self.keys.processing(ch), jid)
+                                self.redis.rpush(self.keys.queue(ch), jid)
+
+                                # Increment attempt count to track reaper retries
+                                job.attempt += 1
+                                job.save(update_fields=['attempt'])
+
                                 JobEvent.objects.create(
-                                    job=job,
-                                    channel=ch,
-                                    event='retry',
-                                    runner_id=self.runner_id,
-                                    attempt=job.attempt,
+                                    job=job, channel=ch, event='retry',
+                                    runner_id=self.runner_id, attempt=job.attempt,
                                     details={'reason': 'reaper_timeout'}
                                 )
+                                logger.info(f"Reaper requeued stale job {jid} on {ch} (attempt {job.attempt}/{job.max_retries})")
+
+                            except Job.DoesNotExist:
+                                # Job deleted from DB but still in Redis - clean it up
+                                logger.info(f"Reaper: Job {jid} not found in DB, removing from processing")
+                                self.redis.zrem(self.keys.processing(ch), jid)
+
+                        except Exception as e:
+                            logger.warning(f"Reaper failed to handle job {jid} on {ch}: {e}")
+                            # Remove from processing to prevent infinite retries on broken jobs
+                            try:
+                                self.redis.zrem(self.keys.processing(ch), jid)
                             except Exception:
                                 pass
-                            logger.info(f"Reaper requeued stale job {jid} on {ch}")
-                        except Exception as e:
-                            logger.warning(f"Reaper failed to requeue {jid} on {ch}: {e}")
             except Exception as e:
                 logger.warning(f"Reaper loop error: {e}")
             # Sleep a bit before next pass

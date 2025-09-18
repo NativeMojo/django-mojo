@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.29 - September 18, 2025
+
+* BUGFIX infinite retries on import func errors
+
+
 ## v0.1.28 - September 18, 2025
 
 * BUGFIX job select_for_update bug

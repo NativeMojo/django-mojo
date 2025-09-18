@@ -8,7 +8,6 @@ import time
 import requests
 from typing import Optional
 from mojo.apps.jobs.models import Job
-from turtledemo.chaos import f
 
 
 def send_email(job: Job) -> str:
