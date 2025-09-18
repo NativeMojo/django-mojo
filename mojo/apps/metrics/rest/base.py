@@ -141,9 +141,9 @@ def on_metrics_data(request):
     elif account != "public":
         perms = metrics.get_view_perms(account)
         if not perms:
-            raise mojo.errors.PermissionDeniedException()
+            raise mojo.errors.PermissionDeniedException(f"Permission denied for account {account}")
         if perms and not request.user.has_permission(perms):
-            raise mojo.errors.PermissionDeniedException()
+            raise mojo.errors.PermissionDeniedException(f"Permission denied for account {account}")
     slugs = request.DATA.get_typed("slugs", typed=list)
     if len(slugs) == 1:
         slugs = slugs[0]

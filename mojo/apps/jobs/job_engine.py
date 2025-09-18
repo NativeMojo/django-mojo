@@ -40,6 +40,7 @@ JOBS_ENGINE_MAX_WORKERS = settings.get('JOBS_ENGINE_MAX_WORKERS', 10)
 JOBS_ENGINE_CLAIM_BUFFER = settings.get('JOBS_ENGINE_CLAIM_BUFFER', 2)
 JOBS_RUNNER_HEARTBEAT_SEC = settings.get('JOBS_RUNNER_HEARTBEAT_SEC', 5)
 JOBS_VISIBILITY_TIMEOUT_MS = settings.get('JOBS_VISIBILITY_TIMEOUT_MS', 30000)
+JOBS_DEBUG = settings.get('JOBS_DEBUG', False)
 
 
 def load_job_function(func_path: str) -> Callable:
@@ -431,6 +432,8 @@ class JobEngine:
 
                 # Track in-flight (visibility)
                 try:
+                    if JOBS_DEBUG:
+                        logger.info(f"Claiming job {job_id} from channel {channel}")
                     self.redis.zadd(self.keys.processing(channel), {job_id: int(time.time() * 1000)})
                 except Exception as e:
                     logger.warning(f"Failed to add job {job_id} to processing ZSET: {e}")
@@ -501,6 +504,8 @@ class JobEngine:
             return
 
         try:
+            if JOBS_DEBUG:
+                logger.info(f"Executing job {job_id} from channel {channel}")
             # Check if already processed or canceled
             if job.status in ('completed', 'canceled'):
                 # Already finished; remove from processing if present
@@ -560,7 +565,8 @@ class JobEngine:
             # Load and execute function
             func = load_job_function(job.func)
             func(job)
-
+            if JOBS_DEBUG:
+                logger.info(f"Completed job {job_id} from channel {channel}")
             # Mark complete
             job.status = 'completed'
             job.finished_at = dates.utcnow()

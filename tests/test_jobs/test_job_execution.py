@@ -6,7 +6,7 @@ from testit import helpers as th
 import time
 import traceback
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone as dt_timezone
 from django.utils import timezone
 
 
@@ -86,7 +86,7 @@ def test_simple_job_execution_pattern(opts):
         # Check for cancellation
         if job.check_cancel_requested():
             job.metadata['cancelled'] = True
-            job.metadata['cancelled_at'] = datetime.now(timezone.utc).isoformat()
+            job.metadata['cancelled_at'] = datetime.now(dt_timezone.utc).isoformat()
             return "cancelled"
         time.sleep(0.01)
         sent_count = 0
@@ -111,7 +111,7 @@ def test_simple_job_execution_pattern(opts):
         job.metadata['failed_count'] = len(failed_recipients)
         if failed_recipients:
             job.metadata['failed_recipients'] = failed_recipients[:10]
-        job.metadata['completed_at'] = datetime.now(timezone.utc).isoformat()
+        job.metadata['completed_at'] = datetime.now(dt_timezone.utc).isoformat()
 
         return "completed"
 
@@ -123,7 +123,8 @@ def test_simple_job_execution_pattern(opts):
     assert job.metadata['failed_count'] == 0, f"Expected failed_count=0, got {job.metadata.get('failed_count')}. Full metadata: {job.metadata}"
     assert 'completed_at' in job.metadata, f"Missing 'completed_at' in job metadata. Available keys: {list(job.metadata.keys())}"
 
-    # Simulate engine marking as completed
+    # Simulate engine marking as completed (add small delay to ensure duration > 0)
+    time.sleep(0.001)  # 1ms delay to ensure measurable duration
     job.status = 'completed'
     job.finished_at = timezone.now()
     job.save(update_fields=['status', 'finished_at', 'metadata'])
@@ -165,7 +166,7 @@ def test_job_with_cancellation_check(opts):
         processing_type = job.payload.get('processing_type', 'default')
 
         # Initialize processing
-        job.metadata['started_at'] = datetime.now(timezone.utc).isoformat()
+        job.metadata['started_at'] = datetime.now(dt_timezone.utc).isoformat()
         job.metadata['file_path'] = file_path
         job.metadata['processing_type'] = processing_type
 
@@ -180,7 +181,7 @@ def test_job_with_cancellation_check(opts):
                 if job.check_cancel_requested():
                     job.metadata['cancelled'] = True
                     job.metadata['processed_bytes'] = processed
-                    job.metadata['cancelled_at'] = datetime.now(timezone.utc).isoformat()
+                    job.metadata['cancelled_at'] = datetime.now(dt_timezone.utc).isoformat()
                     return "cancelled"
 
                 # Process chunk (simulate work)
@@ -196,13 +197,13 @@ def test_job_with_cancellation_check(opts):
                 if processed % 500 == 0:
                     job.save(update_fields=['metadata'])
 
-            job.metadata['completed_at'] = datetime.now(timezone.utc).isoformat()
+            job.metadata['completed_at'] = datetime.now(dt_timezone.utc).isoformat()
             job.metadata['total_processed'] = processed
             return "completed"
 
         except Exception as e:
             job.metadata['error'] = str(e)
-            job.metadata['failed_at'] = datetime.now(timezone.utc).isoformat()
+            job.metadata['failed_at'] = datetime.now(dt_timezone.utc).isoformat()
             raise  # Re-raise to trigger retry logic
 
     # Execute with cancellation
@@ -245,7 +246,7 @@ def test_job_error_handling_and_retry(opts):
         method = job.payload.get('method', 'GET')
         timeout = job.payload.get('timeout', 30)
 
-        job.metadata['request_started'] = datetime.now(timezone.utc).isoformat()
+        job.metadata['request_started'] = datetime.now(dt_timezone.utc).isoformat()
         job.metadata['attempt'] = job.attempt
 
         # Simulate failure
@@ -393,7 +394,7 @@ def test_job_progress_updates(opts):
         # Generate report file
         report_file = f"/tmp/report_{job.id}.{output_format}"
         job.metadata['report_file'] = report_file
-        job.metadata['completed_at'] = datetime.now(timezone.utc).isoformat()
+        job.metadata['completed_at'] = datetime.now(dt_timezone.utc).isoformat()
 
         return "completed"
 
@@ -469,7 +470,7 @@ def test_broadcast_job_execution(opts):
 
         runner_info = {
             'runner': job.runner_id,
-            'executed_at': datetime.now(timezone.utc).isoformat(),
+            'executed_at': datetime.now(dt_timezone.utc).isoformat(),
             'hostname': 'test_host'  # In real: socket.gethostname()
         }
 
@@ -522,7 +523,7 @@ def test_job_with_database_operations(opts):
 
         cutoff_date = timezone.now() - timedelta(days=days_old)
 
-        job.metadata['started_at'] = datetime.now(timezone.utc).isoformat()
+        job.metadata['started_at'] = datetime.now(dt_timezone.utc).isoformat()
         job.metadata['cutoff_date'] = cutoff_date.isoformat()
         job.metadata['dry_run'] = dry_run
 
@@ -557,7 +558,7 @@ def test_job_with_database_operations(opts):
         # Close connections after job
         close_old_connections()
 
-        job.metadata['completed_at'] = datetime.now(timezone.utc).isoformat()
+        job.metadata['completed_at'] = datetime.now(dt_timezone.utc).isoformat()
         job.metadata['total_deleted'] = deleted_count
 
         return "completed"

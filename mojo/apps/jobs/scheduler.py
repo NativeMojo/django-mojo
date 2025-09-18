@@ -29,6 +29,9 @@ from .models import Job, JobEvent
 JOBS_CHANNELS = settings.get('JOBS_CHANNELS', ['default'])
 JOBS_SCHEDULER_LOCK_TTL_MS = settings.get('JOBS_SCHEDULER_LOCK_TTL_MS', 5000)
 JOBS_STREAM_MAXLEN = settings.get('JOBS_STREAM_MAXLEN', 100000)
+JOBS_DEBUG = settings.get('JOBS_DEBUG', False)
+
+
 
 logger = logit.get_logger("scheduler", "scheduler.log")
 
@@ -322,6 +325,8 @@ class Scheduler:
                         scheduled_at_dt = datetime.fromtimestamp(score / 1000.0)
                         if timezone.is_naive(scheduled_at_dt):
                             scheduled_at_dt = timezone.make_aware(scheduled_at_dt)
+                        if JOBS_DEBUG:
+                            print(f"Job {job_id} scheduled at {scheduled_at_dt}")
                         JobEvent.objects.create(
                             job=job,
                             channel=channel,
@@ -364,6 +369,8 @@ class Scheduler:
                         scheduled_at_dt = datetime.fromtimestamp(score / 1000.0)
                         if timezone.is_naive(scheduled_at_dt):
                             scheduled_at_dt = timezone.make_aware(scheduled_at_dt)
+                        if JOBS_DEBUG:
+                            print(f"Delayed Job {job_id} scheduled at {scheduled_at_dt}")
                         JobEvent.objects.create(
                             job=job,
                             channel=channel,

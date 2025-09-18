@@ -53,9 +53,9 @@ def test_basic_job_publish_and_queue(opts):
 
     # Verify job in database
     job = Job.objects.get(id=job_id)
-    assert job.status == 'pending'
-    assert job.channel == opts.test_channel
-    assert job.func == "mojo.apps.jobs.examples.sample_jobs.send_email"
+    assert job.status == 'pending', f"Expected status 'pending', got '{job.status}'"
+    assert job.channel == opts.test_channel, f"Expected channel '{opts.test_channel}', got '{job.channel}'"
+    assert job.func == "mojo.apps.jobs.examples.sample_jobs.send_email", f"Expected func 'mojo.apps.jobs.examples.sample_jobs.send_email', got '{job.func}'"
 
     # Verify job in Redis queue (Plan B)
     queue_key = opts.keys.queue(opts.test_channel)
@@ -64,7 +64,7 @@ def test_basic_job_publish_and_queue(opts):
 
     # Check the job ID is in the queue
     queue_items = opts.redis.get_client().lrange(queue_key, 0, -1)
-    assert job_id.encode('utf-8') in queue_items or job_id in queue_items
+    assert job_id.encode('utf-8') in queue_items or job_id in queue_items, f"Job ID {job_id} not found in queue items: {queue_items}"
 
 
 @th.django_unit_test()
@@ -84,8 +84,8 @@ def test_scheduled_job_publish_and_zset(opts):
 
     # Verify job in database with run_at
     job = Job.objects.get(id=job_id)
-    assert job.run_at is not None
-    assert job.status == 'pending'
+    assert job.run_at is not None, f"Expected run_at to be set, got {job.run_at}"
+    assert job.status == 'pending', f"Expected status 'pending', got '{job.status}'"
 
     # Verify job in scheduled ZSET
     sched_key = opts.keys.sched(opts.test_channel)
@@ -105,22 +105,22 @@ def test_engine_initialization(opts):
     # Create engine
     engine = JobEngine(channels=[opts.test_channel])
 
-    assert engine.channels == [opts.test_channel]
-    assert engine.runner_id is not None
-    assert engine.max_workers > 0
-    assert not engine.running
-    assert not engine.is_initialized
+    assert engine.channels == [opts.test_channel], f"Expected channels {[opts.test_channel]}, got {engine.channels}"
+    assert engine.runner_id is not None, f"Expected runner_id to be set, got {engine.runner_id}"
+    assert engine.max_workers > 0, f"Expected max_workers > 0, got {engine.max_workers}"
+    assert not engine.running, f"Expected engine.running to be False, got {engine.running}"
+    assert not engine.is_initialized, f"Expected engine.is_initialized to be False, got {engine.is_initialized}"
 
     # Initialize
     engine.initialize()
 
-    assert engine.is_initialized
-    assert engine.running
-    assert engine.start_time is not None
+    assert engine.is_initialized, f"Expected engine.is_initialized to be True after initialize(), got {engine.is_initialized}"
+    assert engine.running, f"Expected engine.running to be True after initialize(), got {engine.running}"
+    assert engine.start_time is not None, f"Expected engine.start_time to be set after initialize(), got {engine.start_time}"
 
     # Clean up
     engine.stop()
-    assert not engine.running
+    assert not engine.running, f"Expected engine.running to be False after stop(), got {engine.running}"
 
 
 @th.django_unit_test()
@@ -131,14 +131,14 @@ def test_scheduler_initialization(opts):
     # Create scheduler
     scheduler = Scheduler(channels=[opts.test_channel])
 
-    assert scheduler.channels == [opts.test_channel]
-    assert scheduler.scheduler_id is not None
-    assert not scheduler.running
-    assert not scheduler.has_lock
+    assert scheduler.channels == [opts.test_channel], f"Expected channels {[opts.test_channel]}, got {scheduler.channels}"
+    assert scheduler.scheduler_id is not None, f"Expected scheduler_id to be set, got {scheduler.scheduler_id}"
+    assert not scheduler.running, f"Expected scheduler.running to be False, got {scheduler.running}"
+    assert not scheduler.has_lock, f"Expected scheduler.has_lock to be False, got {scheduler.has_lock}"
 
     # Don't actually start (would need lock), just verify setup
-    assert scheduler.lock_key is not None
-    assert scheduler.lock_ttl_ms > 0
+    assert scheduler.lock_key is not None, f"Expected scheduler.lock_key to be set, got {scheduler.lock_key}"
+    assert scheduler.lock_ttl_ms > 0, f"Expected scheduler.lock_ttl_ms > 0, got {scheduler.lock_ttl_ms}"
 
 
 @th.django_unit_test()
@@ -151,16 +151,16 @@ def test_job_manager_basic_operations(opts):
 
     # Test basic stats
     stats = manager.get_stats()
-    assert 'channels' in stats
-    assert 'runners' in stats
-    assert 'totals' in stats
+    assert 'channels' in stats, f"Expected 'channels' in stats, got keys: {list(stats.keys())}"
+    assert 'runners' in stats, f"Expected 'runners' in stats, got keys: {list(stats.keys())}"
+    assert 'totals' in stats, f"Expected 'totals' in stats, got keys: {list(stats.keys())}"
 
     # Test queue state
     state = manager.get_queue_state(opts.test_channel)
-    assert state['channel'] == opts.test_channel
-    assert 'queued_count' in state
-    assert 'inflight_count' in state
-    assert 'scheduled_count' in state
+    assert state['channel'] == opts.test_channel, f"Expected channel '{opts.test_channel}', got '{state['channel']}'"
+    assert 'queued_count' in state, f"Expected 'queued_count' in state, got keys: {list(state.keys())}"
+    assert 'inflight_count' in state, f"Expected 'inflight_count' in state, got keys: {list(state.keys())}"
+    assert 'scheduled_count' in state, f"Expected 'scheduled_count' in state, got keys: {list(state.keys())}"
 
     # Publish a job and check state changes
     job_id = publish(
@@ -170,7 +170,7 @@ def test_job_manager_basic_operations(opts):
     )
 
     updated_state = manager.get_queue_state(opts.test_channel)
-    assert updated_state['queued_count'] >= 1
+    assert updated_state['queued_count'] >= 1, f"Expected queued_count >= 1 after publishing job, got {updated_state['queued_count']}"
 
 
 @th.django_unit_test()
@@ -214,17 +214,18 @@ def test_simple_job_execution_flow(opts):
     # Execute the job function
     result = simple_test_job(job)
 
-    # Mark as completed
+    # Mark as completed (add small delay to ensure duration > 0)
+    time.sleep(0.001)  # 1ms delay to ensure measurable duration
     job.status = 'completed'
     job.finished_at = timezone.now()
     job.save()
 
-    # Verify execution
-    assert result == "completed"
-    assert job.metadata['test_executed'] is True
-    assert job.metadata['message_received'] == "test execution"
-    assert job.status == 'completed'
-    assert job.duration_ms > 0
+    # Verify execution with better debug info
+    assert result == "completed", f"Expected 'completed', got '{result}'"
+    assert job.metadata.get('test_executed') is True, f"test_executed not set in metadata: {job.metadata}"
+    assert job.metadata.get('message_received') == "test execution", f"Expected 'test execution', got '{job.metadata.get('message_received')}'"
+    assert job.status == 'completed', f"Expected status 'completed', got '{job.status}'"
+    assert job.duration_ms > 0, f"Job duration should be > 0, got {job.duration_ms}ms. Started: {job.started_at}, Finished: {job.finished_at}"
 
 
 @th.django_unit_test()
@@ -242,15 +243,15 @@ def test_job_cancellation_flow(opts):
 
     # Cancel job
     result = cancel(job_id)
-    assert result is True
+    assert result is True, f"Expected cancel to return True, got {result}"
 
     # Verify cancellation in DB
     job = Job.objects.get(id=job_id)
-    assert job.cancel_requested is True
+    assert job.cancel_requested is True, f"Expected job.cancel_requested to be True, got {job.cancel_requested}"
 
     # Verify cancel event created
     cancel_events = JobEvent.objects.filter(job=job, event='canceled')
-    assert cancel_events.exists()
+    assert cancel_events.exists(), f"Expected cancel event to exist, found {cancel_events.count()} events"
 
 
 @th.django_unit_test()
@@ -269,10 +270,20 @@ def test_job_retry_configuration(opts):
     )
 
     job = Job.objects.get(id=job_id)
-    assert job.max_retries == 5
-    assert job.backoff_base == 1.5
-    assert job.backoff_max_sec == 300
-    assert job.is_retriable  # Should be retriable with 0 attempts and max_retries > 0
+    assert job.max_retries == 5, f"Expected max_retries=5, got {job.max_retries}"
+    assert job.backoff_base == 1.5, f"Expected backoff_base=1.5, got {job.backoff_base}"
+    assert job.backoff_max_sec == 300, f"Expected backoff_max_sec=300, got {job.backoff_max_sec}"
+
+    # Test is_retriable logic: first mark job as failed to test retry capability
+    job.status = 'failed'
+    job.attempt = 2  # Has made some attempts but still under max_retries
+    job.save()
+    assert job.is_retriable, f"Expected job.is_retriable to be True for failed job (attempt={job.attempt}, max_retries={job.max_retries}), got {job.is_retriable}"
+
+    # Test when max retries exceeded
+    job.attempt = 5  # Equal to max_retries
+    job.save()
+    assert not job.is_retriable, f"Expected job.is_retriable to be False when attempt >= max_retries (attempt={job.attempt}, max_retries={job.max_retries}), got {job.is_retriable}"
 
 
 @th.django_unit_test()
@@ -282,15 +293,15 @@ def test_scheduler_job_movement(opts):
     from mojo.apps.jobs.scheduler import Scheduler
     from mojo.apps.jobs.models import Job
 
-    # Create a job scheduled for immediate execution (in the past)
-    past_time = timezone.now() - timedelta(seconds=1)
+    # Create a job scheduled for future execution
+    future_time = timezone.now() + timedelta(seconds=10)
 
-    # Publish with specific run_at time
+    # Publish with specific run_at time in the future
     job_id = publish(
         func="mojo.apps.jobs.examples.sample_jobs.send_email",
         payload={"test": "scheduler"},
         channel=opts.test_channel,
-        run_at=past_time
+        run_at=future_time
     )
 
     # Verify it's in the ZSET
@@ -300,21 +311,23 @@ def test_scheduler_job_movement(opts):
 
     # Create scheduler and process this channel
     scheduler = Scheduler(channels=[opts.test_channel])
-    now = timezone.now()
-    now_ms = now.timestamp() * 1000
+
+    # Simulate time passing - process with a future time to make the job due
+    future_now = future_time + timedelta(seconds=1)  # 1 second after the job's run_at time
+    future_now_ms = future_now.timestamp() * 1000
 
     # Process the channel (this would normally be called in main loop)
-    scheduler._process_channel(opts.test_channel, now, now_ms)
+    scheduler._process_channel(opts.test_channel, future_now, future_now_ms)
 
     # Verify job moved to queue
     queue_key = opts.keys.queue(opts.test_channel)
     queue_items = opts.redis.get_client().lrange(queue_key, 0, -1)
     job_id_bytes = job_id.encode('utf-8')
-    assert job_id_bytes in queue_items or job_id in queue_items, "Job should be moved to queue"
+    assert job_id_bytes in queue_items or job_id in queue_items, f"Job {job_id} should be moved to queue. Queue items: {queue_items}"
 
     # Verify removed from ZSET
     score_after = opts.redis.zscore(sched_key, job_id)
-    assert score_after is None, "Job should be removed from ZSET"
+    assert score_after is None, f"Job {job_id} should be removed from ZSET after scheduling, but still has score {score_after}"
 
 
 @th.django_unit_test()
@@ -333,12 +346,12 @@ def test_broadcast_job_handling(opts):
 
     # Verify job marked as broadcast in DB
     job = Job.objects.get(id=job_id)
-    assert job.broadcast is True
+    assert job.broadcast is True, f"Expected job.broadcast to be True, got {job.broadcast}"
 
     # For immediate broadcast jobs, should still go to regular queue in Plan B
     queue_key = opts.keys.queue(opts.test_channel)
     qlen = opts.redis.llen(queue_key)
-    assert qlen >= 1, "Broadcast job should be in queue"
+    assert qlen >= 1, f"Expected broadcast job to be in queue (qlen >= 1), got qlen={qlen} for queue {queue_key}"
 
 
 @th.django_unit_test()
@@ -356,11 +369,11 @@ def test_job_status_api(opts):
     # Get status
     job_status = status(job_id)
 
-    assert job_status is not None
-    assert job_status['id'] == job_id
-    assert job_status['status'] == 'pending'
-    assert job_status['channel'] == opts.test_channel
-    assert job_status['func'] == "mojo.apps.jobs.examples.sample_jobs.send_email"
+    assert job_status is not None, f"Expected job status to be returned, got None"
+    assert job_status['id'] == job_id, f"Expected job status id '{job_id}', got '{job_status.get('id')}'"
+    assert job_status['status'] == 'pending', f"Expected job status 'pending', got '{job_status.get('status')}'"
+    assert job_status['channel'] == opts.test_channel, f"Expected job channel '{opts.test_channel}', got '{job_status.get('channel')}'"
+    assert job_status['func'] == "mojo.apps.jobs.examples.sample_jobs.send_email", f"Expected func 'mojo.apps.jobs.examples.sample_jobs.send_email', got '{job_status.get('func')}'"
 
 
 @th.django_unit_test()
@@ -372,21 +385,21 @@ def test_redis_key_patterns(opts):
 
     # Test key patterns
     queue_key = keys.queue(opts.test_channel)
-    assert f"queue:{opts.test_channel}" in queue_key
+    assert f"queue:{opts.test_channel}" in queue_key, f"Expected 'queue:{opts.test_channel}' in '{queue_key}'"
 
     sched_key = keys.sched(opts.test_channel)
-    assert f"sched:{opts.test_channel}" in sched_key
+    assert f"sched:{opts.test_channel}" in sched_key, f"Expected 'sched:{opts.test_channel}' in '{sched_key}'"
 
     processing_key = keys.processing(opts.test_channel)
-    assert f"processing:{opts.test_channel}" in processing_key
+    assert f"processing:{opts.test_channel}" in processing_key, f"Expected 'processing:{opts.test_channel}' in '{processing_key}'"
 
     # Test runner keys
     runner_id = "test_runner_123"
     hb_key = keys.runner_hb(runner_id)
-    assert f"runner:{runner_id}:hb" in hb_key
+    assert f"runner:{runner_id}:hb" in hb_key, f"Expected 'runner:{runner_id}:hb' in '{hb_key}'"
 
     ctl_key = keys.runner_ctl(runner_id)
-    assert f"runner:{runner_id}:ctl" in ctl_key
+    assert f"runner:{runner_id}:ctl" in ctl_key, f"Expected 'runner:{runner_id}:ctl' in '{ctl_key}'"
 
 
 @th.django_unit_test()
