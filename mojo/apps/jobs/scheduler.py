@@ -570,7 +570,7 @@ def main():
         try:
             runner.start()
         except Exception as e:
-            logit.error(f"Scheduler failed: {e}")
+            logger.exception(f"Scheduler failed: {e}")
             sys.exit(1)
 
 

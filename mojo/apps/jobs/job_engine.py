@@ -492,10 +492,17 @@ class JobEngine:
         job = None
         try:
             # Load job from database
+            if JOBS_DEBUG:
+                logger.info(f"Loading job {job_id} from database...")
             close_old_connections()
-            job = Job.objects.select_for_update().get(id=job_id)
+            if JOBS_DEBUG:
+                logger.info(f"Loading job {job_id} (no lock needed - Redis already claimed it)...")
+            # No select_for_update needed: Redis BRPOP already ensures only one process gets each job
+            job = Job.objects.get(id=job_id)
+            if JOBS_DEBUG:
+                logger.info(f"Successfully loaded job {job_id} from database")
         except Exception as e:
-            logit.error(f"Failed to load job {job_id}: {e}")
+            logger.exception(f"Failed to load job {job_id}: {e}")
             # Remove from processing to avoid leak
             try:
                 self.redis.zrem(self.keys.processing(channel), job_id)
@@ -571,7 +578,8 @@ class JobEngine:
             job.status = 'completed'
             job.finished_at = dates.utcnow()
             job.save(update_fields=['status', 'finished_at', 'metadata'])
-            logger.info(f"Job {job.id} completed")
+            if JOBS_DEBUG:
+                logger.info(f"Job {job.id} completed")
             # Event: completed
             try:
                 JobEvent.objects.create(
@@ -679,7 +687,7 @@ class JobEngine:
                 pass
 
         except Exception as e:
-            logit.error(f"Failed to handle job failure: {e}")
+            logger.exception(f"Failed to handle job failure: {e}")
 
     def _job_completed(self, job_id: str):
         """Callback when job future completes."""
