@@ -156,17 +156,18 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
 
     def touch(self):
         # can't subtract offset-naive and offset-aware datetimes
-        if self.last_activity and not dates.is_today(self.last_activity, METRICS_TIMEZONE):
-            metrics.record("user_activity_day", category="user", min_granularity="days")
         if self.last_activity is None or dates.has_time_elsapsed(self.last_activity, seconds=USER_LAST_ACTIVITY_FREQ):
+            if self.last_activity and not dates.is_today(self.last_activity, METRICS_TIMEZONE):
+                metrics.record("user_activity_day", category="user", min_granularity="days")
             self.last_activity = dates.utcnow()
             self.atomic_save()
         if METRICS_TRACK_USER_ACTIVITY:
             metrics.record(f"user_activity:{self.pk}", category="user", min_granularity="minutes")
 
-    def track(self, request):
+    def track(self):
         self.touch()
-        UserDevice.track(request)
+        if self.active_request:
+            UserDevice.track(request=self.active_request, user=self)
 
     def get_auth_key(self):
         if self.auth_key is None:
@@ -558,5 +559,5 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
             if token_manager.is_expired:
                 return user, "Token expired"
             return user, "Token has invalid signature"
-        user.track(request)
+        user.track()
         return user, None

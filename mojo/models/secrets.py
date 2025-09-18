@@ -21,7 +21,10 @@ class MojoSecrets(models.Model):
         self._secrets_changed = True
 
     def set_secret(self, key, value):
-        self.secrets[key] = value
+        if value is None:
+            self.secrets.pop(key, None)
+        else:
+            self.secrets[key] = value
         self._secrets_changed = True
 
     def get_secret(self, key, default=None):

@@ -157,15 +157,18 @@ class UserDevice(models.Model, MojoModel):
         return f"Device {self.duid} for {self.user.username}"
 
     @classmethod
-    def track(cls, request):
+    def track(cls, request=None, user=None):
         """
         Tracks a user's device based on the incoming request. This is the primary
         entry point for the device tracking system.
         """
-        if not request.user or not request.user.is_authenticated:
-            return None
+        if not request:
+            request = self.active_request
+            if request is None:
+                raise ValueError("No active request found")
 
-        user = request.user
+        if not user:
+            user = request.user
         ip_address = request.ip
         user_agent_str = request.user_agent
         duid = request.duid
