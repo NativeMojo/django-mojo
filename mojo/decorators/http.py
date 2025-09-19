@@ -44,6 +44,7 @@ def dispatcher(request, *args, **kwargs):
                     details=f"Permission denied: Invalid group ID -> '{request.DATA.group}'",
                     event_type="rest_error",
                     request=request,
+                    level=8,
                     request_path=getattr(request, "path", None),
                 )
             return JsonResponse({"error": "Invalid group ID", "code": 400}, status=400)
@@ -78,6 +79,7 @@ def dispatch_error_handler(func):
                     event_type="rest_error",
                     request_data=request.DATA,
                     request=request,
+                    level=5,
                     request_path=getattr(request, "path", None),
                     stack_trace=traceback.format_exc(),
                 )
@@ -92,6 +94,7 @@ def dispatch_error_handler(func):
                     event_type="rest_error",
                     request_data=request.DATA,
                     request=request,
+                    level=4,
                     request_path=getattr(request, "path", None),
                     stack_trace=traceback.format_exc()
                 )
@@ -107,6 +110,7 @@ def dispatch_error_handler(func):
                     event_type="rest_error",
                     request_data=request.DATA,
                     request=request,
+                    level=9,
                     stack_trace=traceback.format_exc(),
                     request_path=getattr(request, "path", None),
                 )

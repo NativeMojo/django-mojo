@@ -113,7 +113,7 @@ class SerializerRegistry:
             if is_default or self.default_serializer is None:
                 self.default_serializer = name
 
-            logger.info(f"Registered serializer: {name}")
+            # logger.info(f"Registered serializer: {name}")
             return True
 
     def get(self, name: str):

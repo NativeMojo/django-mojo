@@ -3,8 +3,15 @@ import datetime
 import time
 from objict import objict
 
+from mojo.helpers.settings import settings
+
+JWT_TOKEN_EXPIRY = settings.get("JWT_TOKEN_EXPIRY", 21600)
+JWT_REFRESH_TOKEN_EXPIRY = settings.get("JWT_REFRESH_TOKEN_EXPIRY", 604800)
+JWT_ALGORITHM = settings.get("JWT_ALGORITHM", "HS256")
+
+
 class JWToken:
-    def __init__(self, key=f"{time.time()}", access_token_expiry=21600, refresh_token_expiry=604800, alg="HS256", token=None):
+    def __init__(self, key=f"{time.time()}", access_token_expiry=JWT_TOKEN_EXPIRY, refresh_token_expiry=JWT_REFRESH_TOKEN_EXPIRY, alg=JWT_ALGORITHM, token=None):
         self.key = key
         self.access_token_expiry = access_token_expiry
         self.refresh_token_expiry = refresh_token_expiry

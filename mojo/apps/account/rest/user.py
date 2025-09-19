@@ -27,7 +27,7 @@ def on_refresh_token(request):
         raise merrors.PermissionDeniedException(error, 401, 401)
     # future look at keeping the refresh token the same but updating the access_token
     # TODO add device id to the token as well
-    user.touch()
+    # user.touch()
     token_package = JWToken(user.get_auth_key()).create(uid=user.id)
     return JsonResponse(dict(status=True, data=token_package))
 
