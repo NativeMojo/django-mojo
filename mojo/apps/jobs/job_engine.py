@@ -615,7 +615,7 @@ class JobEngine:
     def _handle_job_failure(self, job_id: str, channel: str, error: Exception):
         """Handle job failure with retries (Plan B)."""
         try:
-            job = Job.objects.select_for_update().get(id=job_id)
+            job = Job.objects.get(id=job_id)
 
             # Record error
             job.last_error = str(error)
