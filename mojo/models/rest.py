@@ -14,7 +14,7 @@ logger = logit.get_logger("debug", "debug.log")
 ACTIVE_REQUEST = None
 LOGGING_CLASS = None
 MOJO_APP_STATUS_200_ON_ERROR = settings.MOJO_APP_STATUS_200_ON_ERROR
-MOJO_REST_LIST_PERM_DENY = settings.get("MOJO_REST_LIST_PERM_DENY", False)
+MOJO_REST_LIST_PERM_DENY = settings.get("MOJO_REST_LIST_PERM_DENY", True)
 
 # use this when there is no ACTIVE_REQUEST
 SYSTEM_REQUEST = objict.objict()
@@ -90,7 +90,7 @@ class MojoModel:
         """
         payload = dict(kwargs)
         payload["is_authenticated"] = False
-        if request.user is not None:
+        if hasattr(request, "user") and request.user is not None:
             payload["is_authenticated"] = request.user.is_authenticated
         payload["status"] = False
         if "code" not in payload:

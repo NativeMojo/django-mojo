@@ -5,6 +5,7 @@ from mojo.apps.fileman.models import File, FileManager
 
 
 @md.POST('upload/initiate')
+@md.requires_auth()
 def on_upload_initiate(request):
     """
     Initiate a file upload and get upload URLs
@@ -47,6 +48,7 @@ def on_upload_initiate(request):
 
 
 @md.POST('upload/<str:upload_token>')
+@md.custom_security("requires upload token")
 def on_direct_upload(request, upload_token):
     """
     Handle direct file upload for backends that don't support pre-signed URLs
@@ -64,6 +66,7 @@ def on_direct_upload(request, upload_token):
 
 
 @md.GET('download/<str:download_token>')
+@md.custom_security("requires download token")
 def on_download(request, download_token):
     """
     Get a download URL for a file

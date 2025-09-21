@@ -5,10 +5,13 @@ from .settings import settings
 
 
 def parse_datetime(value, timezone=None):
-    date = objict.parse_date(value)
+    if isinstance(value, datetime):
+        date = value
+    else:
+        date = objict.parse_date(value)
     if date.tzinfo is None:
         date = pytz.UTC.localize(date)
-    if timezone is not None:
+    if timezone is not None and isinstance(timezone, str):
         local_tz = pytz.timezone(timezone)
     else:
         local_tz = pytz.UTC

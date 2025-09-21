@@ -10,6 +10,7 @@ def on_user_device(request, pk=None):
 
 @md.GET('user/device/lookup')
 @md.requires_params('duid')
+@md.requires_perms("manage_users", "manage_devices")
 def on_user_device_by_duid(request):
     duid = request.DATA.get('duid')
     device = UserDevice.objects.filter(duid=duid).first()
@@ -20,18 +21,21 @@ def on_user_device_by_duid(request):
 
 @md.URL('user/device/location')
 @md.URL('user/device/location/<int:pk>')
+@md.requires_perms("manage_users", "manage_devices")
 def on_user_device_location(request, pk=None):
     return UserDeviceLocation.on_rest_request(request, pk)
 
 
 @md.URL('system/geoip')
 @md.URL('system/geoip/<int:pk>')
+@md.uses_model_security(GeoLocatedIP)
 def on_geo_located_ip(request, pk=None):
     return GeoLocatedIP.on_rest_request(request, pk)
 
 
 @md.GET('system/geoip/lookup')
 @md.requires_params('ip')
+@md.public_endpoint()
 def on_geo_located_ip_lookup(request):
     ip_address = request.DATA.get('ip')
     auto_refresh = request.DATA.get('auto_refresh', True)

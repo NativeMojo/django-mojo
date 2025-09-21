@@ -5,6 +5,7 @@ from mojo.apps.incident import reporter
 
 
 @md.POST('ossec/alert')
+@md.public_endpoint()
 def on_ossec_alert(request):
     ossec_alert = ossec.parse(request.DATA)
     # add the request ip
@@ -14,6 +15,7 @@ def on_ossec_alert(request):
 
 
 @md.POST('ossec/alert/batch')
+@md.public_endpoint()
 def on_ossec_alert_batch(request):
     ossec_alerts = ossec.parse(request.DATA)
     for alert in ossec_alerts:

@@ -13,15 +13,16 @@ import json
 # Basic CRUD for Jobs (with RestMeta permissions)
 @md.URL('job')
 @md.URL('job/<str:pk>')
+@md.uses_model_security(Job)
 def on_job(request, pk=None):
     """Standard CRUD operations for jobs with automatic permission handling."""
-
     return Job.on_rest_request(request, pk)
 
 
 # Basic CRUD for Job Events
 @md.URL('event')
 @md.URL('event/<int:pk>')
+@md.uses_model_security(JobEvent)
 def on_job_event(request, pk=None):
     """Standard CRUD operations for job events."""
     return JobEvent.on_rest_request(request, pk)
@@ -30,6 +31,7 @@ def on_job_event(request, pk=None):
 # Basic CRUD for Job Logs
 @md.URL('logs')
 @md.URL('logs/<int:pk>')
+@md.uses_model_security(JobLog)
 def on_job_logs(request, pk=None):
     """Standard CRUD operations for job logs."""
     return JobLog.on_rest_request(request, pk)

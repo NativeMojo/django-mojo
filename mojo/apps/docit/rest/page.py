@@ -4,6 +4,7 @@ from ..models import Page
 
 @md.URL('page')
 @md.URL('page/<int:pk>')
+@md.custom_security("docit custom security")
 def on_page(request, pk=None):
     """
     Standard CRUD endpoints for Page model
@@ -18,5 +19,6 @@ def on_page(request, pk=None):
 
 
 @md.URL('page/slug/<str:slug>')
+@md.custom_security("docit custom security")
 def on_page_by_slug(request, slug=None):
     return Page.objects.get(slug=slug).on_rest_get(request)

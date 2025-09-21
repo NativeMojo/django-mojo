@@ -30,6 +30,17 @@ def get_tcp_established(filter_type=None):
     established_connections = [c for c in connections if c.status == psutil.CONN_ESTABLISHED]
     return filter_connections(established_connections, filter_type)
 
+def get_tcp_established_summary():
+    connections = psutil.net_connections(kind="tcp")
+    established_connections = [c for c in connections if c.status == psutil.CONN_ESTABLISHED]
+    return {
+        "total": len(established_connections),
+        "https": len([c for c in established_connections if c.laddr.port == 443]),
+        "redis": len([c for c in established_connections if c.raddr.port == 6379]),
+        "postgres": len([c for c in established_connections if c.raddr.port == 5432]),
+        "unknown": len([c for c in established_connections if c.raddr.port not in [5432, 6379] and c.laddr.port != 443])
+    }
+
 def filter_connections(connections, filter_type):
     """
     Filter connections based on the specified filter type.

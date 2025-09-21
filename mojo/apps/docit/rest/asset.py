@@ -4,6 +4,7 @@ from ..models import Asset
 
 @md.URL('book/asset')
 @md.URL('book/asset/<int:pk>')
+@md.custom_security("uses custom security")
 def on_book_asset(request, pk=None):
     """
     Standard CRUD endpoints for Asset model

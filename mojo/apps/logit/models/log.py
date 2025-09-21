@@ -34,6 +34,28 @@ class Log(dm.Model, MojoModel):
             dm.Index(fields=['created', 'kind']),  # composite index for common search/order combination
         ]
 
+    class RestMeta:
+        VIEW_PERMS = ["manage_logs", "view_logs", "admin"]
+        SAVE_PERMS = ["admin"]  # Only admins should create/edit logs manually
+        DELETE_PERMS = ["admin"]  # Only admins can delete logs
+        CAN_DELETE = True  # Allow deletion for cleanup purposes
+
+        GRAPHS = {
+            "basic": {
+                "fields": [
+                    "id", "created", "level", "kind", "method", "path",
+                    "ip", "uid", "username", "model_name", "model_id"
+                ],
+            },
+            "default": {
+                "fields": [
+                    "id", "created", "level", "kind", "method", "path", "payload",
+                    "ip", "duid", "uid", "username", "user_agent", "log",
+                    "model_name", "model_id"
+                ],
+            },
+        }
+
     @classmethod
     def logit(cls, request, log, kind="log", model_name=None, model_id=0, level="info", **kwargs):
         if isinstance(log, dict):

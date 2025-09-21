@@ -191,6 +191,7 @@ VALUE_GET_DOCS = {
 
 # Time-series metrics endpoints
 @md.GET('series', docs=SERIES_GET_DOCS)
+@md.custom_security("protected by metrics permissions")
 @md.requires_params("slugs")
 def on_metrics_series(request):
     """
@@ -211,6 +212,7 @@ def on_metrics_series(request):
 
 
 @md.POST('series', docs=SERIES_POST_DOCS)
+@md.custom_security("protected by metrics permissions")
 @md.requires_params("slugs")
 def on_metrics_series_post(request):
     """
@@ -221,6 +223,7 @@ def on_metrics_series_post(request):
 
 # Simple value storage endpoints
 @md.POST('value/set', docs=SET_VALUE_DOCS)
+@md.custom_security("protected by metrics permissions")
 @md.requires_params("slug", "value")
 def on_set_value(request):
     """
@@ -243,6 +246,7 @@ def on_set_value(request):
 
 
 @md.GET('value/get', docs=VALUE_GET_DOCS)
+@md.custom_security("protected by metrics permissions")
 @md.requires_params("slugs")
 def on_get_value(request):
     """

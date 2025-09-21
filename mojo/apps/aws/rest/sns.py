@@ -372,6 +372,7 @@ def _handle_sns(kind: str, request):
 
 
 @md.URL("email/sns/inbound")
+@md.public_endpoint()
 def on_sns_inbound(request):
     """
     Public webhook endpoint for SES inbound (S3 + SNS).
@@ -380,6 +381,7 @@ def on_sns_inbound(request):
 
 
 @md.URL("email/sns/bounce")
+@md.public_endpoint()
 def on_sns_bounce(request):
     """
     Public webhook endpoint for SES bounce notifications.
@@ -388,6 +390,7 @@ def on_sns_bounce(request):
 
 
 @md.URL("email/sns/complaint")
+@md.public_endpoint()
 def on_sns_complaint(request):
     """
     Public webhook endpoint for SES complaint notifications.
@@ -396,6 +399,7 @@ def on_sns_complaint(request):
 
 
 @md.URL("email/sns/delivery")
+@md.public_endpoint()
 def on_sns_delivery(request):
     """
     Public webhook endpoint for SES delivery notifications.

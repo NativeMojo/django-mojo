@@ -6,6 +6,7 @@ from mojo.helpers.settings import settings
 
 GROUP_LAST_ACTIVITY_FREQ = settings.get("GROUP_LAST_ACTIVITY_FREQ", 300)
 METRICS_TIMEZONE = settings.get("METRICS_TIMEZONE", "America/Los_Angeles")
+MOJO_REST_LIST_PERM_DENY = settings.get("MOJO_REST_LIST_PERM_DENY", True)
 
 
 class Group(MojoSecrets, MojoModel):
@@ -399,4 +400,6 @@ class Group(MojoSecrets, MojoModel):
         if getattr(request.user, 'members') is not None:
             group_ids = request.user.members.values_list('group__id', flat=True)
             return cls.on_rest_list(request, cls.objects.filter(id__in=group_ids))
+        if MOJO_REST_LIST_PERM_DENY:
+            return cls.rest_error_response(request, 403, error=f"GET permission denied: {cls.__name__}")
         return cls.on_rest_list(request, cls.objects.none())

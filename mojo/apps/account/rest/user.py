@@ -13,6 +13,7 @@ def on_user(request, pk=None):
 
 
 @md.GET('user/me')
+@md.requires_auth()
 def on_user_me(request):
     return User.on_rest_request(request, request.user.pk)
 
@@ -60,6 +61,7 @@ def on_user_login(request):
 
 @md.POST("auth/forgot")
 @md.requires_params("email")
+@md.public_endpoint()
 def on_user_forgot(request):
     email = request.DATA.email
     user = User.objects.filter(email=email.lower().strip()).last()
@@ -115,6 +117,7 @@ def verify_password_reset_token(hex_token):
 
 
 @md.POST("auth/password/reset/code")
+@md.public_endpoint()
 @md.requires_params("code", "email", "new_password")
 def on_user_password_reset_code(request):
     code = request.DATA.get("code")
@@ -131,6 +134,7 @@ def on_user_password_reset_code(request):
 
 
 @md.POST("auth/password/reset/token")
+@md.custom_security("requires valid token")
 @md.requires_params("token", "new_password")
 def on_user_password_reset_token(request):
     token = request.DATA.get("token")

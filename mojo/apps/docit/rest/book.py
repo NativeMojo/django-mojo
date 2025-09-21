@@ -4,6 +4,7 @@ from ..models import Book
 
 @md.URL('book')
 @md.URL('book/<int:pk>')
+@md.custom_security("uses custom security")
 def on_book(request, pk=None):
     """
     Standard CRUD endpoints for Book model
@@ -18,5 +19,6 @@ def on_book(request, pk=None):
 
 
 @md.URL('book/slug/<str:slug>')
+@md.custom_security("uses custom security")
 def on_book_by_slug(request, slug=None):
     return Book.objects.get(slug=slug).on_rest_get(request)

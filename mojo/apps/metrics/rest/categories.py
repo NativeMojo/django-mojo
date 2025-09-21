@@ -178,11 +178,13 @@ CATEGORY_DELETE_DOCS = {
 
 
 @md.GET('categories', docs=CATEGORIES_LIST_DOCS)
+@md.custom_security("protected by metrics permissions")
+@md.requires_params("account")
 def on_categories_list(request):
     """
     List all categories for an account.
     """
-    account = request.DATA.get("account", "public")
+    account = request.DATA.get("account", "DOES_NOT_EXIST")
     check_view_permissions(request, account)
 
     categories = list(metrics.get_categories(account=account))
@@ -195,6 +197,7 @@ def on_categories_list(request):
 
 
 @md.GET('category_slugs', docs=CATEGORY_SLUGS_DOCS)
+@md.custom_security("protected by metrics permissions")
 @md.requires_params("category")
 def on_category_slugs(request):
     """
@@ -215,6 +218,7 @@ def on_category_slugs(request):
 
 
 @md.GET('category_fetch', docs=CATEGORY_FETCH_DOCS)
+@md.custom_security("protected by metrics permissions")
 @md.requires_params("category")
 def on_category_fetch(request):
     """
@@ -247,6 +251,7 @@ def on_category_fetch(request):
 
 
 @md.DELETE('category_delete', docs=CATEGORY_DELETE_DOCS)
+@md.custom_security("protected by metrics permissions")
 @md.requires_params("category")
 def on_category_delete(request):
     """

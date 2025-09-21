@@ -46,6 +46,7 @@ import datetime
     ]
 })
 @md.requires_params("slug")
+@md.custom_security("protected by metrics permissions")
 def on_metrics_record(request):
     account = request.DATA.get("account", "public")
     count = request.DATA.get_typed("count", default=1, typed=int)
@@ -126,6 +127,7 @@ def on_metrics_record(request):
         }
     }
 })
+@md.custom_security("protected by metrics permissions")
 @md.requires_params("slugs")
 def on_metrics_data(request):
     """
@@ -138,6 +140,15 @@ def on_metrics_data(request):
     if account == "global":
         if not request.user.is_authenticated or not request.user.has_permission("view_metrics"):
             raise mojo.errors.PermissionDeniedException()
+    elif account.startswith("group-"):
+        if not request.user.is_authenticated:
+            raise mojo.errors.PermissionDeniedException()
+        if not request.user.has_permission("view_metrics"):
+            from mojo.apps.groups.models import Group
+            group_id = account.split("-")[1]
+            group = Group.objects.get(id=group_id)
+            if not group.user_has_permission(request.user, "view_metrics", False):
+                raise mojo.errors.PermissionDeniedException()
     elif account != "public":
         perms = metrics.get_view_perms(account)
         if not perms:
