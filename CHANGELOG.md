@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.32 - September 21, 2025
+
+* Added new auto security checks on rest end points
+
+
 ## v0.1.31 - September 18, 2025
 
 * Last fix did not take
