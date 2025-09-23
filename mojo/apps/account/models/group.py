@@ -179,7 +179,7 @@ class Group(MojoSecrets, MojoModel):
         return queryset
 
     @property
-    def top_most_parent(self):
+    def top_most_parent(self, kind=None):
         """
         Finds the top-most parent (root ancestor) of this group.
         Returns self if the group has no parent.
@@ -187,6 +187,8 @@ class Group(MojoSecrets, MojoModel):
         current = self
         while current.parent:
             current = current.parent
+            if current.kind == kind:
+                return current
         return current
 
     def is_child_of(self, parent_group):
@@ -219,7 +221,7 @@ class Group(MojoSecrets, MojoModel):
         if user:
             ms = self.add_member(user)
         elif not user:
-            user = User(is_active=True)
+            user = User(is_active=True, email=email)
             user.on_rest_pre_save(dict(email=None), True)
             user.save()
             ms = self.add_member(user)

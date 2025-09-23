@@ -48,7 +48,7 @@ class TicketNote(models.Model, MojoModel):
         GRAPHS = {
             "default": {
                 "graphs": {
-                    "author": "basic",
+                    "user": "basic",
                     "media": "basic"
                 }
             },
@@ -57,6 +57,6 @@ class TicketNote(models.Model, MojoModel):
     parent = models.ForeignKey(Ticket, related_name="notes", on_delete=models.CASCADE)
     created = models.DateTimeField(auto_now_add=True, editable=False)
 
-    author = models.ForeignKey("account.User", related_name="+", on_delete=models.CASCADE)
+    user = models.ForeignKey("account.User", related_name="+", on_delete=models.CASCADE)
     note = models.TextField(blank=True, null=True)
     media = models.ForeignKey("fileman.File", related_name="+", null=True, blank=True, default=None, on_delete=models.SET_NULL)

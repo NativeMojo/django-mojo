@@ -21,9 +21,9 @@ def on_group_member(request, pk=None):
 @md.requires_params('email', 'group')
 @md.custom_security("securted by group security")
 def on_group_invite_member(request):
-    if not request.group.user_has_permission(["manage_users", "manage_members"]):
+    if not request.group.user_has_permission(request.user, ["manage_users", "manage_members"]):
         raise merrors.PermissionDeniedException()
-    ms = request.group.invite(request.DATA['email'])
+    ms = request.group.invite(request.DATA.email)
     return ms.on_rest_get(request)
 
 
@@ -36,5 +36,5 @@ def on_group_me_member(request, pk=None):
     request.group.touch()
     member = request.group.get_member_for_user(request.user)
     if member is None:
-        return Group.rest_error_response(request, 423, error="GET permission denied: Member")
+        return {"status": True, "data": {"id": -1, "permissions": [] }}
     return member.on_rest_get(request)
