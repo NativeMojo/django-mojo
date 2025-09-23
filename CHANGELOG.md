@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.34 - September 22, 2025
+
+* Fixed advanced filtering
+
+
 ## v0.1.33 - September 22, 2025
 
 * Ticket bug fix

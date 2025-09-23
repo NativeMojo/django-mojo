@@ -527,11 +527,19 @@ class MojoModel:
             field_name = key_parts[0]
             if field_name in reserved_keys:
                 continue
-            if hasattr(cls, field_name):
-                filters[key] = cls.normalize_rest_value(request, field_name, value)
-            elif field_name in cls.__rest_field_names__ and cls._meta.get_field(field_name).is_relation:
+            if field_name in cls.__rest_field_names__ and cls._meta.get_field(field_name).is_relation:
                 # TODO Normalize relation field values
+                if key.endswith("__in"):
+                    value = value.split(",")
+                elif key.endswith("__not_in"):
+                    value = value.split(",")
+                elif key.endswith("__isnull"):
+                    value = value.lower() == "true"
+                elif value == "null":
+                    value = None
                 filters[key] = value
+            elif hasattr(cls, field_name):
+                filters[key] = cls.normalize_rest_value(request, field_name, value)
         logger.info("filters", filters)
         queryset = cls.on_rest_list_search(request, queryset)
         return queryset.filter(**filters)
