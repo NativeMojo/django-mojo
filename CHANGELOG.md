@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.35 - September 23, 2025
+
+* FIX cron scheduling
+
+
 ## v0.1.34 - September 22, 2025
 
 * Fixed advanced filtering
