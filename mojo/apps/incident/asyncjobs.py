@@ -12,3 +12,7 @@ def prune_events(job):
         created__lt=timezone.now() - timedelta(days=INCIDENT_EVENT_PRUNE_DAYS),
         level__lt=6)
     qset.delete()
+
+
+def example(job):
+    job.add_log("This is an example job")

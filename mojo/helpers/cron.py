@@ -66,8 +66,13 @@ def matches(cron_value: str, actual_value: int) -> bool:
     Check if a specific time value matches the corresponding cron pattern.
 
     Args:
-        cron_value (str): The cron pattern to match, which can be '*'
-        or a list of comma-separated values.
+        cron_value (str): The cron pattern to match. Supports:
+            - '*' for wildcard (matches all values)
+            - '5' for specific value
+            - '1,3,5' for comma-separated values
+            - '1-5' for ranges (inclusive)
+            - '*/5' for steps (every 5th value)
+            - '10-50/5' for ranges with steps
         actual_value (int): The actual time value to compare.
 
     Returns:
@@ -76,9 +81,55 @@ def matches(cron_value: str, actual_value: int) -> bool:
     """
     if cron_value == '*':
         return True
-    cron_values = cron_value.split(',')
 
-    return str(actual_value) in cron_values
+    # Split by comma to handle multiple patterns
+    for pattern in cron_value.split(','):
+        pattern = pattern.strip()
+
+        # Handle step values (e.g., */5, 10-50/5)
+        if '/' in pattern:
+            range_part, step = pattern.split('/', 1)
+            try:
+                step_value = int(step)
+            except ValueError:
+                continue
+
+            # Handle */step (wildcard with step)
+            if range_part == '*':
+                if actual_value % step_value == 0:
+                    return True
+            # Handle range/step (e.g., 10-50/5)
+            elif '-' in range_part:
+                start, end = range_part.split('-', 1)
+                try:
+                    start_val = int(start)
+                    end_val = int(end)
+                    if start_val <= actual_value <= end_val and \
+                       (actual_value - start_val) % step_value == 0:
+                        return True
+                except ValueError:
+                    continue
+
+        # Handle ranges (e.g., 1-5)
+        elif '-' in pattern:
+            start, end = pattern.split('-', 1)
+            try:
+                start_val = int(start)
+                end_val = int(end)
+                if start_val <= actual_value <= end_val:
+                    return True
+            except ValueError:
+                continue
+
+        # Handle single values
+        else:
+            try:
+                if int(pattern) == actual_value:
+                    return True
+            except ValueError:
+                continue
+
+    return False
 
 def load_app_cron() -> None:
     """

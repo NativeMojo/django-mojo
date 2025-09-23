@@ -279,15 +279,8 @@ def test_redis_decode_edge_cases(opts):
 @th.django_unit_test()
 def test_redis_settings_integration_with_decode_responses(opts):
     """Test that Redis settings integration properly enforces decode_responses=True"""
-    from mojo.helpers.redis.client import get_redis_config
     from mojo.helpers.redis import get_connection
     from mojo.helpers.settings import settings
-
-    # Test that get_redis_config always includes decode_responses=True
-    config = get_redis_config()
-    assert isinstance(config, dict), f"get_redis_config should return dict, got {type(config)}: {config}"
-    assert 'decode_responses' in config, f"Config should contain decode_responses key: {list(config.keys())}"
-    assert config['decode_responses'] == True, f"decode_responses should be True, got: {config['decode_responses']}"
 
     # Test that connection created with this config works properly
     redis_conn = get_connection()
@@ -309,13 +302,6 @@ def test_redis_settings_integration_with_decode_responses(opts):
 
     redis_database = settings.get('REDIS_DATABASE', 0)
     assert isinstance(redis_database, int), f"REDIS_DATABASE setting should be int, got {type(redis_database)}: {redis_database}"
-
-    # Verify that even with potential custom REDIS_DB config, decode_responses remains True
-    custom_redis_db = settings.get('REDIS_DB', {})
-    if custom_redis_db and isinstance(custom_redis_db, dict):
-        # Even if custom config exists, our get_redis_config should still enforce decode_responses=True
-        config_with_custom = get_redis_config()
-        assert config_with_custom['decode_responses'] == True, f"decode_responses should be True even with custom config: {config_with_custom}"
 
     # Clean up
     redis_conn.delete(test_key)

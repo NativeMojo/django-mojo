@@ -128,7 +128,6 @@ def on_metrics_record(request):
     }
 })
 @md.custom_security("protected by metrics permissions")
-@md.requires_params("slugs")
 def on_metrics_data(request):
     """
     TODO add support for group based permissions where account == "group_<id>"
@@ -155,7 +154,14 @@ def on_metrics_data(request):
             raise mojo.errors.PermissionDeniedException(f"Permission denied for account {account}")
         if perms and not request.user.has_permission(perms):
             raise mojo.errors.PermissionDeniedException(f"Permission denied for account {account}")
-    slugs = request.DATA.get_typed("slugs", typed=list)
+
+    category = request.DATA.get("category", None)
+    if "slugs" in request.DATA:
+        slugs = request.DATA.get_typed("slugs", typed=list)
+    elif category:
+        slugs = list(metrics.get_category_slugs(category, account=account))
+    else:
+        raise mojo.errors.ValueException("missing required parameter")
     if len(slugs) == 1:
         slugs = slugs[0]
     records = metrics.fetch(slugs, dt_start=dt_start, dt_end=dt_end,
