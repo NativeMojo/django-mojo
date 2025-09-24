@@ -345,6 +345,22 @@ class JobEngine:
         )
         self.control_thread.start()
 
+    def _remove_from_processing(self, channel: str, job_id: str, max_retries: int = 3):
+        """Remove job from processing ZSET with retries to ensure cleanup."""
+        for attempt in range(max_retries):
+            try:
+                result = self.redis.zrem(self.keys.processing(channel), job_id)
+                if result or attempt == max_retries - 1:
+                    return result
+                time.sleep(0.1 * (attempt + 1))  # Exponential backoff
+            except Exception as e:
+                if attempt == max_retries - 1:
+                    logger.error(f"Failed to remove job {job_id} from processing after {max_retries} attempts: {e}")
+                else:
+                    logger.debug(f"Retry {attempt + 1} removing job {job_id} from processing: {e}")
+                time.sleep(0.1 * (attempt + 1))
+        return False
+
     def _control_loop(self):
         """Control channel listener loop."""
         control_key = self.keys.runner_ctl(self.runner_id)
@@ -516,10 +532,7 @@ class JobEngine:
             # Check if already processed or canceled
             if job.status in ('completed', 'canceled'):
                 # Already finished; remove from processing if present
-                try:
-                    self.redis.zrem(self.keys.processing(channel), job_id)
-                except Exception:
-                    pass
+                self._remove_from_processing(channel, job_id)
                 return
 
             # Check expiration
@@ -542,10 +555,7 @@ class JobEngine:
                     pass
 
                 # Remove from processing after DB update
-                try:
-                    self.redis.zrem(self.keys.processing(channel), job_id)
-                except Exception:
-                    pass
+                self._remove_from_processing(channel, job_id)
                 metrics.record("jobs.expired")
                 return
 
@@ -593,11 +603,8 @@ class JobEngine:
             except Exception:
                 pass
 
-            # Remove from processing after DB update
-            try:
-                self.redis.zrem(self.keys.processing(channel), job_id)
-            except Exception:
-                pass
+            # Remove from processing after DB update with retries to prevent reaper issues
+            self._remove_from_processing(channel, job_id)
 
             # Metrics
             metrics.record("jobs.completed", count=1)
@@ -680,11 +687,8 @@ class JobEngine:
                 metrics.record("jobs.failed")
                 metrics.record(f"jobs.channel.{job.channel}.failed")
 
-            # Always remove from processing to prevent leaks
-            try:
-                self.redis.zrem(self.keys.processing(channel), job_id)
-            except Exception:
-                pass
+            # Always remove from processing to prevent leaks - critical for reaper
+            self._remove_from_processing(channel, job_id)
 
         except Exception as e:
             logger.exception(f"Failed to handle job failure: {e}")
@@ -724,10 +728,16 @@ class JobEngine:
                             try:
                                 job = Job.objects.get(id=jid)
 
+                                # Check if job already completed or canceled - just clean up Redis
+                                if job.status in ('completed', 'canceled'):
+                                    logger.debug(f"Reaper: Job {jid} already {job.status}, removing from processing")
+                                    self._remove_from_processing(ch, jid)
+                                    continue
+
                                 # Check if job is expired
                                 if job.is_expired:
                                     logger.info(f"Reaper: Job {jid} expired, marking as expired instead of requeuing")
-                                    self.redis.zrem(self.keys.processing(ch), jid)
+                                    self._remove_from_processing(ch, jid)
                                     job.status = 'expired'
                                     job.finished_at = dates.utcnow()
                                     job.save(update_fields=['status', 'finished_at'])
@@ -741,7 +751,7 @@ class JobEngine:
                                 # Check retry limits (prevent infinite requeuing)
                                 if job.attempt >= job.max_retries:
                                     logger.info(f"Reaper: Job {jid} exceeded max retries ({job.attempt}/{job.max_retries}), marking as failed")
-                                    self.redis.zrem(self.keys.processing(ch), jid)
+                                    self._remove_from_processing(ch, jid)
                                     job.status = 'failed'
                                     job.finished_at = dates.utcnow()
                                     job.last_error = f"Exceeded max retries after reaper timeout (attempt {job.attempt})"
@@ -754,7 +764,7 @@ class JobEngine:
                                     continue
 
                                 # Job can be retried - requeue it
-                                self.redis.zrem(self.keys.processing(ch), jid)
+                                self._remove_from_processing(ch, jid)
                                 self.redis.rpush(self.keys.queue(ch), jid)
 
                                 # Increment attempt count to track reaper retries
@@ -771,15 +781,12 @@ class JobEngine:
                             except Job.DoesNotExist:
                                 # Job deleted from DB but still in Redis - clean it up
                                 logger.info(f"Reaper: Job {jid} not found in DB, removing from processing")
-                                self.redis.zrem(self.keys.processing(ch), jid)
+                                self._remove_from_processing(ch, jid)
 
                         except Exception as e:
                             logger.warning(f"Reaper failed to handle job {jid} on {ch}: {e}")
                             # Remove from processing to prevent infinite retries on broken jobs
-                            try:
-                                self.redis.zrem(self.keys.processing(ch), jid)
-                            except Exception:
-                                pass
+                            self._remove_from_processing(ch, jid)
             except Exception as e:
                 logger.warning(f"Reaper loop error: {e}")
             # Sleep a bit before next pass
