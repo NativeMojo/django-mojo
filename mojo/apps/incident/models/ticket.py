@@ -27,10 +27,11 @@ class Ticket(models.Model, MojoModel):
     group = models.ForeignKey("account.Group", blank=True, null=True, default=None, related_name="+", on_delete=models.SET_NULL)
 
     title = models.CharField(max_length=255)
-    description = models.TextField(blank=True, null=True)
+    description = models.TextField(blank=True, null=True, default=None)
 
     status = models.CharField(max_length=50, default='open', db_index=True)
     priority = models.IntegerField(default=1, db_index=True)
+    category = models.CharField(max_length=80, default='ticket', db_index=True)
 
     assignee = models.ForeignKey("account.User", blank=True, null=True, default=None, related_name="assigned_tickets", on_delete=models.SET_NULL)
     incident = models.ForeignKey("incident.Incident", blank=True, null=True, default=None, related_name="tickets", on_delete=models.SET_NULL)
