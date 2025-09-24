@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.37 - September 23, 2025
+
+* FIX job reaper falsely kill done jobs
+
+
 ## v0.1.36 - September 23, 2025
 
 * fixing filtering on no related models
