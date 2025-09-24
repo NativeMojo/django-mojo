@@ -3,7 +3,7 @@ import time
 from objict import objict
 from mojo.helpers.settings import settings
 from mojo.helpers import dates, logit
-
+from mojo.models import rest
 
 logger = logit.get_logger("debug", "debug.log")
 
@@ -33,4 +33,7 @@ class MojoMiddleware:
         else:
             request._raw_body = None
         request.DATA = rhelper.parse_request_data(request)
-        return self.get_response(request)
+        rest.ACTIVE_REQUEST = request
+        resp = self.get_response(request)
+        rest.ACTIVE_REQUEST = None
+        return resp

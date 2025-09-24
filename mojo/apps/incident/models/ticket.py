@@ -4,7 +4,7 @@ from mojo.models import MojoModel
 
 class Ticket(models.Model, MojoModel):
     class Meta:
-        ordering = ['-created']
+        ordering = ['-modified']
 
     class RestMeta:
         VIEW_PERMS = ['view_incidents']

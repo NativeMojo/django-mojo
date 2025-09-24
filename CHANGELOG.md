@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.39 - September 24, 2025
+
+* CRITICAL FIX: potential credential leakage
+
+
 ## v0.1.38 - September 24, 2025
 
 * Added ticket category

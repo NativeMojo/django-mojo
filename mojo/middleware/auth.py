@@ -2,9 +2,9 @@ from django.utils.deprecation import MiddlewareMixin
 # from django.http import JsonResponse
 from mojo.helpers.response import JsonResponse
 from mojo.apps.account.models.user import User
+
 from mojo.helpers.settings import settings
 from mojo.helpers import modules
-from marshal import load
 from objict import objict
 
 

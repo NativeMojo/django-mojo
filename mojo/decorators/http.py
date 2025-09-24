@@ -31,7 +31,6 @@ def dispatcher(request, *args, **kwargs):
     """
     Dispatches incoming requests to the appropriate registered URL method.
     """
-    rest.ACTIVE_REQUEST = request
     key = kwargs.pop('__mojo_rest_root_key__', None)
     if "group" in request.DATA:
         try:

@@ -1,5 +1,6 @@
 # from django.http import JsonResponse
 from mojo.helpers.response import JsonResponse
+from mojo.middleware.mojo import ANONYMOUS_USER
 from mojo.serializers import get_serializer_manager
 from mojo.helpers.settings import settings
 from mojo import errors as me
@@ -26,6 +27,7 @@ SYSTEM_REQUEST.user.email = ""
 SYSTEM_REQUEST.user.is_authenticated = True
 SYSTEM_REQUEST.user.has_permission = lambda perm: True
 SYSTEM_REQUEST.DATA = objict.objict()
+
 
 class MojoModel:
     """Base model class for REST operations with GraphSerializer integration."""
