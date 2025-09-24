@@ -539,6 +539,14 @@ class MojoModel:
                     value = None
                 filters[key] = value
             elif hasattr(cls, field_name):
+                if key.endswith("__in"):
+                    value = value.split(",")
+                elif key.endswith("__not_in"):
+                    value = value.split(",")
+                elif key.endswith("__isnull"):
+                    value = value.lower() == "true"
+                elif value == "null":
+                    value = None
                 filters[key] = cls.normalize_rest_value(request, field_name, value)
         logger.info("filters", filters)
         queryset = cls.on_rest_list_search(request, queryset)

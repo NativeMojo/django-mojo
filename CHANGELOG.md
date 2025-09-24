@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.36 - September 23, 2025
+
+* fixing filtering on no related models
+
+
 ## v0.1.35 - September 23, 2025
 
 * FIX cron scheduling
