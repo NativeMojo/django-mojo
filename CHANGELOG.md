@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.41 - September 24, 2025
+
+* REALTIME support
+
+
 ## v0.1.40 - September 24, 2025
 
 * ADDED Channels
