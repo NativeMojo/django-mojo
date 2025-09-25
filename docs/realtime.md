@@ -37,17 +37,12 @@ Key concepts:
 
 ## Files and Modules
 
-- Consumer (WebSocket protocol and logic)
-  - `mojo/apps/realtime/consumers.py` (class `AuthenticatedConsumer`)
-- Routing (URL patterns for WebSocket)
-  - `mojo/apps/realtime/routing.py` (exports `websocket_urlpatterns`)
+- Connection (the websocket connection cleanly wrapped up)
+  - `mojo/apps/realtime/connection.py` (class `Connection`)
 - Shared Auth Utilities (reuse HTTP middleware mappings)
   - `mojo/apps/realtime/auth.py`
 - Publish Helpers (server-side notifications)
   - `mojo/apps/realtime/utils.py`
-- Tests and Test Client
-  - `tests/test_realtime/basic.py`
-  - `testit/ws_client.py`
 
 ---
 
@@ -214,19 +209,6 @@ The consumer translates these to client-facing `{"type":"notification", ...}` me
 1) Install/enable WebSocket support in your ASGI server
 - You need a supported WS implementation (e.g., install an ASGI server bundle that includes websocket support).
 
-2) Configure Channels layer (Redis recommended)
-```python
-# settings.py
-ASGI_APPLICATION = "your_project.asgi.application"
-
-CHANNEL_LAYERS = {
-    "default": {
-        "BACKEND": "channels.layers.InMemoryChannelLayer",  # or Redis
-        # For production, use Redis:
-        # "BACKEND": "channels_redis.core.RedisChannelLayer",
-        # "CONFIG": {"hosts": [("127.0.0.1", 6379)]},
-    },
-}
 ```
 
 3) Root ASGI app wiring
@@ -236,30 +218,15 @@ Create a minimal `asgi.py` to serve both HTTP and WebSocket:
 # your_project/asgi.py
 import os
 from django.core.asgi import get_asgi_application
-from channels.routing import ProtocolTypeRouter, URLRouter
 from channels.auth import AuthMiddlewareStack
-from mojo.apps.realtime.routing import websocket_urlpatterns
+from mojo.apps.realtime.asgi import get_ws_asgi_application
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "your_project.settings")
 
-django_asgi = get_asgi_application()
-
 application = ProtocolTypeRouter({
-    "http": django_asgi,
-    "websocket": URLRouter(websocket_urlpatterns)
+    "http": get_asgi_application(),
+    "websocket": get_ws_asgi_application()
 })
-```
-
-4) Realtime URL routing
-`mojo/apps/realtime/routing.py` already exports:
-
-```python
-from django.urls import path
-from .consumers import AuthenticatedConsumer
-
-websocket_urlpatterns = [
-    path("ws/realtime/", AuthenticatedConsumer.as_asgi()),
-]
 ```
 
 ---

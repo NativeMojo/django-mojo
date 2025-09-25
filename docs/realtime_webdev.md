@@ -29,15 +29,16 @@ Message-based authentication (split fields)
   - { "type": "authenticate", "token": "<token>", "prefix": "bearer" }
   - prefix is optional; defaults to "bearer"
 - On success, server returns:
-  - { "type": "auth_success", "instance_kind": "user", "instance_id": 123, "available_topics": [...] }
+  - { "type": "auth_success", "user_type": "user", "user_id": 123 }
 
 Built-in actions
 - Subscribe: { "action": "subscribe", "topic": "<external-topic>" }
 - Unsubscribe: { "action": "unsubscribe", "topic": "<external-topic>" }
 - Ping: { "action": "ping" } (application-level heartbeat)
 
-Notifications (server → client)
-- { "type": "notification", "topic": "<external-topic>", "title": "...", "message": "...", "timestamp": ... }
+Messages (server → client)
+- { "type": "message", "data": { "title": "...", "body": "..." }, "topic": "<external-topic>", "timestamp": ... }
+- { "type": "message", "data": { "title": "...", "body": "..." }, "timestamp": ... } (direct message)
 
 Custom messages
 - { "message_type": "<your_type>", ... }
@@ -88,16 +89,20 @@ Topics
           case "auth_success":
             console.log("[ws] auth_success", msg);
             // Example: subscribe to user topic
-            if (msg.instance_id && msg.instance_kind) {
-              const topic = `${msg.instance_kind}:${msg.instance_id}`;
-              ws.send(JSON.stringify({ action: "subscribe", topic }));
+            if (msg.user_id && msg.user_type) {
+              const topic = `${msg.user_type}:${msg.user_id}`;
+              ws.send(JSON.stringify({ type: "subscribe", topic }));
             }
             break;
           case "subscribed":
             console.log("[ws] subscribed:", msg.topic);
             break;
-          case "notification":
-            console.log("[ws] notification:", msg);
+          case "message":
+            console.log("[ws] message:", msg);
+            // Handle direct messages or topic messages
+            if (msg.topic) {
+              console.log("[ws] topic message from:", msg.topic);
+            }
             break;
           case "pong":
             console.log("[ws] pong", msg);
@@ -177,15 +182,15 @@ class RealtimeClient {
   }
 
   subscribe(topic) {
-    this.send({ action: "subscribe", topic });
+    this.send({ type: "subscribe", topic });
   }
 
   unsubscribe(topic) {
-    this.send({ action: "unsubscribe", topic });
+    this.send({ type: "unsubscribe", topic });
   }
 
   ping() {
-    this.send({ action: "ping" });
+    this.send({ type: "ping" });
   }
 
   _open() {
@@ -231,9 +236,9 @@ class RealtimeClient {
   _onMessage(msg) {
     if (msg.type === "auth_success") {
       // Auto-subscribe to own topic
-      const { instance_kind, instance_id } = msg;
-      if (instance_kind && instance_id != null) {
-        this.subscribe(`${instance_kind}:${instance_id}`);
+      const { user_type, user_id } = msg;
+      if (user_type && user_id != null) {
+        this.subscribe(`${user_type}:${user_id}`);
       }
     } else if (msg.type === "auth_timeout") {
       this.onError(new Error("Authentication timeout"));
@@ -397,11 +402,11 @@ function useRealtime({ onNotification }) {
       const msg = safeParse(ev.data);
       if (!msg) return;
       if (msg.type === "auth_success") {
-        const { instance_kind, instance_id } = msg;
-        if (instance_kind && instance_id != null) {
-          ws.send(JSON.stringify({ action: "subscribe", topic: `${instance_kind}:${instance_id}` }));
+        const { user_type, user_id } = msg;
+        if (user_type && user_id != null) {
+          ws.send(JSON.stringify({ type: "subscribe", topic: `${user_type}:${user_id}` }));
         }
-      } else if (msg.type === "notification") {
+      } else if (msg.type === "message") {
         onNotification?.(msg);
       }
     });
@@ -453,20 +458,20 @@ function useRealtime({ onNotification }) {
 
 ```ts
 type WsServerMessage =
-  | { type: "auth_required"; timeout_seconds: number }
-  | { type: "auth_success"; instance_kind: string; instance_id: number | string; available_topics?: string[] }
-  | { type: "subscribed"; topic: string; group: string }
-  | { type: "unsubscribed"; topic: string; group: string }
-  | { type: "notification"; topic: string; title?: string; message?: string; timestamp?: number; priority?: string }
-  | { type: "pong"; instance_kind?: string; instance?: string }
+  | { type: "auth_required"; timeout: number }
+  | { type: "auth_success"; user_type: string; user_id: number | string }
+  | { type: "subscribed"; topic: string }
+  | { type: "unsubscribed"; topic: string }
+  | { type: "message"; data: any; topic?: string; timestamp?: number }
+  | { type: "pong"; user_type?: string; user_id?: number | string }
   | { type: "error"; message: string }
   | { type: string; [k: string]: any }; // custom cases
 
 type WsClientMessage =
   | { type: "authenticate"; token: string; prefix?: string }
-  | { action: "subscribe"; topic: string }
-  | { action: "unsubscribe"; topic: string }
-  | { action: "ping" }
+  | { type: "subscribe"; topic: string }
+  | { type: "unsubscribe"; topic: string }
+  | { type: "ping" }
   | { message_type: string; [k: string]: any };
 ```
 
@@ -511,20 +516,21 @@ ws.addEventListener("open", () => {
 Subscribe to your own topic after auth_success:
 ```js
 if (msg.type === "auth_success") {
-  ws.send(JSON.stringify({ action: "subscribe", topic: `${msg.instance_kind}:${msg.instance_id}` }));
+  ws.send(JSON.stringify({ type: "subscribe", topic: `${msg.user_type}:${msg.user_id}` }));
 }
 ```
 
-Handle notifications:
+Handle messages:
 ```js
-if (msg.type === "notification") {
-  // show toast/banner
+if (msg.type === "message") {
+  // show toast/banner with msg.data
+  console.log("Received:", msg.data);
 }
 ```
 
 Send heartbeat:
 ```js
-setInterval(() => ws.send(JSON.stringify({ action: "ping" })), 30000);
+setInterval(() => ws.send(JSON.stringify({ type: "ping" })), 30000);
 ```
 
 Reconnect on close with backoff:
