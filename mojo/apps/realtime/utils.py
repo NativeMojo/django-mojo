@@ -42,22 +42,25 @@ def normalize_topic(topic: Optional[str]) -> str:
     return re.sub(r"[^a-zA-Z0-9_.-]+", "_", topic)[:MAX_GROUP_LEN] or DEFAULT_TOPIC
 
 
-def publish_to_topic(topic: str, payload: Optional[Dict[str, Any]] = None) -> None:
+def publish_to_topic(topic: str, payload: Optional[Dict[str, Any]] = None, dispatch_type: str = "notification_message") -> None:
     """
     Publish a realtime message to all WebSocket clients subscribed to the given topic.
 
     The topic is the external name (e.g., 'user:123', 'customer:77'). This function
-    normalizes the topic to a Channels-safe group name and sends a 'notification_message'
-    event so it is routed to the consumer's 'notification_message' handler.
+    normalizes the topic to a Channels-safe group name and sends a Channels dispatch
+    event with the given `dispatch_type`. By default it uses 'notification_message'
+    so it is routed to the consumer's 'notification_message' handler.
 
     Args:
         topic: External topic name.
         payload: Dict payload to send to clients (e.g., title/message/priority/etc.).
+        dispatch_type: Channels event dispatch type to invoke on the consumer.
+                       Defaults to 'notification_message'.
 
     Notes:
         - Event shape sent to the consumer:
             {
-                "type": "notification_message",  # required by Channels
+                "type": "<dispatch_type>",        # Channels dispatch key
                 "topic": "<external-topic>",
                 "timestamp": <epoch-seconds>,
                 ...payload
@@ -67,8 +70,10 @@ def publish_to_topic(topic: str, payload: Optional[Dict[str, Any]] = None) -> No
     channel_layer = get_channel_layer()
     group = normalize_topic(topic)
     data = payload.copy() if isinstance(payload, dict) else {}
+    if "dispatch_type" in data:
+        dispatch_type = data["dispatch_type"]
     event = {
-        "type": "notification_message",
+        "type": dispatch_type,
         "topic": topic,
         "timestamp": time.time(),
         **data,
@@ -80,6 +85,7 @@ def publish_to_instance(
     kind: str,
     instance_id: Union[int, str],
     payload: Optional[Dict[str, Any]] = None,
+    dispatch_type: str = "notification_message"
 ) -> None:
     """
     Publish a realtime message to a specific instance by kind and id.
@@ -93,7 +99,7 @@ def publish_to_instance(
         payload: Dict payload to send.
     """
     topic = f"{kind}:{instance_id}"
-    publish_to_topic(topic, payload)
+    publish_to_topic(topic, payload, dispatch_type=dispatch_type)
 
 
 def publish_broadcast(payload: Optional[Dict[str, Any]] = None) -> None:

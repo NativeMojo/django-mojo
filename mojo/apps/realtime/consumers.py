@@ -362,8 +362,7 @@ class AuthenticatedConsumer(AsyncWebsocketConsumer):
         await self.send(text_data=json.dumps({
             'type': 'pong',
             'timestamp': time.time(),
-            'instance_kind': self.instance_kind,
-            'instance': (getattr(self.instance, "username", None) or getattr(self.instance, "name", None)) if self.instance else None
+            'instance_kind': self.instance_kind
         }))
 
     async def get_available_topics(self, instance):
@@ -383,12 +382,33 @@ class AuthenticatedConsumer(AsyncWebsocketConsumer):
     async def notification_message(self, event):
         """Handle notification events for authenticated users."""
         if self.authenticated:
-            await self.send(text_data=json.dumps({
-                'type': 'notification',
-                'topic': event.get('topic'),
-                'title': event.get('title'),
-                'message': event.get('message'),
-                'timestamp': event.get('timestamp'),
-                'priority': event.get('priority', 'normal')
-            }))
-        # If not authenticated, silently ignore (connection will be closed soon anyway)
+            return
+        # Build notification message with only existing fields
+        notification = {'type': 'notification'}
+        if 'topic' in event:
+            notification['topic'] = event['topic']
+        if 'title' in event:
+            notification['title'] = event['title']
+        if 'message' in event:
+            notification['message'] = event['message']
+        if 'data' in event:
+            notification['data'] = event['data']
+        if 'timestamp' in event:
+            notification['timestamp'] = event['timestamp']
+        if 'priority' in event:
+            notification['priority'] = event['priority']
+        elif 'priority' not in event:
+            notification['priority'] = 'normal'
+        await self.send(text_data=json.dumps(notification))
+
+    async def action(self, event):
+        if not self.authenticated:
+            return
+        # event is a dict you sent from server; relay or handle as needed
+        await self.send(text_data=json.dumps({
+            "type": "action",
+            "topic": event.get("topic"),
+            "action": event.get("action"),
+            "data": event.get("data"),
+            "timestamp": event.get("timestamp"),
+        }))
