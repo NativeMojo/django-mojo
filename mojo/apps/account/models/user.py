@@ -273,18 +273,15 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
             raise merrors.ValueException("Username containing @ must match the email address")
         return True
 
-    def set_new_password(self, new_password):
+    def set_new_password(self, new_password, old_password = None):
         if self.active_request:
-            old_password = self.active_request.DATA.get("current_password", "x")
-            if not self.check_password(old_password):
-                self.report_incident(f"{self.username} entered an invalid password", "invalid_password")
-                raise merrors.ValueException("Incorrect current password")
-        # Validate password strength
-        if len(new_password) < 8:
-            raise merrors.ValueException("Password must be at least 8 characters long")
-
+            old_password = self.active_request.DATA.get("current_password", None)
+            if not old_password and not self.active_request.user.has_permission("manage_users"):
+                raise merrors.ValueException("You must provide your current password")
+        if old_password and not self.check_password(old_password):
+            self.report_incident(f"{self.username} entered an invalid password", "invalid_password")
+            raise merrors.ValueException("Incorrect current password")
         strength_score = 0
-
         # Length contributes to strength (longer is better)
         if len(new_password) >= 12:
             strength_score += 2

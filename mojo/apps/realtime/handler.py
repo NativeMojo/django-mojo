@@ -299,7 +299,23 @@ class WebSocketHandler:
             await self.send_error("Missing topic")
             return
 
-        # TODO: Add topic authorization check
+        # Topic authorization check
+        if hasattr(self.user, 'can_subscribe_to_realtime_topic'):
+            def check_permission():
+                return self.user.can_subscribe_to_realtime_topic(topic)
+
+            try:
+                can_subscribe = await asyncio.get_event_loop().run_in_executor(
+                    None, check_permission
+                )
+                if not can_subscribe:
+                    await self.send_error(f"Access denied to topic: {topic}")
+                    return
+            except Exception as e:
+                logger.exception(f"Error checking topic permission for {topic}: {e}")
+                await self.send_error("Authorization check failed")
+                return
+
         await self.subscribe_to_topic(topic)
 
         await self.send_message({
