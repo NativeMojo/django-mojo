@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.42 - September 24, 2025
+
+* debugging channels
+
+
 ## v0.1.41 - September 24, 2025
 
 * REALTIME support

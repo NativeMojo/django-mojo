@@ -143,7 +143,7 @@ def on_metrics_data(request):
         if not request.user.is_authenticated:
             raise mojo.errors.PermissionDeniedException()
         if not request.user.has_permission("view_metrics"):
-            from mojo.apps.groups.models import Group
+            from mojo.apps.account.models import Group
             group_id = account.split("-")[1]
             group = Group.objects.get(id=group_id)
             if not group.user_has_permission(request.user, "view_metrics", False):

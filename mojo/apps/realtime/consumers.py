@@ -155,6 +155,7 @@ class AuthenticatedConsumer(AsyncWebsocketConsumer):
             data = json.loads(text_data)
             message_type = data.get('type')
         except json.JSONDecodeError:
+            logger.error("Invalid JSON format")
             await self.send_error('Invalid JSON format')
             return
 
@@ -162,6 +163,7 @@ class AuthenticatedConsumer(AsyncWebsocketConsumer):
             if message_type == 'authenticate':
                 await self.handle_authentication(data)
             else:
+                logger.error("Authentication required - only 'authenticate' messages accepted")
                 await self.send_error('Authentication required - only "authenticate" messages accepted')
             return
 
@@ -184,18 +186,20 @@ class AuthenticatedConsumer(AsyncWebsocketConsumer):
 
                 # Small delay to ensure message is sent
                 await asyncio.sleep(0.1)
-
+                logger.info("Closing connection, instance not authorized")
                 # Force close with custom code for timeout
                 await self.close(code=4008)  # Policy Violation (RFC 6455)
 
         except asyncio.CancelledError:
             # Task was cancelled because user authenticated in time
-            logger.info("Authentication timeout cancelled - user authenticated successfully")
+            # logger.info("Authentication timeout cancelled - user authenticated successfully")
+            pass
 
     async def handle_authentication(self, data):
         """Handle authentication message via split fields with default prefix 'bearer'."""
         # Check if we're past the deadline
         if self.auth_deadline is not None and time.time() > self.auth_deadline:
+            logger.error("Authentication timeout exceeded")
             await self.send_error('Authentication timeout exceeded', close_after=True)
             return
 
@@ -204,16 +208,20 @@ class AuthenticatedConsumer(AsyncWebsocketConsumer):
         prefix = (data.get('prefix') or 'bearer').lower()
 
         if not token:
+            logger.error("Token required for authentication")
             await self.send_error('Token required for authentication')
             return
 
         # Validate using shared bearer flow (consistent with HTTP middleware)
+        logger.info(f"Validating token with prefix '{prefix}'")
         instance, err, key_name = await async_validate_bearer_token(prefix, token, request=None)
         if not instance or err:
+            logger.error(f"Authentication failed: {err}")
             await self.send_error(err or 'Authentication failed', close_after=True)
             return
 
         # Authentication successful
+        logger.info("Authentication successful")
         self.authenticated = True
         self.instance = instance
         self.instance_kind = key_name or prefix
@@ -355,6 +363,7 @@ class AuthenticatedConsumer(AsyncWebsocketConsumer):
         if close_after:
             # Small delay to ensure error message is sent
             await asyncio.sleep(0.1)
+            logger.info(f"Closing connection, user not authorized")
             await self.close(code=4001)  # Unauthorized
 
     async def handle_ping(self):

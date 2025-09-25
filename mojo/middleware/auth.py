@@ -8,7 +8,9 @@ from mojo.helpers import modules
 from objict import objict
 
 
-AUTH_BEARER_HANDLERS_MAP = settings.get("AUTH_BEARER_HANDLERS", {})
+AUTH_BEARER_HANDLERS_MAP = settings.get("AUTH_BEARER_HANDLERS", {
+    "bearer": "user"
+})
 AUTH_BEARER_HANDLERS = {
     "bearer": User.validate_jwt
 }
