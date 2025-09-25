@@ -246,9 +246,7 @@ django_asgi = get_asgi_application()
 
 application = ProtocolTypeRouter({
     "http": django_asgi,
-    "websocket": AuthMiddlewareStack(
-        URLRouter(websocket_urlpatterns)   # exposes ws/realtime/
-    ),
+    "websocket": URLRouter(websocket_urlpatterns)
 })
 ```
 
