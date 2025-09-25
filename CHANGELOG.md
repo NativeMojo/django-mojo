@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.44 - September 24, 2025
+
+* more robust error handling on channels
+
+
 ## v0.1.43 - September 24, 2025
 
 * debug

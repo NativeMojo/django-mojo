@@ -122,7 +122,7 @@ class AuthenticatedConsumer(AsyncWebsocketConsumer):
             'timeout_seconds': 30
         }))
 
-        logger.info("WebSocket connection established - authentication required within 30 seconds")
+
 
     async def disconnect(self, close_code):
         # Cancel authentication timeout task
@@ -144,11 +144,8 @@ class AuthenticatedConsumer(AsyncWebsocketConsumer):
             except Exception:
                 logger.exception("Error in instance.on_realtime_disconnected()")
 
-        if self.instance:
-            ident = getattr(self.instance, "username", None) or getattr(self.instance, "name", None) or str(self.instance)
-            logger.info(f'Authenticated {self.instance_kind or "instance"} {ident} disconnected (code: {close_code})')
-        else:
-            logger.info(f'Unauthenticated connection disconnected (code: {close_code})')
+        # Minimal disconnect logging retained only in error handlers elsewhere
+        pass
 
     async def receive(self, text_data):
         try:
@@ -186,7 +183,6 @@ class AuthenticatedConsumer(AsyncWebsocketConsumer):
 
                 # Small delay to ensure message is sent
                 await asyncio.sleep(0.1)
-                logger.info("Closing connection, instance not authorized")
                 # Force close with custom code for timeout
                 await self.close(code=4008)  # Policy Violation (RFC 6455)
 
@@ -213,7 +209,6 @@ class AuthenticatedConsumer(AsyncWebsocketConsumer):
             return
 
         # Validate using shared bearer flow (consistent with HTTP middleware)
-        logger.info(f"Validating token with prefix '{prefix}'")
         instance, err, key_name = await async_validate_bearer_token(prefix, token, request=None)
         if not instance or err:
             logger.error(f"Authentication failed: {err}")
@@ -221,12 +216,10 @@ class AuthenticatedConsumer(AsyncWebsocketConsumer):
             return
 
         # Authentication successful
-        logger.info("Authentication successful")
         self.authenticated = True
         self.instance = instance
         self.instance_kind = key_name or prefix
         attach_identity_to_scope(self.scope, instance, prefix)
-        logger.info(f"{prefix}.on_realtime_connected()")
         # Instance-level connected hook
         try:
             await call_instance_hook(self.instance, "on_realtime_connected")
@@ -234,21 +227,30 @@ class AuthenticatedConsumer(AsyncWebsocketConsumer):
             logger.exception("Error in instance.on_realtime_connected()")
 
         # Cancel the timeout task
-        logger.info("auth_timeout_task.cancel()")
         if self.auth_timeout_task and not self.auth_timeout_task.done():
             self.auth_timeout_task.cancel()
 
         # Auto-subscribe to instance-specific topic (external: "<kind>:<id>")
-        logger.info("user_subscriptions.add()")
         uid = getattr(instance, "id", None)
         if uid is not None:
             topic = f'{self.instance_kind}:{uid}'
             group = normalize_topic(topic)
-            await self.channel_layer.group_add(group, self.channel_name)
+            try:
+                if not getattr(self, "channel_layer", None):
+                    raise RuntimeError("channel_layer unavailable")
+                await self.channel_layer.group_add(group, self.channel_name)
+            except Exception:
+                await self.send(text_data=json.dumps({
+                    'type': 'error',
+                    'code': 'server_misconfigured',
+                    'message': 'Server realtime channel layer unavailable'
+                }))
+                await asyncio.sleep(0.05)
+                await self.close(code=1011)
+                return
             self.user_subscriptions.add(group)
 
         # Send authentication success
-        logger.info("send auth back")
         await self.send(text_data=json.dumps({
             'type': 'auth_success',
             'message': f'Authenticated as {getattr(instance, "username", None) or getattr(instance, "name", None) or str(instance)}',
@@ -257,8 +259,6 @@ class AuthenticatedConsumer(AsyncWebsocketConsumer):
             'authenticated_at': time.time(),
             'available_topics': await self.get_available_topics(instance)
         }))
-
-        logger.info(f'Authenticated {self.instance_kind} connected')
 
     async def handle_authenticated_message(self, data):
         """Handle messages from authenticated connections."""
@@ -325,7 +325,19 @@ class AuthenticatedConsumer(AsyncWebsocketConsumer):
             return
 
         group = normalize_topic(topic)
-        await self.channel_layer.group_add(group, self.channel_name)
+        try:
+            if not getattr(self, "channel_layer", None):
+                raise RuntimeError("channel_layer unavailable")
+            await self.channel_layer.group_add(group, self.channel_name)
+        except Exception:
+            await self.send(text_data=json.dumps({
+                'type': 'error',
+                'code': 'server_misconfigured',
+                'message': 'Server realtime channel layer unavailable'
+            }))
+            await asyncio.sleep(0.05)
+            await self.close(code=1011)
+            return
         self.user_subscriptions.add(group)
 
         await self.send(text_data=json.dumps({
@@ -343,7 +355,18 @@ class AuthenticatedConsumer(AsyncWebsocketConsumer):
 
         group = normalize_topic(topic)
         if group in self.user_subscriptions:
-            await self.channel_layer.group_discard(group, self.channel_name)
+            try:
+                if getattr(self, "channel_layer", None):
+                    await self.channel_layer.group_discard(group, self.channel_name)
+            except Exception:
+                await self.send(text_data=json.dumps({
+                    'type': 'error',
+                    'code': 'server_misconfigured',
+                    'message': 'Server realtime channel layer unavailable'
+                }))
+                await asyncio.sleep(0.05)
+                await self.close(code=1011)
+                return
             self.user_subscriptions.discard(group)
 
             await self.send(text_data=json.dumps({
@@ -366,7 +389,6 @@ class AuthenticatedConsumer(AsyncWebsocketConsumer):
         if close_after:
             # Small delay to ensure error message is sent
             await asyncio.sleep(0.1)
-            logger.info(f"Closing connection, user not authorized")
             await self.close(code=4001)  # Unauthorized
 
     async def handle_ping(self):
@@ -393,7 +415,7 @@ class AuthenticatedConsumer(AsyncWebsocketConsumer):
     # Message handlers for notifications (only work when authenticated)
     async def notification_message(self, event):
         """Handle notification events for authenticated users."""
-        if self.authenticated:
+        if not self.authenticated:
             return
         # Build notification message with only existing fields
         notification = {'type': 'notification'}
