@@ -274,7 +274,11 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
         return True
 
     def set_new_password(self, new_password):
-        self.debug("SET NEW PASSWORD")
+        if self.active_request:
+            old_password = self.active_request.DATA.get("current_password", "x")
+            if not self.check_password(old_password):
+                self.report_incident(f"{self.username} entered an invalid password", "invalid_password")
+                raise merrors.ValueException("Incorrect current password")
         # Validate password strength
         if len(new_password) < 8:
             raise merrors.ValueException("Password must be at least 8 characters long")
@@ -376,9 +380,9 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
         if not self.display_name:
             self.display_name = self.generate_display_name()
         if self.pk is not None:
-            self._handle_new_user_pre_save(creds_changed, changed_fields)
+            self._handle_existing_user_pre_save(creds_changed, changed_fields)
 
-    def _handle_new_user_pre_save(self, creds_changed, changed_fields):
+    def _handle_existing_user_pre_save(self, creds_changed, changed_fields):
         # only super user can change email or username
         if creds_changed and not self.active_user.is_superuser:
             raise merrors.PermissionDeniedException("You are not allowed to change email or username")
@@ -544,6 +548,57 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
             allow_unverified=True,
             **kwargs
         )
+
+    def on_realtime_connected(self):
+        meta = self.metadata or {}
+        meta["realtime_connected"] = True
+        try:
+            meta["realtime_connected_at"] = dates.utcnow().isoformat()
+        except Exception:
+            # Fallback without timestamp if serialization fails
+            meta["realtime_connected_at"] = None
+        self.metadata = meta
+        self.atomic_save()
+
+    def on_realtime_message(self, data):
+        # Simple test handler logic for unit tests
+        # Supports:
+        # - echo: returns payload back
+        # - set_meta: sets a metadata key/value and returns ack
+        mtype = None
+        if isinstance(data, dict):
+            mtype = data.get("message_type") or data.get("type")
+
+        if mtype == "echo":
+            payload = data.get("payload") if isinstance(data, dict) else None
+            return {
+                "type": "echo",
+                "user_id": self.id,
+                "payload": payload
+            }
+
+        if mtype == "set_meta" and isinstance(data, dict):
+            key = data.get("key")
+            value = data.get("value")
+            if key:
+                meta = self.metadata or {}
+                meta[str(key)] = value
+                self.metadata = meta
+                self.atomic_save()
+                return {"type": "ack", "key": key, "value": value}
+
+        # Default ack for unrecognized messages
+        return {"type": "ack"}
+
+    def on_realtime_disconnected(self):
+        meta = self.metadata or {}
+        meta["realtime_connected"] = False
+        try:
+            meta["realtime_disconnected_at"] = dates.utcnow().isoformat()
+        except Exception:
+            meta["realtime_disconnected_at"] = None
+        self.metadata = meta
+        self.atomic_save()
 
     @classmethod
     def validate_jwt(cls, token, request=None):
