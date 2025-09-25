@@ -38,6 +38,7 @@ class WebSocketHandler:
 
         # Control flags
         self.running = True
+        self.last_activity = time.time()
 
     async def handle_connection(self):
         """Main connection handler - manages entire connection lifecycle"""
@@ -55,10 +56,9 @@ class WebSocketHandler:
 
             # Start background tasks
             tasks = [
-                asyncio.create_task(self.auth_timeout()),
+                asyncio.create_task(self.activity_timeout()),
                 asyncio.create_task(self.handle_client_messages()),
-                asyncio.create_task(self.handle_redis_messages()),
-                asyncio.create_task(self.heartbeat_monitor())
+                asyncio.create_task(self.handle_redis_messages())
             ]
 
             # Wait for any task to complete (usually means connection ended)
@@ -141,12 +141,20 @@ class WebSocketHandler:
 
         await asyncio.get_event_loop().run_in_executor(None, get_and_update)
 
-    async def auth_timeout(self):
-        """Handle authentication timeout"""
-        await asyncio.sleep(30)
-        if not self.authenticated:
-            await self.send_error("Authentication timeout")
-            await self.close_connection()
+    async def activity_timeout(self):
+        """Handle both auth and activity timeouts"""
+        while self.running:
+            await asyncio.sleep(5)  # Check every 5 seconds
+
+            time_since_activity = time.time() - self.last_activity
+
+            if time_since_activity >= 30:
+                if not self.authenticated:
+                    await self.send_error("Authentication timeout")
+                else:
+                    logger.info(f"Connection {self.connection_id} timed out due to inactivity")
+                await self.close_connection()
+                break
 
     async def handle_client_messages(self):
         """Handle messages from WebSocket client"""
@@ -211,22 +219,15 @@ class WebSocketHandler:
                     None, self.pubsub.close
                 )
 
-    async def heartbeat_monitor(self):
-        """Send periodic pings and monitor connection health"""
-        while self.running:
-            await asyncio.sleep(30)
-            if self.authenticated:
-                try:
-                    await self.send_message({
-                        "type": "heartbeat",
-                        "timestamp": time.time()
-                    })
-                except:
-                    break
+
 
     async def process_client_message(self, data):
         """Process message from client"""
-        message_type = data.get("type")
+        # Reset activity timeout on any incoming message
+        self.last_activity = time.time()
+
+        # Support both "type" and "action" fields for backward compatibility
+        message_type = data.get("type") or data.get("action")
 
         if message_type == "authenticate":
             await self.handle_authenticate(data)

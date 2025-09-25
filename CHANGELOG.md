@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.50 - September 25, 2025
+
+* realtime disconnect dead connections
+
+
 ## v0.1.49 - September 25, 2025
 
 * REWRITE of realtime
