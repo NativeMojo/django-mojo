@@ -202,7 +202,7 @@ class AuthenticatedConsumer(AsyncWebsocketConsumer):
         # Split fields approach; default prefix is 'bearer'
         token = data.get('token')
         prefix = (data.get('prefix') or 'bearer').lower()
-
+        logger.info(f"Received authentication request with token '{token}' and prefix '{prefix}'")
         if not token:
             logger.error("Token required for authentication")
             await self.send_error('Token required for authentication')
@@ -214,7 +214,7 @@ class AuthenticatedConsumer(AsyncWebsocketConsumer):
             logger.error(f"Authentication failed: {err}")
             await self.send_error(err or 'Authentication failed', close_after=True)
             return
-
+        logger.info("Authentication successful")
         # Authentication successful
         self.authenticated = True
         self.instance = instance
@@ -229,7 +229,7 @@ class AuthenticatedConsumer(AsyncWebsocketConsumer):
         # Cancel the timeout task
         if self.auth_timeout_task and not self.auth_timeout_task.done():
             self.auth_timeout_task.cancel()
-
+        logger.info("Cancelled the timeout task")
         # Auto-subscribe to instance-specific topic (external: "<kind>:<id>")
         uid = getattr(instance, "id", None)
         if uid is not None:
@@ -250,6 +250,7 @@ class AuthenticatedConsumer(AsyncWebsocketConsumer):
                 return
             self.user_subscriptions.add(group)
 
+        logger.info("Sending response")
         # Send authentication success
         await self.send(text_data=json.dumps({
             'type': 'auth_success',
@@ -259,6 +260,7 @@ class AuthenticatedConsumer(AsyncWebsocketConsumer):
             'authenticated_at': time.time(),
             'available_topics': await self.get_available_topics(instance)
         }))
+        logger.info("response sent")
 
     async def handle_authenticated_message(self, data):
         """Handle messages from authenticated connections."""
