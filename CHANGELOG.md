@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.43 - September 24, 2025
+
+* debug
+
+
 ## v0.1.42 - September 24, 2025
 
 * debugging channels

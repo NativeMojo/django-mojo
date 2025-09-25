@@ -226,7 +226,7 @@ class AuthenticatedConsumer(AsyncWebsocketConsumer):
         self.instance = instance
         self.instance_kind = key_name or prefix
         attach_identity_to_scope(self.scope, instance, prefix)
-
+        logger.info(f"{prefix}.on_realtime_connected()")
         # Instance-level connected hook
         try:
             await call_instance_hook(self.instance, "on_realtime_connected")
@@ -234,10 +234,12 @@ class AuthenticatedConsumer(AsyncWebsocketConsumer):
             logger.exception("Error in instance.on_realtime_connected()")
 
         # Cancel the timeout task
+        logger.info("auth_timeout_task.cancel()")
         if self.auth_timeout_task and not self.auth_timeout_task.done():
             self.auth_timeout_task.cancel()
 
         # Auto-subscribe to instance-specific topic (external: "<kind>:<id>")
+        logger.info("user_subscriptions.add()")
         uid = getattr(instance, "id", None)
         if uid is not None:
             topic = f'{self.instance_kind}:{uid}'
@@ -246,6 +248,7 @@ class AuthenticatedConsumer(AsyncWebsocketConsumer):
             self.user_subscriptions.add(group)
 
         # Send authentication success
+        logger.info("send auth back")
         await self.send(text_data=json.dumps({
             'type': 'auth_success',
             'message': f'Authenticated as {getattr(instance, "username", None) or getattr(instance, "name", None) or str(instance)}',
