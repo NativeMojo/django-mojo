@@ -1,15 +1,32 @@
 # parser_core.py
 from . import rules, utils
 from .parsed import ParsedAlert
+
+from .clean_parser import parse_incoming_clean_alert
 from objict import objict
 
 def parse_incoming_alert(data):
-    if "batch" in data:
+    # Detect format: clean OSSEC text or JSON
+    if isinstance(data, str):
+        data_stripped = data.strip()
+
+        # Check for clean format (delimited or direct)
+        if "=START=" in data_stripped or data_stripped.startswith("** Alert"):
+            return parse_incoming_clean_alert(data)
+
+    if isinstance(data, list):
+        # List of clean OSSEC strings
+        if data and isinstance(data[0], str):
+            return parse_incoming_clean_alert(data)
+
+    # Original JSON format handling
+    if isinstance(data, dict) and "batch" in data:
         alerts = []
         for item in data["batch"]:
             alerts.append(parse_incoming_alert(item))
         return alerts
 
+    # Handle JSON format
     alert = ParsedAlert(parse_alert_json(data))
     if utils.ignore_alert(alert):
         return None

@@ -1,0 +1,265 @@
+=START=
+** Alert 1758225773.31821: - ossec,syscheck,
+2025 Sep 18 20:02:53 m->syscheck
+Rule: 554 (level 5) -> 'File added to the system.'
+New file '/etc/cloud/templates/sources.list.debian.tmpl' added to the file system.
+New sha1sum is : '017df269d5ac9eebcffb1565bec31fcb1586acfc'
+New md5sum is : 'a7e69f77a32f15648cee0423fd1ed2bd'
+=END=
+=START=
+** Alert 1758499282.0: - ossec,
+2025 Sep 22 00:01:22 m->ossec-logcollector
+Rule: 591 (level 3) -> 'Log file rotated.'
+ossec: File rotated (inode changed): '/var/log/nginx/access.log'.
+=END=
+=START=
+** Alert 1758240980.1340: - pam,syslog,
+2025 Sep 19 00:16:20 m->/var/log/secure
+Rule: 5502 (level 3) -> 'Login session closed.'
+Sep 19 00:16:19 m sudo[393112]: pam_unix(sudo:session): session closed for user root
+=END=
+=START=
+** Alert 1758246059.3373: - syslog,sshd,
+2025 Sep 19 01:40:59 m->/var/log/secure
+Rule: 5740 (level 4) -> 'ssh connection reset by peer'
+Sep 19 01:40:57 m sshd[401300]: error: kex_exchange_identification: read: Connection reset by peer
+=END=
+=START=
+** Alert 1758254452.18740: - pam,syslog,authentication_success,
+2025 Sep 19 04:00:52 m->/var/log/secure
+Rule: 5501 (level 3) -> 'Login session opened.'
+Sep 19 04:00:51 m sshd[415139]: pam_unix(sshd:session): session opened for user ec2-user(uid=1000) by (uid=0)
+=END=
+=START=
+** Alert 1758298721.96045: mail  - ossec,
+2025 Sep 19 16:18:41 m->ossec-monitord
+Rule: 502 (level 3) -> 'Ossec server started.'
+ossec: Ossec started.
+=END=
+=START=
+** Alert 1758391882.124822: - syslog,sudo
+2025 Sep 20 18:11:22 m->/var/log/secure
+Rule: 5402 (level 3) -> 'Successful sudo to ROOT executed'
+Sep 20 18:11:22 m sudo[183658]: ec2-user : PWD=/home/ec2-user ; USER=root ; COMMAND=/usr/bin/cp -r /opt/www/payterm_utio_v2/index.html /opt/www/payterm_utio_v2/js /opt/www/payterm_utio_v2/main-6VL92uQ7.js /opt/www/payterm_utio_v2/style-DCgdlYzz.css /tmp/payterm_utio-backup-20250920-111120/
+=END=
+=START=
+** Alert 1758761079.11606: mail  - ossec,syscheck,
+2025 Sep 25 00:44:39 m->syscheck
+Rule: 553 (level 7) -> 'File deleted. Unable to retrieve checksum.'
+File '/etc/nginx/.django.inc.swp' was deleted. Unable to retrieve checksum.
+=END=
+=START=
+** Alert 1758339661.5259: - web,accesslog,
+2025 Sep 20 03:41:01 m->/var/log/nginx/access.log
+Rule: 31101 (level 5) -> 'Web server 400 error code.'
+Src IP: 152.32.235.85
+152.32.235.85 - - [20/Sep/2025:03:41:01 +0000] "GET http://98.86.6.146/v1 HTTP/1.1" 400 248 "-" "-" 0.000 443
+=END=
+=START=
+** Alert 1758227289.1128461: mail  - ossec,syscheck,
+2025 Sep 18 20:28:09 m->syscheck
+Rule: 551 (level 7) -> 'Integrity checksum changed again (2nd time).'
+Integrity checksum changed for: '/etc/cron.d/.mojo_cron.swp'
+Old md5sum was: 'd0ee6648104e5b1f2b5ebda2b1efd34a'
+New md5sum is : '692e5bd5357e2d1c70baa8d5537e9820'
+Old sha1sum was: '02ce63f1ac24cea76feb5256f501911fc9e55961'
+New sha1sum is : '38457ab3da7eaab808e308a801b99dcb79711295'
+=END=
+=START=
+** Alert 1758227294.1128902: mail  - ossec,syscheck,
+2025 Sep 18 20:28:14 m->syscheck
+Rule: 552 (level 7) -> 'Integrity checksum changed again (3rd time).'
+Integrity checksum changed for: '/etc/cron.d/.mojo_cron.swp'
+Old md5sum was: '692e5bd5357e2d1c70baa8d5537e9820'
+New md5sum is : '393cb27f7e0fafb9c5b37d6b63a7b0f9'
+Old sha1sum was: '38457ab3da7eaab808e308a801b99dcb79711295'
+New sha1sum is : '4ba0f6c96c73bf0c453f72bcf6c030fa7c2e8cd8'
+=END=
+=START=
+** Alert 1758227315.1129863: mail  - syslog,fts,authentication_success
+2025 Sep 18 20:28:35 m->/var/log/secure
+Rule: 10100 (level 4) -> 'First time user logged in.'
+Src IP: 68.111.90.164
+User: ec2-user
+Sep 18 20:28:34 m sshd[366225]: Accepted publickey for ec2-user from 68.111.90.164 port 53815 ssh2: ED25519 SHA256:e9H0b6zVOEPeUmtLO47HUOSSukVB5a+kHdRQ1yWpnzk
+=END=
+=START=
+** Alert 1758227463.1130490: - syslog,sshd,authentication_success,
+2025 Sep 18 20:31:03 m->/var/log/secure
+Rule: 5715 (level 3) -> 'SSHD authentication success.'
+Src IP: 68.111.90.164
+User: ec2-user
+Sep 18 20:31:02 m sshd[367254]: Accepted publickey for ec2-user from 68.111.90.164 port 55044 ssh2: ED25519 SHA256:e9H0b6zVOEPeUmtLO47HUOSSukVB5a+kHdRQ1yWpnzk
+=END=
+=START=
+** Alert 1758227612.1131421: mail  - web,accesslog,system_error,
+2025 Sep 18 20:33:32 m->/var/log/nginx/access.log
+Rule: 31122 (level 5) -> 'Web server 500 error code (Internal Error).'
+Src IP: 98.86.6.146
+98.86.6.146 - - [18/Sep/2025:20:33:31 +0000] "POST https://api.foraylabs.io/api/incident/ossec/alert/batch HTTP/2.0" 500 75 "-" "curl/8.11.1" 0.041 443
+=END=
+=START=
+** Alert 1758462285.71847: - web,accesslog,
+2025 Sep 21 13:44:45 m->/var/log/nginx/access.log
+Rule: 31111 (level 5) -> 'Request for .js file with no referer.'
+Src IP: 68.111.90.164
+68.111.90.164 - - [21/Sep/2025:13:44:44 +0000] "GET https://portal.foraylabs.net/js/portal-DVHo_FNu.js HTTP/1.1" 200 258161 "-" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36" 0.254 443
+=END=
+=START=
+** Alert 1758227881.1140168: mail  - ossec,syscheck,
+2025 Sep 18 20:38:01 m->syscheck
+Rule: 550 (level 7) -> 'Integrity checksum changed.'
+Integrity checksum changed for: '/etc/cron.d/mojo_cron'
+Size changed from '144' to '148'
+Old md5sum was: 'aa35fa40ebcc0ff82a75ce0e8b996e18'
+New md5sum is : '72cf2671e2130399b27b2b149f5246c3'
+Old sha1sum was: 'edc6861393ccfda4a6c827bac607fadb0e85b67a'
+New sha1sum is : '4458c46692690e1b49e5221049a4b4689afe5752'
+=END=
+=START=
+** Alert 1758231350.1146405: mail  - web,accesslog,web_scan,recon,
+2025 Sep 18 21:35:50 m->/var/log/nginx/access.log
+Rule: 31151 (level 10) -> 'Multiple web server 400 error codes from same source ip.'
+Src IP: 35.86.109.206
+35.86.109.206 - - [18/Sep/2025:21:35:48 +0000] "GET https://apps.foraylabs.io/ HTTP/1.1" 404 181 "-" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36" 0.000 443
+35.86.109.206 - - [18/Sep/2025:21:35:48 +0000] "GET https://apps.foraylabs.io/ HTTP/1.1" 404 118 "http://apps.foraylabs.io" "Mozilla/5.0 (iPhone; CPU iPhone OS 14_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.4 Mobile/15E148 Safari/604.1" 0.000 443
+35.86.109.206 - - [18/Sep/2025:21:35:48 +0000] "GET https://apps.foraylabs.io/ HTTP/1.1" 404 181 "http://apps.foraylabs.io" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36" 0.000 443
+35.86.109.206 - - [18/Sep/2025:21:35:47 +0000] "GET https://apps.foraylabs.io/ HTTP/1.1" 404 118 "-" "Mozilla/5.0 (iPhone; CPU iPhone OS 14_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.4 Mobile/15E148 Safari/604.1" 0.000 443
+35.86.109.206 - - [18/Sep/2025:21:35:47 +0000] "GET https://apps.foraylabs.io/ HTTP/1.1" 404 181 "-" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36" 0.000 443
+35.86.109.206 - - [18/Sep/2025:21:35:47 +0000] "GET https://apps.foraylabs.io/ HTTP/1.1" 404 181 "http://apps.foraylabs.io" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36" 0.000 443
+35.86.109.206 - - [18/Sep/2025:21:35:47 +0000] "GET https://apps.foraylabs.io/ HTTP/1.1" 404 118 "http://apps.foraylabs.io" "Mozilla/5.0 (iPhone; CPU iPhone OS 14_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.4 Mobile/15E148 Safari/604.1" 0.000 443
+=END=
+=START=
+** Alert 1758238715.1164528: - web,accesslog,attack,
+2025 Sep 18 23:38:35 m->/var/log/nginx/access.log
+Rule: 31104 (level 6) -> 'Common web attack.'
+Src IP: 34.148.212.160
+34.148.212.160 - - [18/Sep/2025:23:38:33 +0000] "GET https://98.86.6.146/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1" 404 56 "-" "libredtail-http" 0.001 443
+=END=
+=START=
+** Alert 1758238715.1165554: mail  - web,accesslog,attack,
+2025 Sep 18 23:38:35 m->/var/log/nginx/access.log
+Rule: 31153 (level 10) -> 'Multiple common web attacks from same source ip.'
+Src IP: 34.148.212.160
+34.148.212.160 - - [18/Sep/2025:23:38:33 +0000] "GET https://98.86.6.146/vendor/phpunit/Util/PHP/eval-stdin.php HTTP/1.1" 404 56 "-" "libredtail-http" 0.001 443
+34.148.212.160 - - [18/Sep/2025:23:38:33 +0000] "GET https://98.86.6.146/vendor/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1" 404 56 "-" "libredtail-http" 0.001 443
+34.148.212.160 - - [18/Sep/2025:23:38:33 +0000] "GET https://98.86.6.146/vendor/phpunit/phpunit/Util/PHP/eval-stdin.php HTTP/1.1" 404 56 "-" "libredtail-http" 0.001 443
+34.148.212.160 - - [18/Sep/2025:23:38:33 +0000] "GET https://98.86.6.146/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1" 404 56 "-" "libredtail-http" 0.001 443
+=END=
+=START=
+** Alert 1758254450.16619: mail  - syslog,sudo
+2025 Sep 19 04:00:50 m->/var/log/secure
+Rule: 5403 (level 4) -> 'First time user executed sudo.'
+Sep 19 04:00:50 m sudo[415129]: ec2-user : PWD=/home/ec2-user ; USER=root ; COMMAND=/usr/bin/mkdir -p /tmp/payterm_utio-backup-20250918-210048
+=END=
+=START=
+** Alert 1758254740.30182: - apache,
+2025 Sep 19 04:05:40 m->/var/log/nginx/error.log
+Rule: 31302 (level 3) -> 'Nginx warning message.'
+2025/09/19 04:05:39 [warn] 416604#416604: "ssl_stapling" ignored, no OCSP responder URL in the certificate "/etc/letsencrypt/live/api.foraylabs.io/fullchain.pem"
+=END=
+=START=
+** Alert 1758255161.39803: - apache,
+2025 Sep 19 04:12:41 m->/var/log/nginx/error.log
+Rule: 31301 (level 3) -> 'Nginx error message.'
+Src IP: 68.111.90.164
+2025/09/19 04:12:41 [error] 418011#418011: *4815 directory index of "/opt/www/" is forbidden, client: 68.111.90.164, server: apps.foraylabs.io, request: "GET / HTTP/1.1", host: "apps.foraylabs.io"
+=END=
+=START=
+** Alert 1758258440.66157: - syslog,sshd,invalid_login,authentication_failed,
+2025 Sep 19 05:07:20 m->/var/log/secure
+Rule: 5710 (level 5) -> 'Attempt to login using a non-existent user'
+Src IP: 202.41.160.199
+Sep 19 05:07:19 m sshd[425326]: Invalid user wqmarlduiqkmgs from 202.41.160.199 port 57724
+=END=
+=START=
+** Alert 1758288484.80632: mail  - syslog,sshd,authentication_failures,
+2025 Sep 19 13:28:04 m->/var/log/secure
+Rule: 5712 (level 10) -> 'SSHD brute force trying to get access to the system.'
+Src IP: 110.38.70.146
+Sep 19 13:28:03 m sshd[474344]: Invalid user user from 110.38.70.146 port 32492
+Sep 19 13:28:01 m sshd[474320]: Invalid user user from 110.38.70.146 port 30062
+Sep 19 13:27:59 m sshd[474298]: Invalid user user from 110.38.70.146 port 35810
+Sep 19 13:27:57 m sshd[474240]: Invalid user user from 110.38.70.146 port 56754
+=END=
+=START=
+** Alert 1758292729.91357: mail  - web,accesslog,web_scan,recon,
+2025 Sep 19 14:38:49 m->/var/log/nginx/access.log
+Rule: 31173 (level 8) -> 'Excessive 404 errors from the same IP (possible brute-force or reconnaissance).'
+Src IP: 68.111.90.164
+68.111.90.164 - - [19/Sep/2025:14:38:48 +0000] "GET https://api.foraylabs.io/api/metrics/fetch?granularity=hours&account=incident&with_labels=true&slugs%5B%5D%5B%5D=incidents&dr_start=1758139714&dr_end=1758226114&_=1758292728104 HTTP/2.0" 401 36 "https://portal.foraylabs.net/" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36" 0.019 443
+68.111.90.164 - - [19/Sep/2025:14:38:48 +0000] "GET https://api.foraylabs.io/api/metrics/fetch?granularity=hours&account=incident&with_labels=true&slugs%5B%5D%5B%5D=incident_events&dr_start=1758139714&dr_end=1758226114&_=1758292727909 HTTP/2.0" 401 36 "https://portal.foraylabs.net/" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36" 0.019 443
+68.111.90.164 - - [19/Sep/2025:14:38:47 +0000] "GET https://api.foraylabs.io/api/metrics/fetch?granularity=hours&account=global&with_labels=true&slugs%5B%5D%5B%5D=api_calls&slugs%5B%5D%5B%5D=api_errors&dr_start=1758139714&dr_end=1758226114&_=1758292727711 HTTP/2.0" 401 36 "https://portal.foraylabs.net/" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36" 0.022 443
+68.111.90.164 - - [19/Sep/2025:14:38:47 +0000] "GET https://api.foraylabs.io/api/metrics/series?slugs%5B%5D=user_created&slugs%5B%5D=user_activity_day&slugs%5B%5D=incidents&slugs%5B%5D=api_calls&slugs%5B%5D=api_errors&slugs%5B%5D=group_activity_day&account=global&granularity=days HTTP/2.0" 401 36 "https://portal.foraylabs.net/" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36" 0.028 443
+68.111.90.164 - - [19/Sep/2025:14:38:47 +0000] "GET https://api.foraylabs.io/api/metrics/value/get?slugs%5B%5D=total_users&slugs%5B%5D=total_groups&account=global HTTP/2.0" 401 36 "https://portal.foraylabs.net/" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36" 0.027 443
+68.111.90.164 - - [19/Sep/2025:14:38:38 +0000] "GET https://api.foraylabs.io/api/incident/event?start=0&size=10 HTTP/2.0" 401 36 "https://portal.foraylabs.net/" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36" 0.020 443
+68.111.90.164 - - [19/Sep/2025:14:38:34 +0000] "GET https://api.foraylabs.io/api/incident/event?start=0&size=10 HTTP/2.0" 401 36 "https://portal.foraylabs.net/" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36" 0.020 443
+=END=
+=START=
+** Alert 1758302400.106619: - web,appsec,attack
+2025 Sep 19 17:20:00 m->/var/log/nginx/access.log
+Rule: 31516 (level 6) -> 'Suspicious URL access.'
+Src IP: 109.202.99.46
+109.202.99.46 - - [19/Sep/2025:17:19:59 +0000] "GET https://apps.foraylabs.io/server-status HTTP/1.1" 404 118 "-" "Go-http-client/1.1" 0.000 443
+=END=
+=START=
+** Alert 1758489850.91484: - web,accesslog,attack,
+2025 Sep 21 21:24:10 m->/var/log/nginx/access.log
+Rule: 31106 (level 6) -> 'A web attack returned code 200 (success).'
+Src IP: 123.24.142.58
+123.24.142.58 - - [21/Sep/2025:21:24:09 +0000] "GET https://98.86.6.146/?../../../../../../../../etc/passwd HTTP/1.1" 200 44 "-" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36" 0.001 443
+=END=
+=START=
+** Alert 1758425035.31205: mail  - syslog,sshd,
+2025 Sep 21 03:23:55 m->/var/log/secure
+Rule: 5701 (level 8) -> 'Possible attack on the ssh server (or version gathering).'
+Sep 21 03:23:55 m sshd[245694]: error: Protocol major versions differ: 2 vs. 1
+=END=
+=START=
+** Alert 1758545931.89712: mail  - syslog,sshd,authentication_failed,
+2025 Sep 22 12:58:51 m->/var/log/secure
+Rule: 5758 (level 8) -> 'Maximum authentication attempts exceeded.'
+Src IP: 121.132.81.3
+Src Port: 39476
+User: root
+Sep 22 12:58:49 m sshd[467308]: error: maximum authentication attempts exceeded for root from 121.132.81.3 port 39476 ssh2 [preauth]
+=END=
+=START=
+** Alert 1758545931.90072: - syslog,access_control,authentication_failed,
+2025 Sep 22 12:58:51 m->/var/log/secure
+Rule: 2501 (level 5) -> 'User authentication failure.'
+Sep 22 12:58:49 m sshd[467308]: Disconnecting authenticating user root 121.132.81.3 port 39476: Too many authentication failures [preauth]
+=END=
+=START=
+** Alert 1758783360.1675702: mail  - ossec,
+2025 Sep 25 06:56:00 m->netstat -tan |grep LISTEN |egrep -v '(127.0.0.1| \1)' | sort
+Rule: 533 (level 7) -> 'Listened ports status (netstat) changed (new port opened or closed).'
+ossec: output: 'netstat -tan |grep LISTEN |egrep -v '(127.0.0.1| \1)' | sort':
+tcp        0      0 0.0.0.0:22              0.0.0.0:*               LISTEN
+tcp        0      0 0.0.0.0:443             0.0.0.0:*               LISTEN
+tcp        0      0 0.0.0.0:80              0.0.0.0:*               LISTEN
+tcp        0      0 0.0.0.0:9001            0.0.0.0:*               LISTEN
+tcp6       0      0 :::22                   :::*                    LISTEN
+Previous output:
+ossec: output: 'netstat -tan |grep LISTEN |egrep -v '(127.0.0.1| \1)' | sort':
+=END=
+=START=
+** Alert 1758762630.249899: - web,accesslog,
+2025 Sep 25 01:10:30 m->/var/log/nginx/access.log
+Rule: 31120 (level 5) -> 'Web server 500 error code (server error).'
+Src IP: 98.86.6.146
+98.86.6.146 - - [25/Sep/2025:01:10:29 +0000] "POST https://api.foraylabs.io/api/incident/ossec/alert/batch HTTP/2.0" 502 150 "-" "curl/8.11.1" 0.000 443
+=END=
+=START=
+** Alert 1758836722.3024145: mail  - web,accesslog,system_error,
+2025 Sep 25 21:45:22 m->/var/log/nginx/access.log
+Rule: 31162 (level 10) -> 'Multiple web server 500 error code (Internal Error).'
+Src IP: 173.184.21.231
+173.184.21.231 - - [25/Sep/2025:21:45:21 +0000] "GET https://api.foraylabs.io/api/pos/metrics/group/summary?group=2 HTTP/2.0" 500 45 "https://portal.foraylabs.net/" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36" 0.059 443
+173.184.21.231 - - [25/Sep/2025:21:45:10 +0000] "GET https://api.foraylabs.io/api/pos/metrics/group/summary?group=2 HTTP/2.0" 500 45 "https://portal.foraylabs.net/" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36" 0.083 443
+173.184.21.231 - - [25/Sep/2025:21:45:10 +0000] "GET https://api.foraylabs.io/api/pos/metrics/group/summary?group=2 HTTP/2.0" 500 45 "https://portal.foraylabs.net/" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36" 0.101 443
+173.184.21.231 - - [25/Sep/2025:21:45:06 +0000] "GET https://api.foraylabs.io/api/pos/metrics/group/summary?group=2 HTTP/2.0" 500 45 "https://portal.foraylabs.net/" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36" 0.066 443
+173.184.21.231 - - [25/Sep/2025:21:45:00 +0000] "GET https://api.foraylabs.io/api/pos/metrics/group/summary?group=2 HTTP/2.0" 500 45 "https://portal.foraylabs.net/" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36" 0.075 443
+173.184.21.231 - - [25/Sep/2025:21:44:49 +0000] "GET https://api.foraylabs.io/api/pos/metrics/group/summary?group=2 HTTP/2.0" 500 45 "https://portal.foraylabs.net/" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36" 0.065 443
+173.184.21.231 - - [25/Sep/2025:21:44:42 +0000] "GET https://api.foraylabs.io/api/pos/metrics/group/summary?group=2 HTTP/2.0" 500 45 "https://portal.foraylabs.net/" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36" 0.076 443
+=END=

@@ -50,6 +50,7 @@ class GeoLocatedIP(models.Model, MojoModel):
 
     class RestMeta:
         VIEW_PERMS = ['manage_users']
+        SEARCH_FIELDS = ["ip_address", "city", "country_name"]
         GRAPHS = {
             'default': {
 

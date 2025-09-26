@@ -35,5 +35,8 @@ class MojoMiddleware:
         request.DATA = rhelper.parse_request_data(request)
         rest.ACTIVE_REQUEST = request
         resp = self.get_response(request)
+        resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
         rest.ACTIVE_REQUEST = None
         return resp
