@@ -909,6 +909,7 @@ class MojoModel:
         """
         with transaction.atomic():
             self.save()
+        transaction.commit()
 
     def report_incident(self, details, event_type="info", level=1, request=None, **context):
         """
