@@ -49,18 +49,26 @@ def parse_alert_id(details):
 
 def parse_rule_details(details):
     """
-    Extract rule_id, level, and title from the Rule line in OSSEC logs.
+    Extract rule_id, level, title, and source_ip from OSSEC alert text.
     """
     # alert_id = parse_alert_id(details)
     rule_pattern = r"Rule: (\d+) \(level (\d+)\) -> '([^']+)'"
     match = re.search(rule_pattern, details)
+
+    result = objict()
+
     if match:
-        return objict(
-            rule_id=int(match.group(1)),
-            level=int(match.group(2)),
-            title=match.group(3)
-        )
-    return objict()
+        result.rule_id = int(match.group(1))
+        result.level = int(match.group(2))
+        result.title = match.group(3)
+
+    # Extract source IP from "Src IP: x.x.x.x" line
+    src_ip_pattern = r"Src IP: (\d+\.\d+\.\d+\.\d+)"
+    src_match = re.search(src_ip_pattern, details)
+    if src_match:
+        result.source_ip = src_match.group(1)
+
+    return result
 
 # -------------------------------
 # Generic Pattern Matching
