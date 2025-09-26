@@ -26,22 +26,47 @@ def parse_incoming_alert(data):
             alerts.append(parse_incoming_alert(item))
         return alerts
 
-    # Handle JSON format
-    alert = ParsedAlert(parse_alert_json(data))
+    # Handle JSON format - use clean parser on the text field for detailed extraction
+    json_alert = parse_alert_json(data)
+
+    # If the JSON has a text field with OSSEC alert content, parse it with clean parser
+    if hasattr(json_alert, 'text') and json_alert.text and json_alert.text.strip().startswith('** Alert'):
+        # Parse the text content using clean parser for detailed field extraction
+        from .clean_parser import parse_clean_ossec_alert
+        clean_parsed = parse_clean_ossec_alert(json_alert.text)
+
+        if clean_parsed:
+            # Start with clean parser results (more detailed)
+            alert = ParsedAlert(clean_parsed)
+
+            # Override with any JSON fields that aren't null/empty
+            for key, value in json_alert.items():
+                if value is not None and value != "" and value != "-":
+                    alert[key] = value
+        else:
+            # Fallback to JSON-only parsing if clean parser fails
+            alert = ParsedAlert(json_alert)
+    else:
+        # No text field or doesn't look like OSSEC format, use JSON-only parsing
+        alert = ParsedAlert(json_alert)
+
+        # Extract what we can from text field if it exists
+        if hasattr(alert, 'text') and alert.text:
+            details = utils.parse_rule_details(alert.text)
+            alert.update(details)
+
     if utils.ignore_alert(alert):
         return None
 
-    details = utils.parse_rule_details(alert.text)
-    for key, value in details.items():
-        if key not in alert:
-            alert[key] = value
-    alert.update(details)
-    if not alert.title:
+    if not getattr(alert, 'title', None):
         return None
 
-    alert.update(parse_alert_metadata(alert))
-    alert.normalize_fields()
+    # Apply rule-specific processing
+    metadata = parse_alert_metadata(alert)
+    if metadata:
+        alert.update(metadata)
 
+    alert.normalize_fields()
     update_by_rule(alert)
 
     return alert

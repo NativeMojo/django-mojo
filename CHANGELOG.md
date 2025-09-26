@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.54 - September 25, 2025
+
+ossec fixes
+
+
 ## v0.1.53 - September 25, 2025
 
 debug ossec
