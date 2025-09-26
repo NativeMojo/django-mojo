@@ -903,13 +903,12 @@ class MojoModel:
         manager = get_serializer_manager()
         return manager.serialize(qset, graph=graph, many=True)
 
-    def atomic_save(self):
-        """
-        Save the object atomically to the database.
-        """
-        with transaction.atomic():
-            self.save()
+    def save_now(self):
+        self.save()
         transaction.commit()
+
+    def atomic_save(self):
+        return self.save_now()
 
     def report_incident(self, details, event_type="info", level=1, request=None, **context):
         """
