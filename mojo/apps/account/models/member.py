@@ -90,8 +90,8 @@ class GroupMember(models.Model, MojoModel):
         If perm_key starts with 'sys.', only the user-level permission is checked.
         Otherwise, checks group-member-level permission as before.
         """
-        # Support lists for "OR" logic
-        if isinstance(perm_key, list):
+        # Support lists and sets for "OR" logic
+        if isinstance(perm_key, (list, set)):
             for pk in perm_key:
                 if self.has_permission(pk):
                     return True

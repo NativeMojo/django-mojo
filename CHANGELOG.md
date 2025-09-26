@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.55 - September 25, 2025
+
+BUGFIX checking group member permission
+
+
 ## v0.1.54 - September 25, 2025
 
 ossec fixes
