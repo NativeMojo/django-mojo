@@ -100,25 +100,103 @@ def parse_rule_311_default(alert):
 
 
 def update_rule_2501(alert, geoip=None):
-    alert.title = f"SSH Auth Attempt {alert.username}@{alert.hostname} from {alert.src_ip}"
+    alert.title = f"SSH Auth Attempt {alert.username}@{alert.hostname} from {alert.source_ip}"
 
 def update_rule_2503(alert, geoip=None):
     alert.title = f"SSH Auth Blocked from {alert.source_ip}"
 
 def update_rule_31101(alert, geoip=None):
-    alert.title = f"Web {alert.http_status} {alert.http_method} {alert.http_url} from {alert.src_ip}"
+    # Extract HTTP details if not already present
+    if not hasattr(alert, 'http_status') or not alert.http_status:
+        # Extract from NGINX log format in the text
+        nginx_match = re.search(
+            r'(\d+\.\d+\.\d+\.\d+) - - \[([^\]]+)\] "(\w+) ([^"]+) ([^"]+)" (\d+) (\d+)',
+            alert.text
+        )
+        if nginx_match:
+            alert.http_method = nginx_match.group(3)
+            alert.http_url = nginx_match.group(4)
+            alert.http_status = int(nginx_match.group(6))
+
+    # Use source_ip consistently
+    source_ip = getattr(alert, 'source_ip', getattr(alert, 'src_ip', 'Unknown'))
+    http_status = getattr(alert, 'http_status', '???')
+    http_method = getattr(alert, 'http_method', '???')
+    http_url = getattr(alert, 'http_url', '???')
+
+    # Truncate URL if too long
+    if hasattr(alert, 'truncate_str') and len(str(http_url)) > 50:
+        http_url = alert.truncate_str(str(http_url), 50)
+
+    alert.title = f"Web {http_status} {http_method} {http_url} from {source_ip}"
 
 def update_rule_31104(alert, geoip=None):
-    alert.title = f"Web Attack {alert.http_status} {alert.http_method} {alert.http_url} from {alert.src_ip}"
+    # Extract HTTP details if not already present (same logic as 31101)
+    if not hasattr(alert, 'http_status') or not alert.http_status:
+        nginx_match = re.search(
+            r'(\d+\.\d+\.\d+\.\d+) - - \[([^\]]+)\] "(\w+) ([^"]+) ([^"]+)" (\d+) (\d+)',
+            alert.text
+        )
+        if nginx_match:
+            alert.http_method = nginx_match.group(3)
+            alert.http_url = nginx_match.group(4)
+            alert.http_status = int(nginx_match.group(6))
+
+    source_ip = getattr(alert, 'source_ip', getattr(alert, 'src_ip', 'Unknown'))
+    http_status = getattr(alert, 'http_status', '???')
+    http_method = getattr(alert, 'http_method', '???')
+    http_url = getattr(alert, 'http_url', '???')
+
+    if hasattr(alert, 'truncate_str') and len(str(http_url)) > 50:
+        http_url = alert.truncate_str(str(http_url), 50)
+
+    alert.title = f"Web Attack {http_status} {http_method} {http_url} from {source_ip}"
 
 def update_rule_31111(alert, geoip=None):
+    # Extract HTTP details if not already present
+    if not hasattr(alert, 'http_status') or not alert.http_status:
+        nginx_match = re.search(
+            r'(\d+\.\d+\.\d+\.\d+) - - \[([^\]]+)\] "(\w+) ([^"]+) ([^"]+)" (\d+) (\d+)',
+            alert.text
+        )
+        if nginx_match:
+            alert.http_method = nginx_match.group(3)
+            alert.http_url = nginx_match.group(4)
+            alert.http_status = int(nginx_match.group(6))
+
+    source_ip = getattr(alert, 'source_ip', getattr(alert, 'src_ip', 'Unknown'))
+    http_status = getattr(alert, 'http_status', '???')
+    http_method = getattr(alert, 'http_method', '???')
+    http_url = getattr(alert, 'http_url', '???')
+
+    if hasattr(alert, 'truncate_str') and len(str(http_url)) > 50:
+        http_url = alert.truncate_str(str(http_url), 50)
+
     if geoip and geoip.isp:
-        alert.title = f"No referrer for .js - {alert.http_status} {alert.http_method} {alert.http_url} from {alert.src_ip}({geoip.isp})"
+        alert.title = f"No referrer for .js - {http_status} {http_method} {http_url} from {source_ip}({geoip.isp})"
     else:
-        alert.title = f"No referrer for .js - {alert.http_status} {alert.http_method} {alert.http_url} from {alert.src_ip}"
+        alert.title = f"No referrer for .js - {http_status} {http_method} {http_url} from {source_ip}"
 
 def update_rule_311_default(alert, geoip=None):
-    if not alert.http_status:
+    # Extract HTTP details if not already present
+    if not hasattr(alert, 'http_status') or not alert.http_status:
+        nginx_match = re.search(
+            r'(\d+\.\d+\.\d+\.\d+) - - \[([^\]]+)\] "(\w+) ([^"]+) ([^"]+)" (\d+) (\d+)',
+            alert.text
+        )
+        if nginx_match:
+            alert.http_method = nginx_match.group(3)
+            alert.http_url = nginx_match.group(4)
+            alert.http_status = int(nginx_match.group(6))
+
+    # Check if we have required fields
+    if not hasattr(alert, 'http_status') or not alert.http_status:
         return
-    url = alert.truncate_str(alert.http_url, 50)
-    alert.title = f"Web {alert.http_status} {alert.http_method} {url} from {alert.src_ip}"
+
+    source_ip = getattr(alert, 'source_ip', getattr(alert, 'src_ip', 'Unknown'))
+    http_status = getattr(alert, 'http_status', '???')
+    http_method = getattr(alert, 'http_method', '???')
+    http_url = getattr(alert, 'http_url', '???')
+
+    url = alert.truncate_str(str(http_url), 50) if hasattr(alert, 'truncate_str') else str(http_url)[:50]
+    alert.title = f"Web {http_status} {http_method} {url} from {source_ip}"

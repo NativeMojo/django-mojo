@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.53 - September 25, 2025
+
+debug ossec
+
+
 ## v0.1.52 - September 25, 2025
 
 * FIX ossec alerts not parsing
