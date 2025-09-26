@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.56 - September 26, 2025
+
+HOTFIX atomic commits
+
+
 ## v0.1.55 - September 25, 2025
 
 BUGFIX checking group member permission

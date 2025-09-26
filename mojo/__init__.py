@@ -1,3 +1,3 @@
-__version__ = "0.1.55"
+__version__ = "0.1.56"
 
 from mojo.helpers.response import JsonResponse
