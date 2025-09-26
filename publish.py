@@ -266,17 +266,19 @@ def commit_changes(version: str, notes: List[str]) -> None:
 
     run_command("git add .", capture_output=False)
 
-    # Create commit message
-    commit_messages = [f"Release v{version}"]
-    commit_messages.extend(notes)
+    # Create single multi-line commit message
+    commit_lines = [f"Release v{version}"]
+    commit_lines.extend(note for note in notes if note.strip())
 
-    # Build git commit command with proper message formatting
-    git_args = ["git", "commit"]
-    for msg in commit_messages:
-        if msg.strip():
-            git_args.extend(["-m", msg])
+    # Join all lines into single commit message with proper newlines
+    commit_message = "\n\n".join(commit_lines)
 
-    run_command(" ".join(f'"{arg}"' if " " in arg else arg for arg in git_args), capture_output=False)
+    # Properly escape the commit message for shell execution
+    escaped_message = commit_message.replace('"', '\\"').replace('`', '\\`').replace('$', '\\$')
+
+    # Use single -m flag with the complete message
+    commit_command = f'git commit -m "{escaped_message}"'
+    run_command(commit_command, capture_output=False)
 
     logger.info("Pushing to git...")
     run_command("git push", capture_output=False)

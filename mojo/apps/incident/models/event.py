@@ -41,7 +41,38 @@ class Event(models.Model, MojoModel):
     class RestMeta:
         SEARCH_FIELDS = ["details"]
         VIEW_PERMS = ["view_incidents"]
-        CREATE_PERMS = None
+        CREATE_PERMS = ["all"]
+        SAVE_PERMS = ["edit_incidents"]
+        GRAPHS = {
+            "default": {
+                "graphs": {
+                    "incident": "basic",
+                }
+            },
+        }
+
+        FORMATS = {
+            "csv": [
+                "created",
+                "level",
+                "category",
+                "source_ip",
+                "hostname",
+                "uid",
+                "country_code",
+                "title",
+                "details",
+                "model_name",
+                "model_id",
+                "metadata.text",
+                "metadata.request_ip",
+                "metadata.source_ip",
+                "metadata.ext_ip",
+                "metadata.ip",
+                "metadata.rule_id",
+                "incident.id",
+            ]
+        }
 
     _geo_ip = None
     @property
