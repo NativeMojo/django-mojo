@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.57 - September 26, 2025
+
+* Atomic save bug
+
+
 ## v0.1.56 - September 26, 2025
 
 HOTFIX atomic commits
