@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.52 - September 25, 2025
+
+* FIX ossec alerts not parsing
+
+
 ## v0.1.51 - September 25, 2025
 
 * FIX password without current password
