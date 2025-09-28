@@ -359,6 +359,8 @@ class WebSocketHandler:
 
     async def handle_custom_message(self, data):
         """Handle custom message - delegate to user's hook if available"""
+        logger.debug(f"Processing custom message for {self.connection_id}: {data}")
+
         if hasattr(self.user, 'on_realtime_message'):
             def call_hook():
                 return self.user.on_realtime_message(data)
@@ -367,23 +369,31 @@ class WebSocketHandler:
                 response = await asyncio.get_event_loop().run_in_executor(
                     None, call_hook
                 )
+                logger.debug(f"User hook returned for {self.connection_id}: {response}")
                 if response:
                     await self._process_hook_response(response)
+                else:
+                    logger.debug(f"No response from user hook for {self.connection_id}")
             except Exception as e:
                 logger.exception(f"Error in user message hook: {e}")
                 await self.send_error("Message processing error")
         else:
+            logger.debug(f"No on_realtime_message hook for user {self.user}")
             await self.send_error("Unsupported message type")
 
     async def _process_hook_response(self, response):
         """Process unified response from user hooks"""
+        logger.debug(f"Processing hook response for {self.connection_id}: {response}")
+
         if isinstance(response, dict):
             # Send response message to client
             if "response" in response:
+                logger.debug(f"Sending response to client {self.connection_id}: {response['response']}")
                 await self.send_message(response["response"])
 
             # Process subscription requests
             if "subscriptions" in response:
+                logger.debug(f"Processing subscriptions for {self.connection_id}: {response['subscriptions']}")
                 for topic in response["subscriptions"]:
                     if topic and isinstance(topic, str):
                         try:
@@ -392,6 +402,7 @@ class WebSocketHandler:
                             logger.warning(f"Failed to subscribe to topic {topic}: {e}")
         else:
             # Backward compatibility - treat non-dict as direct response
+            logger.debug(f"Sending direct response to client {self.connection_id}: {response}")
             await self.send_message(response)
 
     async def subscribe_to_topic(self, topic):
@@ -447,6 +458,7 @@ class WebSocketHandler:
 
     async def send_message(self, message):
         """Send message to WebSocket client"""
+        logger.debug(f"Sending WebSocket message to {self.connection_id}: {message}")
         try:
             await self.websocket.send(json.dumps(message))
         except Exception as e:

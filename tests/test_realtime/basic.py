@@ -142,11 +142,16 @@ def test_ws_instance_echo(opts):
 @th.django_unit_test("ws_manager_online_status")
 def test_ws_manager_online_status(opts):
     from mojo.apps import realtime
+    from mojo.helpers.redis.client import get_connection
 
     # Login via REST to get a JWT
     assert opts.client.login(TEST_USER, TEST_PWORD), "authentication failed"
     uid = opts.client.jwt_data.uid
     assert uid is not None, "missing user id from jwt"
+
+    # Clean up any existing online status for this user
+    redis_client = get_connection()
+    redis_client.delete(f"realtime:online:user:{uid}")
 
     # Initially user should not be online
     assert not realtime.is_online("user", uid), "user should not be online initially"
