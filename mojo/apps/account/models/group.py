@@ -36,6 +36,7 @@ class Group(MojoSecrets, MojoModel):
         SEARCH_FIELDS = ["name"]
         VIEW_PERMS = ["view_groups", "manage_groups"]
         SAVE_PERMS = ["manage_groups"]
+        POST_SAVE_ACTIONS = ['realtime_message']
         LIST_DEFAULT_FILTERS = {
             "is_active": True
         }
@@ -394,6 +395,18 @@ class Group(MojoSecrets, MojoModel):
         # but we limit the fields they can see
         request.DATA.set("graph", "basic")
         return True
+
+    def on_action_realtime_message(self, value):
+        # send a realtime message to the group
+        from mojo.apps import realtime
+        if not isinstance(value, dict):
+            return {"status": False, "error": "Invalid message"}
+        if "topic" in value:
+            topic = value["topic"]
+            if not topic.startswith(f"group:{self.id}:"):
+                return {"status": False, "error": "Invalid topic for this group"}
+            realtime.publish_topic(topic, value.get("message"))
+        return {"status": True}
 
     @classmethod
     def on_rest_handle_list(cls, request):

@@ -569,11 +569,11 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
 
         if mtype == "echo":
             payload = data.get("payload") if isinstance(data, dict) else None
-            return {
+            return {"response": {
                 "type": "echo",
                 "user_id": self.id,
                 "payload": payload
-            }
+            }}
 
         if mtype == "set_meta" and isinstance(data, dict):
             key = data.get("key")
@@ -583,10 +583,11 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
                 meta[str(key)] = value
                 self.metadata = meta
                 self.save(update_fields=["metadata"])
-                return {"type": "ack", "key": key, "value": value}
+                return {"response": {"type": "ack", "key": key, "value": value}}
+
 
         # Default ack for unrecognized messages
-        return {"type": "ack"}
+        return {"response": {"type": "ack"}}
 
     def on_realtime_disconnected(self):
         meta = self.metadata or {}

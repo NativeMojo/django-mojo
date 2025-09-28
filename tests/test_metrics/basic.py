@@ -173,21 +173,34 @@ def test_basic_metrics_categories(opts):
     from mojo.apps import metrics
     from mojo.apps.metrics import utils
 
+    # Clean up any existing categories for the test account
+    existing_cats = metrics.get_categories(account="test")
+    for cat in existing_cats:
+        metrics.delete_category(cat, account="test")
+
     cats = metrics.get_categories(account="test")
     assert cats == set(), "get_categories returns something"
     slugs = metrics.get_category_slugs("blue", account="test")
     assert slugs == set(), slugs
 
-    metrics.record("c1", category="blue", account="test")
-    metrics.record("c2", category="blue", account="test")
+    metrics.record("c1", category="blue", min_granularity="minutes", account="test")
+    metrics.record("c2", category="blue", min_granularity="minutes", account="test")
+
+
 
     cats = metrics.get_categories(account="test")
     assert cats == {"blue"}, cats
     slugs = metrics.get_category_slugs("blue", account="test")
     assert slugs == {"c1", "c2"}, slugs
 
+    # Use current time to ensure fetch includes just-recorded data
+    # Use same normalized datetime as metrics system to avoid timezone issues
+    from mojo.apps.metrics import utils as metric_utils
+    now = metric_utils.normalize_datetime(None)
+
     for gran in utils.GRANULARITIES:
-        data = metrics.fetch_by_category("blue", granularity=gran, account="test")
+        data = metrics.fetch_by_category("blue", granularity=gran, dt_end=now, account="test")
+
         assert "c1" in data, f"missing c1: {data}"
         assert data.c1[-1] > 0, f"{gran}.c1 check failed (now)\n{data.c1}"
 
