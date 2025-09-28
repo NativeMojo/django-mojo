@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.59 - September 28, 2025
+
+* Bug fixes in realtime
+
+
 ## v0.1.58 - September 28, 2025
 
 * more realtime logic
