@@ -279,8 +279,12 @@ class WebSocketHandler:
         # Call user's connected hook if available
         if hasattr(self.user, 'on_realtime_connected'):
             def call_hook():
-                self.user.on_realtime_connected()
-            await asyncio.get_event_loop().run_in_executor(None, call_hook)
+                return self.user.on_realtime_connected()
+            result = await asyncio.get_event_loop().run_in_executor(None, call_hook)
+
+            # Process hook response
+            if result:
+                await self._process_hook_response(result)
 
         await self.send_message({
             "type": "auth_success",
@@ -364,12 +368,31 @@ class WebSocketHandler:
                     None, call_hook
                 )
                 if response:
-                    await self.send_message(response)
+                    await self._process_hook_response(response)
             except Exception as e:
                 logger.exception(f"Error in user message hook: {e}")
                 await self.send_error("Message processing error")
         else:
             await self.send_error("Unsupported message type")
+
+    async def _process_hook_response(self, response):
+        """Process unified response from user hooks"""
+        if isinstance(response, dict):
+            # Send response message to client
+            if "response" in response:
+                await self.send_message(response["response"])
+
+            # Process subscription requests
+            if "subscriptions" in response:
+                for topic in response["subscriptions"]:
+                    if topic and isinstance(topic, str):
+                        try:
+                            await self.subscribe_to_topic(topic)
+                        except Exception as e:
+                            logger.warning(f"Failed to subscribe to topic {topic}: {e}")
+        else:
+            # Backward compatibility - treat non-dict as direct response
+            await self.send_message(response)
 
     async def subscribe_to_topic(self, topic):
         """Subscribe connection to a topic"""

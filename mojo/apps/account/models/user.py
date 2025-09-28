@@ -547,6 +547,7 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
         )
 
     def on_realtime_connected(self):
+        # should always self.refresh_from_db()
         meta = self.metadata or {}
         meta["realtime_connected"] = True
         try:
@@ -555,7 +556,7 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
             # Fallback without timestamp if serialization fails
             meta["realtime_connected_at"] = None
         self.metadata = meta
-        self.atomic_save()
+        self.save(update_fields=["metadata"])
 
     def on_realtime_message(self, data):
         # Simple test handler logic for unit tests
@@ -581,7 +582,7 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
                 meta = self.metadata or {}
                 meta[str(key)] = value
                 self.metadata = meta
-                self.atomic_save()
+                self.save(update_fields=["metadata"])
                 return {"type": "ack", "key": key, "value": value}
 
         # Default ack for unrecognized messages
@@ -595,7 +596,7 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
         except Exception:
             meta["realtime_disconnected_at"] = None
         self.metadata = meta
-        self.atomic_save()
+        self.save(update_fields=["metadata"])
 
     @classmethod
     def validate_jwt(cls, token, request=None):

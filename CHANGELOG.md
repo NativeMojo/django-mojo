@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.58 - September 28, 2025
+
+* more realtime logic
+
+
 ## v0.1.57 - September 26, 2025
 
 * Atomic save bug
