@@ -1,7 +1,9 @@
 from typing import Optional, List, Set
 from contextlib import contextmanager
 from django.db import models
+import redis.exceptions
 from .client import get_connection
+from ...errors import TimeoutException
 
 
 class RedisBasePool:
@@ -96,10 +98,13 @@ class RedisBasePool:
         """Get the next available item from the pool."""
         timeout = timeout or self.default_timeout
 
-        result = self.redis_client.brpop(self.available_list_key, timeout=timeout)
-        if result:
-            return result[1]
-        return None
+        try:
+            result = self.redis_client.brpop(self.available_list_key, timeout=timeout)
+            if result:
+                return result[1]
+            return None
+        except redis.exceptions.TimeoutError:
+            return None
 
     @contextmanager
     def checkout_item(self, timeout: Optional[int] = None, raise_on_timeout: bool = True):

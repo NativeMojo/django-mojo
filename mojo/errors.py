@@ -86,3 +86,25 @@ class RestErrorException(MojoException):
             status (int, optional): The HTTP status code. Defaults to 500.
         """
         super().__init__(reason, code, status)
+
+
+class TimeoutException(MojoException):
+    """
+    Exception raised when operations timeout.
+
+    Attributes:
+        reason (str): The reason for the exception. Defaults to 'Operation timed out'.
+        code (int): The error code associated with the exception. Defaults to 408.
+        status (int, optional): The HTTP status code. Defaults to 408.
+    """
+
+    def __init__(self, reason='Operation timed out', code=408, status=408):
+        """
+        Initialize a TimeoutException instance.
+
+        Args:
+            reason (str, optional): The reason for the exception. Defaults to 'Operation timed out'.
+            code (int, optional): The error code associated with the exception. Defaults to 408.
+            status (int, optional): The HTTP status code. Defaults to 408.
+        """
+        super().__init__(reason, code, status)

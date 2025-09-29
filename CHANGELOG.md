@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.60 - September 29, 2025
+
+* FIX no more raising redis timeout in pools
+
+
 ## v0.1.59 - September 28, 2025
 
 * Bug fixes in realtime
