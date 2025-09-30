@@ -765,10 +765,13 @@ class MojoModel:
         # First check for custom setter method
         set_field_method = getattr(self, f'set_{key}', None)
         if callable(set_field_method):
-            old_value = getattr(self, key, None)
-            set_field_method(value)
-            new_value = getattr(self, key, None)
-            self._set_field_change(key, old_value, new_value)
+            if self.has_field(key):
+                old_value = getattr(self, key, None)
+                set_field_method(value)
+                new_value = getattr(self, key, None)
+                self._set_field_change(key, old_value, new_value)
+            else:
+                set_field_method(value)
             return
 
         # Check if this is a model field
@@ -986,3 +989,7 @@ class MojoModel:
             return cls._meta.get_field(field_name)
         except Exception:
             return None
+
+    @classmethod
+    def has_field(cls, field_name):
+        return cls.get_model_field(field_name) is not None

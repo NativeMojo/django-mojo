@@ -64,6 +64,9 @@ def get_model_cache_ttl(instance: Model, graph: str = "default") -> int:
     graphs = getattr(rest_meta, 'GRAPHS', None)
     if graphs is None:
         return 0
+    if not isinstance(graphs, dict):
+        logit.error("Invalid GRAPHS configuration", f"{graphs}")
+        return 0
 
     # Get specific graph configuration
     graph_config = graphs.get(graph)
