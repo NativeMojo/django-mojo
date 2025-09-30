@@ -1,6 +1,6 @@
 from django.db import models
 from mojo.models import MojoModel
-
+from mojo.helpers import logit
 
 class Ticket(models.Model, MojoModel):
     class Meta:
@@ -9,6 +9,7 @@ class Ticket(models.Model, MojoModel):
     class RestMeta:
         VIEW_PERMS = ['view_incidents']
         SAVE_PERMS = ['manage_incidents']
+        CAN_DELETE = True
         GRAPHS = {
             "default": {
                 "graphs": {
@@ -38,6 +39,14 @@ class Ticket(models.Model, MojoModel):
 
     metadata = models.JSONField(default=dict, blank=True)
 
+    def on_rest_created(self):
+        logit.info("Ticket created")
+        if self.description:
+            self.add_note(self.description, user=self.active_request.user)
+
+    def add_note(self, note, user):
+        logit.info(f"Adding note to ticket {self.id}: {note}")
+        TicketNote.objects.create(parent=self, note=note, user=user)
 
 class TicketNote(models.Model, MojoModel):
     class Meta:

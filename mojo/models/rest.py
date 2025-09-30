@@ -505,6 +505,11 @@ class MojoModel:
             if field.get_internal_type() in ["DateTimeField", "DateField"]:
                 if not isinstance(value, (datetime.datetime, datetime.date)):
                     value = dates.parse_datetime(value)
+        elif field.get_internal_type() in ["IntegerField", "BigIntegerField"]:
+            if isinstance(value, (str, bool)):
+                value = int(value)
+            elif isinstance(value, bool):
+                value = int(value)
         return value
 
     @classmethod
