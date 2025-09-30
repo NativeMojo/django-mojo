@@ -91,10 +91,13 @@ class WebSocketHandler:
         }
 
         key = f"realtime:connections:{self.connection_id}"
-        await asyncio.get_event_loop().run_in_executor(
-            None,
-            lambda: self.redis_client.setex(key, 3600, json.dumps(connection_data))
-        )
+        try:
+            await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self.redis_client.setex(key, 3600, json.dumps(connection_data))
+            )
+        except Exception as e:
+            logger.warning(f"Failed to register connection {self.connection_id} in Redis: {e}")
 
     async def update_connection_auth(self):
         """Update connection with authentication info"""
@@ -109,10 +112,13 @@ class WebSocketHandler:
         }
 
         key = f"realtime:connections:{self.connection_id}"
-        await asyncio.get_event_loop().run_in_executor(
-            None,
-            lambda: self.redis_client.setex(key, 3600, json.dumps(connection_data))
-        )
+        try:
+            await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self.redis_client.setex(key, 3600, json.dumps(connection_data))
+            )
+        except Exception as e:
+            logger.warning(f"Failed to update connection auth {self.connection_id} in Redis: {e}")
 
     async def register_user_online(self):
         """Register user as online in Redis"""
@@ -123,21 +129,24 @@ class WebSocketHandler:
 
         # Get existing data or create new
         def get_and_update():
-            existing = self.redis_client.get(key)
-            if existing:
-                user_data = json.loads(existing)
-                connection_ids = set(user_data.get("connection_ids", []))
-            else:
-                connection_ids = set()
+            try:
+                existing = self.redis_client.get(key)
+                if existing:
+                    user_data = json.loads(existing)
+                    connection_ids = set(user_data.get("connection_ids", []))
+                else:
+                    connection_ids = set()
 
-            connection_ids.add(self.connection_id)
+                connection_ids.add(self.connection_id)
 
-            user_data = {
-                "connection_ids": list(connection_ids),
-                "last_seen": time.time()
-            }
+                user_data = {
+                    "connection_ids": list(connection_ids),
+                    "last_seen": time.time()
+                }
 
-            self.redis_client.setex(key, 3600, json.dumps(user_data))
+                self.redis_client.setex(key, 3600, json.dumps(user_data))
+            except Exception as e:
+                logger.warning(f"Failed to register user online for {self.connection_id}: {e}")
 
         await asyncio.get_event_loop().run_in_executor(None, get_and_update)
 
@@ -411,12 +420,16 @@ class WebSocketHandler:
             return
 
         def subscribe():
-            # Add to topic subscribers
-            self.redis_client.sadd(f"realtime:topic:{topic}", self.connection_id)
-            self.redis_client.expire(f"realtime:topic:{topic}", 3600)
+            try:
+                # Add to topic subscribers
+                self.redis_client.sadd(f"realtime:topic:{topic}", self.connection_id)
+                self.redis_client.expire(f"realtime:topic:{topic}", 3600)
 
-            # Subscribe to Redis channel
-            self.pubsub.subscribe(f"realtime:topic:{topic}")
+                # Subscribe to Redis channel
+                self.pubsub.subscribe(f"realtime:topic:{topic}")
+            except Exception as e:
+                logger.warning(f"Failed to subscribe {self.connection_id} to topic {topic}: {e}")
+                raise
 
         await asyncio.get_event_loop().run_in_executor(None, subscribe)
         self.subscribed_topics.add(topic)
@@ -427,11 +440,14 @@ class WebSocketHandler:
             return
 
         def unsubscribe():
-            # Remove from topic subscribers
-            self.redis_client.srem(f"realtime:topic:{topic}", self.connection_id)
+            try:
+                # Remove from topic subscribers
+                self.redis_client.srem(f"realtime:topic:{topic}", self.connection_id)
 
-            # Unsubscribe from Redis channel
-            self.pubsub.unsubscribe(f"realtime:topic:{topic}")
+                # Unsubscribe from Redis channel
+                self.pubsub.unsubscribe(f"realtime:topic:{topic}")
+            except Exception as e:
+                logger.warning(f"Failed to unsubscribe {self.connection_id} from topic {topic}: {e}")
 
         await asyncio.get_event_loop().run_in_executor(None, unsubscribe)
         self.subscribed_topics.discard(topic)
@@ -488,30 +504,33 @@ class WebSocketHandler:
         logger.info(f"Cleaning up connection: {self.connection_id}")
 
         def cleanup():
-            # Remove connection record
-            self.redis_client.delete(f"realtime:connections:{self.connection_id}")
+            try:
+                # Remove connection record
+                self.redis_client.delete(f"realtime:connections:{self.connection_id}")
 
-            # Remove from all subscribed topics
-            for topic in self.subscribed_topics:
-                self.redis_client.srem(f"realtime:topic:{topic}", self.connection_id)
+                # Remove from all subscribed topics
+                for topic in self.subscribed_topics:
+                    self.redis_client.srem(f"realtime:topic:{topic}", self.connection_id)
 
-            # Update user online status
-            if self.user and self.user_type:
-                key = f"realtime:online:{self.user_type}:{self.user.id}"
-                existing = self.redis_client.get(key)
-                if existing:
-                    user_data = json.loads(existing)
-                    connection_ids = set(user_data.get("connection_ids", []))
-                    connection_ids.discard(self.connection_id)
+                # Update user online status
+                if self.user and self.user_type:
+                    key = f"realtime:online:{self.user_type}:{self.user.id}"
+                    existing = self.redis_client.get(key)
+                    if existing:
+                        user_data = json.loads(existing)
+                        connection_ids = set(user_data.get("connection_ids", []))
+                        connection_ids.discard(self.connection_id)
 
-                    if connection_ids:
-                        # Still has other connections
-                        user_data["connection_ids"] = list(connection_ids)
-                        user_data["last_seen"] = time.time()
-                        self.redis_client.setex(key, 3600, json.dumps(user_data))
-                    else:
-                        # No more connections, remove online status
-                        self.redis_client.delete(key)
+                        if connection_ids:
+                            # Still has other connections
+                            user_data["connection_ids"] = list(connection_ids)
+                            user_data["last_seen"] = time.time()
+                            self.redis_client.setex(key, 3600, json.dumps(user_data))
+                        else:
+                            # No more connections, remove online status
+                            self.redis_client.delete(key)
+            except Exception as e:
+                logger.warning(f"Failed to cleanup connection {self.connection_id} in Redis: {e}")
 
         await asyncio.get_event_loop().run_in_executor(None, cleanup)
 
@@ -526,4 +545,7 @@ class WebSocketHandler:
 
         # Close pubsub
         if self.pubsub:
-            await asyncio.get_event_loop().run_in_executor(None, self.pubsub.close)
+            try:
+                await asyncio.get_event_loop().run_in_executor(None, self.pubsub.close)
+            except Exception as e:
+                logger.warning(f"Failed to close pubsub for {self.connection_id}: {e}")
