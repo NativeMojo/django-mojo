@@ -7,8 +7,8 @@ class Ticket(models.Model, MojoModel):
         ordering = ['-modified']
 
     class RestMeta:
-        VIEW_PERMS = ['view_incidents']
-        SAVE_PERMS = ['manage_incidents']
+        VIEW_PERMS = ['view_incidents', 'view_tickets']
+        SAVE_PERMS = ['manage_incidents', 'view_tickets']
         CAN_DELETE = True
         GRAPHS = {
             "default": {
@@ -46,15 +46,16 @@ class Ticket(models.Model, MojoModel):
 
     def add_note(self, note, user):
         logit.info(f"Adding note to ticket {self.id}: {note}")
-        TicketNote.objects.create(parent=self, note=note, user=user)
+        TicketNote.objects.create(parent=self, note=note, group=self.group, user=user)
 
 class TicketNote(models.Model, MojoModel):
     class Meta:
         ordering = ['-created']
 
     class RestMeta:
-        VIEW_PERMS = ['view_incidents']
-        SAVE_PERMS = ['manage_incidents']
+        VIEW_PERMS = ['view_incidents', 'view_tickets']
+        SAVE_PERMS = ['manage_incidents', 'view_tickets']
+        CAN_DELETE = True
         GRAPHS = {
             "default": {
                 "graphs": {
@@ -67,6 +68,7 @@ class TicketNote(models.Model, MojoModel):
     parent = models.ForeignKey(Ticket, related_name="notes", on_delete=models.CASCADE)
     created = models.DateTimeField(auto_now_add=True, editable=False)
 
+    group = models.ForeignKey("account.Group", related_name="+", on_delete=models.CASCADE, blank=True, null=True, default=None)
     user = models.ForeignKey("account.User", related_name="+", on_delete=models.CASCADE)
     note = models.TextField(blank=True, null=True)
     media = models.ForeignKey("fileman.File", related_name="+", null=True, blank=True, default=None, on_delete=models.SET_NULL)
