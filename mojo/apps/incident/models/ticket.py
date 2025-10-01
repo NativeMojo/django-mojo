@@ -44,6 +44,10 @@ class Ticket(models.Model, MojoModel):
         if self.description:
             self.add_note(self.description, user=self.active_request.user)
 
+    def on_rest_saved(self, changed_fields, created):
+        if 'status' in changed_fields:
+            self.add_note(f"Status changed from {changed_fields['status']} to {self.status}", user=self.active_request.user)
+
     def add_note(self, note, user):
         logit.info(f"Adding note to ticket {self.id}: {note}")
         TicketNote.objects.create(parent=self, note=note, group=self.group, user=user)
@@ -72,3 +76,9 @@ class TicketNote(models.Model, MojoModel):
     user = models.ForeignKey("account.User", related_name="+", on_delete=models.CASCADE)
     note = models.TextField(blank=True, null=True)
     media = models.ForeignKey("fileman.File", related_name="+", null=True, blank=True, default=None, on_delete=models.SET_NULL)
+
+    def on_rest_saved(self, changed_fields, created):
+        if not hasattr(self, 'group') or not self.group:
+            if self.parent.group:
+                self.group = self.parent.group
+                self.save(update_fields=['group'])
