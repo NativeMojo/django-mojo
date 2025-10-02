@@ -25,8 +25,8 @@ class GroupMember(models.Model, MojoModel):
     metadata = models.JSONField(default=dict, blank=True)
 
     class RestMeta:
-        VIEW_PERMS = ["view_groups", "manage_groups"]
-        SAVE_PERMS = ["manage_groups"]
+        VIEW_PERMS = ["view_groups", "manage_groups", "manage_group"]
+        SAVE_PERMS = ["manage_groups", "manage_group"]
         CREATED_BY_OWNER_FIELD = 'created_by'  # we do this to protect user
         LIST_DEFAULT_FILTERS = {
             "is_active": True

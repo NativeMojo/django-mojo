@@ -34,8 +34,8 @@ class Group(MojoSecrets, MojoModel):
     class RestMeta:
         LOG_CHANGES = True
         SEARCH_FIELDS = ["name"]
-        VIEW_PERMS = ["view_groups", "manage_groups"]
-        SAVE_PERMS = ["manage_groups"]
+        VIEW_PERMS = ["view_groups", "manage_groups", "manage_group"]
+        SAVE_PERMS = ["manage_groups", "manage_group"]
         POST_SAVE_ACTIONS = ['realtime_message']
         LIST_DEFAULT_FILTERS = {
             "is_active": True
