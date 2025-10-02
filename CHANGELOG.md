@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.64 - October 02, 2025
+
+* Bug in managing group members
+
+
 ## v0.1.63 - October 01, 2025
 
 * ADDED ticket status changes to notes
