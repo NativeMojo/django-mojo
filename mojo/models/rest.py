@@ -328,12 +328,26 @@ class MojoModel:
         # cls.debug("on_rest_handle_list")
         if cls.rest_check_permission(request, "VIEW_PERMS"):
             return cls.on_rest_list(request)
-        else:
-            perms = cls.get_rest_meta_prop("VIEW_PERMS", [])
-            if perms and "owner" in perms and request.user.is_authenticated:
-                owner_field = cls.get_rest_meta_prop("OWNER_FIELD", "user")
-                q = {owner_field: request.user}
+
+        # Advanced permission checks if basic check fails
+        perms = cls.get_rest_meta_prop("VIEW_PERMS", [])
+
+        # Check for owner permission
+        if perms and "owner" in perms and request.user.is_authenticated:
+            owner_field = cls.get_rest_meta_prop("OWNER_FIELD", "user")
+            q = {owner_field: request.user}
+            return cls.on_rest_list(request, cls.objects.filter(**q))
+
+        # Check if model has a group field and user might have group-level permissions
+        if request.user.is_authenticated and hasattr(cls, "group"):
+            # User doesn't have system-level permissions, but might have group-level permissions
+            groups_with_perms = request.user.get_groups_with_permission(perms)
+            if groups_with_perms.exists():
+                # Filter queryset to only include objects from groups where user has permission
+                group_field = cls.get_rest_meta_prop("GROUP_FIELD", "group")
+                q = {f"{group_field}__in": groups_with_perms}
                 return cls.on_rest_list(request, cls.objects.filter(**q))
+
         if MOJO_REST_LIST_PERM_DENY:
             return cls.rest_error_response(request, 403, error=f"GET permission denied: {cls.__name__}")
         return cls.on_rest_list_response(request, cls.objects.none())

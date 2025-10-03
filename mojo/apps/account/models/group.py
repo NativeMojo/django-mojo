@@ -106,7 +106,7 @@ class Group(MojoSecrets, MojoModel):
     def user_has_permission(self, user, perms, check_user=True):
         if check_user and user.has_permission(perms):
             return True
-        ms = self.get_member_for_user(user)
+        ms = self.get_member_for_user(user, check_parents=True)
         if ms is not None:
             return ms.has_permission(perms)
         return False
@@ -128,8 +128,45 @@ class Group(MojoSecrets, MojoModel):
         member, created = self.members.get_or_create(user=user)
         return member
 
-    def get_member_for_user(self, user):
-        return self.members.filter(user=user).last()
+    def get_member_for_user(self, user, check_parents=False, is_active=True, max_depth=8):
+        """
+        Get the member object for a user, optionally checking parent chain if not found.
+
+        Args:
+            user: User object to find membership for
+            check_parents: If True, check parent groups if not found in current group
+            is_active: Filter by active members (default True)
+            max_depth: Maximum depth to check in parent chain (default 8)
+
+        Returns:
+            GroupMember object if found, None otherwise
+        """
+        # First check direct membership
+        queryset = self.members.filter(user=user)
+        if is_active:
+            queryset = queryset.filter(is_active=True)
+        member = queryset.last()
+
+        if member is not None or not check_parents:
+            return member
+
+        # Walk up the parent chain with depth protection
+        current = self.parent
+        depth = 0
+
+        while current is not None and depth < max_depth:
+            queryset = current.members.filter(user=user)
+            if is_active:
+                queryset = queryset.filter(is_active=True)
+            member = queryset.last()
+
+            if member is not None:
+                return member
+
+            current = current.parent
+            depth += 1
+
+        return None
 
     def get_children(self, is_active=True, kind=None):
         """
@@ -234,7 +271,7 @@ class Group(MojoSecrets, MojoModel):
 
     def push_notification(self, title=None, body=None, data=None, **kwargs):
         from mojo.apps.account.services.push import send_direct_notification
-        for member in self.members.filter(is_active=True):
+        for member in self.members.filter(is_active=True).select_related('user'):
             send_direct_notification(member.user, title=title, body=body, data=data, **kwargs)
 
     def send_email(
@@ -386,7 +423,7 @@ class Group(MojoSecrets, MojoModel):
         # check if the user is a member of the group
         if request.user.has_permission(perms):
             return True
-        ms = self.get_member_for_user(request.user)
+        ms = self.get_member_for_user(request.user, check_parents=True)
         if ms is None:
             return False
         if ms.has_permission(["view_group", "manage_group"]):
@@ -412,9 +449,25 @@ class Group(MojoSecrets, MojoModel):
     def on_rest_handle_list(cls, request):
         if cls.rest_check_permission(request, "VIEW_PERMS"):
             return cls.on_rest_list(request)
-        if getattr(request.user, 'members') is not None:
-            group_ids = request.user.members.values_list('group__id', flat=True)
-            return cls.on_rest_list(request, cls.objects.filter(id__in=group_ids))
+
+        # Check if user has group-level permissions (includes parent chain and children)
+        if request.user.is_authenticated:
+            perms = cls.get_rest_meta_prop("VIEW_PERMS", [])
+            groups_with_perms = request.user.get_groups_with_permission(perms)
+
+            # Also include all groups where user is a member (even without specific perms)
+            # This matches the behavior of check_view_permission which allows members to view
+            all_user_groups = request.user.get_groups(is_active=True)
+
+            # Combine both querysets
+            combined_ids = set(groups_with_perms.values_list('id', flat=True)) | set(all_user_groups.values_list('id', flat=True))
+
+            if combined_ids:
+                return cls.on_rest_list(request, cls.objects.filter(id__in=combined_ids))
+            else:
+                # Authenticated user with no groups - return empty list (not 403)
+                return cls.on_rest_list(request, cls.objects.none())
+
         if MOJO_REST_LIST_PERM_DENY:
             return cls.rest_error_response(request, 403, error=f"GET permission denied: {cls.__name__}")
         return cls.on_rest_list(request, cls.objects.none())
