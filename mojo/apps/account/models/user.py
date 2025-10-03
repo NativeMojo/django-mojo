@@ -169,6 +169,80 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
         if self.active_request:
             UserDevice.track(request=self.active_request, user=self)
 
+    def get_groups(self, is_active=True):
+        """
+        Returns a QuerySet of all groups the user is a member of.
+
+        Args:
+            is_active: Filter by active members (default True). Set to None to get all.
+
+        Returns:
+            QuerySet of Group objects
+        """
+        from mojo.apps.account.models import Group
+        queryset = Group.objects.filter(members__user=self)
+        if is_active is not None:
+            queryset = queryset.filter(members__is_active=is_active)
+        return queryset.distinct()
+
+    def get_group_ids(self, is_active=True):
+        """
+        Returns a list of group IDs the user is a member of.
+
+        Args:
+            is_active: Filter by active members (default True). Set to None to get all.
+
+        Returns:
+            List of group IDs
+        """
+        queryset = self.members.all()
+        if is_active is not None:
+            queryset = queryset.filter(is_active=is_active)
+        return list(queryset.values_list('group_id', flat=True))
+
+    def get_groups_with_permission(self, perms, is_active=True):
+        """
+        Returns a list of groups where the user has the specified permission(s).
+        Checks both user-level permissions and group member permissions.
+        Includes child groups where user has parent membership with permissions.
+
+        Args:
+            perms: Permission key (string) or list of permission keys to check (OR logic)
+            is_active: Filter by active members (default True). Set to None to get all.
+
+        Returns:
+            QuerySet of Group objects where the user has the specified permission(s)
+        """
+        from mojo.apps.account.models import Group
+
+        # First check if user has system-level permissions
+        if self.has_permission(perms):
+            # User has system-level permission, return all groups they're a member of
+            return self.get_groups(is_active=is_active)
+
+        # Get all groups where user is directly a member with permissions
+        group_ids = set()
+        members_queryset = self.members.select_related('group')
+        if is_active is not None:
+            members_queryset = members_queryset.filter(is_active=is_active)
+
+        # Collect groups where user has direct membership with required permissions
+        parent_group_ids = []
+        for member in members_queryset:
+            if member.has_permission(perms):
+                group_ids.add(member.group_id)
+                parent_group_ids.append(member.group_id)
+
+        # Bulk fetch all child groups for parents with permissions (optimized)
+        if parent_group_ids:
+            parent_groups = Group.objects.filter(id__in=parent_group_ids)
+            # Collect all child IDs from each parent in one go
+            for parent_group in parent_groups:
+                child_ids = parent_group._get_all_child_ids()
+                group_ids.update(child_ids)
+
+        return Group.objects.filter(id__in=list(group_ids))
+
     def get_auth_key(self):
         if self.auth_key is None:
             self.auth_key = uuid.uuid4().hex

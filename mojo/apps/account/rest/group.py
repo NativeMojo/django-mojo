@@ -34,7 +34,7 @@ def on_group_me_member(request, pk=None):
     if request.group is None:
         return Group.rest_error_response(request, 403, error="GET permission denied: Group")
     request.group.touch()
-    member = request.group.get_member_for_user(request.user)
+    member = request.group.get_member_for_user(request.user, check_parents=True)
     if member is None:
         return {"status": True, "data": {"id": -1, "permissions": [] }}
     return member.on_rest_get(request)
