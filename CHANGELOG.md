@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.68 - October 05, 2025
+
+* trying to fix cluster bug
+
+
 ## v0.1.67 - October 05, 2025
 
 * Bug fix in redis cluster mode
