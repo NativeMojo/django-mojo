@@ -2,9 +2,12 @@ from django.db import models
 from mojo.models import MojoModel
 from mojo import errors as merrors
 from mojo.helpers.settings import settings
+from mojo.helpers import dates
 
 MEMBER_PERMS_PROTECTION = settings.get("MEMBER_PERMS_PROTECTION", {})
-
+USER_LAST_ACTIVITY_FREQ = settings.get("USER_LAST_ACTIVITY_FREQ", 300)
+METRICS_TIMEZONE = settings.get("METRICS_TIMEZONE", "America/Los_Angeles")
+METRICS_TRACK_USER_ACTIVITY = settings.get("METRICS_TRACK_USER_ACTIVITY", False)
 
 class GroupMember(models.Model, MojoModel):
     """
@@ -12,6 +15,8 @@ class GroupMember(models.Model, MojoModel):
     """
     created = models.DateTimeField(auto_now_add=True, editable=False)
     modified = models.DateTimeField(auto_now=True, db_index=True)
+    last_activity = models.DateTimeField(default=None, null=True, db_index=True)
+
     user = models.ForeignKey(
         "account.User",related_name="members",
         on_delete=models.CASCADE)
@@ -25,7 +30,7 @@ class GroupMember(models.Model, MojoModel):
     metadata = models.JSONField(default=dict, blank=True)
 
     class RestMeta:
-        VIEW_PERMS = ["view_groups", "manage_groups", "manage_group"]
+        VIEW_PERMS = ["view_members", "view_groups", "manage_groups", "manage_group"]
         SAVE_PERMS = ["manage_groups", "manage_group"]
         CREATED_BY_OWNER_FIELD = 'created_by'  # we do this to protect user
         LIST_DEFAULT_FILTERS = {
@@ -117,3 +122,18 @@ class GroupMember(models.Model, MojoModel):
         if perm_key in self.permissions:
             del self.permissions[perm_key]
             self.save()
+
+    def touch(self):
+        from mojo.apps import metrics
+        # can't subtract offset-naive and offset-aware datetimes
+        if self.last_activity is None or dates.has_time_elsapsed(self.last_activity, seconds=USER_LAST_ACTIVITY_FREQ):
+            if self.last_activity and not dates.is_today(self.last_activity, METRICS_TIMEZONE):
+                metrics.record(
+                    "member_activity_day",
+                    min_granularity="days",
+                    account=f"group-{self.group.pk}"
+                )
+            self.last_activity = dates.utcnow()
+            self.save(update_fields=['last_activity'])
+        if METRICS_TRACK_USER_ACTIVITY:
+            metrics.record(f"member_activity:{self.pk}", category="member", min_granularity="minutes")
