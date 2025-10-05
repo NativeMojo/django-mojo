@@ -107,7 +107,7 @@ class JobManager:
                     logit.warn(f"Failed to parse runner heartbeat: {e}")
 
         except Exception as e:
-            logit.error(f"Failed to get runners: {e}")
+            logit.exception(f"Failed to get runners: {e}")
 
         # Sort by runner_id for consistency
         runners.sort(key=lambda r: r.get('runner_id', ''))
