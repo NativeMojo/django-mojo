@@ -37,4 +37,5 @@ def on_group_me_member(request, pk=None):
     member = request.group.get_member_for_user(request.user, check_parents=True)
     if member is None:
         return {"status": True, "data": {"id": -1, "permissions": [] }}
+    member.touch()
     return member.on_rest_get(request)

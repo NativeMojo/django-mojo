@@ -405,7 +405,63 @@ class MojoModel:
         if request.method == 'GET':
             return cls.on_rest_handle_list(request)
         elif request.method in ['POST', 'PUT']:
+            # Batch save mode: if 'batched' list is present and model allows batching
+            batched = request.DATA.get("batched")
+            if batched and isinstance(batched, list) and cls.get_rest_meta_prop("CAN_BATCH", False):
+                return cls.on_rest_handle_batch(request)
             return cls.on_rest_handle_create(request)
+
+    @classmethod
+    def on_rest_handle_batch(cls, request):
+        """
+        Handle batch create/update when request.DATA includes a 'batched' list
+        and RestMeta.CAN_BATCH is True.
+
+        Each item in 'batched':
+          - If contains 'id' or 'pk', attempts to update that instance via update_from_dict
+          - Otherwise creates a new instance via create_from_dict
+
+        Returns a JSON response with serialized results and optional errors.
+        """
+        if not cls.get_rest_meta_prop("CAN_BATCH", False):
+            return cls.rest_error_response(request, 403, error=f"BATCH not allowed: {cls.__name__}")
+
+        if not cls.rest_check_permission(request, ["SAVE_PERMS", "VIEW_PERMS"]):
+            return cls.rest_error_response(request, 403, error=f"BATCH permission denied: {cls.__name__}")
+
+        batched = request.DATA.get("batched")
+        if not isinstance(batched, list):
+            return cls.rest_error_response(request, 400, error="Invalid 'batched' payload: expected a list")
+
+        results = []
+        errors = []
+        for idx, item in enumerate(batched):
+            try:
+                if not isinstance(item, dict):
+                    raise ValueError("Batch item must be an object")
+                pk = item.get("id") or item.get("pk")
+                if pk:
+                    instance = cls.objects.filter(pk=pk).first()
+                    if instance:
+                        instance.update_from_dict(item)
+                    else:
+                        instance = cls.create_from_dict(item, request=request)
+                else:
+                    instance = cls.create_from_dict(item, request=request)
+                results.append(instance)
+            except Exception as e:
+                errors.append({"index": idx, "error": str(e)})
+
+        # Serialize results using the same serializer manager used elsewhere
+        graph = request.DATA.get("graph", "list")
+        manager = get_serializer_manager()
+        serializer = manager.get_serializer(results, graph=graph, many=True)
+        data = serializer.serialize()
+
+        payload = {"items": data, "count": len(results)}
+        if errors:
+            payload["errors"] = errors
+        return cls.return_rest_response(payload)
 
     @classmethod
     def on_rest_list(cls, request, queryset=None):
