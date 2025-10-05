@@ -105,6 +105,9 @@ def fetch(slug, dt_start=None, dt_end=None, granularity="hours",
     if redis_con is None:
         redis_con = redis.get_connection()
 
+    if not slug:
+        slug = "no_slugs_found"
+
     if isinstance(slug, (list, set)):
         resp = nobjict()
         if with_labels:
