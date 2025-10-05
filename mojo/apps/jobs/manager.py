@@ -64,7 +64,13 @@ class JobManager:
                     cursor, match=pattern, count=100
                 )
                 all_keys.extend(keys)
-                if cursor == 0:
+                # Handle both cluster (dict cursor) and non-cluster (int cursor) modes
+                if isinstance(cursor, dict):
+                    # RedisCluster returns dict cursor, check if all nodes are done
+                    if all(v == 0 for v in cursor.values()):
+                        break
+                elif cursor == 0:
+                    # Standalone Redis returns int cursor
                     break
 
             # Check each runner
@@ -892,7 +898,13 @@ class JobManager:
                             channel = channel.rsplit(":broadcast", 1)[0]
                         if channel:
                             found.add(channel)
-                if cursor == 0:
+                # Handle both cluster (dict cursor) and non-cluster (int cursor) modes
+                if isinstance(cursor, dict):
+                    # RedisCluster returns dict cursor, check if all nodes are done
+                    if all(v == 0 for v in cursor.values()):
+                        break
+                elif cursor == 0:
+                    # Standalone Redis returns int cursor
                     break
             channels = sorted(found)
         except Exception as e:
