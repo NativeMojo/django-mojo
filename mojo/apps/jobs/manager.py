@@ -55,23 +55,9 @@ class JobManager:
             # Find all runner heartbeat keys
             pattern = self.keys.runner_hb('*')
 
-            # Note: In production, use SCAN instead of KEYS for better performance
-            # For now, using a simple approach
-            all_keys = []
-            cursor = 0
-            while True:
-                cursor, keys = self.redis.get_client().scan(
-                    cursor, match=pattern, count=100
-                )
-                all_keys.extend(keys)
-                # Handle both cluster (dict cursor) and non-cluster (int cursor) modes
-                if isinstance(cursor, dict):
-                    # RedisCluster returns dict cursor, check if all nodes are done
-                    if all(v == 0 for v in cursor.values()):
-                        break
-                elif cursor == 0:
-                    # Standalone Redis returns int cursor
-                    break
+            # Use scan_iter for better performance and cluster compatibility
+            # scan_iter handles both standalone and cluster modes automatically
+            all_keys = list(self.redis.get_client().scan_iter(match=pattern, count=100))
 
             # Check each runner
             for key in all_keys:
@@ -884,28 +870,18 @@ class JobManager:
         try:
             pattern = f"{self.keys.prefix}:stream:*"
             client = self.redis.get_client()
-            cursor = 0
             found = set()
-            while True:
-                cursor, keys = client.scan(cursor, match=pattern, count=200)
-                for k in keys or []:
-                    key_str = k.decode('utf-8') if isinstance(k, (bytes, bytearray)) else k
-                    parts = key_str.split(":stream:")
-                    if len(parts) == 2 and parts[1]:
-                        channel = parts[1]
-                        # ignore broadcast suffix if present
-                        if channel.endswith(":broadcast"):
-                            channel = channel.rsplit(":broadcast", 1)[0]
-                        if channel:
-                            found.add(channel)
-                # Handle both cluster (dict cursor) and non-cluster (int cursor) modes
-                if isinstance(cursor, dict):
-                    # RedisCluster returns dict cursor, check if all nodes are done
-                    if all(v == 0 for v in cursor.values()):
-                        break
-                elif cursor == 0:
-                    # Standalone Redis returns int cursor
-                    break
+            # Use scan_iter for cluster compatibility (handles both standalone and cluster modes)
+            for k in client.scan_iter(match=pattern, count=200):
+                key_str = k.decode('utf-8') if isinstance(k, (bytes, bytearray)) else k
+                parts = key_str.split(":stream:")
+                if len(parts) == 2 and parts[1]:
+                    channel = parts[1]
+                    # ignore broadcast suffix if present
+                    if channel.endswith(":broadcast"):
+                        channel = channel.rsplit(":broadcast", 1)[0]
+                    if channel:
+                        found.add(channel)
             channels = sorted(found)
         except Exception as e:
             logit.debug(f"Failed to discover channels via Redis scan: {e}")

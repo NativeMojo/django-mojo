@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.69 - October 05, 2025
+
+* mroe debug
+
+
 ## v0.1.68 - October 05, 2025
 
 * trying to fix cluster bug
