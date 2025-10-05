@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.66 - October 05, 2025
+
+* Fixes to group level permissions
+
+
 ## v0.1.65 - October 03, 2025
 
 * ADDED advanced permissions via group/child/parent chaining
