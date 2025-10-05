@@ -180,13 +180,20 @@ class OptimizedGraphSerializer:
         # Serialize based on graph configuration
         data = {}
 
+        # Enforce NO_SHOW_FIELDS from RestMeta (never expose, even if requested)
+        no_show_fields = set(getattr(obj.RestMeta, "NO_SHOW_FIELDS", []) or [])
+
         # Basic model fields - if no fields specified, use all model fields
         fields = graph_config.get("fields", [])
         if not fields:
             fields = [field.name for field in obj._meta.fields]
 
         # Apply exclude filter to remove sensitive fields
-        exclude_fields = graph_config.get("exclude", [])
+        exclude_fields = list(graph_config.get("exclude", []))
+        exclude_fields.append("mojo_secrets")
+        # Always exclude NO_SHOW_FIELDS
+        if no_show_fields:
+            exclude_fields.extend(no_show_fields)
         if exclude_fields:
             fields = [field for field in fields if field not in exclude_fields]
 
@@ -219,6 +226,8 @@ class OptimizedGraphSerializer:
                 method_name, alias = field_spec
             else:
                 method_name, alias = field_spec, field_spec
+
+
 
             try:
                 if hasattr(obj, method_name):
@@ -324,6 +333,10 @@ class OptimizedGraphSerializer:
         """
         if hasattr(obj, '_meta'):
             fields = [field.name for field in obj._meta.fields]
+            # Enforce NO_SHOW_FIELDS even in fallback mode
+            no_show_fields = set(getattr(obj.RestMeta, "NO_SHOW_FIELDS", []) or []) if hasattr(obj, "RestMeta") else set()
+            if no_show_fields:
+                fields = [field for field in fields if field not in no_show_fields]
             data = {}
             for field_name in fields:
                 try:
