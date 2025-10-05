@@ -8,19 +8,47 @@ from mojo.helpers import logit
 @md.public_endpoint()
 def on_ossec_alert(request):
     ossec_alert = ossec.parse(request.DATA)
-    # add the request ip
-    ossec_alert["request_ip"] = request.ip
-    reporter.report_event(ossec_alert.text, category="ossec", **ossec_alert)
+
+    # Skip if parsing returned None (ignored or malformed alert)
+    if not ossec_alert:
+        return JsonResponse({"status": True})
+
+    # Add the request IP defensively
+    try:
+        ossec_alert["request_ip"] = request.ip
+    except Exception:
+        try:
+            setattr(ossec_alert, "request_ip", request.ip)
+        except Exception:
+            pass
+
+    # Use getattr to avoid attribute errors if 'text' is missing
+    reporter.report_event(getattr(ossec_alert, "text", ""), category="ossec", **ossec_alert)
     return JsonResponse({"status": True})
 
 
 @md.POST('ossec/alert/batch')
 @md.public_endpoint()
 def on_ossec_alert_batch(request):
-    ossec_alerts = ossec.parse(request.DATA)
+    ossec_alerts = ossec.parse(request.DATA) or []
+
     for alert in ossec_alerts:
-        alert["request_ip"] = request.ip
-        reporter.report_event(alert.text, category="ossec", **alert)
+        # Skip None alerts (ignored or malformed)
+        if not alert:
+            continue
+
+        # Add the request IP defensively
+        try:
+            alert["request_ip"] = request.ip
+        except Exception:
+            try:
+                setattr(alert, "request_ip", request.ip)
+            except Exception:
+                pass
+
+        # Use getattr to avoid attribute errors if 'text' is missing
+        reporter.report_event(getattr(alert, "text", ""), category="ossec", **alert)
+
     return JsonResponse({"status": True})
 
 

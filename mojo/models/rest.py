@@ -809,10 +809,14 @@ class MojoModel:
                     value = bool(value)
                 else:
                     value = bool(value)
+            elif value == "" and field.null:
+                value = None
             elif value is not None:
                 if field.get_internal_type() in ["DateTimeField", "DateField"]:
                     if not isinstance(value, (datetime.datetime, datetime.date)):
                         value = dates.parse_datetime(value)
+                elif value == "" and field.get_internal_type() in ["IntegerField", "FloatField", "BigIntegerField"]:
+                    value = 0
             self._set_field_change(key, getattr(self, key), value)
             setattr(self, key, value)
 

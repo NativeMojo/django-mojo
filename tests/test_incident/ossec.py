@@ -340,3 +340,64 @@ def test_clean_text_data_coverage(opts):
 #         #assert expected[sec_alert.alert_id] == alert, f"does not match {sec_alert.alert_id}"
 #         expected[sec_alert.alert_id] = alert
 #     expected.save(os.path.join(current_dir, "ossec_expected.json"))
+
+
+@th.django_unit_test()
+def test_ossec_rest_skips_none_single(opts):
+    """Ensure single REST handler returns 200 and skips None alerts."""
+    # Post an empty body which will parse to None and should be skipped gracefully
+    resp = opts.client.post("/api/incident/ossec/alert", "", content_type="text/plain")
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
+
+
+@th.django_unit_test()
+def test_ossec_rest_batch_skips_none_and_processes_valid(opts):
+    """Ensure batch REST handler skips None entries and processes valid ones."""
+    from mojo.apps.incident.models import Event
+    import time
+
+    # Unique alert_id for this test
+    alert_id = f"{int(time.time())}.101"
+
+    valid_text = f"""** Alert {alert_id}: - web,accesslog,
+2025 Oct 03 13:22:05 m->/var/log/nginx/access.log
+Rule: 31101 (level 5) -> 'Web server 400 error code.'
+Src IP: 1.2.3.4
+1.2.3.4 - - [03/Oct/2025:13:22:03 +0000] "GET https://example.com/ HTTP/1.1" 404 56 "-" "TestAgent" 0.003 443"""
+
+    batch_payload = {
+        "batch": [
+            {
+                "ip": "-",
+                "text": valid_text,
+                "action": "add",
+                "ext_ip": "-",
+                "logfile": "/var/log/nginx/access.log",
+                "rule_id": "31101",
+                "alert_id": alert_id,
+                "hostname": "m",
+                "username": "-",
+                "username2": "-"
+            },
+            {
+                # This one should parse to None and be skipped
+                "ip": "-",
+                "text": "",
+                "action": "add",
+                "ext_ip": "-",
+                "logfile": "/var/log/nginx/access.log",
+                "rule_id": "31530",
+                "alert_id": f"{int(time.time())}.102",
+                "hostname": "m",
+                "username": "-",
+                "username2": "-"
+            }
+        ]
+    }
+
+    resp = opts.client.post("/api/incident/ossec/alert/batch", batch_payload)
+    assert resp.status_code == 200, f"Expected status_code 200 but got {resp.status_code}"
+
+    # Verify the valid alert was saved
+    event = Event.objects.filter(metadata__alert_id=alert_id).last()
+    assert event is not None, f"Event with alert_id {alert_id} not found"
