@@ -5,6 +5,11 @@ from mojo.helpers.response import JsonResponse
 from mojo.apps.account.models.user import User
 from mojo.helpers import dates, crypto
 from mojo import errors as merrors
+from mojo.helpers.settings import settings
+
+JWT_TOKEN_EXPIRY = settings.get("JWT_TOKEN_EXPIRY", 21600)
+JWT_REFRESH_TOKEN_EXPIRY = settings.get("JWT_REFRESH_TOKEN_EXPIRY", 604800)
+
 
 @md.URL('user')
 @md.URL('user/<int:pk>')
@@ -55,13 +60,32 @@ def on_user_login(request):
         # Authentication successful
         user.report_incident(f"{user.username} enter an invalid password", "invalid_password")
         raise merrors.PermissionDeniedException("Invalid username or password", 401, 401)
+    return jwt_login(request, user, "account/jwt/login" in request.path)
+
+
+def jwt_login(request, user, legacy=False):
     user.last_login = dates.utcnow()
     user.track()
     keys = dict(uid=user.id)
     if request.device:
         keys['device'] = request.device.id
-    token_package = JWToken(user.get_auth_key()).create(**keys)
+    access_token_expiry = JWT_TOKEN_EXPIRY
+    refresh_token_expiry = JWT_REFRESH_TOKEN_EXPIRY
+    if user.org:
+        access_token_expiry = user.org.metadata.get("access_token_expiry", JWT_TOKEN_EXPIRY)
+        refresh_token_expiry = user.org.metadata.get("refresh_token_expiry", JWT_REFRESH_TOKEN_EXPIRY)
+    token_package = JWToken(
+        user.get_auth_key(),
+        access_token_expiry=access_token_expiry,
+        refresh_token_expiry=refresh_token_expiry).create(**keys)
     token_package['user'] = user.to_dict("basic")
+    if legacy:
+        return {
+            "status": True,
+            "access": token_package.access_token,
+            "refresh": token_package.refresh_token,
+            "id": user.id
+        }
     return JsonResponse(dict(status=True, data=token_package))
 
 

@@ -14,7 +14,7 @@ Note: WebSocket authentication is message-only; header/query parsing helpers wer
 
 import logging
 
-from channels.db import database_sync_to_async
+from asgiref.sync import sync_to_async
 
 # Reuse the same handler maps as the HTTP middleware for a single source of truth
 from mojo.middleware.auth import (
@@ -123,7 +123,7 @@ async def async_validate_bearer_token(
     """
     Async wrapper for validate_bearer_token suitable for use in async consumers.
     """
-    return await database_sync_to_async(validate_bearer_token)(prefix, token, request)
+    return await sync_to_async(validate_bearer_token)(prefix, token, request)
 
 
 def attach_identity_to_scope(
