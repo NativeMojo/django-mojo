@@ -55,7 +55,7 @@ def register_device(request):
 def register_legacy_device(request):
     device_id = request.DATA.get("device_id", request.duid)
     if not device_id:
-        device_id =
+        device_id = request.device.id
     cmf_token = request.DATA.get(["cmf_token", "cm_token"])
     meta = request.DATA.get("device_metadata", {})
     ua_info = rhelper.parse_user_agent(request.user_agent)
