@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.72 - October 05, 2025
+
+Robustness of redis pools
+
+
 ## v0.1.71 - October 05, 2025
 
 FIXES in aws email sending

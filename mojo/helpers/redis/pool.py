@@ -36,10 +36,26 @@ class RedisBasePool:
             return True
         return False
 
-    def remove(self, str_id: str) -> bool:
-        """Remove an item from the pool entirely."""
+    def remove(self, str_id: str, force: bool = False) -> bool:
+        """
+        Remove an item from the pool entirely.
+
+        Args:
+            str_id: Item to remove
+            force: If True, removes even if checked out. If False (default),
+                   only removes if currently available.
+
+        Returns:
+            True if removed, False if not in pool or checked out (when force=False)
+        """
         if not self.redis_client.sismember(self.all_items_set_key, str_id):
             return False
+
+        if not force:
+            # Check if item is available (not checked out)
+            available = self.redis_client.lrange(self.available_list_key, 0, -1)
+            if str_id.encode() not in available and str_id not in available:
+                return False
 
         self.redis_client.srem(self.all_items_set_key, str_id)
         self.redis_client.lrem(self.available_list_key, 0, str_id)
@@ -68,10 +84,27 @@ class RedisBasePool:
                 return False
         return True
 
-    def checkin(self, str_id: str) -> bool:
-        """Check in an item back to the pool."""
+    def checkin(self, str_id: str, allow_duplicate: bool = False) -> bool:
+        """
+        Check in an item back to the pool.
+
+        Args:
+            str_id: Item to check in
+            allow_duplicate: If False (default), checks if item is already available
+                           to prevent duplicates. If True, always adds to list.
+
+        Returns:
+            True if item was checked in, False if item not in pool or already available
+        """
         if not self.redis_client.sismember(self.all_items_set_key, str_id):
             return False
+
+        # Prevent duplicates by checking if item is already in available list
+        if not allow_duplicate:
+            # Check if item is in the available list
+            available = self.redis_client.lrange(self.available_list_key, 0, -1)
+            if str_id.encode() in available or str_id in available:
+                return False
 
         self.redis_client.lpush(self.available_list_key, str_id)
         return True
@@ -93,6 +126,30 @@ class RedisBasePool:
     def destroy_pool(self) -> None:
         """Completely destroy the pool."""
         self.clear()
+
+    def remove_duplicates(self) -> int:
+        """
+        Remove duplicate entries from the available list.
+
+        Returns:
+            Number of duplicates removed
+        """
+        available = self.redis_client.lrange(self.available_list_key, 0, -1)
+        seen = set()
+        duplicates_removed = 0
+
+        # Clear the list
+        self.redis_client.delete(self.available_list_key)
+
+        # Re-add unique items only
+        for item in reversed(available):  # Reversed to maintain original order
+            if item not in seen:
+                seen.add(item)
+                self.redis_client.lpush(self.available_list_key, item)
+            else:
+                duplicates_removed += 1
+
+        return duplicates_removed
 
     def get_next_available(self, timeout: Optional[int] = None) -> Optional[str]:
         """Get the next available item from the pool."""
@@ -160,23 +217,51 @@ class RedisModelPool(RedisBasePool):
         queryset = self.model_cls.objects.filter(**self.query_dict)
         for instance in queryset:
             item = str(instance.pk)
-            if not self.redis_client.sismember(self.all_items_set_key, item):
-                self.redis_client.sadd(self.all_items_set_key, item)
+            # After destroy_pool(), the set is empty, so no need to check membership
+            self.redis_client.sadd(self.all_items_set_key, item)
             self.redis_client.lpush(self.available_list_key, item)
 
     def add_to_pool(self, instance: models.Model) -> bool:
-        """Add a model instance to the pool."""
+        """
+        Add a model instance to the pool.
+
+        Returns:
+            True if item was added, False if it already existed
+        """
+        if not self.is_ready():
+            self.init_pool()
+
         item = str(instance.pk)
         if not self.redis_client.sismember(self.all_items_set_key, item):
             self.redis_client.sadd(self.all_items_set_key, item)
-        self.redis_client.lpush(self.available_list_key, item)
-        return True
+            self.redis_client.lpush(self.available_list_key, item)
+            return True
+        return False
 
-    def remove_from_pool(self, instance: models.Model) -> bool:
-        """Remove instance from pool."""
+    def remove_from_pool(self, instance: models.Model, force: bool = False) -> bool:
+        """
+        Remove instance from pool.
+
+        Args:
+            instance: Model instance to remove
+            force: If True, removes even if checked out. If False (default),
+                   only removes if currently available.
+
+        Returns:
+            True if removed, False if not in pool or checked out (when force=False)
+        """
+        if not self.redis_client.exists(self.all_items_set_key):
+            self.init_pool()
+
         item = str(instance.pk)
         if not self.redis_client.sismember(self.all_items_set_key, item):
             return False
+
+        if not force:
+            # Check if item is available (not checked out)
+            available = self.redis_client.lrange(self.available_list_key, 0, -1)
+            if item.encode() not in available and item not in available:
+                return False
 
         self.redis_client.lrem(self.available_list_key, 0, item)
         self.redis_client.srem(self.all_items_set_key, item)
@@ -187,10 +272,20 @@ class RedisModelPool(RedisBasePool):
         all_items = self.list_checked_out()
         return self.model_cls.objects.filter(pk__in=all_items)
 
-    def get_next_instance(self, timeout: Optional[int] = None) -> Optional[models.Model]:
-        """Get the next available model instance."""
+    def get_next_instance(self, timeout: Optional[int] = None, _retries: int = 0, _max_retries: int = 100) -> Optional[models.Model]:
+        """
+        Get the next available model instance.
+
+        Args:
+            timeout: Timeout for waiting for an available instance
+            _retries: Internal counter to prevent infinite recursion
+            _max_retries: Maximum number of retries for stale records
+        """
         if not self.redis_client.exists(self.all_items_set_key):
             self.init_pool()
+
+        if _retries >= _max_retries:
+            return None
 
         pk = self.get_next_available(timeout)
         if pk:
@@ -201,12 +296,12 @@ class RedisModelPool(RedisBasePool):
                 for key, value in self.query_dict.items():
                     if getattr(instance, key) != value:
                         self.redis_client.srem(self.all_items_set_key, pk)
-                        return self.get_next_instance(timeout)
+                        return self.get_next_instance(timeout=0, _retries=_retries + 1, _max_retries=_max_retries)
 
                 return instance
             except self.model_cls.DoesNotExist:
                 self.redis_client.srem(self.all_items_set_key, pk)
-                return self.get_next_instance(timeout)
+                return self.get_next_instance(timeout=0, _retries=_retries + 1, _max_retries=_max_retries)
 
         return None
 
@@ -219,11 +314,26 @@ class RedisModelPool(RedisBasePool):
         removed = self.redis_client.lrem(self.available_list_key, 1, item)
         return removed > 0
 
-    def return_instance(self, instance: models.Model) -> bool:
-        """Return a model instance to the pool."""
+    def return_instance(self, instance: models.Model, allow_duplicate: bool = False) -> bool:
+        """
+        Return a model instance to the pool.
+
+        Args:
+            instance: Model instance to return
+            allow_duplicate: If False (default), prevents returning an already-available instance
+
+        Returns:
+            True if returned, False if not in pool or already available
+        """
         item = str(instance.pk)
         if not self.redis_client.sismember(self.all_items_set_key, item):
             return False
+
+        # Prevent duplicates by checking if item is already in available list
+        if not allow_duplicate:
+            available = self.redis_client.lrange(self.available_list_key, 0, -1)
+            if item.encode() in available or item in available:
+                return False
 
         self.redis_client.lpush(self.available_list_key, item)
         return True
