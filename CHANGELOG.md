@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.74 - October 06, 2025
+
+Legacy login
+
+
 ## v0.1.73 - October 06, 2025
 
 HOTFIX channels package removal
