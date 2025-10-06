@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.75 - October 06, 2025
+
+legacy login support debug
+
+
 ## v0.1.74 - October 06, 2025
 
 Legacy login

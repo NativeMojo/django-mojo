@@ -74,6 +74,8 @@ def jwt_login(request, user, legacy=False):
     if user.org:
         access_token_expiry = user.org.metadata.get("access_token_expiry", JWT_TOKEN_EXPIRY)
         refresh_token_expiry = user.org.metadata.get("refresh_token_expiry", JWT_REFRESH_TOKEN_EXPIRY)
+    if legacy:
+        keys.update(dict(user_id=user.id, device_id=request.DATA.get(["device_id", "deviceID"], request.device.id)))
     token_package = JWToken(
         user.get_auth_key(),
         access_token_expiry=access_token_expiry,
