@@ -269,8 +269,8 @@ class Mailbox(models.Model, MojoModel):
             if EmailTemplate.objects.filter(name=domain_template_name).exists():
                 final_template_name = domain_template_name
 
-        aws_access_key = self.domain.aws_access_key
-        aws_secret_key = self.domain.aws_secret_key
+        aws_access_key = self.domain.aws_key
+        aws_secret_key = self.domain.aws_secret
         aws_region = self.domain.aws_region
 
         return email_service.send_with_template(

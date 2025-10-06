@@ -167,7 +167,7 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
     def track(self):
         self.touch()
         if self.active_request:
-            UserDevice.track(request=self.active_request, user=self)
+            self.active_request.device = UserDevice.track(request=self.active_request, user=self)
 
     def get_groups(self, is_active=True):
         """
