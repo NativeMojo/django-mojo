@@ -23,6 +23,7 @@ class MojoMiddleware:
         request.started_at = time.time()
         request.user = ANONYMOUS_USER
         request.group = None
+        request.device = None
         request.request_log = None
         request.ip = rhelper.get_remote_ip(request)
         request.user_agent = rhelper.get_user_agent(request)

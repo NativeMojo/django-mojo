@@ -42,7 +42,53 @@ def register_device(request):
         }
     )
 
+    if not created:
+        if not device.push_enabled:
+            device.is_active = True
+            device.push_enabled = True
+            device.save()
+
     return device.on_rest_get(request, 'default')
+
+
+@md.POST('account/member/device/register')
+def register_legacy_device(request):
+    device_id = request.DATA.get("device_id")
+    cmf_token = request.DATA.get("cmf_token")
+    device, created = RegisteredDevice.objects.update_or_create(
+        user=request.user,
+        device_id=device_id,
+        defaults={
+            'device_token': cmf_token,
+            'platform': request.DATA.get('platform', ''),
+            'device_name': request.DATA.get('device_name', ''),
+            'app_version': request.DATA.get('app_version', ''),
+            'os_version': request.DATA.get('os_version', ''),
+            'push_preferences': request.DATA.get('push_preferences', {}),
+            'is_active': True,
+            'push_enabled': True
+        }
+    )
+
+    if not created:
+        if not device.push_enabled:
+            device.is_active = True
+            device.push_enabled = True
+            device.save()
+    return {"status": True}
+
+
+@md.POST('account/devices/push/unregister')
+@md.requires_auth()
+@md.requires_params(['device_token', 'device_id', 'platform'])
+def unregister_device(request):
+    device =RegisteredDevice.objects.filter(
+        user=request.user, device_id=request.DATA.get('device_id')).last()
+    if device and device.push_enabled:
+        device.is_active = False
+        device.push_enabled = False
+        device.save()
+    return {"status": True }
 
 
 @md.URL('account/devices/push')

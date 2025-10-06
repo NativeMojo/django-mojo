@@ -13,6 +13,7 @@ def on_user(request, pk=None):
 
 
 @md.GET('user/me')
+@md.GET('account/user/me')
 @md.requires_auth()
 def on_user_me(request):
     return User.on_rest_request(request, request.user.pk)
@@ -21,6 +22,7 @@ def on_user_me(request):
 @md.POST('refresh_token')
 @md.POST('token/refresh')
 @md.POST("auth/token/refresh")
+@md.POST('account/jwt/refresh')
 @md.requires_params("refresh_token")
 def on_refresh_token(request):
     user, error = User.validate_jwt(request.DATA.refresh_token)
@@ -35,6 +37,7 @@ def on_refresh_token(request):
 
 @md.POST("login")
 @md.POST("auth/login")
+@md.POST('account/jwt/login')
 @md.requires_params("username", "password")
 def on_user_login(request):
     username = request.DATA.username
@@ -53,8 +56,11 @@ def on_user_login(request):
         user.report_incident(f"{user.username} enter an invalid password", "invalid_password")
         raise merrors.PermissionDeniedException("Invalid username or password", 401, 401)
     user.last_login = dates.utcnow()
-    user.touch()
-    token_package = JWToken(user.get_auth_key()).create(uid=user.id)
+    user.track()
+    keys = dict(uid=user.id)
+    if request.device:
+        keys['device'] = request.device.id
+    token_package = JWToken(user.get_auth_key()).create(**keys)
     token_package['user'] = user.to_dict("basic")
     return JsonResponse(dict(status=True, data=token_package))
 
