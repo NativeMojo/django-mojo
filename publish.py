@@ -163,7 +163,7 @@ def get_release_notes() -> List[str]:
     Returns:
         List of release note lines
     """
-    logger.info("Please enter release notes (press Enter twice when done):")
+    logger.info("\n======\nPlease enter release notes (press Enter twice when done):")
     notes = []
     empty_lines = 0
 

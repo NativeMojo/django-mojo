@@ -82,9 +82,11 @@ def jwt_login(request, user, legacy=False):
     if legacy:
         return {
             "status": True,
-            "access": token_package.access_token,
-            "refresh": token_package.refresh_token,
-            "id": user.id
+            "data": {
+                "access": token_package.access_token,
+                "refresh": token_package.refresh_token,
+                "id": user.id
+            }
         }
     return JsonResponse(dict(status=True, data=token_package))
 
