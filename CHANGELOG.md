@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.80 - October 08, 2025
+
+Bugfix non str id in redis pool
+
+
 ## v0.1.79 - October 08, 2025
 
 BUGfix geolocated
