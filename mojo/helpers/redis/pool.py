@@ -30,6 +30,8 @@ class RedisBasePool:
 
     def add(self, str_id: str) -> bool:
         """Add an item to the pool."""
+        if not isinstance(str_id, str):
+            str_id = str(str_id)
         if not self.redis_client.sismember(self.all_items_set_key, str_id):
             self.redis_client.sadd(self.all_items_set_key, str_id)
             self.redis_client.lpush(self.available_list_key, str_id)
@@ -48,6 +50,8 @@ class RedisBasePool:
         Returns:
             True if removed, False if not in pool or checked out (when force=False)
         """
+        if not isinstance(str_id, str):
+            str_id = str(str_id)
         if not self.redis_client.sismember(self.all_items_set_key, str_id):
             return False
 
@@ -68,6 +72,8 @@ class RedisBasePool:
 
     def checkout(self, str_id: str, timeout: Optional[int] = None) -> bool:
         """Check out a specific item from the pool."""
+        if not isinstance(str_id, str):
+            str_id = str(str_id)
         if not self.redis_client.sismember(self.all_items_set_key, str_id):
             return False
 
@@ -96,6 +102,8 @@ class RedisBasePool:
         Returns:
             True if item was checked in, False if item not in pool or already available
         """
+        if not isinstance(str_id, str):
+            str_id = str(str_id)
         if not self.redis_client.sismember(self.all_items_set_key, str_id):
             return False
 
@@ -182,6 +190,8 @@ class RedisBasePool:
     @contextmanager
     def checkout_specific_item(self, str_id: str, timeout: Optional[int] = None):
         """Context manager for checking out a specific item."""
+        if not isinstance(str_id, str):
+            str_id = str(str_id)
         if not self.checkout(str_id, timeout):
             raise RuntimeError(f"Could not checkout item {str_id}")
 
