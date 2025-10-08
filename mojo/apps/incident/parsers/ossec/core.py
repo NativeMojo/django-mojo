@@ -119,6 +119,6 @@ def parse_alert_json(data):
         if isinstance(data[key], str):
             data[key] = data[key].strip() # .replace('\\/', '/')
 
-    if hasattr(data, 'text'):
+    if hasattr(data, 'text') and data.text:
         data.text = utils.remove_non_ascii(data.text) # .replace('\\/', '/')
     return data

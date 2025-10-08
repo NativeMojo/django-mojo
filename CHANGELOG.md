@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.79 - October 08, 2025
+
+BUGfix geolocated
+
+
 ## v0.1.78 - October 08, 2025
 
 * BUGFIX geoip no provider

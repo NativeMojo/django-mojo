@@ -108,6 +108,7 @@ class GeoLocatedIP(models.Model, MojoModel):
                 geo_ip.ip_address = ip_address
                 if geo_ip.provider and "subnet" not in geo_ip.provider:
                     geo_ip.provider = f"subnet:{geo_ip.provider}"
+                geo_ip.save()
         if not geo_ip:
             geo_ip = GeoLocatedIP.objects.create(ip_address=ip_address, subnet=subnet)
         if auto_refresh and geo_ip.is_expired:
