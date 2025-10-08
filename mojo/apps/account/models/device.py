@@ -106,7 +106,7 @@ class GeoLocatedIP(models.Model, MojoModel):
                 geo_ip.id = None
                 geo_ip.pk = None
                 geo_ip.ip_address = ip_address
-                if "subnet" not in geo_ip.provider:
+                if geo_ip.provider and "subnet" not in geo_ip.provider:
                     geo_ip.provider = f"subnet:{geo_ip.provider}"
         if not geo_ip:
             geo_ip = GeoLocatedIP.objects.create(ip_address=ip_address, subnet=subnet)
