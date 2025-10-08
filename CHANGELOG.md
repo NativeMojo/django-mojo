@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.78 - October 08, 2025
+
+* BUGFIX geoip no provider
+
+
 ## v0.1.77 - October 06, 2025
 
 Syntax error tests failed
