@@ -59,7 +59,29 @@ class Log(dm.Model, MojoModel):
     @classmethod
     def logit(cls, request, log, kind="log", model_name=None, model_id=0, level="info", **kwargs):
         if isinstance(log, dict):
-            log = ujson.encode(log, indent=4)
+            # Convert unsupported types in dict values
+            def convert_value(value):
+                if isinstance(value, bytes):
+                    return value.decode('utf-8', errors='replace')
+                elif hasattr(value, 'isoformat'):  # datetime objects
+                    return value.isoformat()
+                elif isinstance(value, str):
+                    return value
+                else:
+                    return str(value)
+
+            converted_log = {}
+            for key, value in log.items():
+                if isinstance(value, dict):
+                    # Recursively handle nested dicts
+                    converted_log[key] = {k: convert_value(v) for k, v in value.items()}
+                elif isinstance(value, (list, tuple)):
+                    # Handle lists/tuples of values
+                    converted_log[key] = [convert_value(item) for item in value]
+                else:
+                    converted_log[key] = convert_value(value)
+
+            log = ujson.encode(converted_log, indent=4)
         if not isinstance(log, (bytes, str)):
             log = f"INVALID LOG TYPE: attempting to log type: {type(log)}"
         log = log.decode("utf-8") if isinstance(log, bytes) else log
