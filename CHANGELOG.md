@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.82 - October 10, 2025
+
+* LOGIT_DEBUG_ALL for all logging
+
+
 ## v0.1.81 - October 08, 2025
 
 Better logging
