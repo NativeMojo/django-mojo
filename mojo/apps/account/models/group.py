@@ -41,6 +41,17 @@ class Group(MojoSecrets, MojoModel):
             "is_active": True
         }
         GRAPHS = {
+            "simple": {
+                "extra": ["timezone"],
+                "fields": [
+                    'id',
+                    'name',
+                    'created',
+                    'modified',
+                    'is_active',
+                    'kind',
+                ]
+            },
             "basic": {
                 "fields": [
                     'id',
