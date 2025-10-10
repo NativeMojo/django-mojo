@@ -7,6 +7,7 @@ from mojo.helpers import logit
 from mojo.helpers.response import JsonResponse
 
 API_PREFIX = "/".join([settings.get("MOJO_PREFIX", "api/").rstrip("/"), ""])
+LOGIT_DEBUG_ALL = settings.get("LOGIT_DEBUG_ALL", False)
 LOGIT_DB_ALL = settings.get("LOGIT_DB_ALL", False)
 LOGIT_FILE_ALL = settings.get("LOGIT_FILE_ALL", False)
 LOGIT_RETURN_REAL_ERROR = settings.get("LOGIT_RETURN_REAL_ERROR", True)
@@ -102,6 +103,9 @@ class LoggerMiddleware:
         - LOGIT_ALWAYS_LOG_PREFIX overrides LOGIT_NO_LOG_PREFIX.
         - Rules can be "METHOD:/path/prefix" or "/path/prefix".
         """
+        if LOGIT_DEBUG_ALL:
+            return True
+
         # 1. Check LOGIT_ALWAYS_LOG_PREFIX first. If it matches, we must log.
         for prefix in LOGIT_ALWAYS_LOG_PREFIX:
             if self._request_matches_prefix(request, prefix):
@@ -119,6 +123,9 @@ class LoggerMiddleware:
         """Fast conditional checks to decide logging strategy."""
         # Always log errors fully (but still async)
         if response.status_code >= 400:
+            return True
+
+        if LOGIT_DEBUG_ALL:
             return True
 
         # Quick size check
