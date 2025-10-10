@@ -251,6 +251,7 @@ class Group(MojoSecrets, MojoModel):
         Invites a user to join the group.
         """
         from mojo.apps.account.models import User
+        email = email.strip().lower()
         user = User.objects.filter(email=email).last()
         ms = None
         if context is None:
