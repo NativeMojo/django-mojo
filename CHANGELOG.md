@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.83 - October 10, 2025
+
+dump all even lists
+
+
 ## v0.1.82 - October 10, 2025
 
 * LOGIT_DEBUG_ALL for all logging
