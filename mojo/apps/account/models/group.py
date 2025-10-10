@@ -42,13 +42,15 @@ class Group(MojoSecrets, MojoModel):
         }
         GRAPHS = {
             "simple": {
-                "extra": ["timezone"],
+                "extra": ["timezone", "short_name", "thumbnail"],
                 "fields": [
+                    'uuid',
                     'id',
                     'name',
                     'created',
                     'modified',
                     'is_active',
+                    'parent',
                     'kind',
                 ]
             },
@@ -104,6 +106,14 @@ class Group(MojoSecrets, MojoModel):
     @property
     def timezone(self):
         return self.metadata.get("timezone", "America/Los_Angeles")
+
+    @property
+    def short_name(self):
+        return self.metadata.get("short_name", "")
+
+    @property
+    def thumbnail(self):
+        return None
 
     def get_local_day(self, dt_utc=None):
         return dates.get_local_day(self.timezone, dt_utc)
