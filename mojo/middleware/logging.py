@@ -141,6 +141,8 @@ class LoggerMiddleware:
 
     def get_response_log_content(self, request, response):
         """Extract log content - prioritize log_context if available."""
+        if LOGIT_DEBUG_ALL:
+            return response.content
 
         # Check for log_context first (fastest path)
         if hasattr(response, 'log_context') and response.log_context:
