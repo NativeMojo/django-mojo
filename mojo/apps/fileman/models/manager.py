@@ -166,6 +166,12 @@ class FileManager(MojoSecrets, MojoModel):
         group_name = self.group.name if self.group else "Global"
         return f"{self.name} ({self.get_backend_type_display()}) - {group_name}"
 
+    def save(self, *args, **kwargs):
+        """Override save to ensure name is set before saving"""
+        if not self.name:
+            self.name = self.generate_name()
+        super().save(*args, **kwargs)
+
     def get_setting(self, key, default=None):
         """Get a specific setting value"""
         value = self.get_secret(key, default)
@@ -581,6 +587,8 @@ class FileManager(MojoSecrets, MojoModel):
 
     @classmethod
     def get_for_user(cls, user, group=None):
+        from django.db import transaction, IntegrityError
+
         file_manager = cls.objects.filter(
             user=user, group=group, is_default=True, is_active=True
         ).first()
@@ -590,13 +598,41 @@ class FileManager(MojoSecrets, MojoModel):
             else:
                 sys_manager = cls.objects.filter(user=None, group=None, is_default=True, is_active=True).first()
             if sys_manager is not None:
-                file_manager = cls(user=user, is_default=True, group=group, parent=sys_manager)
-                file_manager.set_backend_url(sys_manager.backend_url, user.uuid.hex)
-                file_manager.save()
+                # Generate name before creating to avoid race conditions
+                temp_manager = cls(user=user, is_default=True, group=group, parent=sys_manager)
+                temp_manager.set_backend_url(sys_manager.backend_url, user.uuid.hex)
+                name = temp_manager.generate_name()
+
+                try:
+                    with transaction.atomic():
+                        # Use get_or_create to handle race conditions
+                        file_manager, created = cls.objects.get_or_create(
+                            user=user,
+                            group=group,
+                            name=name,
+                            defaults={
+                                'is_default': True,
+                                'parent': sys_manager,
+                                'backend_type': sys_manager.backend_type,
+                                'backend_url': temp_manager.backend_url,
+                                'is_active': True,
+                            }
+                        )
+                        if created:
+                            # Copy secrets from parent
+                            file_manager.set_secrets(sys_manager.secrets)
+                            file_manager.save()
+                except IntegrityError:
+                    # If still a race condition, fetch the existing one
+                    file_manager = cls.objects.filter(
+                        user=user, group=group, is_default=True, is_active=True
+                    ).first()
         return file_manager
 
     @classmethod
     def get_for_group(cls, group=None):
+        from django.db import transaction, IntegrityError
+
         file_manager = cls.objects.filter(
             user=None, group=group, is_default=True, is_active=True
         ).first()
@@ -605,9 +641,35 @@ class FileManager(MojoSecrets, MojoModel):
                 user=None, group=None, is_default=True, is_active=True
             ).first()
             if sys_manager is not None:
-                file_manager = cls(group=group, is_default=True, user=None, parent=sys_manager)
-                file_manager.set_backend_url(sys_manager.backend_url, group.get_uuid())
-                file_manager.save()
+                # Generate name before creating to avoid race conditions
+                temp_manager = cls(group=group, is_default=True, user=None, parent=sys_manager)
+                temp_manager.set_backend_url(sys_manager.backend_url, group.get_uuid())
+                name = temp_manager.generate_name()
+
+                try:
+                    with transaction.atomic():
+                        # Use get_or_create to handle race conditions
+                        file_manager, created = cls.objects.get_or_create(
+                            user=None,
+                            group=group,
+                            name=name,
+                            defaults={
+                                'is_default': True,
+                                'parent': sys_manager,
+                                'backend_type': sys_manager.backend_type,
+                                'backend_url': temp_manager.backend_url,
+                                'is_active': True,
+                            }
+                        )
+                        if created:
+                            # Copy secrets from parent
+                            file_manager.set_secrets(sys_manager.secrets)
+                            file_manager.save()
+                except IntegrityError:
+                    # If still a race condition, fetch the existing one
+                    file_manager = cls.objects.filter(
+                        user=None, group=group, is_default=True, is_active=True
+                    ).first()
         return file_manager
 
     @classmethod
