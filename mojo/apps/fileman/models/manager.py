@@ -591,7 +591,7 @@ class FileManager(MojoSecrets, MojoModel):
                 sys_manager = cls.objects.filter(user=None, group=None, is_default=True, is_active=True).first()
             if sys_manager is not None:
                 file_manager = cls(user=user, is_default=True, group=group, parent=sys_manager)
-                file_manager.set_backend_url(sys_manager.backend_url, user.get_uuid())
+                file_manager.set_backend_url(sys_manager.backend_url, user.uuid.hex)
                 file_manager.save()
         return file_manager
 
