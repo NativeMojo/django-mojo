@@ -39,7 +39,11 @@ except Exception:
     import logging
     logger = logging.getLogger("optimized_serializer")
 
+from mojo.helpers.settings import settings
 from .cache import get_cache_backend, get_cache_key, get_model_cache_ttl
+
+# Load setting once at module import time for performance
+SERIALIZE_DATETIME_TO_FLOAT = settings.get('SERIALIZE_DATETIME_TO_FLOAT', False)
 
 
 class OptimizedGraphSerializer:
@@ -359,7 +363,11 @@ class OptimizedGraphSerializer:
 
         # Handle datetime objects (common case first for speed)
         if isinstance(value, datetime.datetime):
-            return int(value.timestamp())
+            # Check if we should serialize to float (with microsecond precision) or int
+            if SERIALIZE_DATETIME_TO_FLOAT:
+                return value.timestamp()  # Returns float with microsecond precision
+            else:
+                return int(value.timestamp())  # Returns int (seconds only)
         elif isinstance(value, datetime.date):
             return value.isoformat()
 

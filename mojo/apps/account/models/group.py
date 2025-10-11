@@ -3,6 +3,7 @@ from mojo.models import MojoModel, MojoSecrets
 from mojo.helpers import dates, logit
 from mojo.apps import metrics
 from mojo.helpers.settings import settings
+import uuid
 
 GROUP_LAST_ACTIVITY_FREQ = settings.get("GROUP_LAST_ACTIVITY_FREQ", 300)
 METRICS_TIMEZONE = settings.get("METRICS_TIMEZONE", "America/Los_Angeles")
@@ -114,6 +115,12 @@ class Group(MojoSecrets, MojoModel):
     @property
     def thumbnail(self):
         return None
+
+    def get_uuid(self):
+        if not self.uuid:
+            self.uuid = uuid.uuid4().hex
+            self.save(update_fields=["uuid"])
+        return self.uuid
 
     def get_local_day(self, dt_utc=None):
         return dates.get_local_day(self.timezone, dt_utc)
