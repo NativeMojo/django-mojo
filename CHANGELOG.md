@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.86 - October 11, 2025
+
+Fixing file uploads for group
+
+
 ## v0.1.85 - October 10, 2025
 
 group support
