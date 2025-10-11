@@ -586,20 +586,19 @@ class FileManager(MojoSecrets, MojoModel):
         return cls.get_for_user_group(user=request.user, group=request.group)
 
     @classmethod
-    def get_for_user(cls, user, group=None):
+    def get_for_user(cls, user):
+        """Get the file manager for a specific user (without group)"""
         from django.db import transaction, IntegrityError
 
         file_manager = cls.objects.filter(
-            user=user, group=group, is_default=True, is_active=True
+            user=user, group=None, is_default=True, is_active=True
         ).first()
         if file_manager is None:
-            if group:
-                sys_manager = cls.get_for_group(group=group)
-            else:
-                sys_manager = cls.objects.filter(user=None, group=None, is_default=True, is_active=True).first()
+            # Get the system default manager
+            sys_manager = cls.objects.filter(user=None, group=None, is_default=True, is_active=True).first()
             if sys_manager is not None:
                 # Generate name before creating to avoid race conditions
-                temp_manager = cls(user=user, is_default=True, group=group, parent=sys_manager)
+                temp_manager = cls(user=user, is_default=True, group=None, parent=sys_manager)
                 temp_manager.set_backend_url(sys_manager.backend_url, user.uuid.hex)
                 name = temp_manager.generate_name()
 
@@ -608,7 +607,7 @@ class FileManager(MojoSecrets, MojoModel):
                         # Use get_or_create to handle race conditions
                         file_manager, created = cls.objects.get_or_create(
                             user=user,
-                            group=group,
+                            group=None,
                             name=name,
                             defaults={
                                 'is_default': True,
@@ -625,7 +624,7 @@ class FileManager(MojoSecrets, MojoModel):
                 except IntegrityError:
                     # If still a race condition, fetch the existing one
                     file_manager = cls.objects.filter(
-                        user=user, group=group, is_default=True, is_active=True
+                        user=user, group=None, is_default=True, is_active=True
                     ).first()
         return file_manager
 
@@ -674,12 +673,15 @@ class FileManager(MojoSecrets, MojoModel):
 
     @classmethod
     def get_for_user_group(cls, user=None, group=None):
-        """Get the file manager from the user and/or group"""
-        file_manager = None
-        if user and group is None:
-            file_manager = cls.get_for_user(user=user)
-        if not file_manager and group and user is None:
-            file_manager = cls.get_for_user_group(group=group)
-        if not file_manager and group and user:
-            file_manager = cls.get_for_user(user=user, group=group)
-        return file_manager
+        """Get the file manager from the user and/or group
+
+        If group is provided, returns the group's FileManager (user-agnostic).
+        If only user is provided, returns the user's FileManager.
+        """
+        if group:
+            # Always use group manager when group is present, ignore user
+            return cls.get_for_group(group=group)
+        elif user:
+            # Only use user manager if no group
+            return cls.get_for_user(user=user)
+        return None
