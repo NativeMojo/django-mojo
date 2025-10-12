@@ -202,6 +202,21 @@ def ensure_sns_topics_and_subscriptions(
     If HTTPS endpoints are provided, ensure subscriptions exist.
     Returns topic ARNs by key: bounce, complaint, delivery, inbound.
     """
+    # Derive endpoints from EmailDomain.metadata if none provided
+    if not any([getattr(endpoints, "bounce", None), getattr(endpoints, "complaint", None), getattr(endpoints, "delivery", None), getattr(endpoints, "inbound", None)]):
+        try:
+            from mojo.apps.aws.models import EmailDomain as _EmailDomain
+            _ed = _EmailDomain.objects.filter(name=domain).first()
+            if _ed and isinstance(getattr(_ed, "metadata", None), dict):
+                meta = _ed.metadata or {}
+                endpoints = SnsEndpoints(
+                    bounce=meta.get("bounce_endpoint") or meta.get("sns_bounce_endpoint"),
+                    complaint=meta.get("complaint_endpoint") or meta.get("sns_complaint_endpoint"),
+                    delivery=meta.get("delivery_endpoint") or meta.get("sns_delivery_endpoint"),
+                    inbound=meta.get("inbound_endpoint") or meta.get("sns_inbound_endpoint"),
+                )
+        except Exception:
+            pass
     topic_arns: Dict[str, str] = {}
     safe_domain = domain.replace(".", "-")
     topics = {
