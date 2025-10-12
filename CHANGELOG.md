@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.93 - October 11, 2025
+
+Fixing aws email auto config
+
+
 ## v0.1.92 - October 11, 2025
 
 test fails to catch syntax error
