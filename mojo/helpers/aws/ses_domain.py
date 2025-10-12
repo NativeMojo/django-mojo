@@ -764,11 +764,11 @@ def audit_domain_config(
             checks["sns_topics_exist"] = (exists_ok if checks["sns_topics_exist"] is None else (checks["sns_topics_exist"] and exists_ok))
             checks["sns_subscriptions_confirmed"] = (subs_ok if checks["sns_subscriptions_confirmed"] is None else (checks["sns_subscriptions_confirmed"] and subs_ok))
 
-    # Finalize: if no SNS topics were expected (no ARNs provided), set to False instead of defaulting to True
-    if checks["sns_topics_exist"] is None:
-        checks["sns_topics_exist"] = False
-    if checks["sns_subscriptions_confirmed"] is None:
-        checks["sns_subscriptions_confirmed"] = False
+        # Finalize: if no SNS topics were expected (no ARNs provided), set to False instead of defaulting to True
+        if checks["sns_topics_exist"] is None:
+            checks["sns_topics_exist"] = False
+        if checks["sns_subscriptions_confirmed"] is None:
+            checks["sns_subscriptions_confirmed"] = False
     except Exception:
         # If SNS client init fails, mark as unknown/false
         checks["sns_topics_exist"] = False
