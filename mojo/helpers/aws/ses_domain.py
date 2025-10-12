@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Literal, Any, Tuple
 
 import boto3
+import json
 from botocore.exceptions import ClientError
 
 from mojo.helpers.aws.client import get_session
@@ -314,7 +315,10 @@ def ensure_receiving_catch_all(
     # Sanity: inbound bucket should exist
     bucket = S3Bucket(s3_bucket)
     if not bucket._check_exists():
-        raise ValueError(f"Inbound S3 bucket '{s3_bucket}' does not exist")
+        # Auto-create inbound bucket for SES receiving
+        created = bucket.create(region=region)
+        if not created:
+            raise ValueError(f"Inbound S3 bucket '{s3_bucket}' does not exist and could not be created")
 
     ses = _get_ses_client(region, access_key, secret_key)
 
@@ -357,17 +361,17 @@ def ensure_receiving_catch_all(
             "S3Action": {
                 "BucketName": s3_bucket,
                 "ObjectKeyPrefix": s3_prefix or "",
-                # "KmsKeyArn": "optional-kms-arn",
-                # "TopicArn": inbound_topic_arn,  # S3Action TopicArn is optional; we use a separate SNSAction
             }
-        },
-        {
+        }
+    ]
+    # Only include SNSAction when we have an inbound topic ARN
+    if inbound_topic_arn:
+        actions.append({
             "SNSAction": {
                 "TopicArn": inbound_topic_arn,
                 "Encoding": "UTF-8",
             }
-        },
-    ]
+        })
 
     rule_def = {
         "Name": rule_name,
@@ -386,7 +390,83 @@ def ensure_receiving_catch_all(
             )
             logger.info(f"Created SES receipt rule {rule_name} in set {rule_set_name}")
         except ClientError as e:
-            logger.error(f"Failed to create receipt rule {rule_name}: {e}")
+            # Attempt to auto-fix InvalidS3Configuration by applying SES PutObject bucket policy, then retry
+            err_code = getattr(e, "response", {}).get("Error", {}).get("Code")
+            if err_code == "InvalidS3Configuration":
+                try:
+                    # Discover account ID for aws:Referer condition
+                    sts = boto3.client(
+                        "sts",
+                        aws_access_key_id=access_key or settings.AWS_KEY,
+                        aws_secret_access_key=secret_key or settings.AWS_SECRET,
+                        region_name=region,
+                    )
+                    account_id = sts.get_caller_identity().get("Account")
+
+                    # Try to set a minimal bucket policy if none exists
+                    s3c = boto3.client(
+                        "s3",
+                        aws_access_key_id=access_key or settings.AWS_KEY,
+                        aws_secret_access_key=secret_key or settings.AWS_SECRET,
+                        region_name=region,
+                    )
+                    try:
+                        s3c.get_bucket_policy(Bucket=s3_bucket)
+                        has_policy = True
+                    except s3c.exceptions.from_code("NoSuchBucketPolicy"):
+                        has_policy = False
+
+                    if not has_policy:
+                        policy_str = (
+                            "{"
+                            '"Version":"2012-10-17","Statement":[{'
+                            '"Sid":"AllowSESPuts","Effect":"Allow",'
+                            '"Principal":{"Service":"ses.amazonaws.com"},'
+                            '"Action":"s3:PutObject",'
+                            f'"Resource":"arn:aws:s3:::{s3_bucket}/*",'
+                            '"Condition":{"StringEquals":{"aws:Referer":"'
+                            f'{account_id}'
+                            '"}}'
+                            "}]}"
+                        )
+                        s3c.put_bucket_policy(Bucket=s3_bucket, Policy=policy_str)
+                        logger.info(f"Applied SES PutObject policy to bucket {s3_bucket}; retrying rule creation")
+
+                        # Retry rule creation
+                        ses.create_receipt_rule(
+                            RuleSetName=rule_set_name,
+                            Rule=rule_def,
+                        )
+                        logger.info(f"Created SES receipt rule {rule_name} in set {rule_set_name}")
+                    else:
+                        try:
+                            pol = json.loads(s3c.get_bucket_policy(Bucket=s3_bucket)["Policy"])
+                            stmts = pol.get("Statement", [])
+                        except Exception:
+                            pol = {"Version": "2012-10-17", "Statement": []}
+                            stmts = []
+                        # Replace existing AllowSESPuts or append a new one
+                        new_stmts = [s for s in stmts if s.get("Sid") != "AllowSESPuts"]
+                        new_stmts.append({
+                            "Sid": "AllowSESPuts",
+                            "Effect": "Allow",
+                            "Principal": {"Service": "ses.amazonaws.com"},
+                            "Action": "s3:PutObject",
+                            "Resource": f"arn:aws:s3:::{s3_bucket}/*",
+                            "Condition": {"StringEquals": {"aws:Referer": account_id}},
+                        })
+                        pol["Statement"] = new_stmts
+                        s3c.put_bucket_policy(Bucket=s3_bucket, Policy=json.dumps(pol))
+                        logger.info(f"Updated bucket policy for {s3_bucket}; retrying rule creation")
+                        ses.create_receipt_rule(
+                            RuleSetName=rule_set_name,
+                            Rule=rule_def,
+                        )
+                        logger.info(f"Created SES receipt rule {rule_name} in set {rule_set_name}")
+                except Exception as pe:
+                    logger.error(f"Failed to auto-apply SES S3 policy and create rule {rule_name}: {pe}")
+            else:
+                logger.error(f"Failed to create receipt rule {rule_name}: {e}")
     else:
         # Update to desired shape (best effort)
         try:
@@ -810,7 +890,22 @@ def reconcile_domain_config(
     - Optionally enable MAIL FROM
     This does NOT modify DNS. Use build_required_dns_records and your DNS manager (GoDaddy or Route 53) for that.
     """
+    # Derive endpoints from EmailDomain.metadata if not provided
     endpoints = endpoints or SnsEndpoints()
+    if not any([endpoints.bounce, endpoints.complaint, endpoints.delivery, endpoints.inbound]):
+        try:
+            from mojo.apps.aws.models import EmailDomain as _EmailDomain
+            _ed = _EmailDomain.objects.filter(name=domain).first()
+            if _ed and isinstance(getattr(_ed, "metadata", None), dict):
+                meta = _ed.metadata or {}
+                endpoints = SnsEndpoints(
+                    bounce=meta.get("bounce_endpoint") or meta.get("sns_bounce_endpoint"),
+                    complaint=meta.get("complaint_endpoint") or meta.get("sns_complaint_endpoint"),
+                    delivery=meta.get("delivery_endpoint") or meta.get("sns_delivery_endpoint"),
+                    inbound=meta.get("inbound_endpoint") or meta.get("sns_inbound_endpoint"),
+                )
+        except Exception:
+            pass
     result = OnboardResult(domain=domain, region=region)
 
     # Ensure SNS topics (and subscriptions if endpoints provided)
