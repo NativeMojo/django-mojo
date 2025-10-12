@@ -109,10 +109,10 @@ def _parse_endpoints(payload: Dict[str, Any]) -> SnsEndpoints:
     """Parse SNS endpoints from payload"""
     ep = payload.get("endpoints") or {}
     return SnsEndpoints(
-        bounce=ep.get("bounce") or payload.get("bounce_endpoint"),
-        complaint=ep.get("complaint") or payload.get("complaint_endpoint"),
-        delivery=ep.get("delivery") or payload.get("delivery_endpoint"),
-        inbound=ep.get("inbound") or payload.get("inbound_endpoint"),
+        bounce=ep.get("bounce") or payload.get("bounce") or payload.get("bounce_endpoint"),
+        complaint=ep.get("complaint") or payload.get("complaint") or payload.get("complaint_endpoint"),
+        delivery=ep.get("delivery") or payload.get("delivery") or payload.get("delivery_endpoint"),
+        inbound=ep.get("inbound") or payload.get("inbound") or payload.get("inbound_endpoint"),
     )
 
 
@@ -281,6 +281,26 @@ def onboard_email_domain(
 
     # Parse endpoints
     sns_endpoints = _parse_endpoints(endpoints or {})
+    # Persist provided SNS endpoints into EmailDomain.metadata for future runs
+    provided = {}
+    if sns_endpoints.bounce:
+        provided["bounce_endpoint"] = sns_endpoints.bounce
+    if sns_endpoints.complaint:
+        provided["complaint_endpoint"] = sns_endpoints.complaint
+    if sns_endpoints.delivery:
+        provided["delivery_endpoint"] = sns_endpoints.delivery
+    if sns_endpoints.inbound:
+        provided["inbound_endpoint"] = sns_endpoints.inbound
+    if provided:
+        meta = domain.metadata or {}
+        changed = False
+        for k, v in provided.items():
+            if meta.get(k) != v:
+                meta[k] = v
+                changed = True
+        if changed:
+            domain.metadata = meta
+            domain.save(update_fields=["metadata", "modified"])
 
     try:
         result = onboard_domain(
@@ -503,6 +523,26 @@ def reconcile_email_domain(
 
     access_key_final, secret_key_final = _get_aws_credentials(domain, access_key, secret_key)
     sns_endpoints = _parse_endpoints(endpoints or {})
+    # Persist provided SNS endpoints into EmailDomain.metadata for future runs
+    provided = {}
+    if sns_endpoints.bounce:
+        provided["bounce_endpoint"] = sns_endpoints.bounce
+    if sns_endpoints.complaint:
+        provided["complaint_endpoint"] = sns_endpoints.complaint
+    if sns_endpoints.delivery:
+        provided["delivery_endpoint"] = sns_endpoints.delivery
+    if sns_endpoints.inbound:
+        provided["inbound_endpoint"] = sns_endpoints.inbound
+    if provided:
+        meta = domain.metadata or {}
+        changed = False
+        for k, v in provided.items():
+            if meta.get(k) != v:
+                meta[k] = v
+                changed = True
+        if changed:
+            domain.metadata = meta
+            domain.save(update_fields=["metadata", "modified"])
 
     try:
         result = reconcile_domain_config(
