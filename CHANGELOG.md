@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.91 - October 11, 2025
+
+FIXING SES Audit
+
+
 ## v0.1.90 - October 11, 2025
 
 BUGFIX filestore for each user + group

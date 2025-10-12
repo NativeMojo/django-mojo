@@ -202,11 +202,12 @@ def ensure_sns_topics_and_subscriptions(
     Returns topic ARNs by key: bounce, complaint, delivery, inbound.
     """
     topic_arns: Dict[str, str] = {}
+    safe_domain = domain.replace(".", "-")
     topics = {
-        "bounce": f"ses-{domain}-bounce",
-        "complaint": f"ses-{domain}-complaint",
-        "delivery": f"ses-{domain}-delivery",
-        "inbound": f"ses-{domain}-inbound",
+        "bounce": f"ses-{safe_domain}-bounce",
+        "complaint": f"ses-{safe_domain}-complaint",
+        "delivery": f"ses-{safe_domain}-delivery",
+        "inbound": f"ses-{safe_domain}-inbound",
     }
 
     for key, name in topics.items():
@@ -272,6 +273,27 @@ def set_mail_from_domain(
     except ClientError as e:
         logger.error(f"Failed to configure MAIL FROM for {domain}: {e}")
 
+
+def ensure_dkim_enabled(
+    domain: str,
+    region: str,
+    access_key: Optional[str],
+    secret_key: Optional[str],
+):
+    """
+    Ensure Easy DKIM signing is enabled once DKIM verification has succeeded.
+    """
+    ses = _get_ses_client(region, access_key, secret_key)
+    try:
+        resp = ses.get_identity_dkim_attributes(Identities=[domain])
+        attrs = (resp.get("DkimAttributes", {}) or {}).get(domain, {}) or {}
+        enabled = attrs.get("DkimEnabled")
+        vstatus = attrs.get("DkimVerificationStatus")
+        if vstatus == "Success" and not enabled:
+            ses.set_identity_dkim_enabled(Identity=domain, DkimEnabled=True)
+            logger.info(f"Enabled DKIM signing for {domain}")
+    except ClientError as e:
+        logger.error(f"Failed to ensure DKIM enabled for {domain}: {e}")
 
 def ensure_receiving_catch_all(
     domain: str,
@@ -666,8 +688,9 @@ def audit_domain_config(
             checks["receiving_rule_sns_ok"] = False
 
     # 5) SNS topics existence and subscription status for configured ARNs
-    checks["sns_topics_exist"] = True
-    checks["sns_subscriptions_confirmed"] = True
+    # Initialize as None so we can detect "no expectations provided"
+    checks["sns_topics_exist"] = None
+    checks["sns_subscriptions_confirmed"] = None
     try:
         sns = boto3.client(
             "sns",
@@ -738,9 +761,14 @@ def audit_domain_config(
                     )
                     subs_ok = False
 
-            checks["sns_topics_exist"] = checks["sns_topics_exist"] and exists_ok
-            checks["sns_subscriptions_confirmed"] = checks["sns_subscriptions_confirmed"] and subs_ok
+            checks["sns_topics_exist"] = (exists_ok if checks["sns_topics_exist"] is None else (checks["sns_topics_exist"] and exists_ok))
+            checks["sns_subscriptions_confirmed"] = (subs_ok if checks["sns_subscriptions_confirmed"] is None else (checks["sns_subscriptions_confirmed"] and subs_ok))
 
+    # Finalize: if no SNS topics were expected (no ARNs provided), set to False instead of defaulting to True
+    if checks["sns_topics_exist"] is None:
+        checks["sns_topics_exist"] = False
+    if checks["sns_subscriptions_confirmed"] is None:
+        checks["sns_subscriptions_confirmed"] = False
     except Exception:
         # If SNS client init fails, mark as unknown/false
         checks["sns_topics_exist"] = False
@@ -819,6 +847,14 @@ def reconcile_domain_config(
     map_identity_notification_topics(
         domain=domain,
         topic_arns=topic_arns,
+        region=region,
+        access_key=access_key,
+        secret_key=secret_key,
+    )
+
+    # Ensure DKIM signing is enabled once verification is successful
+    ensure_dkim_enabled(
+        domain=domain,
         region=region,
         access_key=access_key,
         secret_key=secret_key,
