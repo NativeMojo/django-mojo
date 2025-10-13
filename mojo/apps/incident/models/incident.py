@@ -10,6 +10,7 @@ class Incident(models.Model, MojoModel):
 
     priority = models.IntegerField(default=0, db_index=True)
     state = models.CharField(max_length=24, default=0, db_index=True)
+    # new, open, paused, closed
     status = models.CharField(max_length=50, default='new', db_index=True)
     category = models.CharField(max_length=124, db_index=True)
     country_code = models.CharField(max_length=2, default=None, null=True, db_index=True)

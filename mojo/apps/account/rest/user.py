@@ -164,7 +164,7 @@ def on_user_password_reset_code(request):
         raise merrors.ValueException("Invalid code")
     user.set_password(new_password)
     user.save()
-    return JsonResponse(dict(status=True, message="Password reset successful."))
+    return jwt_login(request, user)
 
 
 @md.POST("auth/password/reset/token")
@@ -176,4 +176,4 @@ def on_user_password_reset_token(request):
     new_password = request.DATA.get("new_password")
     user.set_password(new_password)
     user.save()
-    return JsonResponse(dict(status=True, message="Password reset successful."))
+    return jwt_login(request, user)
