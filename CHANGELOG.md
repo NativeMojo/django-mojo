@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.97 - October 13, 2025
+
+HOTFIX don't show protected fields in changes
+
+
 ## v0.1.96 - October 13, 2025
 
 Invalidate user login tokens when after a TTL

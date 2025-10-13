@@ -779,7 +779,10 @@ class MojoModel:
     def get_changes(self, data):
         changes = {}
         for key, value in self.__changed_fields__.items():
-            changes[key] = f"{value} -> {data.get(key, None)}"
+            if "password" in key or "key" in key:
+                changes[key] = "*** -> ***"
+            else:
+                changes[key] = f"{value} -> {data.get(key, None)}"
         return changes
 
     def on_rest_save(self, request, data_dict):
