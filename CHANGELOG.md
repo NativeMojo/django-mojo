@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.96 - October 13, 2025
+
+Invalidate user login tokens when after a TTL
+
+
 ## v0.1.95 - October 13, 2025
 
 Fixing broken login flows
