@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.95 - October 13, 2025
+
+Fixing broken login flows
+
+
 ## v0.1.94 - October 11, 2025
 
 BUGFIX automated email setup
