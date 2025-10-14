@@ -490,11 +490,19 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
             action_url=action_url,
             devices=devices, user_ids=user_ids, delay=delay)
 
-    def send_invite(self):
+    def send_invite(self, **kwargs):
+        from mojo.apps.account.utils import tokens
+
+        context = kwargs.copy()
+        context.update({
+            "user": self.to_dict("basic"),
+            "token": tokens.generate_token(self)
+        })
+
         self.send_template_email(
             template_name="invite",
-            context={"user": self.to_dict("basic")}
-        )
+            context=context
+            )
 
     def send_email(
         self,

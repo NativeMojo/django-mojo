@@ -3,6 +3,7 @@ from mojo.apps.account.utils.jwtoken import JWToken
 # from django.http import JsonResponse
 from mojo.helpers.response import JsonResponse
 from mojo.apps.account.models.user import User
+from mojo.apps.account.utils import tokens
 from mojo.helpers import dates, crypto
 from mojo import errors as merrors
 from mojo.helpers.settings import settings
@@ -116,56 +117,10 @@ def on_user_forgot(request):
             user.save()
             user.send_template_email("password_reset_code", dict(code=code))
         elif request.DATA.get("method") in ["link", "email"]:
-            user.send_template_email("password_reset_link", dict(token=generate_password_reset_token(user)))
+            user.send_template_email("password_reset_link", dict(token=tokens.generate_password_reset_token(user)))
         else:
             raise merrors.ValueException("Invalid method")
     return JsonResponse(dict(status=True, message="If email in our system a reset email was sent."))
-
-
-def generate_password_reset_token(user):
-    now_ts = int(dates.utcnow().timestamp())
-    jti = crypto.random_string(12, True, True, False)
-    token = crypto.b64_encode({"uid": user.pk, "ts": now_ts, "jti": jti})
-    sig = crypto.sign(token, user.get_auth_key())
-    user.set_secret("password_reset_jti", jti)
-    user.set_secret("password_reset_ts", now_ts)
-    user.save(update_fields=["mojo_secrets", "modified"])
-    hex_token = token.encode("utf-8").hex() + sig[-6:]
-    return hex_token
-
-
-def verify_password_reset_token(hex_token):
-    orig_token = hex_token
-    try:
-        tsig = hex_token[-6:]
-        hex_token = hex_token[:-6]
-        token = bytes.fromhex(hex_token).decode("utf-8")
-        obj = crypto.b64_decode(token)
-        if not isinstance(obj, dict) or "uid" not in obj or "ts" not in obj or "jti" not in obj:
-            raise merrors.ValueException("Invalid token")
-        user = User.objects.get(pk=obj["uid"])
-        sig = crypto.sign(token, user.get_auth_key())
-        if sig[-6:] != tsig:
-            user.report_incident(f"{user.username} invalid reset token (signature)", "invalid_reset_token")
-            raise merrors.ValueException("Invalid token")
-        now_ts = int(dates.utcnow().timestamp())
-        if now_ts - int(obj["ts"]) > int(PASSWORD_RESET_TOKEN_TTL):
-            user.report_incident(f"{user.username} expired reset token", "expired_reset_token")
-            raise merrors.ValueException("Expired token")
-        expected_jti = user.get_secret("password_reset_jti")
-        if not expected_jti or expected_jti != obj["jti"]:
-            user.report_incident(f"{user.username} reset token jti mismatch or reused", "invalid_reset_token")
-            raise merrors.ValueException("Invalid token")
-        user.set_secret("password_reset_jti", None)
-        user.save(update_fields=["mojo_secrets", "modified"])
-        return user
-    except Exception:
-        pass
-    User.class_report_incident(
-        "invalid reset token",
-        event_type="reset:unknown",
-        level=8, token=orig_token)
-    raise merrors.ValueException("Invalid token")
 
 
 @md.POST("auth/password/reset/code")
@@ -197,7 +152,7 @@ def on_user_password_reset_code(request):
 @md.requires_params("token", "new_password")
 def on_user_password_reset_token(request):
     token = request.DATA.get("token")
-    user = verify_password_reset_token(token)
+    user = tokens.verify_password_reset_token(token)
     new_password = request.DATA.get("new_password")
     user.set_password(new_password)
     user.save()

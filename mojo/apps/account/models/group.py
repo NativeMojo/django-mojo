@@ -282,9 +282,6 @@ class Group(MojoSecrets, MojoModel):
         email = email.strip().lower()
         user = User.objects.filter(email=email).last()
         ms = None
-        if context is None:
-            context = {}
-        context['group'] = self
         if user:
             ms = self.add_member(user)
         elif not user:
@@ -292,6 +289,11 @@ class Group(MojoSecrets, MojoModel):
             user.on_rest_pre_save(dict(email=None), True)
             user.save()
             ms = self.add_member(user)
+            user.send_invite(group=self.to_dict("basic"))
+            return ms
+        if context is None:
+            context = {}
+        context['group'] = self.to_dict("basic")
         try:
             user.send_template_email('group_invite', context)
         except Exception as e:

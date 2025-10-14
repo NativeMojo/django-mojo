@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.98 - October 14, 2025
+
+Invite tokens
+
+
 ## v0.1.97 - October 13, 2025
 
 HOTFIX don't show protected fields in changes
