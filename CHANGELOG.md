@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.101 - October 15, 2025
+
+Config to allow incident and rule deletion
+
+
 ## v0.1.100 - October 15, 2025
 
 * Cleanup and debugging of rules and incidents

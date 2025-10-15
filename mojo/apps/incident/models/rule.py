@@ -52,6 +52,7 @@ class RuleSet(models.Model, MojoModel):
         SEARCH_FIELDS = ["name"]
         VIEW_PERMS = ["view_incidents"]
         CREATE_PERMS = None
+        CAN_DELETE = True
 
     def run_handler(self, event, incident=None):
         """
@@ -344,6 +345,7 @@ class Rule(models.Model, MojoModel):
         SEARCH_FIELDS = ["details"]
         VIEW_PERMS = ["view_incidents"]
         CREATE_PERMS = ["manage_incidents"]
+        CAN_DELETE = True
 
     def check_rule(self, event):
         """
