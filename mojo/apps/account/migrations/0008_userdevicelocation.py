@@ -3,7 +3,7 @@
 from django.conf import settings
 from django.db import migrations, models
 import django.db.models.deletion
-import mojo.models.rest
+from mojo.models import MojoModel
 
 
 class Migration(migrations.Migration):
@@ -28,6 +28,6 @@ class Migration(migrations.Migration):
                 'ordering': ['-last_seen'],
                 'unique_together': {('user', 'user_device', 'ip_address')},
             },
-            bases=(models.Model, mojo.models.rest.MojoModel),
+            bases=(models.Model, MojoModel),
         ),
     ]
