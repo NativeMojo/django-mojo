@@ -1,5 +1,6 @@
 from mojo import decorators as md
-from mojo.apps.account.models.device import UserDevice, UserDeviceLocation, GeoLocatedIP
+from mojo.apps.account.models.device import UserDevice, UserDeviceLocation
+from mojo.apps.account.models.geolocated_ip import GeoLocatedIP
 
 
 @md.URL('user/device')

@@ -8,20 +8,154 @@ from .countries import get_country_name
 _GeoLocatedIP = None
 GEOLOCATION_PROVIDERS = settings.get('GEOLOCATION_PROVIDERS', ['ipinfo'])
 
+# Detection settings
+ENABLE_TOR_DETECTION = settings.get('GEOLOCATION_ENABLE_TOR_DETECTION', True)
+ENABLE_VPN_DETECTION = settings.get('GEOLOCATION_ENABLE_VPN_DETECTION', True)
+ENABLE_CLOUD_DETECTION = settings.get('GEOLOCATION_ENABLE_CLOUD_DETECTION', True)
+TOR_EXIT_NODE_LIST_URL = settings.get('TOR_EXIT_NODE_LIST_URL', 'https://check.torproject.org/exit-addresses')
+
+# Cloud provider IP ranges (ASN-based detection is more reliable, but these help)
+CLOUD_PROVIDERS = {
+    'AWS': ['amazon', 'aws'],
+    'GCP': ['google cloud', 'gcp'],
+    'Azure': ['microsoft azure', 'azure'],
+    'DigitalOcean': ['digitalocean'],
+    'Linode': ['linode'],
+    'OVH': ['ovh'],
+    'Hetzner': ['hetzner'],
+}
+
 
 def get_geo_located_ip_model():
     global _GeoLocatedIP
     if _GeoLocatedIP is None:
-        from mojo.apps.account.models.device import GeoLocatedIP
+        from mojo.apps.account.models.geolocated_ip import GeoLocatedIP
         _GeoLocatedIP = GeoLocatedIP
     return _GeoLocatedIP
+
+
+def detect_tor(ip_address):
+    """
+    Check if the IP is a known Tor exit node.
+    Uses the Tor Project's exit node list.
+    """
+    if not ENABLE_TOR_DETECTION:
+        return False
+
+    try:
+        # Check against Tor Project's exit list
+        response = requests.get(TOR_EXIT_NODE_LIST_URL, timeout=3)
+        if response.status_code == 200:
+            exit_nodes = []
+            for line in response.text.split('\n'):
+                if line.startswith('ExitAddress '):
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        exit_nodes.append(parts[1])
+            return ip_address in exit_nodes
+    except Exception as e:
+        print(f"[Tor Detection Error] Failed to check Tor status for {ip_address}: {e}")
+
+    return False
+
+
+def detect_vpn_proxy_cloud(asn_org, isp, connection_type):
+    """
+    Detect VPN, proxy, and cloud services based on ASN organization, ISP, and connection type.
+    Returns a dict with is_vpn, is_proxy, is_cloud, is_datacenter flags.
+    """
+    result = {
+        'is_vpn': False,
+        'is_proxy': False,
+        'is_cloud': False,
+        'is_datacenter': False,
+    }
+
+    if not asn_org:
+        asn_org = ''
+    if not isp:
+        isp = ''
+
+    combined_text = f"{asn_org} {isp}".lower()
+
+    # VPN detection keywords
+    vpn_keywords = [
+        'vpn', 'virtual private', 'nordvpn', 'expressvpn', 'surfshark',
+        'private internet access', 'pia', 'cyberghost', 'protonvpn',
+        'tunnelbear', 'ipvanish', 'purevpn', 'windscribe', 'mullvad',
+        'hide.me', 'hotspot shield'
+    ]
+
+    # Proxy detection keywords
+    proxy_keywords = [
+        'proxy', 'anonymizer', 'anonymous', 'squid', 'privoxy'
+    ]
+
+    # Cloud provider detection
+    if ENABLE_CLOUD_DETECTION:
+        for provider, keywords in CLOUD_PROVIDERS.items():
+            if any(keyword in combined_text for keyword in keywords):
+                result['is_cloud'] = True
+                break
+
+    # Datacenter/hosting detection
+    datacenter_keywords = [
+        'hosting', 'datacenter', 'data center', 'server', 'colocation',
+        'colo', 'dedicated', 'vps', 'virtual server', 'cloud'
+    ]
+
+    if ENABLE_VPN_DETECTION:
+        result['is_vpn'] = any(keyword in combined_text for keyword in vpn_keywords)
+
+    result['is_proxy'] = any(keyword in combined_text for keyword in proxy_keywords)
+
+    # Connection type hints
+    if connection_type:
+        conn_lower = connection_type.lower()
+        if 'hosting' in conn_lower or 'datacenter' in conn_lower:
+            result['is_datacenter'] = True
+        if 'business' in conn_lower and any(keyword in combined_text for keyword in datacenter_keywords):
+            result['is_datacenter'] = True
+
+    # If not already marked as cloud but shows datacenter characteristics
+    if not result['is_cloud'] and any(keyword in combined_text for keyword in datacenter_keywords):
+        result['is_datacenter'] = True
+
+    return result
+
+
+def calculate_threat_level(is_tor, is_vpn, is_proxy, threat_data=None):
+    """
+    Calculate a threat level based on detected characteristics.
+    Returns: 'low', 'medium', 'high', or 'critical'
+    """
+    if is_tor:
+        return 'high'  # Tor is often used for anonymity, which could be suspicious
+
+    if threat_data and isinstance(threat_data, dict):
+        # If provider returns threat scores, use those
+        if threat_data.get('is_threat') or threat_data.get('threat_score', 0) > 75:
+            return 'critical'
+        elif threat_data.get('threat_score', 0) > 50:
+            return 'high'
+        elif threat_data.get('threat_score', 0) > 25:
+            return 'medium'
+
+    if is_proxy:
+        return 'medium'
+
+    if is_vpn:
+        return 'low'  # VPNs are common and not necessarily malicious
+
+    return 'low'
 
 
 def geolocate_ip(ip_address):
     """
     Fetches geolocation data for a given IP address. It handles both
     public IPs (by calling an external provider) and private IPs.
-    Returns a normalized dictionary of geolocation data.
+    Returns a normalized dictionary of geolocation data including
+    security detection (Tor, VPN, cloud, etc.).
     """
     # 1. Handle private/reserved IPs
     try:
@@ -31,6 +165,12 @@ def geolocate_ip(ip_address):
                 'provider': 'internal',
                 'country_name': 'Private Network',
                 'region': 'Private' if ip_obj.is_private else 'Reserved',
+                'is_tor': False,
+                'is_vpn': False,
+                'is_proxy': False,
+                'is_cloud': False,
+                'is_datacenter': False,
+                'threat_level': 'low',
             }
     except ValueError:
         return None  # Invalid IP
@@ -51,7 +191,27 @@ def geolocate_ip(ip_address):
     fetch_function = provider_map.get(provider)
 
     if fetch_function:
-        return fetch_function(ip_address, api_key)
+        geo_data = fetch_function(ip_address, api_key)
+
+        if geo_data:
+            # Perform detection
+            is_tor = detect_tor(ip_address)
+            detection = detect_vpn_proxy_cloud(
+                geo_data.get('asn_org'),
+                geo_data.get('isp'),
+                geo_data.get('connection_type')
+            )
+
+            geo_data['is_tor'] = is_tor
+            geo_data.update(detection)
+            geo_data['threat_level'] = calculate_threat_level(
+                is_tor,
+                detection['is_vpn'],
+                detection['is_proxy'],
+                geo_data.get('data', {}).get('threat', None)
+            )
+
+        return geo_data
     else:
         # In a real app, you might want to log this or handle it differently
         print(f"[Geolocation Error] Provider '{provider}' is not supported.")
@@ -94,6 +254,16 @@ def fetch_from_ipinfo(ip_address, api_key):
         longitude = float(loc_parts[1]) if len(loc_parts) == 2 else None
         country_code = data.get('country')
 
+        # Extract ASN info from org field (format: "AS15169 Google LLC")
+        org = data.get('org', '')
+        asn = None
+        asn_org = org
+        if org.startswith('AS'):
+            parts = org.split(' ', 1)
+            if len(parts) == 2:
+                asn = parts[0]
+                asn_org = parts[1]
+
         return {
             'provider': 'ipinfo',
             'country_code': country_code,
@@ -104,6 +274,9 @@ def fetch_from_ipinfo(ip_address, api_key):
             'latitude': latitude,
             'longitude': longitude,
             'timezone': data.get('timezone'),
+            'asn': asn,
+            'asn_org': asn_org,
+            'isp': asn_org,  # ipinfo doesn't separate ISP, use org
             'data': data  # Store the raw response
         }
 

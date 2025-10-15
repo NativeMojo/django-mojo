@@ -9,7 +9,8 @@ def setup_device_testing(opts):
     """
     Nuke any test entries from the database so we can do repeat testing.
     """
-    from mojo.apps.account.models.device import UserDevice, UserDeviceLocation, GeoLocatedIP
+    from mojo.apps.account.models.device import UserDevice, UserDeviceLocation
+    from mojo.apps.account.models.geolocated_ip import GeoLocatedIP
     UserDevice.objects.filter(user__username=TEST_USER).delete()
     UserDeviceLocation.objects.filter(user__username=TEST_USER).delete()
     GeoLocatedIP.objects.filter(ip_address__in=['8.8.8.8', '192.168.1.100', '1.1.1.1']).delete()
@@ -22,7 +23,8 @@ def test_track_new_device_public_ip(opts):
     database objects and triggers a geolocation refresh task.
     """
     from mojo.apps.account.models import User
-    from mojo.apps.account.models.device import UserDevice, UserDeviceLocation, GeoLocatedIP
+    from mojo.apps.account.models.device import UserDevice, UserDeviceLocation
+    from mojo.apps.account.models.geolocated_ip import GeoLocatedIP
     from mojo.helpers.location.geolocation import refresh_geolocation_for_ip
 
     user = User.objects.get(username=TEST_USER)
