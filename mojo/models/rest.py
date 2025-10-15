@@ -9,10 +9,11 @@ from django.db import transaction, models as dm
 import objict
 import datetime
 from mojo.helpers import dates, logit
+from contextvars import ContextVar
 
 
 logger = logit.get_logger("debug", "debug.log")
-ACTIVE_REQUEST = None
+ACTIVE_REQUEST = ContextVar("ACTIVE_REQUEST", default=None)
 LOGGING_CLASS = None
 MOJO_APP_STATUS_200_ON_ERROR = settings.MOJO_APP_STATUS_200_ON_ERROR
 MOJO_REST_LIST_PERM_DENY = settings.get("MOJO_REST_LIST_PERM_DENY", True)
@@ -35,13 +36,14 @@ class MojoModel:
     @property
     def active_request(self):
         """Returns the active request being processed."""
-        return ACTIVE_REQUEST
+        return ACTIVE_REQUEST.get()
 
     @property
     def active_user(self):
         """Returns the active user being processed."""
-        if ACTIVE_REQUEST:
-            return ACTIVE_REQUEST.user
+        req = ACTIVE_REQUEST.get()
+        if req:
+            return req.user
         return None
 
     @classmethod
@@ -353,12 +355,12 @@ class MojoModel:
         return cls.on_rest_list_response(request, cls.objects.none())
 
     def update_from_dict(self, dict_data):
-        request = ACTIVE_REQUEST or SYSTEM_REQUEST
+        request = ACTIVE_REQUEST.get() or SYSTEM_REQUEST
         return self.on_rest_save(request, dict_data)
 
     @classmethod
     def create_from_dict(cls, dict_data, **kwargs):
-        request = kwargs.pop('request', ACTIVE_REQUEST or SYSTEM_REQUEST)
+        request = kwargs.pop('request', ACTIVE_REQUEST.get() or SYSTEM_REQUEST)
         instance = cls(**kwargs)
         instance.on_rest_save(request, dict_data)
         instance.on_rest_created()
@@ -372,7 +374,7 @@ class MojoModel:
         instance.on_rest_save(request, request.DATA)
         instance.on_rest_created()
         if cls.get_rest_meta_prop("LOG_CHANGES", False):
-            instance.log(kind="model:created", log=f"{ACTIVE_REQUEST.user.username} created {instance.pk}")
+            instance.log(kind="model:created", log=f"{request.user.username} created {instance.pk}")
         return instance
 
     @classmethod
@@ -1017,7 +1019,8 @@ class MojoModel:
         request: Optional HTTP request or actor.
         **context: Any additional context.
         """
-        if ACTIVE_REQUEST and ACTIVE_REQUEST.user.is_authenticated:
+        req = ACTIVE_REQUEST.get()
+        if req and req.user.is_authenticated:
             return request.user.report_incident(details, event_type=event_type, level=level, request=request, **context)
         return cls.class_report_incident(details, event_type=event_type, level=level, request=request, **context)
 
@@ -1044,7 +1047,7 @@ class MojoModel:
         )
 
     def log(self, log="", kind="model_log", level="info", **kwargs):
-        return self.class_logit(ACTIVE_REQUEST, log, kind, self.id, level, **kwargs)
+        return self.class_logit(ACTIVE_REQUEST.get(), log, kind, self.id, level, **kwargs)
 
     def model_logit(self, request, log, kind="model_log", level="info", **kwargs):
         return self.class_logit(request, log, kind, self.id, level, **kwargs)

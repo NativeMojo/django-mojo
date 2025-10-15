@@ -164,8 +164,9 @@ class UserDevice(models.Model, MojoModel):
         Tracks a user's device based on the incoming request. This is the primary
         entry point for the device tracking system.
         """
-        if not request:
-            request = self.active_request
+        if request is None:
+            from mojo.models import rest
+            request = rest.ACTIVE_REQUEST.get() if hasattr(rest.ACTIVE_REQUEST, "get") else rest.ACTIVE_REQUEST
             if request is None:
                 raise ValueError("No active request found")
 
