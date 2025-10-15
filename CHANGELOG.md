@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.99 - October 15, 2025
+
+HOTFIX - shared context bug with requests
+
+
 ## v0.1.98 - October 14, 2025
 
 Invite tokens

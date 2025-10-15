@@ -2,7 +2,7 @@ from mojo.helpers import request as rhelper
 import time
 from objict import objict
 from mojo.helpers.settings import settings
-from mojo.helpers import dates, logit
+from mojo.helpers import logit
 from mojo.models import rest
 
 logger = logit.get_logger("debug", "debug.log")
@@ -34,10 +34,12 @@ class MojoMiddleware:
         else:
             request._raw_body = None
         request.DATA = rhelper.parse_request_data(request)
-        rest.ACTIVE_REQUEST = request
-        resp = self.get_response(request)
-        resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-        resp.headers["Pragma"] = "no-cache"
-        resp.headers["Expires"] = "0"
-        rest.ACTIVE_REQUEST = None
-        return resp
+        token = rest.ACTIVE_REQUEST.set(request)
+        try:
+            resp = self.get_response(request)
+            resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+            resp.headers["Pragma"] = "no-cache"
+            resp.headers["Expires"] = "0"
+            return resp
+        finally:
+            rest.ACTIVE_REQUEST.reset(token)
