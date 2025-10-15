@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.102 - October 15, 2025
+
+Update geo ip for forensics
+
+
 ## v0.1.101 - October 15, 2025
 
 Config to allow incident and rule deletion
