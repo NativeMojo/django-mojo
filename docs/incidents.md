@@ -58,7 +58,7 @@ A `Rule` is a single, specific condition to be checked against an `Event`'s `met
 ## Event Processing Flow
 
 1.  **Ingestion**: An event enters the system. This can happen in several ways:
-    - **Via REST API**: The endpoints at `/api/ossec/alert` are specifically designed to parse and report events from OSSEC.
+    - **Via REST API**: The endpoints at `/api/incident/ossec/alert` are specifically designed to parse and report events from OSSEC. All incident endpoints are namespaced under `/api/incident/*`.
     - **Via `report_event` helper**: The function `mojo.apps.incident.reporter.report_event` can be called from anywhere in the codebase to submit a new event.
     - **Via `MojoModel.report_incident`**: A convenience method on `MojoModel` that wraps the `report_event` helper.
 

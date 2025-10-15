@@ -2,9 +2,9 @@
 
 This comprehensive guide provides developers with everything needed to integrate with the MOJO Incident Management System's REST API. The system processes events through a powerful rule engine, creates actionable incidents, and provides ticketing functionality.
 
-**Base URL:** `/api/`  
-**Authentication:** Required for all endpoints  
-**Permissions:** 
+Base URL: `/api/`
+Authentication: Required for all endpoints
+Permissions:
 - `view_incidents` - Required to read incidents, events, and tickets
 - `manage_incidents` - Required to create/modify rules, incidents, and tickets
 
@@ -15,6 +15,10 @@ This comprehensive guide provides developers with everything needed to integrate
 1. [Core Concepts](#core-concepts)
 2. [Event Management](#event-management)
 3. [Rule Engine](#rule-engine)
+   - [Rule Building Guide](#rule-building-guide)
+   - [Bundling Strategies](#bundling-strategies)
+   - [Rule Recipes](#rule-recipes)
+   - [Default Rules Quick Start](#default-rules-quick-start)
 4. [Incident Management](#incident-management)
 5. [Ticket System](#ticket-system)
 6. [Comment Systems](#comment-systems)
@@ -28,7 +32,7 @@ This comprehensive guide provides developers with everything needed to integrate
 
 ### Architecture Overview
 
-The system follows a clear flow: **Events** → **Rules** → **Incidents** → **Tickets**
+The system follows a clear flow: Events → Rules → Incidents → Tickets
 
 ```
 External System → Event → Rule Engine → Incident → Ticket → Resolution
@@ -39,16 +43,18 @@ External System → Event → Rule Engine → Incident → Ticket → Resolution
 #### Event
 The fundamental unit representing a discrete occurrence that needs recording.
 
-**Key Fields:**
+Key Fields:
 - `level` (0-15): Severity level (7+ can auto-escalate to incidents)
 - `category`: Groups similar events (e.g., "auth", "ossec", "api_error")
 - `metadata`: JSON field containing all event details for rule processing
 - `source_ip`, `hostname`, `uid`: Common contextual fields
 
+Note: Core fields are mirrored into `metadata` on save, so rules can reference either the original or the mirrored metadata key (e.g., `level` is available as `metadata.level`).
+
 #### RuleSet & Rule
 The decision engine that determines when events become incidents.
 
-**RuleSet Logic:**
+RuleSet Logic:
 - `match_by`: `0` (ALL rules must match) or `1` (ANY rule can match)
 - `bundle_by`: Controls how events are grouped into single incidents
 - `bundle_minutes`: Time window for event bundling
@@ -57,8 +63,8 @@ The decision engine that determines when events become incidents.
 #### Incident
 High-level records created when events meet significance criteria.
 
-**States:** `open`, `investigating`, `resolved`, `closed`
-**Priority:** Integer (higher = more urgent)
+Status: `new`, `open`, `investigating`, `resolved`, `closed`
+Priority: Integer (higher = more urgent)
 
 #### Ticket
 Actionable tasks that can be assigned to users for resolution.
@@ -98,9 +104,9 @@ report_event(
 
 For external SIEM systems like OSSEC:
 
-**Single Alert:**
+Single Alert:
 ```http
-POST /api/ossec/alert
+POST /api/incident/ossec/alert
 Content-Type: application/json
 
 {
@@ -113,9 +119,9 @@ Content-Type: application/json
 }
 ```
 
-**Batch Alerts:**
+Batch Alerts:
 ```http
-POST /api/ossec/alert/batch
+POST /api/incident/ossec/alert/batch
 Content-Type: application/json
 
 {
@@ -137,10 +143,10 @@ Content-Type: application/json
 ### Querying Events
 
 ```http
-GET /api/event
-GET /api/event?category=ossec&level__gte=7
-GET /api/event?source_ip=192.168.1.100&created__gte=2024-01-15T00:00:00Z
-GET /api/event/123?graph=incident
+GET /api/incident/event
+GET /api/incident/event?category=ossec&level__gte=7
+GET /api/incident/event?source_ip=192.168.1.100&created__gte=2024-01-15T00:00:00Z
+GET /api/incident/event/123?graph=incident
 ```
 
 ---
@@ -149,12 +155,12 @@ GET /api/event/123?graph=incident
 
 ### Understanding the Rule Engine
 
-The rule engine processes every event against category-matched RuleSets in priority order. Rules operate on the `Event.metadata` JSON field.
+The rule engine processes every event against category-matched RuleSets in priority order. Rules operate on the `Event.metadata` JSON field. If a rule set matches, an incident is created or the event is bundled into an existing incident per the ruleset’s bundling policy.
 
 ### Creating a RuleSet
 
 ```http
-POST /api/event/ruleset
+POST /api/incident/event/ruleset
 Content-Type: application/json
 
 {
@@ -168,7 +174,7 @@ Content-Type: application/json
 }
 ```
 
-**Bundle Options:**
+Bundle Options:
 - `0`: No bundling
 - `1`: Bundle by hostname
 - `2`: Bundle by model_name
@@ -180,10 +186,12 @@ Content-Type: application/json
 - `8`: Bundle by source_ip + model_name + model_id
 - `9`: Bundle by source_ip + hostname
 
+Tip: If you want to bundle by “event type”, consider populating `model_name` and `model_id` on events to represent a stable type key (e.g., `model_name="ossec_rule"` and `model_id=<rule_id>`) and then use bundle_by `8` to scope by `source_ip + type`.
+
 ### Adding Rules to a RuleSet
 
 ```http
-POST /api/event/ruleset/rule
+POST /api/incident/event/ruleset/rule
 Content-Type: application/json
 
 {
@@ -196,46 +204,252 @@ Content-Type: application/json
 }
 ```
 
-**Supported Comparators:**
+Supported Comparators:
 - `==`, `eq`: Equal to
 - `>`, `>=`, `<`, `<=`: Numeric comparisons
 - `contains`: String contains
 - `regex`: Regular expression match
 
-### Complete Example: Brute Force Detection
+Field Values:
+- `field_name` reads from `Event.metadata`. Core fields such as `level`, `category`, `source_ip`, `hostname`, `model_name`, and `model_id` are mirrored into `metadata` automatically.
 
+Handlers:
+- `task://name?param1=value1`
+- `email://recipient@example.com`
+- `notify://channel-or-user`
+- `ticket://?status=open&priority=8&title=Investigate` (creates a ticket; optional params: `title`, `description`, `status`, `priority`, `category`, `assignee`)
+
+RuleSet metadata (optional):
+- `min_count` (int): Minimum number of bundled events within the window to consider the incident “open”. If not met, incident status is set to `pending_status`.
+- `window_minutes` (int): Time window in minutes used to count bundled events. Defaults to `bundle_minutes` if unset.
+- `pending_status` (str): Incident status to use when below `min_count` (default: `pending`).
+- `action` (str): When set to `ignore`, matching events are ignored (no incident or handler execution).
+
+Tip on bundling by ip + rule_id:
+- Set events’ `model_name="ossec_rule"` and `model_id=<rule_id>`, then use `bundle_by=8` to bundle by `source_ip + model_name + model_id`.
+
+### Rule Building Guide
+
+- Start with category-specific rule sets (e.g., `ossec`, `auth`, `api_error`).
+- Use `match_by=0` to require all conditions, or `match_by=1` for any condition.
+- Keep handlers simple: `email://user@company.com`, `notify://team-security`, `task://your_task?param=value`, or `ticket://?status=open&priority=8`.
+- Use bundling to prevent duplicate incidents:
+  - Bundle by `source_ip` for network-driven alerts.
+  - Add `model_name/model_id` to separate different event types for the same IP.
+- Keep severity levels consistent; high severities should only trigger when truly necessary.
+
+### Bundling Strategies
+
+- Minimal bundling: `bundle_by=0`
+- By asset: `bundle_by=1` (hostname)
+- By event type: populate `model_name/model_id` and use `3` or `8`
+- By network source: `bundle_by=4` (source_ip)
+- By mixed context: `bundle_by=9` (source_ip + hostname)
+
+Time window: Use `bundle_minutes` to cap how long events will be grouped into one incident.
+
+### Rule Recipes
+
+1) OSSEC: Bundle events to a single incident by source_ip and event type (rule_id-like)
 ```http
-# Step 1: Create RuleSet
-POST /api/event/ruleset
+# Create a ruleset for a specific OSSEC rule class
+POST /api/incident/event/ruleset
 {
-    "name": "SSH Brute Force Detection",
-    "category": "auth",
-    "priority": 5,
-    "match_by": 0,
-    "bundle_by": 4,
-    "bundle_minutes": 5,
-    "handler": "task://block_ip?duration=3600,email://security@company.com"
+  "name": "OSSEC 2501 Bundled by IP",
+  "category": "ossec",
+  "priority": 10,
+  "match_by": 0,
+  "bundle_by": 4,
+  "bundle_minutes": 15,
+  "handler": "email://security@company.com"
 }
 
-# Step 2: Add rules
-POST /api/event/ruleset/rule
+# Only match OSSEC events with level >= 7
+POST /api/incident/event/ruleset/rule
 {
-    "parent": 124,
-    "name": "High severity auth events",
-    "field_name": "level",
-    "comparator": ">=",
-    "value": "7",
-    "value_type": "int"
+  "parent": <ruleset_id>,
+  "name": "Severity >= 7",
+  "field_name": "level",
+  "comparator": ">=",
+  "value": "7",
+  "value_type": "int"
+}
+
+# Constrain to a specific rule type using OSSEC metadata
+POST /api/incident/event/ruleset/rule
+{
+  "parent": <ruleset_id>,
+  "name": "OSSEC rule 2501",
+  "field_name": "rule_id",
+  "comparator": "==",
+  "value": "2501",
+  "value_type": "int"
+}
+```
+Note: For strict per-type bundling (e.g., source_ip + rule_id), set events’ `model_name="ossec_rule"` and `model_id=<rule_id>`, then use `bundle_by=8` to guarantee separation across rule_ids.
+
+2) Batch events as “pending” when below a trigger threshold
+- Pattern: Use a “collector” ruleset to bundle by IP/type and create an incident immediately; keep its `status` as “pending” until a count threshold is met within a time window, then programmatically set it to “open” and run notifications.
+- Implementation approach:
+  - Choose a reasonable `bundle_minutes` to define the evaluation window.
+  - Periodically count matching events for the incident context and, if the threshold is reached, update the incident via:
+    ```http
+    PATCH /api/incident/{id}
+    {
+      "status": "open",
+      "note": "Threshold met (N events in M minutes)"
+    }
+    ```
+  - Use a task/cron in your environment to enforce the transition and trigger downstream actions.
+
+3) Completely ignore some events
+- At ingestion: For OSSEC, leverage parser-side ignore logic (e.g., filter known noisy `rule_id` or text signatures before they become events).
+- Via rules and severity: Ensure noisy categories remain below the incident threshold and have no matching rulesets. They will be recorded as events but will not produce incidents.
+- For targeted suppression, create a high-priority ruleset that matches the noise pattern and do not attach handlers; design your severity and thresholds so no incident gets created for these matches.
+
+4) Escalate major events
+- Use a dedicated high-severity ruleset (e.g., `level >= 10`) with stronger handlers (paging, Slack, email).
+- If an ongoing incident receives higher-severity events, update the incident priority via API:
+```http
+PATCH /api/incident/{id}
+{
+  "priority": 10,
+  "note": "Escalated due to higher-severity event"
+}
+```
+
+5) Turn an event/incident into a ticket
+- From an incident:
+```http
+POST /api/incident/ticket
+Content-Type: application/json
+
+{
+  "title": "Investigate suspicious activity",
+  "description": "Bundled incident by source IP. Review logs and block if necessary.",
+  "priority": 8,
+  "status": "open",
+  "incident": 456,
+  "assignee": 123
+}
+```
+
+### Default Rules Quick Start
+
+These examples create common “core” rules via the REST API.
+
+A) OSSEC: Bundle all high-severity OSSEC events by source IP (15 min window)
+```http
+POST /api/incident/event/ruleset
+{
+  "name": "OSSEC - Bundle by IP (high severity)",
+  "category": "ossec",
+  "priority": 10,
+  "match_by": 0,
+  "bundle_by": 4,
+  "bundle_minutes": 15,
+  "handler": "email://security@company.com"
 }
 
 POST /api/event/ruleset/rule
 {
-    "parent": 124,
-    "name": "SSH-related events",
-    "field_name": "details",
-    "comparator": "contains",
-    "value": "SSH",
-    "value_type": "str"
+  "parent": <ruleset_id>,
+  "name": "OSSEC severity >= 7",
+  "field_name": "level",
+  "comparator": ">=",
+  "value": "7",
+  "value_type": "int"
+}
+```
+
+B) OSSEC: Per-rule bundling (example for `rule_id=31104`)
+```http
+POST /api/incident/event/ruleset
+{
+  "name": "OSSEC 31104 by IP",
+  "category": "ossec",
+  "priority": 9,
+  "match_by": 0,
+  "bundle_by": 4,
+  "bundle_minutes": 20,
+  "handler": "notify://sec-oncall"
+}
+
+POST /api/event/ruleset/rule
+{
+  "parent": <ruleset_id>,
+  "name": "Severity >= 8",
+  "field_name": "level",
+  "comparator": ">=",
+  "value": "8",
+  "value_type": "int"
+}
+
+POST /api/incident/event/ruleset/rule
+{
+  "parent": <ruleset_id>,
+  "name": "Rule 31104",
+  "field_name": "rule_id",
+  "comparator": "==",
+  "value": "31104",
+  "value_type": "int"
+}
+```
+
+C) Ignore noisy low-severity OSSEC events (example for `rule_id=510`)
+- Prefer ingestion-time ignore for OSSEC. If you must handle via rules, ensure severity stays below your incident threshold and omit handlers to avoid alert fatigue:
+```http
+POST /api/incident/event/ruleset
+{
+  "name": "Ignore OSSEC 510",
+  "category": "ossec",
+  "priority": 1,  // high priority so it matches first
+  "match_by": 0,
+  "bundle_by": 0
+}
+
+POST /api/event/ruleset/rule
+{
+  "parent": <ruleset_id>,
+  "name": "Rule 510",
+  "field_name": "rule_id",
+  "comparator": "==",
+  "value": "510",
+  "value_type": "int"
+}
+
+POST /api/incident/event/ruleset/rule
+{
+  "parent": <ruleset_id>,
+  "name": "Low severity",
+  "field_name": "level",
+  "comparator": "<",
+  "value": "7",
+  "value_type": "int"
+}
+```
+
+D) Escalation for critical OSSEC events
+```http
+POST /api/incident/event/ruleset
+{
+  "name": "OSSEC Critical Escalation",
+  "category": "ossec",
+  "priority": 5,
+  "match_by": 1,
+  "bundle_by": 4,
+  "bundle_minutes": 30,
+  "handler": "email://security@company.com,notify://sec-ops"
+}
+
+POST /api/event/ruleset/rule
+{
+  "parent": <ruleset_id>,
+  "name": "OSSEC severity >= 10",
+  "field_name": "level",
+  "comparator": ">=",
+  "value": "10",
+  "value_type": "int"
 }
 ```
 
@@ -247,81 +461,81 @@ POST /api/event/ruleset/rule
 
 ```http
 GET /api/incident
-GET /api/incident?state=open&priority__gte=8
+GET /api/incident?status=open&priority__gte=8
 GET /api/incident?category=ossec&created__gte=2024-01-15T00:00:00Z
 ```
 
-**Response:**
+Response:
 ```json
 {
-    "data": [
-        {
-            "id": 456,
-            "title": "Multiple SSH failures from 192.168.1.100",
-            "category": "auth",
-            "state": "open",
-            "priority": 8,
-            "created": "2024-01-15T10:30:00Z",
-            "source_ip": "192.168.1.100",
-            "hostname": "web-server-01"
-        }
-    ],
-    "meta": {
-        "total": 25,
-        "page": 1,
-        "per_page": 20
+  "data": [
+    {
+      "id": 456,
+      "title": "Multiple SSH failures from 192.168.1.100",
+      "category": "auth",
+      "status": "open",
+      "priority": 8,
+      "created": "2024-01-15T10:30:00Z",
+      "source_ip": "192.168.1.100",
+      "hostname": "web-server-01"
     }
+  ],
+  "meta": {
+    "total": 25,
+    "page": 1,
+    "per_page": 20
+  }
 }
 ```
 
 ### Getting Incident Details with Events
 
 ```http
-GET /api/incident/456?graph=events,history
+GET /api/incident/incident/456?graph=events,history
 ```
 
-**Response:**
+Response:
 ```json
 {
-    "data": {
-        "id": 456,
-        "title": "Multiple SSH failures from 192.168.1.100",
-        "category": "auth",
-        "state": "open",
-        "priority": 8,
-        "events": [
-            {
-                "id": 789,
-                "title": "SSH authentication failed for user admin",
-                "level": 8,
-                "created": "2024-01-15T10:30:00Z",
-                "metadata": {
-                    "username": "admin",
-                    "source_ip": "192.168.1.100"
-                }
-            }
-        ],
-        "history": [
-            {
-                "id": 101,
-                "kind": "created",
-                "created": "2024-01-15T10:30:00Z",
-                "note": "Incident automatically created by rule: SSH Brute Force Detection"
-            }
-        ]
-    }
+  "data": {
+    "id": 456,
+    "title": "Multiple SSH failures from 192.168.1.100",
+    "category": "auth",
+    "status": "open",
+    "priority": 8,
+    "events": [
+      {
+        "id": 789,
+        "title": "SSH authentication failed for user admin",
+        "level": 8,
+        "created": "2024-01-15T10:30:00Z",
+        "metadata": {
+          "username": "admin",
+          "source_ip": "192.168.1.100"
+        }
+      }
+    ],
+    "history": [
+      {
+        "id": 101,
+        "kind": "created",
+        "created": "2024-01-15T10:30:00Z",
+        "note": "Incident automatically created by rule: SSH Brute Force Detection"
+      }
+    ]
+  }
 }
 ```
 
-### Updating Incident State
+### Updating Incident State/Status
 
 ```http
 PATCH /api/incident/456
 Content-Type: application/json
 
 {
-    "state": "investigating",
-    "note": "Security team investigating the source IP"
+  "status": "investigating",
+  "note": "Security team investigating the source IP"
 }
 ```
 
@@ -336,12 +550,12 @@ POST /api/incident/ticket
 Content-Type: application/json
 
 {
-    "title": "Investigate suspicious SSH activity",
-    "description": "Multiple failed SSH attempts from 192.168.1.100 detected",
-    "priority": 8,
-    "status": "open",
-    "assignee": 123,
-    "incident": 456
+  "title": "Investigate suspicious SSH activity",
+  "description": "Multiple failed SSH attempts from 192.168.1.100 detected",
+  "priority": 8,
+  "status": "open",
+  "assignee": 123,
+  "incident": 456
 }
 ```
 
@@ -360,8 +574,8 @@ PATCH /api/incident/ticket/789
 Content-Type: application/json
 
 {
-    "status": "in_progress",
-    "assignee": 456
+  "status": "in_progress",
+  "assignee": 456
 }
 ```
 
@@ -374,53 +588,48 @@ Both Incidents and Tickets support comment-like interfaces for collaboration and
 ### Incident History (Comments)
 
 Add notes to incidents:
-
 ```http
 POST /api/incident/456/history
 Content-Type: application/json
 
 {
-    "kind": "comment",
-    "note": "Blocked the source IP at firewall level. Monitoring for additional attempts.",
-    "by": 123
+  "kind": "comment",
+  "note": "Blocked the source IP at firewall level. Monitoring for additional attempts.",
+  "by": 123
 }
 ```
 
 Get incident history:
-
 ```http
-GET /api/incident/456/history
+GET /api/incident/incident/456/history
 ```
 
 ### Ticket Notes (Comments)
 
 Add notes to tickets:
-
 ```http
 POST /api/incident/ticket/789/note
 Content-Type: application/json
 
 {
-    "note": "Contacted the user - confirmed they were attempting to login from home. IP has been whitelisted.",
-    "author": 123
+  "note": "Contacted the user - confirmed they were attempting to login from home. IP has been whitelisted.",
+  "author": 123
 }
 ```
 
 With file attachments:
-
 ```http
 POST /api/incident/ticket/789/note
 Content-Type: application/json
 
 {
-    "note": "Attached network trace showing the attack pattern",
-    "author": 123,
-    "media": 456
+  "note": "Attached network trace showing the attack pattern",
+  "author": 123,
+  "media": 456
 }
 ```
 
 Get ticket notes:
-
 ```http
 GET /api/incident/ticket/789/note
 ```
@@ -433,32 +642,33 @@ GET /api/incident/ticket/789/note
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/event` | List events with filtering |
-| GET | `/api/event/{id}` | Get specific event |
-| POST | `/api/ossec/alert` | Submit OSSEC alert |
-| POST | `/api/ossec/alert/batch` | Submit multiple OSSEC alerts |
+| GET | `/api/incident/event` | List events with filtering |
+| GET | `/api/incident/event/{id}` | Get specific event |
+| POST | `/api/incident/ossec/alert` | Submit OSSEC alert |
+| POST | `/api/incident/ossec/alert/batch` | Submit multiple OSSEC alerts |
 
 ### Rule Engine Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/event/ruleset` | List rule sets |
-| POST | `/api/event/ruleset` | Create rule set |
-| GET | `/api/event/ruleset/{id}` | Get specific rule set |
-| PATCH | `/api/event/ruleset/{id}` | Update rule set |
-| GET | `/api/event/ruleset/rule` | List rules |
-| POST | `/api/event/ruleset/rule` | Create rule |
-| PATCH | `/api/event/ruleset/rule/{id}` | Update rule |
+| GET | `/api/incident/event/ruleset` | List rule sets |
+| POST | `/api/incident/event/ruleset` | Create rule set |
+| GET | `/api/incident/event/ruleset/{id}` | Get specific rule set |
+| PATCH | `/api/incident/event/ruleset/{id}` | Update rule set |
+| GET | `/api/incident/event/ruleset/rule` | List rules |
+| POST | `/api/incident/event/ruleset/rule` | Create rule |
+| PATCH | `/api/incident/event/ruleset/rule/{id}` | Update rule |
+| POST | `/api/incident/event/ruleset/defaults` | Create default rule sets |
 
 ### Incident Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/incident` | List incidents |
-| GET | `/api/incident/{id}` | Get specific incident |
-| PATCH | `/api/incident/{id}` | Update incident |
-| GET | `/api/incident/history` | List all incident history |
-| POST | `/api/incident/{id}/history` | Add history entry |
+| GET | `/api/incident/incident` | List incidents |
+| GET | `/api/incident/incident/{id}` | Get specific incident |
+| PATCH | `/api/incident/incident/{id}` | Update incident |
+| GET | `/api/incident/incident/history` | List all incident history |
+| POST | `/api/incident/incident/{id}/history` | Add history entry |
 
 ### Ticket Endpoints
 
@@ -477,10 +687,10 @@ GET /api/incident/ticket/789/note
 
 ### Event Creation
 
-1. **Use Meaningful Categories**: Group related events with consistent category names
-2. **Appropriate Severity Levels**: Reserve high levels (8-15) for truly critical events
-3. **Rich Metadata**: Include all relevant context in the metadata field
-4. **Consistent Field Names**: Use standard field names across your application
+- Use meaningful categories (e.g., `ossec`, `auth`, `database`)
+- Keep severity consistent; 8–15 should be reserved for truly critical signals
+- Include rich metadata; prefer stable keys that support bundling (e.g., type identifiers)
+- Mirror type identity into `model_name/model_id` when you need per-type bundling
 
 ```python
 # Good
@@ -499,23 +709,28 @@ report_event("db error", level=15)  # Too vague, inappropriate severity
 
 ### Rule Design
 
-1. **Start Simple**: Begin with basic rules and add complexity as needed
-2. **Test Thoroughly**: Verify rules with historical data before deployment
-3. **Avoid Over-bundling**: Too aggressive bundling can mask individual issues
-4. **Use Meaningful Names**: Clear rule and ruleset names aid troubleshooting
+- Start simple; add complexity as needed
+- Test with historical data before deployment
+- Avoid over-bundling; too much bundling can hide distinct problems
+- Use meaningful names for rulesets and rules
 
 ### Incident Management
 
-1. **Consistent State Management**: Define clear state transition workflows
-2. **Prioritize Appropriately**: Align incident priorities with business impact
-3. **Document Resolutions**: Always add history entries when resolving incidents
+- Define clear, consistent state/status transitions
+- Prioritize by business impact, not just raw event severity
+- Document investigation notes and resolution steps in history
 
 ### Ticket Workflow
 
-1. **Clear Titles**: Use descriptive, actionable ticket titles
-2. **Detailed Descriptions**: Include enough context for assignees to act
-3. **Regular Updates**: Use notes to track progress and decisions
-4. **Link to Incidents**: Always link tickets to related incidents when applicable
+- Create tickets for actionable work, with clear titles and context
+- Update status frequently; use notes for collaboration and audit
+- Link tickets to incidents to keep evidence and context together
+
+Additional baseline rules you may want to add:
+- Geo-risk filters (e.g., high priority for certain country codes)
+- Asset sensitivity (hosts containing “prod” get higher priority)
+- Auth anomalies (multiple failed logins, new device logins)
+- API errors (5xx spikes bundled by route or service)
 
 ---
 
@@ -528,44 +743,35 @@ To evolve this into a full-featured ticket system while maintaining the KISS pri
 #### 1. Advanced Ticket Features
 ```json
 {
-    "due_date": "2024-01-20T17:00:00Z",
-    "estimated_hours": 4.0,
-    "actual_hours": 2.5,
-    "labels": ["security", "urgent", "network"],
-    "watchers": [123, 456, 789],
-    "parent_ticket": 456,
-    "blocked_by": [123, 124]
+  "due_date": "2024-01-20T17:00:00Z",
+  "estimated_hours": 4.0,
+  "actual_hours": 2.5,
+  "labels": ["security", "urgent", "network"],
+  "watchers": [123, 456, 789],
+  "parent_ticket": 456,
+  "blocked_by": [123, 124]
 }
 ```
 
 #### 2. Workflow Automation
-- **State Transitions**: Automatic status changes based on actions
-- **Escalation Rules**: Auto-assignment based on time or priority
-- **SLA Tracking**: Due date calculation and breach notifications
+- State transitions and auto-assignment
+- Time-based escalations
+- SLA tracking and breach notifications
 
 #### 3. Enhanced Notifications
 ```json
 {
-    "handler": "slack://channel/security,email://team@company.com,webhook://https://api.company.com/alerts"
+  "handler": "slack://channel/security,email://team@company.com,webhook://https://api.company.com/alerts"
 }
 ```
 
 #### 4. Metrics and Reporting
-- **MTTR Tracking**: Mean Time To Resolution by category
-- **Incident Trends**: Pattern recognition across events
-- **Performance Dashboards**: Team and individual metrics
+- MTTR, incident trends, performance dashboards
 
 #### 5. Integration Improvements
-- **Bidirectional Sync**: Two-way integration with external ticketing systems
-- **Custom Fields**: Configurable metadata fields per category
-- **Bulk Operations**: Mass updates and actions
-
-### Implementation Priorities
-
-1. **Phase 1**: Enhanced ticket states and workflow automation
-2. **Phase 2**: Advanced notifications and escalation rules
-3. **Phase 3**: Metrics, reporting, and performance tracking
-4. **Phase 4**: External integrations and custom fields
+- Two-way sync with external ticketing systems
+- Custom fields per category
+- Bulk operations
 
 ### API Evolution
 
@@ -575,21 +781,21 @@ Future API additions will maintain backward compatibility:
 # Enhanced ticket creation
 POST /api/incident/ticket/v2
 {
-    "title": "Investigate security incident",
-    "template": "security_incident",
-    "auto_assign": true,
-    "sla_hours": 24,
-    "custom_fields": {
-        "affected_systems": ["web-01", "db-02"],
-        "security_classification": "confidential"
-    }
+  "title": "Investigate security incident",
+  "template": "security_incident",
+  "auto_assign": true,
+  "sla_hours": 24,
+  "custom_fields": {
+    "affected_systems": ["web-01", "db-02"],
+    "security_classification": "confidential"
+  }
 }
 
 # Workflow automation
 POST /api/incident/ticket/789/transition
 {
-    "action": "start_work",
-    "note": "Beginning investigation"
+  "action": "start_work",
+  "note": "Beginning investigation"
 }
 ```
 
@@ -600,8 +806,8 @@ These improvements will be implemented incrementally, ensuring the system remain
 ## Support
 
 For additional help:
-- Review the [Developer Guide](../incidents.md) for internal system mechanics
+- Review the Developer Guide for internal system mechanics
 - Check the source code in `mojo/apps/incident/` for implementation details
 - File issues for bugs or feature requests
 
-**Remember**: This system prioritizes simplicity and reliability. When in doubt, choose the simpler solution that maintains data integrity and system stability.
+Remember: This system prioritizes simplicity and reliability. When in doubt, choose the simpler solution that maintains data integrity and system stability.

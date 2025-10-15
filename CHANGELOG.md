@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.100 - October 15, 2025
+
+* Cleanup and debugging of rules and incidents
+
+
 ## v0.1.99 - October 15, 2025
 
 HOTFIX - shared context bug with requests

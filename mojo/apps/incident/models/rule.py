@@ -42,9 +42,9 @@ class RuleSet(models.Model, MojoModel):
     bundle_by = models.IntegerField(default=3)
     match_by = models.IntegerField(default=0)  # 0=all, 1=any
     # handler syntax is a url like string that can be chained by commas
-    # task://handler_name?param1=value1&param2=value2
-    # email://user@example.com
-    # notify://perm@permission,user@example.com,task://handler_name?param1=value1&param2=value2
+    # task://handler_name?param1=value1&param2=value2 | email://user@example.com
+    # notify://perm@permission,user@example.com | ticket://?status=open
+    # Chains split on ',(task|email|notify|ticket)://'
     handler = models.TextField(default=None, null=True)
     metadata = models.JSONField(default=dict, blank=True)
 
@@ -55,34 +55,199 @@ class RuleSet(models.Model, MojoModel):
 
     def run_handler(self, event, incident=None):
         """
-        Runs the handler for this rule.
+        Runs one or more handlers configured on this RuleSet.
+
+        Handlers can be chained in the `handler` field. The chain is split on
+        ',{scheme}://' where scheme in [task, email, notify, ticket].
 
         Args:
             event (Event): The event to run the handler for.
+            incident (Incident|None): The incident created for this event (if any).
 
         Returns:
-            bool: True if the handler was successfully run, False otherwise.
+            bool: True if at least one handler was successfully run, False otherwise.
         """
         if not self.handler:
             return False
+
+        success = False
         try:
-            handler_url = urlparse(self.handler)
-            handler_type = handler_url.scheme
-            handler_params = parse_qs(handler_url.query)
-            if handler_type == "task":
-                handler_name = handler_url.netloc
-                handler_params = {k: v[0] for k, v in handler_params.items()}
-                handler = TaskHandler(handler_name, **handler_params)
-            elif handler_type == "email":
-                handler = EmailHandler(handler_url.netloc)
-            elif handler_type == "notify":
-                handler = NotifyHandler(handler_url.netloc)
-            else:
-                raise ValueError(f"Unsupported handler type: {handler_type}")
-            return handler.run(event)
-        except Exception as e:
-            # logger.error(f"Error running handler for rule {self.id}: {e}")
+            # Split on commas that are followed by a known scheme, so commas inside
+            # notify recipient lists don't break the chain.
+            specs = re.split(r',(?=(?:task|email|notify|ticket)://)', self.handler.strip())
+
+            for spec in filter(None, [s.strip() for s in specs]):
+                handler_url = urlparse(spec)
+                handler_type = handler_url.scheme
+                params = {k: v[0] for k, v in parse_qs(handler_url.query).items()}
+
+                if handler_type == "task":
+                    handler = TaskHandler(handler_url.netloc, **params)
+                    success = handler.run(event) or success
+
+                elif handler_type == "email":
+                    handler = EmailHandler(handler_url.netloc)
+                    success = handler.run(event) or success
+
+                elif handler_type == "notify":
+                    handler = NotifyHandler(handler_url.netloc)
+                    success = handler.run(event) or success
+
+                elif handler_type == "ticket":
+                    created = self._create_ticket_from_handler(event, incident, handler_url, params)
+                    success = created or success
+
+                else:
+                    # Unsupported handler type; skip to next
+                    continue
+
+            return success
+        except Exception:
+            # logger.error(f"Error running handlers for ruleset {self.id}: {e}")
             return False
+
+    def _create_ticket_from_handler(self, event, incident, handler_url, params):
+        """
+        Create a Ticket from a 'ticket://' handler. Example:
+        ticket://?status=open&priority=8&title=Investigate&category=security
+
+        Supported params:
+        - title, description, status, priority, category, assignee (user id)
+        """
+        try:
+            from django.contrib.auth import get_user_model
+            from mojo.apps.incident.models import Ticket
+        except Exception:
+            return False
+
+        title = params.get("title") or (event.title or (f"Incident {incident.id}" if incident else "Auto Ticket"))
+        description = params.get("description") or (event.details or "")
+        status = params.get("status", "open")
+        category = params.get("category", "incident")
+
+        # Priority: explicit param -> event.level -> 1
+        try:
+            priority = int(params.get("priority", event.level if getattr(event, "level", None) is not None else 1))
+        except Exception:
+            priority = 1
+
+        # Assignee (optional, by user id)
+        assignee = None
+        assignee_param = params.get("assignee")
+        if assignee_param:
+            try:
+                User = get_user_model()
+                assignee = User.objects.filter(id=int(assignee_param)).first()
+            except Exception:
+                assignee = None
+
+        try:
+            ticket = Ticket.objects.create(
+                title=title,
+                description=description,
+                status=status,
+                priority=priority,
+                category=category,
+                assignee=assignee,
+                incident=incident,
+                metadata={**getattr(event, "metadata", {})},
+            )
+            return True if ticket else False
+        except Exception:
+            return False
+
+    @classmethod
+    def ensure_default_rules(cls):
+        """
+        Create or update a set of core default RuleSets and Rules.
+
+        Defaults provided:
+        1) OSSEC bundling by source_ip within 10 minutes (level >= 7)
+        2) OSSEC high severity auto-ticket (level >= 10)
+        """
+        # 1) OSSEC: Bundle by source_ip within 10 minutes for level >= 7
+        ossec_bundle, created = cls.objects.get_or_create(
+            category="ossec",
+            name="OSSEC - Bundle by IP + Type",
+            defaults={
+                "priority": 10,
+                "match_by": 0,
+                "bundle_by": 8,  # source_ip + model_name + model_id
+                "bundle_minutes": 10,
+                "handler": None,
+            },
+        )
+        if created:
+            try:
+                Rule.objects.create(
+                    parent=ossec_bundle,
+                    name="Category is ossec",
+                    field_name="category",
+                    comparator="==",
+                    value="ossec",
+                    value_type="str",
+                )
+                Rule.objects.create(
+                    parent=ossec_bundle,
+                    name="Severity >= 7",
+                    field_name="level",
+                    comparator=">=",
+                    value="7",
+                    value_type="int",
+                )
+                Rule.objects.create(
+                    parent=ossec_bundle,
+                    name="Event type is OSSEC rule",
+                    field_name="model_name",
+                    comparator="==",
+                    value="ossec_rule",
+                    value_type="str",
+                )
+            except Exception:
+                # Safe-guard: do not raise on partial rule creation
+                pass
+
+        # 2) OSSEC: High severity auto-ticket (creates a ticket on new incident)
+        ossec_ticket, created = cls.objects.get_or_create(
+            category="ossec",
+            name="OSSEC - High severity auto-ticket",
+            defaults={
+                "priority": 5,
+                "match_by": 0,
+                "bundle_by": 8,  # source_ip + model_name + model_id
+                "bundle_minutes": 15,
+                "handler": "ticket://?status=open",
+            },
+        )
+        if created:
+            try:
+                Rule.objects.create(
+                    parent=ossec_ticket,
+                    name="Category is ossec",
+                    field_name="category",
+                    comparator="==",
+                    value="ossec",
+                    value_type="str",
+                )
+                Rule.objects.create(
+                    parent=ossec_ticket,
+                    name="Severity >= 10",
+                    field_name="level",
+                    comparator=">=",
+                    value="10",
+                    value_type="int",
+                )
+                Rule.objects.create(
+                    parent=ossec_ticket,
+                    name="Event type is OSSEC rule",
+                    field_name="model_name",
+                    comparator="==",
+                    value="ossec_rule",
+                    value_type="str",
+                )
+            except Exception:
+                # Safe-guard: do not raise on partial rule creation
+                pass
 
     def check_rules(self, event):
         """
