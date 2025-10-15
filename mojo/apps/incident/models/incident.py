@@ -35,6 +35,8 @@ class Incident(models.Model, MojoModel):
         VIEW_PERMS = ["view_incidents"]
         CREATE_PERMS = None
         POST_SAVE_ACTIONS = ["merge"]
+        CAN_DELETE = True
+
 
     def on_action_merge(self, value):
         """
