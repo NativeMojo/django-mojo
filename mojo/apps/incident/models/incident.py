@@ -34,3 +34,25 @@ class Incident(models.Model, MojoModel):
         SEARCH_FIELDS = ["details"]
         VIEW_PERMS = ["view_incidents"]
         CREATE_PERMS = None
+        POST_SAVE_ACTIONS = ["merge"]
+
+    def on_action_merge(self, value):
+        """
+        Merge events from other incidents into this incident and delete the other incidents.
+
+        Args:
+            value: List of Incident ids to merge into this incident
+        """
+        if not value or not isinstance(value, list):
+            raise ValueError("Invalid value")
+
+        # Get the other incidents to merge
+        other_incidents = Incident.objects.filter(id__in=value).exclude(id=self.id)
+
+        for incident in other_incidents:
+            # Move all events from the other incident to this incident
+            incident.events.update(incident=self)
+
+            # Delete the now-empty incident
+            incident.delete()
+        return {"status": True }
