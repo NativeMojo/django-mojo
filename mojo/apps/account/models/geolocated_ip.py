@@ -9,12 +9,25 @@ GEOLOCATION_ALLOW_SUBNET_LOOKUP = settings.get('GEOLOCATION_ALLOW_SUBNET_LOOKUP'
 GEOLOCATION_CACHE_DURATION_DAYS = settings.get('GEOLOCATION_CACHE_DURATION_DAYS', 30)
 
 
-def trigger_refresh_task(ip_address):
+def trigger_refresh_task(ip_address, check_threats=False):
     """
     Publishes a task to refresh the geolocation data for a given IP address.
+
+    Args:
+        ip_address: IP address to refresh
+        check_threats: If True, also perform threat intelligence checks
     """
     from mojo.helpers.location.geolocation import refresh_geolocation_for_ip
-    jobs.publish_local(refresh_geolocation_for_ip, ip_address)
+    jobs.publish_local(refresh_geolocation_for_ip, ip_address, check_threats)
+
+
+def trigger_threat_check_task(ip_address):
+    """
+    Publishes a task to perform threat intelligence checks on an IP address.
+    This is separate from geolocation refresh and focuses only on threat data.
+    """
+    from mojo.helpers.location.geolocation import check_threats_for_ip
+    jobs.publish_local(check_threats_for_ip, ip_address)
 
 
 class GeoLocatedIP(models.Model, MojoModel):
@@ -47,6 +60,8 @@ class GeoLocatedIP(models.Model, MojoModel):
     is_proxy = models.BooleanField(default=False, db_index=True, help_text="Is this IP a known proxy server?")
     is_cloud = models.BooleanField(default=False, db_index=True, help_text="Is this IP from a cloud platform (AWS, GCP, Azure, etc.)?")
     is_datacenter = models.BooleanField(default=False, db_index=True, help_text="Is this IP from a datacenter/hosting provider?")
+    is_known_attacker = models.BooleanField(default=False, db_index=True, help_text="Is this IP from a datacenter/hosting provider?")
+    is_known_abuser = models.BooleanField(default=False, db_index=True, help_text="Is this IP from a datacenter/hosting provider?")
 
     # Additional security metadata
     threat_level = models.CharField(
@@ -86,10 +101,12 @@ class GeoLocatedIP(models.Model, MojoModel):
         POST_SAVE_ACTIONS = ["refresh"]
         GRAPHS = {
             'default': {
+                'extra': ['is_threat', 'is_suspicious', 'risk_score'],
                 'exclude': ['data']
             },
             'detailed': {
                 # Include all fields including raw data
+                'extra': ['is_threat', 'is_suspicious', 'risk_score']
             }
         }
 
@@ -114,6 +131,10 @@ class GeoLocatedIP(models.Model, MojoModel):
         if self.expires_at:
             return dates.utcnow() > self.expires_at
         return True  # If no expiry is set, it needs a refresh
+
+    @property
+    def is_threat(self):
+        return self.is_known_attacker or self.is_known_abuser
 
     @property
     def is_suspicious(self):
@@ -150,14 +171,17 @@ class GeoLocatedIP(models.Model, MojoModel):
         # Cap at 100
         return min(score, 100)
 
-    def refresh(self):
+    def refresh(self, check_threats=False):
         """
         Refreshes the geolocation data for this IP by calling the geolocation
         helper and updating the model instance with the returned data.
+
+        Args:
+            check_threats: If True, also perform threat intelligence checks
         """
         from mojo.helpers.location import geolocation
 
-        geo_data = geolocation.geolocate_ip(self.ip_address)
+        geo_data = geolocation.geolocate_ip(self.ip_address, check_threats=check_threats)
 
         if not geo_data:
             return False
@@ -177,8 +201,36 @@ class GeoLocatedIP(models.Model, MojoModel):
         self.save()
         return True
 
+    def check_threats(self):
+        """
+        Perform comprehensive threat intelligence checks on this IP.
+        Updates is_known_attacker, is_known_abuser, and threat_level fields.
+        Stores detailed threat data in the data JSON field.
+
+        This can be called independently or as part of refresh().
+        """
+        from mojo.helpers.location.threat_intel import perform_threat_check, recalculate_threat_level
+
+        threat_results = perform_threat_check(self.ip_address)
+
+        # Update threat flags
+        self.is_known_attacker = threat_results['is_known_attacker']
+        self.is_known_abuser = threat_results['is_known_abuser']
+
+        # Store detailed threat data
+        if not self.data:
+            self.data = {}
+        self.data['threat_data'] = threat_results['threat_data']
+        self.data['threat_checked_at'] = dates.utcnow().isoformat()
+
+        # Recalculate threat level with new data
+        self.threat_level = recalculate_threat_level(self)
+
+        self.save()
+        return threat_results
+
     def on_action_refresh(self, value):
-        self.refresh()
+        self.refresh(check_threats=True)
 
     @classmethod
     def geolocate(cls, ip_address, auto_refresh=False, subdomain_only=False):
