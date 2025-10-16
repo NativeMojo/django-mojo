@@ -18,7 +18,7 @@ TOR_EXIT_NODE_LIST_URL = settings.get('TOR_EXIT_NODE_LIST_URL', 'https://check.t
 CLOUD_PROVIDERS = {
     'AWS': ['amazon', 'aws'],
     'GCP': ['google cloud', 'gcp'],
-    'Azure': ['microsoft azure', 'azure'],
+    'Azure': ['microsoft', 'azure'],
     'DigitalOcean': ['digitalocean'],
     'Linode': ['linode'],
     'OVH': ['ovh'],
@@ -150,7 +150,7 @@ def calculate_threat_level(is_tor, is_vpn, is_proxy, threat_data=None):
     return 'low'
 
 
-def geolocate_ip(ip_address):
+def geolocate_ip(ip_address, check_threats=False):
     """
     Fetches geolocation data for a given IP address. It handles both
     public IPs (by calling an external provider) and private IPs.
@@ -170,6 +170,8 @@ def geolocate_ip(ip_address):
                 'is_proxy': False,
                 'is_cloud': False,
                 'is_datacenter': False,
+                'is_known_attacker': False,
+                'is_known_abuser': False,
                 'threat_level': 'low',
             }
     except ValueError:
@@ -204,6 +206,22 @@ def geolocate_ip(ip_address):
 
             geo_data['is_tor'] = is_tor
             geo_data.update(detection)
+
+            # Perform threat intelligence checks if requested
+            if check_threats:
+                from .threat_intel import perform_threat_check
+                threat_results = perform_threat_check(ip_address)
+                geo_data['is_known_attacker'] = threat_results['is_known_attacker']
+                geo_data['is_known_abuser'] = threat_results['is_known_abuser']
+
+                # Store threat data in the data field
+                if 'data' not in geo_data:
+                    geo_data['data'] = {}
+                geo_data['data']['threat_data'] = threat_results['threat_data']
+            else:
+                geo_data['is_known_attacker'] = False
+                geo_data['is_known_abuser'] = False
+
             geo_data['threat_level'] = calculate_threat_level(
                 is_tor,
                 detection['is_vpn'],
@@ -218,10 +236,14 @@ def geolocate_ip(ip_address):
         return None
 
 
-def refresh_geolocation_for_ip(ip_address):
+def refresh_geolocation_for_ip(ip_address, check_threats=False):
     """
     This function is the entry point for the background task.
     It gets or creates a GeoLocatedIP record and refreshes it if necessary.
+
+    Args:
+        ip_address: IP address to refresh
+        check_threats: If True, also perform threat intelligence checks
     """
     GeoLocatedIP = get_geo_located_ip_model()
 
@@ -229,9 +251,26 @@ def refresh_geolocation_for_ip(ip_address):
     geo_record, created = GeoLocatedIP.objects.get_or_create(ip_address=ip_address)
 
     if created or geo_record.is_expired:
-        geo_record.refresh()
+        geo_record.refresh(check_threats=check_threats)
 
     return geo_record
+
+
+def check_threats_for_ip(ip_address):
+    """
+    Background task to perform threat intelligence checks on an IP.
+    This is separate from geolocation refresh and can be scheduled independently.
+    """
+    GeoLocatedIP = get_geo_located_ip_model()
+
+    try:
+        geo_record = GeoLocatedIP.objects.get(ip_address=ip_address)
+        return geo_record.check_threats()
+    except GeoLocatedIP.DoesNotExist:
+        # Create the record with threat checking
+        geo_record = GeoLocatedIP.objects.create(ip_address=ip_address)
+        geo_record.refresh(check_threats=True)
+        return geo_record
 
 
 def fetch_from_ipinfo(ip_address, api_key):

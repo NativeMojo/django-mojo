@@ -83,7 +83,7 @@ class RequestDataParser:
                     self._merge_dict_data(json_data, target)
                 else:
                     # Handle case where JSON root is not an object
-                    target['_json_data'] = json_data
+                    target['data'] = json_data
         except Exception as e:
             # Store error info for debugging
             target['_json_parse_error'] = str(e)

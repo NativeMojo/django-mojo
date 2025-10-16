@@ -238,6 +238,8 @@ class Event(models.Model, MojoModel):
                 model_id=self.model_id,
                 source_ip=self.source_ip
             )
+            self.sync_metadata()
+            self.save()
             incident.metadata.update(self.metadata)
             incident.save()
             self.record_incident_metrics()
