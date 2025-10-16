@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.104 - October 16, 2025
+
+Missing key migrations
+
+
 ## v0.1.103 - October 16, 2025
 
 HOTFIX raw json lists in posts not handled correctly
