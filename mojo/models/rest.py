@@ -592,6 +592,13 @@ class MojoModel:
         """
         Apply filtering logic based on request parameters, including foreign key fields.
 
+        Supports both inclusion and exclusion filters:
+        - Regular filters: ?category=ossec (include)
+        - __in filters: ?category__in=ossec,system (include multiple)
+        - __not filters: ?category__not=ossec (exclude single value)
+        - __not_in filters: ?category__not_in=ossec,system (exclude multiple)
+        - __isnull filters: ?category__isnull=true (NULL check)
+
         Args:
             request: Django HTTP request object.
             queryset: The queryset to filter.
@@ -601,6 +608,8 @@ class MojoModel:
         """
         reserved_keys = ["start", "size", "download_format", "dr_start", "dr_end", "limit", "offset"]
         filters = {}
+        excludes = {}
+
         for key, value in request.QUERY_PARAMS.items():
             # Split key to check for foreign key relationships
             if "." in key:
@@ -609,30 +618,53 @@ class MojoModel:
             field_name = key_parts[0]
             if field_name in reserved_keys:
                 continue
+
+            # Determine if this is an exclusion filter
+            is_exclusion = key.endswith("__not") or key.endswith("__not_in")
+            target_dict = excludes if is_exclusion else filters
+
             if field_name in cls.__rest_field_names__ and cls._meta.get_field(field_name).is_relation:
                 # TODO Normalize relation field values
                 if key.endswith("__in"):
                     value = value.split(",")
                 elif key.endswith("__not_in"):
+                    # Convert __not_in to __in for exclude()
+                    key = key.replace("__not_in", "__in")
                     value = value.split(",")
+                elif key.endswith("__not"):
+                    # Remove __not suffix for exclude()
+                    key = key.replace("__not", "")
                 elif key.endswith("__isnull"):
                     value = value.lower() == "true"
                 elif value == "null":
                     value = None
-                filters[key] = value
+                target_dict[key] = value
             elif hasattr(cls, field_name):
                 if key.endswith("__in"):
                     value = value.split(",")
                 elif key.endswith("__not_in"):
+                    # Convert __not_in to __in for exclude()
+                    key = key.replace("__not_in", "__in")
                     value = value.split(",")
+                elif key.endswith("__not"):
+                    # Remove __not suffix for exclude()
+                    key = key.replace("__not", "")
                 elif key.endswith("__isnull"):
                     value = value.lower() == "true"
                 elif value == "null":
                     value = None
-                filters[key] = cls.normalize_rest_value(request, field_name, value)
+                target_dict[key] = cls.normalize_rest_value(request, field_name, value)
+
         logger.info("filters", filters)
+        logger.info("excludes", excludes)
+
         queryset = cls.on_rest_list_search(request, queryset)
-        return queryset.filter(**filters)
+        queryset = queryset.filter(**filters)
+
+        if excludes:
+            queryset = queryset.exclude(**excludes)
+
+        return queryset
 
     @classmethod
     def on_rest_list_search(cls, request, queryset):

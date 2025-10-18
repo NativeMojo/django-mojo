@@ -14,31 +14,12 @@ def on_ossec_alert(request):
         return JsonResponse({"status": True})
 
     # Add the request IP defensively
-    try:
-        ossec_alert["request_ip"] = request.ip
-    except Exception:
-        try:
-            setattr(ossec_alert, "request_ip", request.ip)
-        except Exception:
-            pass
-
-    # Ensure model_name/model_id for bundling by OSSEC rule type
-    try:
-        if "model_name" not in ossec_alert:
-            ossec_alert["model_name"] = "ossec_rule"
-        if "model_id" not in ossec_alert:
-            ossec_alert["model_id"] = ossec_alert.get("rule_id") if hasattr(ossec_alert, "get") else getattr(ossec_alert, "rule_id", None)
-    except Exception:
-        try:
-            if not getattr(ossec_alert, "model_name", None):
-                setattr(ossec_alert, "model_name", "ossec_rule")
-            if not getattr(ossec_alert, "model_id", None):
-                setattr(ossec_alert, "model_id", getattr(ossec_alert, "rule_id", None))
-        except Exception:
-            pass
+    ossec_alert["request_ip"] = request.ip
+    ossec_alert["model_name"] = "ossec_rule"
+    ossec_alert["model_id"] = ossec_alert.get("rule_id", 1)
 
     # Use getattr to avoid attribute errors if 'text' is missing
-    reporter.report_event(getattr(ossec_alert, "text", ""), category="ossec", **ossec_alert)
+    reporter.report_event(ossec_alert.get("text", ""), category="ossec", **ossec_alert)
     return JsonResponse({"status": True})
 
 
