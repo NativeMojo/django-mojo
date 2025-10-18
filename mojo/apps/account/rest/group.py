@@ -24,6 +24,9 @@ def on_group_invite_member(request):
     if not request.group.user_has_permission(request.user, ["manage_users", "manage_members"]):
         raise merrors.PermissionDeniedException()
     ms = request.group.invite(request.DATA.email)
+    if "permissions" in request.DATA:
+        ms.on_rest_update_jsonfield("permissions", request.DATA.permissions)
+        ms.save()
     return ms.on_rest_get(request)
 
 

@@ -1,8 +1,74 @@
 from django.db import models
 from mojo.models import MojoModel
 from urllib.parse import urlparse, parse_qs
-from mojo.apps.incident.handlers import TaskHandler, EmailHandler, NotifyHandler
+from mojo.apps.incident.handlers import JobHandler, EmailHandler, NotifyHandler
 import re
+
+
+class BundleBy:
+    """Named constants for bundle_by field values."""
+    NONE = 0
+    HOSTNAME = 1
+    MODEL_NAME = 2
+    MODEL_NAME_AND_ID = 3
+    SOURCE_IP = 4
+    HOSTNAME_AND_MODEL_NAME = 5
+    HOSTNAME_AND_MODEL_NAME_AND_ID = 6
+    SOURCE_IP_AND_MODEL_NAME = 7
+    SOURCE_IP_AND_MODEL_NAME_AND_ID = 8
+    SOURCE_IP_AND_HOSTNAME = 9
+
+    CHOICES = [
+        (NONE, "Don't bundle - each event creates new incident"),
+        (HOSTNAME, "Bundle by hostname"),
+        (MODEL_NAME, "Bundle by model type"),
+        (MODEL_NAME_AND_ID, "Bundle by specific model instance"),
+        (SOURCE_IP, "Bundle by source IP"),
+        (HOSTNAME_AND_MODEL_NAME, "Bundle by hostname + model type"),
+        (HOSTNAME_AND_MODEL_NAME_AND_ID, "Bundle by hostname + specific model"),
+        (SOURCE_IP_AND_MODEL_NAME, "Bundle by IP + model type"),
+        (SOURCE_IP_AND_MODEL_NAME_AND_ID, "Bundle by IP + specific model"),
+        (SOURCE_IP_AND_HOSTNAME, "Bundle by IP + hostname"),
+    ]
+
+
+class MatchBy:
+    """Named constants for match_by field values."""
+    ALL = 0  # All rules must match
+    ANY = 1  # Any rule can match
+
+    CHOICES = [
+        (ALL, "All rules must match"),
+        (ANY, "Any rule can match"),
+    ]
+
+
+class BundleMinutes:
+    """Preset time window options for bundle_minutes field."""
+    DISABLED = 0
+    FIVE_MINUTES = 5
+    TEN_MINUTES = 10
+    FIFTEEN_MINUTES = 15
+    THIRTY_MINUTES = 30
+    ONE_HOUR = 60
+    TWO_HOURS = 120
+    SIX_HOURS = 360
+    TWELVE_HOURS = 720
+    ONE_DAY = 1440
+
+    CHOICES = [
+        (DISABLED, "Disabled - don't bundle by time"),
+        (FIVE_MINUTES, "5 minutes"),
+        (TEN_MINUTES, "10 minutes"),
+        (FIFTEEN_MINUTES, "15 minutes"),
+        (THIRTY_MINUTES, "30 minutes"),
+        (ONE_HOUR, "1 hour"),
+        (TWO_HOURS, "2 hours"),
+        (SIX_HOURS, "6 hours"),
+        (TWELVE_HOURS, "12 hours"),
+        (ONE_DAY, "1 day"),
+        (None, "No limit - bundle forever"),
+    ]
 
 
 class RuleSet(models.Model, MojoModel):
@@ -23,7 +89,7 @@ class RuleSet(models.Model, MojoModel):
                         0 for all rules must match, 1 for any rule can match.
         handler (str): A field specifying a chain of handlers to process the event,
                        formatted as URL-like strings, e.g.,
-                       task://handler_name?param1=value1&param2=value2.
+                       job://handler_name?param1=value1&param2=value2.
                        Handlers are separated by commas, and they can include
                        different schemes like email or notify.
         metadata (json): A JSON field to store additional metadata about the RuleSet.
@@ -34,17 +100,16 @@ class RuleSet(models.Model, MojoModel):
     priority = models.IntegerField(default=0, db_index=True)
     category = models.CharField(max_length=124, db_index=True)
     name = models.TextField(default=None, null=True)
-    bundle_minutes = models.IntegerField(default=0)  # 0=off
-    # 0=none, 1=hostname, 2=model_name, 3=model_name and model_id, 4=source_ip
-    # 5=hostname and model_name, 6=hostname and model_name and model_id,
-    # 7=source_ip and model_name, 8=source_ip and model_name and model_id
-    # 9=source_ip and hostname
-    bundle_by = models.IntegerField(default=3)
-    match_by = models.IntegerField(default=0)  # 0=all, 1=any
+    bundle_minutes = models.IntegerField(default=0, null=True, blank=True,
+        help_text="Time window in minutes for bundling events (0=disabled/no bundling, >0=time window in minutes)")
+    bundle_by = models.IntegerField(default=BundleBy.MODEL_NAME_AND_ID, choices=BundleBy.CHOICES,
+        help_text="How to group events into incidents")
+    match_by = models.IntegerField(default=MatchBy.ALL, choices=MatchBy.CHOICES,
+        help_text="Rule matching mode")
     # handler syntax is a url like string that can be chained by commas
-    # task://handler_name?param1=value1&param2=value2 | email://user@example.com
+    # job://handler_name?param1=value1&param2=value2 | email://user@example.com
     # notify://perm@permission,user@example.com | ticket://?status=open
-    # Chains split on ',(task|email|notify|ticket)://'
+    # Chains split on ',(job|email|notify|ticket)://'
     handler = models.TextField(default=None, null=True)
     metadata = models.JSONField(default=dict, blank=True)
 
@@ -59,7 +124,7 @@ class RuleSet(models.Model, MojoModel):
         Runs one or more handlers configured on this RuleSet.
 
         Handlers can be chained in the `handler` field. The chain is split on
-        ',{scheme}://' where scheme in [task, email, notify, ticket].
+        ',{scheme}://' where scheme in [job, email, notify, ticket].
 
         Args:
             event (Event): The event to run the handler for.
@@ -75,15 +140,15 @@ class RuleSet(models.Model, MojoModel):
         try:
             # Split on commas that are followed by a known scheme, so commas inside
             # notify recipient lists don't break the chain.
-            specs = re.split(r',(?=(?:task|email|notify|ticket)://)', self.handler.strip())
+            specs = re.split(r',(?=(?:job|email|notify|ticket)://)', self.handler.strip())
 
             for spec in filter(None, [s.strip() for s in specs]):
                 handler_url = urlparse(spec)
                 handler_type = handler_url.scheme
                 params = {k: v[0] for k, v in parse_qs(handler_url.query).items()}
 
-                if handler_type == "task":
-                    handler = TaskHandler(handler_url.netloc, **params)
+                if handler_type == "job":
+                    handler = JobHandler(handler_url.netloc, **params)
                     success = handler.run(event) or success
 
                 elif handler_type == "email":
@@ -172,8 +237,8 @@ class RuleSet(models.Model, MojoModel):
             name="OSSEC - Bundle by IP + Type",
             defaults={
                 "priority": 10,
-                "match_by": 0,
-                "bundle_by": 8,  # source_ip + model_name + model_id
+                "match_by": MatchBy.ALL,
+                "bundle_by": BundleBy.SOURCE_IP_AND_MODEL_NAME_AND_ID,
                 "bundle_minutes": 10,
                 "handler": None,
             },
@@ -214,8 +279,8 @@ class RuleSet(models.Model, MojoModel):
             name="OSSEC - High severity auto-ticket",
             defaults={
                 "priority": 5,
-                "match_by": 0,
-                "bundle_by": 8,  # source_ip + model_name + model_id
+                "match_by": MatchBy.ALL,
+                "bundle_by": BundleBy.SOURCE_IP_AND_MODEL_NAME_AND_ID,
                 "bundle_minutes": 15,
                 "handler": "ticket://?status=open",
             },
@@ -261,7 +326,7 @@ class RuleSet(models.Model, MojoModel):
         Returns:
             bool: True if the event matches the RuleSet, False otherwise.
         """
-        if self.match_by == 0:
+        if self.match_by == MatchBy.ALL:
             return self.check_all_match(event)
         return self.check_any_match(event)
 

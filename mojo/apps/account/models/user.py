@@ -101,6 +101,7 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
         SEARCH_FIELDS = ["username", "email", "display_name"]
         VIEW_PERMS = ["view_users", "manage_users", "owner"]
         SAVE_PERMS = ["manage_users", "owner"]
+        OWNER_FIELD = "self"
         LIST_DEFAULT_FILTERS = {
             "is_active": True
         }

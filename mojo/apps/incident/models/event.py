@@ -115,7 +115,7 @@ class Event(models.Model, MojoModel):
         rule_set = RuleSet.check_by_category(self.category, self)
 
         # Honor action=ignore from RuleSet metadata
-        if rule_set and isinstance(rule_set.metadata, dict) and rule_set.metadata.get("action") == "ignore":
+        if rule_set and rule_set.handler == "ignore":
             return
 
         # Threshold-based pending/open logic
@@ -134,24 +134,33 @@ class Event(models.Model, MojoModel):
             pending_status = rule_set.metadata.get("pending_status", "pending")
 
         # Fallback to ruleset bundling window when not provided
-        if window_minutes is None and rule_set and rule_set.bundle_minutes:
+        # Only use bundle_minutes if it's > 0 (0 means disabled)
+        if window_minutes is None and rule_set and rule_set.bundle_minutes and rule_set.bundle_minutes > 0:
             window_minutes = rule_set.bundle_minutes
 
         # Count recent matching events to evaluate threshold
         meets_threshold = True
         event_count = 1
         if rule_set and (min_count or window_minutes) and rule_set.bundle_by > 0:
+            from mojo.apps.incident.models.rule import BundleBy
+
             criteria = {"category": self.category}
             if window_minutes:
                 criteria["created__gte"] = dates.subtract(minutes=window_minutes)
-            b = rule_set.bundle_by
-            if b in [1, 5, 6, 9]:
+
+            # Use same bundling logic as determine_bundle_criteria
+            if rule_set.bundle_by in [BundleBy.HOSTNAME, BundleBy.HOSTNAME_AND_MODEL_NAME,
+                                       BundleBy.HOSTNAME_AND_MODEL_NAME_AND_ID, BundleBy.SOURCE_IP_AND_HOSTNAME]:
                 criteria["hostname"] = self.hostname
-            if b in [2, 3, 5, 6, 7, 8]:
+            if rule_set.bundle_by in [BundleBy.MODEL_NAME, BundleBy.MODEL_NAME_AND_ID,
+                                       BundleBy.HOSTNAME_AND_MODEL_NAME, BundleBy.HOSTNAME_AND_MODEL_NAME_AND_ID,
+                                       BundleBy.SOURCE_IP_AND_MODEL_NAME, BundleBy.SOURCE_IP_AND_MODEL_NAME_AND_ID]:
                 criteria["model_name"] = self.model_name
-                if b in [3, 6, 8]:
+                if rule_set.bundle_by in [BundleBy.MODEL_NAME_AND_ID, BundleBy.HOSTNAME_AND_MODEL_NAME_AND_ID,
+                                           BundleBy.SOURCE_IP_AND_MODEL_NAME_AND_ID]:
                     criteria["model_id"] = self.model_id
-            if b in [4, 7, 8, 9]:
+            if rule_set.bundle_by in [BundleBy.SOURCE_IP, BundleBy.SOURCE_IP_AND_MODEL_NAME,
+                                       BundleBy.SOURCE_IP_AND_MODEL_NAME_AND_ID, BundleBy.SOURCE_IP_AND_HOSTNAME]:
                 criteria["source_ip"] = self.source_ip
 
             try:
@@ -165,8 +174,10 @@ class Event(models.Model, MojoModel):
         if rule_set or self.level >= INCIDENT_LEVEL_THRESHOLD:
             incident, created = self.get_or_create_incident(rule_set)
 
+            # Capture status BEFORE any modifications for transition detection
+            prev_status = incident.status if incident.pk else None
+
             # Determine status transitions for pending/open
-            prev_status = getattr(incident, "status", None)
             if rule_set and (min_count or window_minutes):
                 try:
                     desired_status = "open" if meets_threshold else pending_status
@@ -180,7 +191,7 @@ class Event(models.Model, MojoModel):
 
             # Run handlers on creation or when transitioning from pending -> open
             if rule_set:
-                transitioned_to_open = (prev_status == pending_status and getattr(incident, "status", None) == "open")
+                transitioned_to_open = (prev_status == pending_status and incident.status == "open")
                 if (created and (min_count is None or meets_threshold)) or transitioned_to_open:
                     rule_set.run_handler(self, incident)
 
@@ -250,18 +261,38 @@ class Event(models.Model, MojoModel):
         """
         Determines the bundle criteria based on the rule set configuration.
         """
+        from mojo.apps.incident.models.rule import BundleBy
+
         bundle_criteria = {
             "category": self.category
         }
-        if rule_set.bundle_minutes:
+
+        # Add time window if specified
+        # bundle_minutes=0 or None means disabled (don't add time filter, will not find existing incidents)
+        # bundle_minutes>0 means only bundle within that time window
+        if rule_set.bundle_minutes and rule_set.bundle_minutes > 0:
             bundle_criteria['created__gte'] = dates.subtract(minutes=rule_set.bundle_minutes)
-        if rule_set.bundle_by in [1, 5, 6, 9]:  # hostname or hostname and others
+        elif rule_set.bundle_minutes == 0:
+            # bundle_minutes=0 means disabled - make criteria impossible to match
+            # by requiring a specific timestamp that won't exist
+            from django.utils import timezone
+            bundle_criteria['created__exact'] = timezone.now()
+
+        # Add field-based criteria using named constants
+        if rule_set.bundle_by in [BundleBy.HOSTNAME, BundleBy.HOSTNAME_AND_MODEL_NAME,
+                                   BundleBy.HOSTNAME_AND_MODEL_NAME_AND_ID, BundleBy.SOURCE_IP_AND_HOSTNAME]:
             bundle_criteria['hostname'] = self.hostname
-        if rule_set.bundle_by in [2, 3, 5, 6, 7, 8]:  # model and combinations
+
+        if rule_set.bundle_by in [BundleBy.MODEL_NAME, BundleBy.MODEL_NAME_AND_ID,
+                                   BundleBy.HOSTNAME_AND_MODEL_NAME, BundleBy.HOSTNAME_AND_MODEL_NAME_AND_ID,
+                                   BundleBy.SOURCE_IP_AND_MODEL_NAME, BundleBy.SOURCE_IP_AND_MODEL_NAME_AND_ID]:
             bundle_criteria['model_name'] = self.model_name
-            if rule_set.bundle_by in [3, 6, 8]:  # model_id where applicable
+            if rule_set.bundle_by in [BundleBy.MODEL_NAME_AND_ID, BundleBy.HOSTNAME_AND_MODEL_NAME_AND_ID,
+                                       BundleBy.SOURCE_IP_AND_MODEL_NAME_AND_ID]:
                 bundle_criteria['model_id'] = self.model_id
-        if rule_set.bundle_by in [4, 7, 8, 9]:  # source_ip and combinations
+
+        if rule_set.bundle_by in [BundleBy.SOURCE_IP, BundleBy.SOURCE_IP_AND_MODEL_NAME,
+                                   BundleBy.SOURCE_IP_AND_MODEL_NAME_AND_ID, BundleBy.SOURCE_IP_AND_HOSTNAME]:
             bundle_criteria['source_ip'] = self.source_ip
 
         return bundle_criteria

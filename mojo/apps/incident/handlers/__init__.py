@@ -1,3 +1,3 @@
-from .event_handlers import TaskHandler, EmailHandler, NotifyHandler
+from .event_handlers import JobHandler, EmailHandler, NotifyHandler
 
-__all__ = ['TaskHandler', 'EmailHandler', 'NotifyHandler']
+__all__ = ['JobHandler', 'EmailHandler', 'NotifyHandler']
