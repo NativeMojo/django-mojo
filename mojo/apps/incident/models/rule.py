@@ -228,88 +228,83 @@ class RuleSet(models.Model, MojoModel):
         Create or update a set of core default RuleSets and Rules.
 
         Defaults provided:
-        1) OSSEC bundling by source_ip within 10 minutes (level >= 7)
-        2) OSSEC high severity auto-ticket (level >= 10)
+        1) OSSEC rule 31104 (Common web attack) - Bundle by IP for 1 hour with threshold
+        2) OSSEC catch-all - Bundle moderate severity events (level >= 5) by IP
         """
-        # 1) OSSEC: Bundle by source_ip within 10 minutes for level >= 7
-        ossec_bundle, created = cls.objects.get_or_create(
+        # 1) OSSEC Rule 31104: Common web attack detection
+        # Bundle by source IP for 1 hour, pending until 5 events, then trigger handler
+        ossec_31104, created = cls.objects.get_or_create(
             category="ossec",
-            name="OSSEC - Bundle by IP + Type",
+            name="OSSEC 31104 - Web Attack Detection",
             defaults={
                 "priority": 10,
                 "match_by": MatchBy.ALL,
-                "bundle_by": BundleBy.SOURCE_IP_AND_MODEL_NAME_AND_ID,
-                "bundle_minutes": 10,
-                "handler": None,
+                "bundle_by": BundleBy.SOURCE_IP,
+                "bundle_minutes": 60,  # 1 hour
+                "handler": "ticket://?status=new&priority=7&category=security",
+                "metadata": {
+                    "min_count": 5,  # Need 5 events before triggering
+                    "window_minutes": 60,  # Within 1 hour window
+                    "pending_status": "pending"  # Status before threshold met
+                }
             },
         )
         if created:
             try:
                 Rule.objects.create(
-                    parent=ossec_bundle,
+                    parent=ossec_31104,
                     name="Category is ossec",
                     field_name="category",
                     comparator="==",
                     value="ossec",
                     value_type="str",
+                    index=0
                 )
                 Rule.objects.create(
-                    parent=ossec_bundle,
-                    name="Severity >= 7",
-                    field_name="level",
-                    comparator=">=",
-                    value="7",
-                    value_type="int",
-                )
-                Rule.objects.create(
-                    parent=ossec_bundle,
-                    name="Event type is OSSEC rule",
-                    field_name="model_name",
+                    parent=ossec_31104,
+                    name="Rule ID is 31104",
+                    field_name="rule_id",
                     comparator="==",
-                    value="ossec_rule",
-                    value_type="str",
+                    value="31104",
+                    value_type="int",
+                    index=1
                 )
             except Exception:
                 # Safe-guard: do not raise on partial rule creation
                 pass
 
-        # 2) OSSEC: High severity auto-ticket (creates a ticket on new incident)
-        ossec_ticket, created = cls.objects.get_or_create(
+        # 2) OSSEC Catch-all: Bundle all moderate severity events by IP
+        # Lower priority (higher number) so specific rules are checked first
+        ossec_catchall, created = cls.objects.get_or_create(
             category="ossec",
-            name="OSSEC - High severity auto-ticket",
+            name="OSSEC - Catch-all Moderate Severity",
             defaults={
-                "priority": 5,
+                "priority": 100,  # Low priority - checked after specific rules
                 "match_by": MatchBy.ALL,
-                "bundle_by": BundleBy.SOURCE_IP_AND_MODEL_NAME_AND_ID,
-                "bundle_minutes": 15,
-                "handler": "ticket://?status=open",
+                "bundle_by": BundleBy.SOURCE_IP,
+                "bundle_minutes": 60,  # 1 hour
+                "handler": None,  # No automatic handler for catch-all
             },
         )
         if created:
             try:
                 Rule.objects.create(
-                    parent=ossec_ticket,
+                    parent=ossec_catchall,
                     name="Category is ossec",
                     field_name="category",
                     comparator="==",
                     value="ossec",
                     value_type="str",
+                    index=0
                 )
                 Rule.objects.create(
-                    parent=ossec_ticket,
-                    name="Severity >= 10",
+                    parent=ossec_catchall,
+                    name="Severity >= 5",
                     field_name="level",
                     comparator=">=",
-                    value="10",
+                    value="5",
                     value_type="int",
-                )
-                Rule.objects.create(
-                    parent=ossec_ticket,
-                    name="Event type is OSSEC rule",
-                    field_name="model_name",
-                    comparator="==",
-                    value="ossec_rule",
-                    value_type="str",
+                    index=1
                 )
             except Exception:
                 # Safe-guard: do not raise on partial rule creation
