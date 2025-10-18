@@ -1,6 +1,6 @@
 
 
-# TODO make this async using our task queue
+# TODO make this async using our job queue
 def report_event(details, title=None, category="api_error", level=1, request=None, **kwargs):
     from .models import Event
     event_data = _create_event_dict(details, title, category, level, request, **kwargs)

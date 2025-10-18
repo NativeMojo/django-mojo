@@ -28,6 +28,7 @@ def validate_token(hex_token):
 
 def verify_password_reset_token(hex_token):
     orig_token = hex_token
+    user = None
     try:
         tsig = hex_token[-6:]
         hex_token = hex_token[:-6]
@@ -51,10 +52,18 @@ def verify_password_reset_token(hex_token):
         user.set_secret("password_reset_jti", None)
         user.save(update_fields=["mojo_secrets", "modified"])
         return user
-    except Exception:
-        pass
-    User.class_report_incident(
-        "invalid reset token",
-        event_type="reset:unknown",
-        level=8, token=orig_token)
+    except Exception as err:
+        if user:
+            user.report_incident(
+                f"{user.username} invalid reset token",
+                "reset token error",
+                event_type="reset:unknown",
+                error=str(err),
+                level=8, token=orig_token)
+        else:
+            User.class_report_incident(
+                "reset token error",
+                event_type="reset:unknown",
+                error=str(err),
+                level=8, token=orig_token)
     raise merrors.ValueException("Invalid token")

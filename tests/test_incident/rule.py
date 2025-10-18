@@ -297,16 +297,16 @@ def test_ruleset_run_handler(opts):
         "message": "Authentication failure"
     }
 
-    # Create RuleSet with task handler
-    ruleset_task = RuleSet.objects.create(
-        name="Task Handler RuleSet",
+    # Create RuleSet with job handler
+    ruleset_job = RuleSet.objects.create(
+        name="Job Handler RuleSet",
         category="testing",
         priority=1,
-        handler="task://incident_handler?severity=high&notify=true"
+        handler="job://incident_handler?severity=high&notify=true"
     )
 
-    # Test task handler
-    assert ruleset_task.run_handler(event) is True, "Task handler should return True"
+    # Test job handler
+    assert ruleset_job.run_handler(event) is True, "Job handler should return True"
 
     # Create RuleSet with email handler
     ruleset_email = RuleSet.objects.create(

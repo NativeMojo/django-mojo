@@ -108,7 +108,7 @@ class UserDeviceLocation(models.Model, MojoModel):
     A log linking a UserDevice to every IP address it uses. Geolocation is
     handled asynchronously.
     """
-    user = models.ForeignKey("account.User", on_delete=models.CASCADE, related_name='device_locations_direct')
+    user = models.ForeignKey("account.User", on_delete=models.CASCADE, related_name='locations')
     user_device = models.ForeignKey('UserDevice', on_delete=models.CASCADE, related_name='locations')
     ip_address = models.GenericIPAddressField(db_index=True)
     geolocation = models.ForeignKey('GeoLocatedIP', on_delete=models.SET_NULL, null=True, blank=True, related_name='device_locations')

@@ -337,7 +337,10 @@ class MojoModel:
         # Check for owner permission
         if perms and "owner" in perms and request.user.is_authenticated:
             owner_field = cls.get_rest_meta_prop("OWNER_FIELD", "user")
-            q = {owner_field: request.user}
+            if owner_field == "self":
+                q = {"pk": request.user.pk}
+            else:
+                q = {owner_field: request.user}
             return cls.on_rest_list(request, cls.objects.filter(**q))
 
         # Check if model has a group field and user might have group-level permissions
@@ -1019,8 +1022,9 @@ class MojoModel:
         request: Optional HTTP request or actor.
         **context: Any additional context.
         """
-        req = ACTIVE_REQUEST.get()
-        if req and req.user.is_authenticated:
+        if request is None:
+            request = ACTIVE_REQUEST.get()
+        if request and request.user.is_authenticated:
             return request.user.report_incident(details, event_type=event_type, level=level, request=request, **context)
         return cls.class_report_incident(details, event_type=event_type, level=level, request=request, **context)
 
@@ -1037,6 +1041,8 @@ class MojoModel:
         from mojo.apps import incident
         context = dict(context)
         context.setdefault("model_name", cls.__name__)
+        if request is None:
+            request = ACTIVE_REQUEST.get()
         incident.report_event(
             details,
             title=details[:80],

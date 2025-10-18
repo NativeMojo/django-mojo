@@ -2,59 +2,59 @@
 Event handlers for incident processing.
 
 This module contains handlers for processing incident events based on different
-handler types (task, email, notify, ticket). These handlers are used by the RuleSet.run_handler
+handler types (job, email, notify, ticket). These handlers are used by the RuleSet.run_handler
 method to handle events that match rule criteria.
 Supported handler schemes:
-- task://name?param1=value1
+- job://name?param1=value1
 - email://recipient@example.com
 - notify://user-or-channel
 - ticket://?status=open&priority=8
 """
 
-class TaskHandler:
+class JobHandler:
     """
-    Handler for executing tasks based on events.
+    Handler for executing jobs based on events.
 
-    This handler executes a named task with the given parameters
+    This handler executes a named job with the given parameters
     when an event matches rule criteria.
 
     Attributes:
-        handler_name (str): The name of the task to execute.
-        params (dict): Parameters to pass to the task.
+        handler_name (str): The name of the job to execute.
+        params (dict): Parameters to pass to the job.
     """
 
     def __init__(self, handler_name, **params):
         """
-        Initialize a TaskHandler with a task name and parameters.
+        Initialize a JobHandler with a job name and parameters.
 
         Args:
-            handler_name (str): The name of the task to execute.
-            **params: Parameters to pass to the task.
+            handler_name (str): The name of the job to execute.
+            **params: Parameters to pass to the job.
         """
         self.handler_name = handler_name
         self.params = params
 
     def run(self, event):
         """
-        Execute the task for the given event.
+        Execute the job for the given event.
 
         Args:
             event (Event): The event that triggered this handler.
 
         Returns:
-            bool: True if the task was executed successfully, False otherwise.
+            bool: True if the job was executed successfully, False otherwise.
         """
-        # TODO: Implement actual task execution logic
-        # For example, using Celery to execute tasks asynchronously
+        # TODO: Implement actual job execution logic
+        # For example, using Celery or your task queue to execute jobs asynchronously
         try:
             # Example implementation:
-            # from mojo.tasks import execute_task
-            # result = execute_task.delay(self.handler_name, event=event, **self.params)
+            # from mojo.jobs import execute_job
+            # result = execute_job.delay(self.handler_name, event=event, **self.params)
             # return result.successful()
             return True
         except Exception as e:
             # Log the error
-            # logger.error(f"Error executing task {self.handler_name}: {e}")
+            # logger.error(f"Error executing job {self.handler_name}: {e}")
             return False
 
 
