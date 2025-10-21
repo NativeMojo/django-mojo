@@ -86,7 +86,7 @@ elif rule_set.bundle_minutes == 0:
 ### Bug #3: Handler Transition Detection Broken
 **File:** `mojo/apps/incident/models/event.py:147-153`  
 **Severity:** MEDIUM  
-**Impact:** Handlers don't execute on pending→open transition
+**Impact:** Handlers don't execute on pending→new transition
 
 **Problem:**
 ```python
@@ -96,7 +96,7 @@ if rule_set and (min_count or window_minutes):
     incident.save(update_fields=["status"])
 
 # prev_status == incident.status, so this never detects transition
-transitioned_to_open = (prev_status == pending_status and 
+transitioned_to_new = (prev_status == pending_status and 
                         getattr(incident, "status", None) == "open")
 ```
 
@@ -109,13 +109,13 @@ prev_status = incident.status if incident.pk else None
 
 # Now do threshold logic...
 if rule_set and (min_count or window_minutes):
-    desired_status = "open" if meets_threshold else pending_status
+    desired_status = "new" if meets_threshold else pending_status
     if incident.status != desired_status:
         incident.status = desired_status
         incident.save(update_fields=["status"])
 
 # Now comparison works correctly
-transitioned_to_open = (prev_status == pending_status and incident.status == "open")
+transitioned_to_new = (prev_status == pending_status and incident.status == "new")
 ```
 
 ---
@@ -501,7 +501,7 @@ A comprehensive test suite has been created at:
 **Threshold Tests:**
 - min_count behavior
 - window_minutes behavior
-- Status transitions (pending → open)
+- Status transitions (pending → new)
 
 **Handler Tests:**
 - Ignore handler

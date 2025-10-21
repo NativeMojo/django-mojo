@@ -280,14 +280,18 @@ def test_redis_model_pool_mock_operations(opts):
     pool = RedisModelPool(Group, query_dict, 'test_model_operations')
     pool.clear()
 
-    # Test adding instances
-    assert pool.add_to_pool(instance1) == True, "Failed to add instance1 to pool"
-    assert pool.add_to_pool(instance2) == True, "Failed to add instance2 to pool"
+    # Test that pool auto-initializes on first add_to_pool
+    # Since the pool is not ready, add_to_pool(instance1) will call init_pool()
+    # which adds both instance1 and instance2 (matching the query)
+    assert pool.add_to_pool(instance1) == True, "Failed to add instance1 to pool (should trigger init)"
 
-    # Test pool contents
+    # Verify pool is now initialized with both instances
     all_items = pool.list_all()
-    assert '1' in all_items, f"Instance '1' not found in pool: {all_items}"
-    assert '2' in all_items, f"Instance '2' not found in pool: {all_items}"
+    assert '1' in all_items, f"Instance '1' not found in pool after auto-init: {all_items}"
+    assert '2' in all_items, f"Instance '2' not found in pool after auto-init: {all_items}"
+
+    # Second add should return False since instance2 was already added during init_pool
+    assert pool.add_to_pool(instance2) == False, "instance2 should already be in pool from auto-init"
 
     # Test removing instance
     assert pool.remove_from_pool(instance1) == True, "Failed to remove instance1 from pool"
