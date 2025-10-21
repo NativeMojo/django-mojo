@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.107 - October 21, 2025
+
+* BUGFIXES in rules and events
+
+
 ## v0.1.105 - October 17, 2025
 
 * New incident engine cleanup

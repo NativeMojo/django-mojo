@@ -87,7 +87,7 @@ elif rule_set.bundle_minutes == 0:
 **File:** `mojo/apps/incident/models/event.py` in `publish()`
 
 **Problem:**
-The code captured `prev_status` AFTER `get_or_create_incident()`, which meant it already had the current status. Transition detection from pending→open never worked.
+The code captured `prev_status` AFTER `get_or_create_incident()`, which meant it already had the current status. Transition detection from pending→new never worked.
 
 **Before:**
 ```python
@@ -100,7 +100,7 @@ if rule_set and (min_count or window_minutes):
     # ... changes incident.status ...
 
 # prev_status == incident.status, so this never detects transitions
-transitioned_to_open = (prev_status == pending_status and 
+transitioned_to_new = (prev_status == pending_status and 
                         getattr(incident, "status", None) == "open")
 ```
 
@@ -115,11 +115,11 @@ if rule_set and (min_count or window_minutes):
     # ... changes incident.status ...
 
 # Now this correctly detects transitions
-transitioned_to_open = (prev_status == pending_status and incident.status == "open")
+transitioned_to_new = (prev_status == pending_status and incident.status == "new")
 ```
 
 **Impact:**
-- Handlers now correctly execute when incidents transition from pending to open
+- Handlers now correctly execute when incidents transition from pending to new
 - Threshold-based incident management works as designed
 
 ---

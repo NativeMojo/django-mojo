@@ -28,8 +28,3 @@ def on_event_ruleset(request, pk=None):
 @md.URL('event/ruleset/rule/<int:pk>')
 def on_event_ruleset_rule(request, pk=None):
     return Rule.on_rest_request(request, pk)
-
-@md.POST('event/ruleset/defaults')
-def on_event_ruleset_defaults(request):
-    RuleSet.ensure_default_rules()
-    return JsonResponse({"status": True})

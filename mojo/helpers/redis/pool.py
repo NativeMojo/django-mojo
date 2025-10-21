@@ -236,12 +236,20 @@ class RedisModelPool(RedisBasePool):
         Add a model instance to the pool.
 
         Returns:
-            True if item was added, False if it already existed
+            True if item was added (either by init_pool or directly), False if it already existed
         """
+        item = str(instance.pk)
+
+        # Check if item exists before potential init
+        existed_before = self.redis_client.exists(self.all_items_set_key) and \
+                        self.redis_client.sismember(self.all_items_set_key, item)
+
         if not self.is_ready():
             self.init_pool()
+            # If item didn't exist before but exists now, init_pool added it
+            if not existed_before and self.redis_client.sismember(self.all_items_set_key, item):
+                return True
 
-        item = str(instance.pk)
         if not self.redis_client.sismember(self.all_items_set_key, item):
             self.redis_client.sadd(self.all_items_set_key, item)
             self.redis_client.lpush(self.available_list_key, item)

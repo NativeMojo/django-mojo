@@ -262,7 +262,7 @@ def test_disable_bundling_with_bundle_by_none(opts):
 def test_bug_handler_transition_detection_broken(opts):
     """
     FIXED: Handler execution on status transition now works correctly.
-    Handler should be called when incident transitions from pending to open.
+    Handler should be called when incident transitions from pending to new.
     """
     from mojo.apps.incident.models import Event, RuleSet, Rule, Incident
     from unittest.mock import Mock, patch
@@ -345,12 +345,12 @@ def test_bug_handler_transition_detection_broken(opts):
         event3.publish()
 
         incident.refresh_from_db()
-        assert incident.status == "open", f"Expected open status after event 3, got {incident.status}"
+        assert incident.status == "new", f"Expected new status after event 3, got {incident.status}"
 
-    # After fix: Handler should be called when incident transitions to open
+    # After fix: Handler should be called when incident transitions to new
     # Uncomment for debugging: print(f"Handler calls: {handler_calls}")
     assert len(handler_calls) >= 1, (
-        f"Handler should be called when incident transitions from pending to open. "
+        f"Handler should be called when incident transitions from pending to new. "
         f"Got {len(handler_calls)} calls: {handler_calls}"
     )
 
@@ -990,7 +990,7 @@ def test_threshold_min_count(opts):
     event3.publish()
 
     incident.refresh_from_db()
-    assert incident.status == "open", f"Expected open after 3 events, got {incident.status}"
+    assert incident.status == "new", f"Expected new after 3 events, got {incident.status}"
 
 
 @th.django_unit_test()

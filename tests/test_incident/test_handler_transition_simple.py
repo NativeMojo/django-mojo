@@ -63,4 +63,4 @@ def test_handler_transition_simple(opts):
     event2.publish()
 
     incident.refresh_from_db()
-    assert incident.status == "open", f"Expected open, got {incident.status}"
+    assert incident.status == "new", f"Expected new, got {incident.status}"

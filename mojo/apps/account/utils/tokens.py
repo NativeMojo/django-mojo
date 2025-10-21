@@ -39,15 +39,21 @@ def verify_password_reset_token(hex_token):
         user = User.objects.get(pk=obj["uid"])
         sig = crypto.sign(token, user.get_auth_key())
         if sig[-6:] != tsig:
-            user.report_incident(f"{user.username} invalid reset token (signature)", "invalid_reset_token")
+            user.report_incident(
+                details=f"{user.username} invalid reset token (signature)",
+                event_type="invalid_reset_token")
             raise merrors.ValueException("Invalid token")
         now_ts = int(dates.utcnow().timestamp())
         if now_ts - int(obj["ts"]) > int(PASSWORD_RESET_TOKEN_TTL):
-            user.report_incident(f"{user.username} expired reset token", "expired_reset_token")
+            user.report_incident(
+                details=f"{user.username} expired reset token",
+                event_type="expired_reset_token")
             raise merrors.ValueException("Expired token")
         expected_jti = user.get_secret("password_reset_jti")
         if not expected_jti or expected_jti != obj["jti"]:
-            user.report_incident(f"{user.username} reset token jti mismatch or reused", "invalid_reset_token")
+            user.report_incident(
+                details=f"{user.username} reset token jti mismatch or reused",
+                event_type="invalid_reset_token")
             raise merrors.ValueException("Invalid token")
         user.set_secret("password_reset_jti", None)
         user.save(update_fields=["mojo_secrets", "modified"])
@@ -55,14 +61,13 @@ def verify_password_reset_token(hex_token):
     except Exception as err:
         if user:
             user.report_incident(
-                f"{user.username} invalid reset token",
-                "reset token error",
+                details=f"{user.username} invalid reset token",
                 event_type="reset:unknown",
                 error=str(err),
                 level=8, token=orig_token)
         else:
             User.class_report_incident(
-                "reset token error",
+                details="reset token error",
                 event_type="reset:unknown",
                 error=str(err),
                 level=8, token=orig_token)

@@ -118,7 +118,7 @@ class Event(models.Model, MojoModel):
         if rule_set and rule_set.handler == "ignore":
             return
 
-        # Threshold-based pending/open logic
+        # Threshold-based pending/new logic
         min_count = None
         window_minutes = None
         pending_status = "pending"
@@ -177,10 +177,10 @@ class Event(models.Model, MojoModel):
             # Capture status BEFORE any modifications for transition detection
             prev_status = incident.status if incident.pk else None
 
-            # Determine status transitions for pending/open
+            # Determine status transitions for pending/new
             if rule_set and (min_count or window_minutes):
                 try:
-                    desired_status = "open" if meets_threshold else pending_status
+                    desired_status = "new" if meets_threshold else pending_status
                     if incident.status != desired_status:
                         incident.status = desired_status
                         incident.save(update_fields=["status"])
@@ -189,10 +189,10 @@ class Event(models.Model, MojoModel):
 
             self.link_to_incident(incident)
 
-            # Run handlers on creation or when transitioning from pending -> open
+            # Run handlers on creation or when transitioning from pending -> new
             if rule_set:
-                transitioned_to_open = (prev_status == pending_status and incident.status == "open")
-                if (created and (min_count is None or meets_threshold)) or transitioned_to_open:
+                transitioned_to_new = (prev_status == pending_status and incident.status == "new")
+                if (created and (min_count is None or meets_threshold)) or transitioned_to_new:
                     rule_set.run_handler(self, incident)
 
     def record_event_metrics(self):
