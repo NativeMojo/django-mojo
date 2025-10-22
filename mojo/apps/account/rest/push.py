@@ -1,11 +1,9 @@
 import mojo.decorators as md
 from mojo.apps.account.models import (
     RegisteredDevice, NotificationTemplate, PushConfig,
-    NotificationDelivery
+    NotificationDelivery, User
 )
-from mojo.apps.account.services.push import (
-    send_push_notification, send_direct_notification
-)
+from mojo.apps.account.services.push import send_to_user, send_to_users
 from mojo.helpers import response
 from mojo.helpers import request as rhelper
 
@@ -129,16 +127,9 @@ def on_notification_deliveries(request, pk=None):
 @md.requires_perms("send_notifications")
 def send_notification(request):
     """
-    Send push notification using template or direct content.
+    Send push notification directly.
 
     POST /api/account/devices/push/send
-
-    Templated:
-    {
-        "template": "template_name",
-        "context": {"key": "value"},
-        "user_ids": [1, 2, 3]  # optional
-    }
 
     Direct:
     {
@@ -146,44 +137,52 @@ def send_notification(request):
         "body": "Your order is ready",
         "category": "orders",
         "action_url": "myapp://orders/123",
-        "user_ids": [1, 2, 3]  # optional
+        "data": {"order_id": 123},
+        "user_ids": [1, 2, 3]  # optional, defaults to requesting user
+    }
+
+    Silent (data-only):
+    {
+        "data": {"action": "sync", "timestamp": 123},
+        "category": "system"
     }
     """
-    template = request.DATA.get('template')
     title = request.DATA.get('title')
     body = request.DATA.get('body')
+    data = request.DATA.get('data')
+    category = request.DATA.get('category', 'general')
+    action_url = request.DATA.get('action_url')
+    user_ids = request.DATA.get('user_ids')
 
-    if template:
-        # Templated sending
-        context = request.DATA.get('context', {})
-        user_ids = request.DATA.get('user_ids')
-        results = send_push_notification(
-            user=request.user,
-            template_name=template,
-            context=context,
-            user_ids=user_ids
+    # Must have at least title, body, or data
+    if not (title or body or data):
+        return response.error('Must provide title, body, or data')
+
+    # Send to specific users or just the requesting user
+    if user_ids:
+        results = send_to_users(
+            user_ids=user_ids,
+            title=title,
+            body=body,
+            data=data,
+            category=category,
+            action_url=action_url
         )
-    elif title and body:
-        # Direct sending
-        category = request.DATA.get('category', 'general')
-        action_url = request.DATA.get('action_url')
-        user_ids = request.DATA.get('user_ids')
-        results = send_direct_notification(
+    else:
+        results = send_to_user(
             user=request.user,
             title=title,
             body=body,
+            data=data,
             category=category,
-            action_url=action_url,
-            user_ids=user_ids
+            action_url=action_url
         )
-    else:
-        return response.error('Must provide either template or both title and body')
 
     return response.success({
         'success': True,
-        'sent_count': len([r for r in results if r.status == 'sent']),
-        'failed_count': len([r for r in results if r.status == 'failed']),
-        'deliveries': [r.to_dict("basic") for r in results]
+        'sent_count': len([r for r in results if r and r.status == 'sent']),
+        'failed_count': len([r for r in results if r and r.status == 'failed']),
+        'deliveries': [r.to_dict("basic") for r in results if r]
     })
 
 
@@ -200,7 +199,7 @@ def test_push_config(request):
     """
     test_message = request.DATA.get('message', 'This is a test notification')
 
-    results = send_direct_notification(
+    results = send_to_user(
         user=request.user,
         title="Push Test",
         body=test_message,
@@ -212,8 +211,8 @@ def test_push_config(request):
 
     return response.success({
         'success': True,
-        'message': 'Test notifications sent',
-        'results': [r.to_dict('basic') for r in results]
+        'message': f'Test notifications sent to {len(results)} devices',
+        'results': [r.to_dict('basic') for r in results if r]
     })
 
 
