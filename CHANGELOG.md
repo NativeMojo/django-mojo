@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.111 - October 22, 2025
+
+bugfix allow user to subscribe to self
+
+
 ## v0.1.110 - October 21, 2025
 
 more socket cleanup
