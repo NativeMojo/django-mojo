@@ -707,7 +707,7 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
         self.save(update_fields=["metadata"])
 
     def on_realtime_can_subscribe(self, topic):
-        if topic.startswith(f"group:"):
+        if topic.startswith("group:"):
             from .group import Group
             if self.has_permission(["view_groups", "manage_groups"]):
                 return True
@@ -715,6 +715,8 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
             if group is None:
                 return False
             return group.get_member_for_user(self) is not None
+        if topic == f"user:{self.id}":
+            return True
         if topic == "general_announcements":
             return True
         return False
