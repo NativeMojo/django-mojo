@@ -32,6 +32,7 @@ class GroupMember(models.Model, MojoModel):
     class RestMeta:
         VIEW_PERMS = ["view_members", "view_groups", "manage_groups", "manage_group"]
         SAVE_PERMS = ["manage_groups", "manage_group"]
+        SEARCH_FIELDS = ["user__username", "user__email", "user__display_name"]
         CREATED_BY_OWNER_FIELD = 'created_by'  # we do this to protect user
         LIST_DEFAULT_FILTERS = {
             "is_active": True
