@@ -2,12 +2,13 @@
 
 ## Overview
 
-The Django Mojo Push Notification API provides a comprehensive system for managing and sending push notifications to mobile applications and web clients. The system supports both iOS (via FCM/APNS) and Android (via FCM) platforms, with built-in template support, delivery tracking, and organizational configuration.
+The Django Mojo Push Notification API provides a simple system for managing and sending push notifications to mobile and web clients. The system uses **Firebase Cloud Messaging (FCM)** for all platforms (iOS, Android, Web), with built-in template support, delivery tracking, and organizational configuration.
 
 ### Key Features
 
-- **Multi-Platform Support**: FCM for both iOS/Android, APNS for iOS-specific needs
-- **Template System**: Reusable notification templates with variable substitution
+- **FCM for All Platforms**: Single unified service for iOS, Android, and Web
+- **Simple Architecture**: `device.send()` does everything, `user.push_notification()` loops devices
+- **Template System**: Optional reusable templates with variable substitution
 - **Device Management**: Registration and preference management for user devices  
 - **Delivery Tracking**: Complete audit trail of notification attempts and results
 - **Organization Support**: Per-organization push configurations and templates
@@ -15,11 +16,17 @@ The Django Mojo Push Notification API provides a comprehensive system for managi
 
 ### Architecture
 
+```
+User.push_notification() 
+  └─> loops devices → device.send()
+      └─> FCM delivery + tracking
+```
+
 The push system consists of four main components:
 
-1. **Device Registration**: Apps register device tokens and preferences
-2. **Templates**: Define reusable notification formats with variables
-3. **Configuration**: Per-organization push service credentials and settings
+1. **Device Registration**: Apps register FCM tokens and preferences
+2. **Configuration**: Per-organization FCM credentials and settings
+3. **Templates**: Optional reusable notification formats with variables
 4. **Delivery Tracking**: Complete history of sent notifications and their status
 
 ## Authentication & Permissions
@@ -30,7 +37,7 @@ All push API endpoints require authentication via the standard Django Mojo auth 
 
 ### Register Device
 
-Register a device for push notifications. This is typically called when a user first installs/opens your app.
+Register a device for push notifications with an FCM token. Call this when a user installs/opens your app.
 
 ```http
 POST /api/account/devices/push/register
@@ -41,7 +48,7 @@ Content-Type: application/json
 **Request Body:**
 ```json
 {
-    "device_token": "FCM/APNS device token",
+    "device_token": "FCM device token from Firebase",
     "device_id": "unique-app-device-id", 
     "platform": "ios|android|web",
     "device_name": "iPhone 14 Pro",
@@ -145,51 +152,9 @@ Authorization: Bearer <token>
 
 ## Sending Notifications
 
-### Send Templated Notification
-
-Send notifications using predefined templates with variable substitution.
-
-```http
-POST /api/account/devices/push/send
-Authorization: Bearer <token>
-Content-Type: application/json
-Permission: send_notifications
-```
-
-**Request Body:**
-```json
-{
-    "template": "order_ready",
-    "context": {
-        "customer_name": "John Doe",
-        "order_number": "ORD-12345",
-        "pickup_time": "3:30 PM"
-    },
-    "user_ids": [456, 789]
-}
-```
-
-**Response:**
-```json
-{
-    "success": true,
-    "sent_count": 3,
-    "failed_count": 0,
-    "deliveries": [
-        {
-            "id": 789,
-            "title": "Order Ready for John Doe",
-            "category": "orders",
-            "status": "sent",
-            "sent_at": "2024-01-15T10:30:00Z"
-        }
-    ]
-}
-```
-
 ### Send Direct Notification
 
-Send notifications with explicit content without using templates.
+Send notifications with explicit content (most common use case).
 
 ```http
 POST /api/account/devices/push/send
@@ -201,11 +166,14 @@ Permission: send_notifications
 **Request Body:**
 ```json
 {
-    "title": "System Maintenance",
-    "body": "The system will be down for maintenance from 2-4 AM EST",
-    "category": "system",
-    "action_url": "myapp://maintenance",
-    "user_ids": [456, 789]
+    "title": "Order Ready",
+    "body": "Your order #12345 is ready for pickup",
+    "category": "orders",
+    "action_url": "myapp://orders/12345",
+    "data": {
+        "order_id": 12345,
+        "custom_field": "value"
+    }
 }
 ```
 
@@ -214,23 +182,57 @@ Permission: send_notifications
 {
     "success": true,
     "sent_count": 2,
-    "failed_count": 1,
+    "failed_count": 0,
     "deliveries": [
         {
             "id": 790,
-            "title": "System Maintenance", 
-            "category": "system",
+            "title": "Order Ready", 
+            "category": "orders",
             "status": "sent",
             "sent_at": "2024-01-15T10:30:00Z"
-        },
-        {
-            "id": 791,
-            "title": "System Maintenance",
-            "category": "system", 
-            "status": "failed",
-            "error_message": "Invalid device token"
         }
     ]
+}
+```
+
+### Send Silent Notification (Data Only)
+
+Send data-only notification without title/body.
+
+```json
+{
+    "data": {
+        "action": "sync",
+        "timestamp": 1234567890,
+        "user_id": 123
+    },
+    "category": "system"
+}
+```
+
+### Send to Multiple Users
+
+```json
+{
+    "title": "System Maintenance",
+    "body": "The system will be down 2-4 AM EST",
+    "category": "system",
+    "user_ids": [456, 789, 123]
+}
+```
+
+### Send Templated Notification (Optional)
+
+Send notifications using predefined templates with variable substitution.
+
+```json
+{
+    "template": "order_ready",
+    "context": {
+        "customer_name": "John Doe",
+        "order_number": "ORD-12345",
+        "pickup_time": "3:30 PM"
+    }
 }
 ```
 
@@ -247,7 +249,7 @@ Content-Type: application/json
 **Request Body:**
 ```json
 {
-    "message": "Testing push notifications from my app!"
+    "message": "Testing push notifications!"
 }
 ```
 
@@ -255,7 +257,7 @@ Content-Type: application/json
 ```json
 {
     "success": true,
-    "message": "Test notifications sent",
+    "message": "Test notifications sent to 2 devices",
     "results": [
         {
             "id": 792,
@@ -267,7 +269,9 @@ Content-Type: application/json
 }
 ```
 
-## Notification Templates
+## Notification Templates (Optional)
+
+Templates are optional but useful for recurring notification types.
 
 ### List Templates
 
@@ -337,7 +341,7 @@ Content-Type: application/json
 {
     "name": "welcome",
     "title_template": "Welcome {username}!",
-    "body_template": "Thanks for joining {app_name}. Get started by exploring our features.",
+    "body_template": "Thanks for joining {app_name}.",
     "category": "onboarding",
     "priority": "normal",
     "variables": {
@@ -381,8 +385,6 @@ Permission: manage_push_config
         {
             "id": 1,
             "name": "Production Config",
-            "fcm_enabled": true,
-            "apns_enabled": false,
             "test_mode": false,
             "is_active": true
         }
@@ -402,13 +404,10 @@ Permission: manage_push_config
 ```json
 {
     "id": 1,
-    "name": "Production Config",
+    "name": "Production FCM Config",
     "test_mode": false,
-    "fcm_enabled": true,
     "fcm_sender_id": "123456789",
-    "apns_enabled": false,
     "default_sound": "default",
-    "default_badge_count": 1,
     "is_active": true,
     "group": {
         "id": 5,
@@ -416,6 +415,8 @@ Permission: manage_push_config
     }
 }
 ```
+
+**Note:** Sensitive credentials (FCM server keys) are encrypted and not exposed via API. Set them using `config.set_fcm_server_key()` method.
 
 ### Create/Update Configuration
 
@@ -432,14 +433,10 @@ Content-Type: application/json
 {
     "name": "Development Config",
     "test_mode": true,
-    "fcm_enabled": true,
     "fcm_sender_id": "dev-123456789",
-    "default_sound": "default",
-    "default_badge_count": 1
+    "default_sound": "default"
 }
 ```
-
-**Note:** Sensitive credentials (FCM server keys, APNS private keys) are set via separate secure methods, not through the REST API.
 
 ## Delivery Tracking
 
@@ -498,11 +495,19 @@ Permission: view_notifications
     "body": "Your order #ORD-12345 is ready for pickup at 3:30 PM",
     "category": "orders",
     "action_url": "myapp://orders/ORD-12345",
+    "data_payload": {
+        "order_id": 12345
+    },
     "status": "sent",
     "sent_at": "2024-01-15T10:30:00Z",
     "delivered_at": null,
     "error_message": null,
     "created": "2024-01-15T10:29:55Z",
+    "platform_data": {
+        "multicast_id": "123456789",
+        "success": 1,
+        "failure": 0
+    },
     "user": {
         "id": 456,
         "username": "john.doe",
@@ -550,7 +555,7 @@ All endpoints return standard HTTP status codes with detailed error information:
 ### 400 Bad Request
 ```json
 {
-    "error": "Must provide either template or both title and body",
+    "error": "Must provide title, body, or data",
     "code": "INVALID_PARAMETERS"
 }
 ```
@@ -574,20 +579,27 @@ All endpoints return standard HTTP status codes with detailed error information:
 ### 404 Not Found
 ```json
 {
-    "error": "Template 'invalid_template' not found",
+    "error": "Device not found",
     "code": "NOT_FOUND"
 }
 ```
 
 ## Integration Examples
 
-### iOS Swift Example
+### iOS Swift Example (FCM)
 
 ```swift
-// Register device for push notifications
-func registerForPush(deviceToken: String) {
-    let parameters = [
-        "device_token": deviceToken,
+import FirebaseMessaging
+
+// Configure Firebase
+FirebaseApp.configure()
+
+// Get FCM token
+Messaging.messaging().token { token, error in
+    guard let token = token else { return }
+    
+    let parameters: [String: Any] = [
+        "device_token": token,
         "device_id": UIDevice.current.identifierForVendor?.uuidString ?? "",
         "platform": "ios",
         "device_name": UIDevice.current.name,
@@ -598,19 +610,21 @@ func registerForPush(deviceToken: String) {
             "marketing": false,
             "system": true
         ]
-    ] as [String: Any]
+    ]
     
-    APIClient.shared.post("/api/account/devices/push/register", parameters: parameters) { result in
-        // Handle response
-    }
+    APIClient.shared.post("/api/account/devices/push/register", parameters: parameters)
 }
 ```
 
-### Android Kotlin Example
+### Android Kotlin Example (FCM)
 
 ```kotlin
-// Register device for push notifications
-fun registerForPush(token: String) {
+import com.google.firebase.messaging.FirebaseMessaging
+
+FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
+    if (!task.isSuccessful) return@addOnCompleteListener
+    
+    val token = task.result
     val preferences = mapOf(
         "orders" to true,
         "marketing" to false,
@@ -627,21 +641,19 @@ fun registerForPush(token: String) {
         "push_preferences" to preferences
     )
     
-    apiService.registerDevice(requestBody).enqueue { response ->
-        // Handle response
-    }
+    apiService.registerDevice(requestBody)
 }
 ```
 
-### JavaScript Web Example
+### Web JavaScript Example (FCM)
 
 ```javascript
-// Register for web push notifications
+import { getMessaging, getToken } from "firebase/messaging";
+
 async function registerForPush() {
-    const registration = await navigator.serviceWorker.register('/sw.js');
-    const subscription = await registration.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: FCM_VAPID_KEY
+    const messaging = getMessaging();
+    const token = await getToken(messaging, { 
+        vapidKey: 'YOUR_VAPID_KEY' 
     });
     
     const response = await fetch('/api/account/devices/push/register', {
@@ -651,7 +663,7 @@ async function registerForPush() {
             'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-            device_token: subscription.endpoint,
+            device_token: token,
             device_id: getDeviceId(),
             platform: 'web',
             device_name: navigator.userAgent,
@@ -671,52 +683,101 @@ async function registerForPush() {
 ## Best Practices
 
 ### Device Registration
-- Always register devices when the app starts and the user is authenticated
-- Update device tokens when they change (iOS/Android may refresh them)
-- Allow users to manage notification preferences in your app settings
+- Register devices on app start when user is authenticated
+- Update device tokens when they change (FCM may refresh them)
+- Allow users to manage notification preferences in app settings
+- Use unique, persistent device_id values
 
-### Template Usage
-- Use templates for recurring notification types (order updates, system alerts, etc.)
-- Keep template variables descriptive and document them in the `variables` field
-- Test templates in development with realistic data
+### Notification Sending
+- Use descriptive categories for preference filtering
+- Include action_url for deep linking into your app
+- Use data payload for silent/background notifications
+- Test with small user groups before broad deployments
+
+### Template Usage (Optional)
+- Use templates for recurring notification types
+- Keep template variables descriptive
+- Document expected variables
+- Test templates with realistic data
 
 ### Error Handling
-- Handle failed notifications gracefully - tokens may become invalid
-- Implement retry logic for temporary failures
+- Handle failed notifications gracefully (tokens may expire)
 - Monitor delivery statistics to identify issues
+- Implement retry logic for temporary failures
+- Log errors for debugging
 
 ### Security
-- Never expose push configuration credentials in client applications
-- Use the test endpoint during development to avoid sending notifications to real users
-- Validate user permissions before sending notifications on behalf of users
+- Never expose FCM server keys in client apps
+- Use test mode during development
+- Validate user permissions before sending on behalf of users
+- Monitor for suspicious notification patterns
 
 ### Performance
-- Batch notifications when possible by using `user_ids` parameter
-- Use appropriate notification categories to respect user preferences
-- Monitor notification delivery rates and adjust sending patterns accordingly
+- Send to multiple users efficiently using user_ids
+- Respect user notification preferences via categories
+- Monitor delivery rates and adjust patterns
+- Use silent notifications sparingly
 
 ## Development & Testing
 
 ### Test Mode
-Enable test mode in push configuration to send fake notifications during development:
+Enable test mode to send fake notifications during development:
 
-```json
-{
-    "test_mode": true
-}
+```python
+config = PushConfig.objects.create(
+    name="Dev Config",
+    test_mode=True  # No real FCM calls
+)
 ```
 
-Test mode notifications will:
-- Not attempt actual platform delivery
+Test mode notifications:
+- Don't call FCM (fake delivery)
 - Always succeed
-- Log detailed information for debugging
-- Store test metadata in delivery records
+- Log detailed debug info
+- Store test metadata in platform_data
 
 ### Local Development Setup
 
-1. Create a test push configuration with `test_mode: true`
-2. Register your development devices
-3. Use the test endpoint to verify registration is working
-4. Gradually enable real push services as needed
+1. Create test config with `test_mode=True`
+2. Register development devices
+3. Use test endpoint to verify registration
+4. Enable real FCM when ready for production
 
-This comprehensive API enables building robust notification systems for mobile and web applications while providing complete control over delivery tracking and user preferences.
+### Testing Checklist
+
+- [ ] Device registration works on all platforms
+- [ ] Notifications arrive on devices
+- [ ] Deep links work (action_url)
+- [ ] User preferences are respected
+- [ ] Silent notifications work (data only)
+- [ ] Failed deliveries are logged correctly
+- [ ] Test mode works without FCM credentials
+
+## Architecture Summary
+
+Simple KISS architecture:
+
+```
+┌─────────────────────────────────────┐
+│ User.push_notification()            │
+│  - Simple loop through devices      │
+└────────────┬────────────────────────┘
+             │
+             ▼
+┌─────────────────────────────────────┐
+│ RegisteredDevice.send()             │
+│  - Get FCM config                   │
+│  - Create delivery record           │
+│  - Send via FCM                     │
+│  - Track result                     │
+└─────────────────────────────────────┘
+```
+
+**Key Points:**
+- FCM only - no APNS complexity
+- `device.send()` does all the work
+- Simple helper functions for convenience
+- Complete delivery tracking
+- Encrypted credential storage
+
+This comprehensive API enables building robust notification systems for mobile and web applications with minimal complexity.

@@ -1,5 +1,6 @@
 from django.db import models
 from mojo.models import MojoModel
+from mojo.apps import metrics
 
 
 class RegisteredDevice(models.Model, MojoModel):
@@ -64,3 +65,140 @@ class RegisteredDevice(models.Model, MojoModel):
 
     def __str__(self):
         return f"{self.device_name or self.device_id} ({self.platform}) - {self.user.username}"
+
+    def send(self, title=None, body=None, data=None, category="general", action_url=None):
+        """
+        Send push notification to this device via FCM.
+        Simple and stupid - just send it.
+
+        Args:
+            title: Notification title (optional for silent notifications)
+            body: Notification body (optional for silent notifications)
+            data: Custom data payload dict
+            category: Notification category (for user preferences)
+            action_url: URL to open when notification is tapped
+
+        Returns:
+            NotificationDelivery object
+        """
+        from mojo.helpers import logit, dates
+        from mojo.apps.account.models import PushConfig, NotificationDelivery
+
+        # Check if device wants this category
+        preferences = self.push_preferences or {}
+        if not preferences.get(category, True):
+            logit.info(f"Device {self.device_id} has disabled category {category}")
+            return None
+
+        # Get push config
+        config = PushConfig.get_for_user(self.user)
+        if not config:
+            logit.info(f"No push config available for user {self.user.username}")
+            return None
+
+        # Create delivery record
+        delivery = NotificationDelivery.objects.create(
+            user=self.user,
+            device=self,
+            title=title,
+            body=body,
+            category=category,
+            action_url=action_url,
+            data_payload=data or {}
+        )
+
+        try:
+            # Test mode - fake it
+            if config.test_mode:
+                self._send_test(delivery, config)
+                delivery.mark_sent()
+                return delivery
+
+            # Real FCM send
+            success = self._send_fcm(delivery, config)
+            if success:
+                metrics.record("push_sent")
+                delivery.mark_sent()
+            else:
+                metrics.record("push_failed")
+                delivery.mark_failed("FCM delivery failed")
+
+        except Exception as e:
+            error_msg = f"Push notification failed: {str(e)}"
+            logit.error(error_msg)
+            delivery.mark_failed(error_msg)
+
+        return delivery
+
+    def _send_test(self, delivery, config):
+        """Fake notification for testing."""
+        from mojo.helpers import logit, dates
+
+        log_parts = []
+        if delivery.title:
+            log_parts.append(f"Title: {delivery.title}")
+        if delivery.body:
+            log_parts.append(f"Body: {delivery.body}")
+        if delivery.data_payload:
+            log_parts.append(f"Data: {delivery.data_payload}")
+
+        log_message = f"TEST MODE: Push to {self.platform} device '{self.device_name}'"
+        if log_parts:
+            log_message += f" - {' | '.join(log_parts)}"
+
+        logit.info(log_message)
+
+        delivery.platform_data = {
+            'test_mode': True,
+            'platform': self.platform,
+            'device_name': self.device_name,
+            'timestamp': dates.utcnow().isoformat(),
+        }
+        delivery.save(update_fields=['platform_data'])
+
+    def _send_fcm(self, delivery, config):
+        """Send via FCM."""
+        from mojo.helpers import logit
+
+        try:
+            from pyfcm import FCMNotification
+        except ImportError:
+            logit.error("pyfcm not installed - run: pip install pyfcm")
+            return False
+
+        try:
+            fcm_key = config.get_fcm_server_key()
+            if not fcm_key:
+                logit.error("No FCM server key configured")
+                return False
+
+            push_service = FCMNotification(api_key=fcm_key)
+
+            # Build data payload
+            data_message = delivery.data_payload.copy() if delivery.data_payload else {}
+            if delivery.action_url:
+                data_message['action_url'] = delivery.action_url
+
+            # Send notification
+            result = push_service.notify_single_device(
+                registration_id=self.device_token,
+                message_title=delivery.title,
+                message_body=delivery.body,
+                sound=config.default_sound if (delivery.title or delivery.body) else None,
+                data_message=data_message if data_message else None
+            )
+
+            # Store response
+            delivery.platform_data = {
+                'multicast_id': result.get('multicast_id'),
+                'success': result.get('success', 0),
+                'failure': result.get('failure', 0),
+                'results': result.get('results', [])
+            }
+            delivery.save(update_fields=['platform_data'])
+
+            return result.get('success', 0) > 0
+
+        except Exception as e:
+            logit.error(f"FCM send failed: {e}")
+            return False

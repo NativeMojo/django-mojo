@@ -484,13 +484,36 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
         self.send_invite()
 
     def push_notification(self, title=None, body=None, data=None,
-                          category="general", action_url=None,
-                          devices=None, user_ids=None, delay=None):
-        from mojo.apps.account.services.push import send_direct_notification
-        send_direct_notification(
-            self, title=title, body=body, data=data, category=category,
-            action_url=action_url,
-            devices=devices, user_ids=user_ids, delay=delay)
+                          category="general", action_url=None):
+        """
+        Send push notification to all user's active devices.
+        Simple - just loops through devices and calls device.send().
+
+        Args:
+            title: Notification title (optional for silent notifications)
+            body: Notification body (optional for silent notifications)
+            data: Custom data payload dict
+            category: Notification category
+            action_url: URL to open when notification is tapped
+
+        Returns:
+            List of NotificationDelivery objects
+        """
+        devices = self.registered_devices.filter(is_active=True, push_enabled=True)
+
+        deliveries = []
+        for device in devices:
+            delivery = device.send(
+                title=title,
+                body=body,
+                data=data,
+                category=category,
+                action_url=action_url
+            )
+            if delivery:
+                deliveries.append(delivery)
+
+        return deliveries
 
     def send_invite(self, **kwargs):
         from mojo.apps.account.utils import tokens

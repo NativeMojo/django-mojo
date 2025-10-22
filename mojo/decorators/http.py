@@ -32,7 +32,7 @@ def dispatcher(request, *args, **kwargs):
     Dispatches incoming requests to the appropriate registered URL method.
     """
     key = kwargs.pop('__mojo_rest_root_key__', None)
-    if "group" in request.DATA:
+    if "group" in request.DATA and request.DATA.group:
         try:
             request.group = modules.get_model_instance("account", "Group", int(request.DATA.group))
             if request.group is not None:
@@ -68,6 +68,8 @@ def dispatch_error_handler(func):
             resp = func(request, *args, **kwargs)
             if not isinstance(resp, HttpResponse) and isinstance(resp, dict):
                 return JsonResponse(resp)
+            elif resp is None:
+                return JsonResponse({"error": "No response", "code": 500}, status=500)
             return resp
         except mojo.errors.MojoException as err:
             if API_METRICS:
