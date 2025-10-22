@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.110 - October 21, 2025
+
+more socket cleanup
+
+
 ## v0.1.109 - October 21, 2025
 
 Custom FCM implementation to work around issues
