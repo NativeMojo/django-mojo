@@ -81,22 +81,27 @@ def test_push_config_creation_and_encryption(opts):
     config = PushConfig.objects.create(
         group=test_org,
         name="test_secrets_config",
-        test_mode=True,
-        fcm_sender_id="test_sender_123"
+        test_mode=True
     )
 
-    # Test MojoSecrets with FCM
-    config.set_fcm_server_key("test_fcm_server_key_12345")
+    # Test MojoSecrets with FCM v1 service account
+    test_service_account = {
+        "project_id": "test-project-123",
+        "private_key": "dummy_key_for_testing",
+        "client_email": "test@test-project.iam.gserviceaccount.com"
+    }
+    config.set_fcm_service_account(test_service_account)
     config.save()
 
     opts.test_config_id = config.id
     assert config.group == test_org, f"Expected group {test_org}, got {config.group}"
     assert config.test_mode == True, "Test mode should be True for this config"
-    assert config.fcm_sender_id == "test_sender_123", "FCM sender ID should be set"
+    assert config.fcm_project_id == "test-project-123", "FCM project ID should be extracted from service account"
 
     # Test credential encryption/decryption via MojoSecrets
-    decrypted_fcm = config.get_fcm_server_key()
-    assert decrypted_fcm == "test_fcm_server_key_12345", "FCM key should be decrypted correctly"
+    decrypted_account = config.get_fcm_service_account()
+    assert decrypted_account is not None, "Service account should be decrypted"
+    assert decrypted_account['project_id'] == "test-project-123", "Service account should be decrypted correctly"
 
     opts.test_secrets_config_id = config.id
 
@@ -110,8 +115,7 @@ def test_system_default_config(opts):
     system_config = PushConfig.objects.create(
         group=None,
         name="test_system_default",
-        test_mode=True,
-        fcm_sender_id="system_sender_123"
+        test_mode=True
     )
 
     user = User.objects.get(username=TEST_USER)
@@ -288,7 +292,6 @@ def test_push_config_api(opts):
     config_data = {
         "name": "test_api_config",
         "test_mode": True,
-        "fcm_sender_id": "api_test_sender_456",
         "default_sound": "notification.wav"
     }
 
@@ -303,7 +306,7 @@ def test_push_config_api(opts):
     data = resp.response.data
     assert data.name == "test_api_config", f"Expected name 'test_api_config', got '{data.name}'"
     assert data.test_mode == True, "Test mode should be enabled"
-    assert data.fcm_sender_id == "api_test_sender_456", "FCM sender ID should be set"
+    # Note: fcm_project_id will be None until service account is configured via set_fcm_service_account()
 
     # Verify that sensitive fields are not exposed
     assert 'mojo_secrets' not in data, "MojoSecrets should not be exposed in API response"
@@ -628,27 +631,33 @@ def test_notification_delivery_status_methods(opts):
 
 @th.django_unit_test()
 def test_fcm_secrets_functionality(opts):
-    """Test FCM server key encryption/decryption functionality."""
+    """Test FCM service account encryption/decryption functionality."""
     from mojo.apps.account.models import PushConfig
 
     # Get our test config and verify secrets work
     test_config = PushConfig.objects.get(id=opts.test_secrets_config_id)
 
-    # Verify the FCM key was set and can be retrieved
-    fcm_key = test_config.get_fcm_server_key()
-    # assert fcm_key == "test_fcm_server_key_for_testing", f"Expected FCM key 'test_fcm_server_key_for_testing', got '{fcm_key}'"
+    # Verify the service account was set and can be retrieved
+    service_account = test_config.get_fcm_service_account()
+    assert service_account is not None, "Service account should be set"
+    assert service_account['project_id'] == "test-project-123", f"Expected project_id 'test-project-123', got '{service_account.get('project_id')}'"
 
-    # Test updating the key
-    test_config.set_fcm_server_key("updated_fcm_key_54321")
+    # Test updating the service account
+    updated_account = {
+        "project_id": "updated-project-456",
+        "private_key": "updated_dummy_key",
+        "client_email": "updated@test-project.iam.gserviceaccount.com"
+    }
+    test_config.set_fcm_service_account(updated_account)
     test_config.save()
 
     # Verify the update worked
-    updated_key = test_config.get_fcm_server_key()
-    assert updated_key == "updated_fcm_key_54321", f"Expected updated key 'updated_fcm_key_12345', got '{updated_key}'"
+    retrieved_account = test_config.get_fcm_service_account()
+    assert retrieved_account['project_id'] == "updated-project-456", f"Expected project_id 'updated-project-456', got '{retrieved_account.get('project_id')}'"
 
     # Verify the encrypted field exists but is not the plain text
     assert test_config.mojo_secrets is not None, "mojo_secrets field should contain encrypted data"
-    assert "updated_fcm_key_54321" not in test_config.mojo_secrets, "Plain text key should not be in encrypted field"
+    assert "updated-project-456" not in test_config.mojo_secrets, "Plain text should not be in encrypted field"
 
 
 @th.django_unit_test()
@@ -659,8 +668,7 @@ def test_comprehensive_test_mode_verification(opts):
     # Create a config with test mode enabled
     test_config = PushConfig.objects.create(
         name="comprehensive_test_config",
-        test_mode=True,
-        fcm_sender_id="comprehensive_test_sender"
+        test_mode=True
     )
 
     # Temporarily assign this config by creating a user without org

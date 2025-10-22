@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.109 - October 21, 2025
+
+Custom FCM implementation to work around issues
+
+
 ## v0.1.108 - October 21, 2025
 
 Cleanup of FCM

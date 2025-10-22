@@ -157,47 +157,48 @@ class RegisteredDevice(models.Model, MojoModel):
         delivery.save(update_fields=['platform_data'])
 
     def _send_fcm(self, delivery, config):
-        """Send via FCM."""
+        """Send via FCM v1 API."""
         from mojo.helpers import logit
+        from mojo.helpers.fcm import FCMv1Client
 
         try:
-            from pyfcm import FCMNotification
-        except ImportError:
-            logit.error("pyfcm not installed - run: pip install pyfcm")
-            return False
-
-        try:
-            fcm_key = config.get_fcm_server_key()
-            if not fcm_key:
-                logit.error("No FCM server key configured")
+            service_account_json = config.get_fcm_service_account()
+            if not service_account_json:
+                logit.error("No FCM service account configured")
                 return False
 
-            push_service = FCMNotification(api_key=fcm_key)
+            # Initialize FCM v1 client
+            try:
+                fcm_client = FCMv1Client(service_account_json)
+            except Exception as e:
+                logit.error(f"Failed to initialize FCM client: {e}")
+                return False
 
             # Build data payload
             data_message = delivery.data_payload.copy() if delivery.data_payload else {}
             if delivery.action_url:
                 data_message['action_url'] = delivery.action_url
 
-            # Send notification
-            result = push_service.notify_single_device(
-                registration_id=self.device_token,
-                message_title=delivery.title,
-                message_body=delivery.body,
-                sound=config.default_sound if (delivery.title or delivery.body) else None,
-                data_message=data_message if data_message else None
+            # Send notification via FCM v1
+            result = fcm_client.send(
+                token=self.device_token,
+                title=delivery.title,
+                body=delivery.body,
+                data=data_message if data_message else None,
+                sound=config.default_sound if (delivery.title or delivery.body) else None
             )
 
             # Store response
             delivery.platform_data = {
-                'multicast_id': result.get('multicast_id'),
-                'success': result.get('success', 0),
-                'failure': result.get('failure', 0),
-                'results': result.get('results', [])
+                'fcm_version': 'v1',
+                'message_id': result.get('message_id'),
+                'success': result.get('success', False),
+                'status_code': result.get('status_code'),
+                'error': result.get('error')
             }
             delivery.save(update_fields=['platform_data'])
 
-            return result.get('success', 0) > 0
+            return result.get('success', False)
 
         except Exception as e:
             logit.error(f"FCM send failed: {e}")
