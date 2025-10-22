@@ -313,9 +313,9 @@ class WebSocketHandler:
             return
 
         # Topic authorization check
-        if hasattr(self.user, 'can_subscribe_to_realtime_topic'):
+        if hasattr(self.user, 'on_realtime_can_subscribe'):
             def check_permission():
-                return self.user.can_subscribe_to_realtime_topic(topic)
+                return self.user.on_realtime_can_subscribe(topic)
 
             try:
                 can_subscribe = await asyncio.get_event_loop().run_in_executor(

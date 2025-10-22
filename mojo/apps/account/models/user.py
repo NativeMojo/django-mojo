@@ -706,6 +706,19 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
         self.metadata = meta
         self.save(update_fields=["metadata"])
 
+    def on_realtime_can_subscribe(self, topic):
+        if topic.startswith(f"group:"):
+            from .group import Group
+            if self.has_permission(["view_groups", "manage_groups"]):
+                return True
+            group = Group.objects.filter(pk=int(topic.split(":")[1])).last()
+            if group is None:
+                return False
+            return group.get_member_for_user(self) is not None
+        if topic == "general_announcements":
+            return True
+        return False
+
     @classmethod
     def validate_jwt(cls, token, request=None):
         token_manager = JWToken()
