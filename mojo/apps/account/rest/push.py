@@ -235,3 +235,31 @@ def push_stats(request):
     }
 
     return response.success(stats)
+
+
+@md.POST('account/devices/push/config/<int:pk>/test')
+@md.requires_auth()
+@md.requires_perms("manage_push_config")
+def test_push_config_connection(request, pk):
+    """
+    Test FCM configuration by attempting to send a test notification.
+
+    POST /api/account/devices/push/config/123/test
+    {
+        "device_token": "optional_real_token_to_test_with"
+    }
+    """
+    try:
+        config = PushConfig.objects.get(id=pk)
+    except PushConfig.DoesNotExist:
+        return response.error('Push configuration not found', status=404)
+
+    # Optional: test with a real device token
+    test_token = request.DATA.get('device_token')
+
+    result = config.test_fcm_connection(test_token=test_token)
+
+    if result['success']:
+        return response.success(result)
+    else:
+        return response.error(result['message'], data=result)
