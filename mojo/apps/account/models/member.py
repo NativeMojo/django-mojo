@@ -115,7 +115,11 @@ class GroupMember(models.Model, MojoModel):
 
     def add_permission(self, perm_key, value=True):
         """Dynamically add a permission."""
-        self.permissions[perm_key] = value
+        if isinstance(perm_key, (list, set)):
+            for pk in perm_key:
+                self.add_permission(pk, value)
+        else:
+            self.permissions[perm_key] = value
         self.save()
 
     def remove_permission(self, perm_key):

@@ -44,6 +44,14 @@ def get_remote_ip(request):
         ip = request.META.get('REMOTE_ADDR')
     return ip
 
+def get_ip_sources(request):
+    return objict({
+        'x_forwarded_for': request.META.get('HTTP_X_FORWARDED_FOR'),
+        'x_forwarded_proto': request.META.get('HTTP_X_FORWARDED_PROTO'),
+        'x_forwarded_port': request.META.get('HTTP_X_FORWARDED_PORT'),
+        'remote_addr': request.META.get('REMOTE_ADDR'),  # Will be ALB's IP
+        'x_amzn_trace_id': request.META.get('HTTP_X_AMZN_TRACE_ID'),
+    })
 
 def get_device_id(request):
     # Look for 'buid' or 'duid' in GET parameters
