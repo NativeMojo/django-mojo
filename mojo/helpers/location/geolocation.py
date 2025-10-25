@@ -25,6 +25,36 @@ CLOUD_PROVIDERS = {
     'Hetzner': ['hetzner'],
 }
 
+# Mobile/Cellular carrier detection keywords
+MOBILE_CARRIERS = {
+    # US Carriers
+    'Verizon': ['verizon', 'cellco'],
+    'AT&T': ['at&t', 'att mobility', 'att wireless'],
+    'T-Mobile': ['t-mobile', 'tmobile', 'sprint'],  # Sprint merged with T-Mobile
+    'Sprint': ['sprint'],
+    'US Cellular': ['us cellular', 'uscellular'],
+    'Cricket': ['cricket'],
+    'Boost': ['boost mobile'],
+    'Metro': ['metro pcs', 'metropcs'],
+
+    # International Carriers
+    'Vodafone': ['vodafone'],
+    'Orange': ['orange'],
+    'Telefonica': ['telefonica', 'movistar'],
+    'Deutsche Telekom': ['deutsche telekom', 't-systems'],
+    'Telstra': ['telstra'],
+    'Rogers': ['rogers'],
+    'Bell': ['bell canada', 'bell mobility'],
+    'Telus': ['telus'],
+    'O2': ['o2-uk', 'o2 uk'],
+    'EE': ['ee limited'],
+    'Three': ['three uk', 'hutchison'],
+    'Sky': ['sky mobile'],
+
+    # Generic mobile indicators
+    'Mobile': ['mobile', 'cellular', 'wireless', 'telecom', '4g', '5g', 'lte']
+}
+
 
 def get_geo_located_ip_model():
     global _GeoLocatedIP
@@ -61,14 +91,16 @@ def detect_tor(ip_address):
 
 def detect_vpn_proxy_cloud(asn_org, isp, connection_type):
     """
-    Detect VPN, proxy, and cloud services based on ASN organization, ISP, and connection type.
-    Returns a dict with is_vpn, is_proxy, is_cloud, is_datacenter flags.
+    Detect VPN, proxy, cloud services, and mobile carriers based on ASN organization, ISP, and connection type.
+    Returns a dict with is_vpn, is_proxy, is_cloud, is_datacenter, is_mobile, mobile_carrier flags.
     """
     result = {
         'is_vpn': False,
         'is_proxy': False,
         'is_cloud': False,
         'is_datacenter': False,
+        'is_mobile': False,
+        'mobile_carrier': None,
     }
 
     if not asn_org:
@@ -90,6 +122,13 @@ def detect_vpn_proxy_cloud(asn_org, isp, connection_type):
     proxy_keywords = [
         'proxy', 'anonymizer', 'anonymous', 'squid', 'privoxy'
     ]
+
+    # Mobile/Cellular carrier detection
+    for carrier, keywords in MOBILE_CARRIERS.items():
+        if any(keyword in combined_text for keyword in keywords):
+            result['is_mobile'] = True
+            result['mobile_carrier'] = carrier
+            break
 
     # Cloud provider detection
     if ENABLE_CLOUD_DETECTION:
@@ -116,6 +155,8 @@ def detect_vpn_proxy_cloud(asn_org, isp, connection_type):
             result['is_datacenter'] = True
         if 'business' in conn_lower and any(keyword in combined_text for keyword in datacenter_keywords):
             result['is_datacenter'] = True
+        if 'cellular' in conn_lower or 'mobile' in conn_lower:
+            result['is_mobile'] = True
 
     # If not already marked as cloud but shows datacenter characteristics
     if not result['is_cloud'] and any(keyword in combined_text for keyword in datacenter_keywords):
@@ -170,6 +211,8 @@ def geolocate_ip(ip_address, check_threats=False):
                 'is_proxy': False,
                 'is_cloud': False,
                 'is_datacenter': False,
+                'is_mobile': False,
+                'mobile_carrier': None,
                 'is_known_attacker': False,
                 'is_known_abuser': False,
                 'threat_level': 'low',
@@ -177,11 +220,9 @@ def geolocate_ip(ip_address, check_threats=False):
     except ValueError:
         return None  # Invalid IP
 
-    # 2. Handle public IPs by dispatching to a randomly selected provider
-    providers = GEOLOCATION_PROVIDERS
-    provider = random.choice(providers)
-    api_key_setting_name = f'GEOLOCATION_API_KEY_{provider.upper()}'
-    api_key = getattr(settings, api_key_setting_name, None)
+    # 2. Handle public IPs by trying providers with fallback
+    providers = GEOLOCATION_PROVIDERS.copy()
+    random.shuffle(providers)  # Randomize to distribute load
 
     provider_map = {
         'ipinfo': fetch_from_ipinfo,
@@ -190,49 +231,71 @@ def geolocate_ip(ip_address, check_threats=False):
         'maxmind': fetch_from_maxmind,
     }
 
-    fetch_function = provider_map.get(provider)
+    geo_data = None
+    errors = []
 
-    if fetch_function:
-        geo_data = fetch_function(ip_address, api_key)
+    # Try each provider in order until one succeeds
+    for provider in providers:
+        fetch_function = provider_map.get(provider)
 
-        if geo_data:
-            # Perform detection
-            is_tor = detect_tor(ip_address)
-            detection = detect_vpn_proxy_cloud(
-                geo_data.get('asn_org'),
-                geo_data.get('isp'),
-                geo_data.get('connection_type')
-            )
+        if not fetch_function:
+            errors.append(f"{provider}: not supported")
+            continue
 
-            geo_data['is_tor'] = is_tor
-            geo_data.update(detection)
+        api_key_setting_name = f'GEOLOCATION_API_KEY_{provider.upper()}'
+        api_key = getattr(settings, api_key_setting_name, None)
 
-            # Perform threat intelligence checks if requested
-            if check_threats:
-                from .threat_intel import perform_threat_check
-                threat_results = perform_threat_check(ip_address)
-                geo_data['is_known_attacker'] = threat_results['is_known_attacker']
-                geo_data['is_known_abuser'] = threat_results['is_known_abuser']
+        try:
+            geo_data = fetch_function(ip_address, api_key)
 
-                # Store threat data in the data field
-                if 'data' not in geo_data:
-                    geo_data['data'] = {}
-                geo_data['data']['threat_data'] = threat_results['threat_data']
+            if geo_data:
+                # Success! Break out of loop
+                break
             else:
-                geo_data['is_known_attacker'] = False
-                geo_data['is_known_abuser'] = False
+                errors.append(f"{provider}: returned no data")
+        except Exception as e:
+            errors.append(f"{provider}: {str(e)}")
+            continue
 
-            geo_data['threat_level'] = calculate_threat_level(
-                is_tor,
-                detection['is_vpn'],
-                detection['is_proxy'],
-                geo_data.get('data', {}).get('threat', None)
-            )
+    # If we got data from any provider, process it
+    if geo_data:
+        # Perform detection
+        is_tor = detect_tor(ip_address)
+        detection = detect_vpn_proxy_cloud(
+            geo_data.get('asn_org'),
+            geo_data.get('isp'),
+            geo_data.get('connection_type')
+        )
+
+        geo_data['is_tor'] = is_tor
+        geo_data.update(detection)
+
+        # Perform threat intelligence checks if requested
+        if check_threats:
+            from .threat_intel import perform_threat_check
+            threat_results = perform_threat_check(ip_address)
+            geo_data['is_known_attacker'] = threat_results['is_known_attacker']
+            geo_data['is_known_abuser'] = threat_results['is_known_abuser']
+
+            # Store threat data in the data field
+            if 'data' not in geo_data:
+                geo_data['data'] = {}
+            geo_data['data']['threat_data'] = threat_results['threat_data']
+        else:
+            geo_data['is_known_attacker'] = False
+            geo_data['is_known_abuser'] = False
+
+        geo_data['threat_level'] = calculate_threat_level(
+            is_tor,
+            detection['is_vpn'],
+            detection['is_proxy'],
+            geo_data.get('data', {}).get('threat', None)
+        )
 
         return geo_data
     else:
-        # In a real app, you might want to log this or handle it differently
-        print(f"[Geolocation Error] Provider '{provider}' is not supported.")
+        # All providers failed
+        print(f"[Geolocation Error] All providers failed for IP {ip_address}: {'; '.join(errors)}")
         return None
 
 

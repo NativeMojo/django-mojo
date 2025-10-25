@@ -20,6 +20,7 @@ class RestClient:
         self.access_token = None
         self.is_authenticated = False
         self.bearer = "bearer"
+        self.headers = {}
 
     def login(self, username, password):
         self.logout()
@@ -37,8 +38,8 @@ class RestClient:
 
     def get_headers(self):
         if self.is_authenticated:
-            return dict(Authorization=f"{self.bearer} {self.access_token}")
-        return {}
+            self.headers["Authorization"] = f"{self.bearer} {self.access_token}"
+        return self.headers
 
     def _make_request(self, method, path, **kwargs):
         """

@@ -8,10 +8,11 @@ from mojo.helpers import modules
 from objict import objict
 
 
-AUTH_BEARER_HANDLERS_MAP = settings.get("AUTH_BEARER_HANDLERS", {
+AUTH_BEARER_HANDLER_PATHS = settings.get("AUTH_BEARER_HANDLERS", {
     "bearer": "user"
 })
-AUTH_BEARER_HANDLERS = {
+
+AUTH_BEARER_HANDLERS_CACHE = {
     "bearer": User.validate_jwt
 }
 
@@ -25,15 +26,15 @@ class AuthenticationMiddleware(MiddlewareMixin):
             return
         prefix, token = token.split()
         prefix = prefix.lower()
-        if prefix not in AUTH_BEARER_HANDLERS:
-            if prefix not in AUTH_BEARER_HANDLERS_MAP:
-                return JsonResponse({'error': 'Invalid token type'}, status=401)
+        if prefix not in AUTH_BEARER_HANDLERS_CACHE:
+            if prefix not in AUTH_BEARER_HANDLER_PATHS:
+                return JsonResponse({'error': f'Invalid token type: {prefix}', 'paths': AUTH_BEARER_HANDLER_PATHS}, status=401)
             try:
-                AUTH_BEARER_HANDLERS[prefix] = modules.load_function(AUTH_BEARER_HANDLERS_MAP[prefix])
+                AUTH_BEARER_HANDLERS_CACHE[prefix] = modules.load_function(AUTH_BEARER_HANDLER_PATHS[prefix])
             except Exception as e:
                 return JsonResponse({'error': "failed to load handler"}, status=500)
 
-        handler = AUTH_BEARER_HANDLERS[prefix]
+        handler = AUTH_BEARER_HANDLERS_CACHE[prefix]
         request.auth_token = objict(prefix=prefix, token=token)
 
         # decode data to find the instance

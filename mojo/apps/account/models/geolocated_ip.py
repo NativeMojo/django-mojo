@@ -60,8 +60,9 @@ class GeoLocatedIP(models.Model, MojoModel):
     is_proxy = models.BooleanField(default=False, db_index=True, help_text="Is this IP a known proxy server?")
     is_cloud = models.BooleanField(default=False, db_index=True, help_text="Is this IP from a cloud platform (AWS, GCP, Azure, etc.)?")
     is_datacenter = models.BooleanField(default=False, db_index=True, help_text="Is this IP from a datacenter/hosting provider?")
-    is_known_attacker = models.BooleanField(default=False, db_index=True, help_text="Is this IP from a datacenter/hosting provider?")
-    is_known_abuser = models.BooleanField(default=False, db_index=True, help_text="Is this IP from a datacenter/hosting provider?")
+    is_mobile = models.BooleanField(default=False, db_index=True, help_text="Is this IP from a mobile/cellular carrier?")
+    is_known_attacker = models.BooleanField(default=False, db_index=True, help_text="Is this IP a known attacker?")
+    is_known_abuser = models.BooleanField(default=False, db_index=True, help_text="Is this IP a known abuser?")
 
     # Additional security metadata
     threat_level = models.CharField(
@@ -74,6 +75,7 @@ class GeoLocatedIP(models.Model, MojoModel):
     asn = models.CharField(max_length=50, null=True, blank=True, help_text="Autonomous System Number")
     asn_org = models.CharField(max_length=255, null=True, blank=True, help_text="Organization owning the ASN")
     isp = models.CharField(max_length=255, null=True, blank=True, help_text="Internet Service Provider")
+    mobile_carrier = models.CharField(max_length=100, null=True, blank=True, db_index=True, help_text="Mobile carrier name (Verizon, AT&T, T-Mobile, etc.)")
     connection_type = models.CharField(
         max_length=50,
         null=True,
@@ -93,6 +95,7 @@ class GeoLocatedIP(models.Model, MojoModel):
             models.Index(fields=['is_tor', 'is_vpn', 'is_proxy']),
             models.Index(fields=['threat_level', 'modified']),
             models.Index(fields=['is_cloud', 'is_datacenter']),
+            models.Index(fields=['is_mobile', 'mobile_carrier']),
         ]
 
     class RestMeta:
@@ -120,6 +123,9 @@ class GeoLocatedIP(models.Model, MojoModel):
             flags.append("PROXY")
         if self.is_cloud:
             flags.append("CLOUD")
+        if self.is_mobile:
+            carrier = self.mobile_carrier or "MOBILE"
+            flags.append(carrier)
 
         flag_str = f" [{', '.join(flags)}]" if flags else ""
         return f"{self.ip_address} ({self.city}, {self.country_code}){flag_str}"

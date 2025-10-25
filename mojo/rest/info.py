@@ -30,6 +30,13 @@ def rest_my_ip(request):
     return JsonResponse(dict(status=True, ip=request.ip))
 
 
+@md.GET('myip/sources')
+@md.public_endpoint()
+def rest_my_ip_detailed(request):
+    from mojo.helpers import request as rh
+    return JsonResponse(dict(status=True, **rh.get_ip_sources(request)))
+
+
 @md.GET('sysinfo/detailed')
 @md.custom_security("Secured by required 'key' parameter")
 @md.requires_params("key")
