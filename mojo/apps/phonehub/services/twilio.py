@@ -61,8 +61,7 @@ def _lookup(phone_number, account_sid, auth_token):
         'is_valid': True,
         'caller_name': caller_name,
         'caller_type': caller_type,
-        'lookup_provider': 'twilio',
-        'lookup_data': lookup.__dict__ if hasattr(lookup, '__dict__') else {}
+        'lookup_provider': 'twilio'
     })
 
 
@@ -126,4 +125,4 @@ def _send_sms(body, to_number, from_number, account_sid, auth_token):
             'status': 'failed',
             'code': None,
             'error': str(e)
-        }
+        })
