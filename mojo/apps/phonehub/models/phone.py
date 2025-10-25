@@ -16,8 +16,10 @@ class PhoneNumber(models.Model, MojoModel):
     # Phone Number Fields
     phone_number = models.CharField(max_length=20, unique=True, db_index=True,
                                    help_text="E.164 formatted phone number (+1234567890)")
-    country_code = models.CharField(max_length=5, db_index=True,
-                                  help_text="Country code (e.g., US, CA, GB)")
+
+    country_code = models.CharField(max_length=5, db_index=True, null=True, blank=True)
+    region = models.CharField(max_length=100, null=True, blank=True)
+    state = models.CharField(max_length=3, db_index=True, null=True, blank=True)
 
     # Lookup Data - Carrier/Line Type
     carrier = models.CharField(max_length=100, blank=True, null=True,
@@ -104,10 +106,29 @@ class PhoneNumber(models.Model, MojoModel):
         """Alias for needs_lookup."""
         return self.needs_lookup
 
+    @property
+    def area_code(self):
+        return self.area_code_info.get("area_code", "")
+
+    _area_code_info = None
+    @property
+    def area_code_info(self):
+        if self._area_code_info:
+            return self._area_code_info
+        from mojo.apps.phonehub import get_area_code_info
+        self._area_code_info = get_area_code_info(self.phone_number)
+        return self._area_code_info
+
     def refresh(self):
         from mojo.apps.phonehub.services.twilio import lookup
+        if not self.region and self.area_code_info and self.area_code_info.location:
+            self.region = self.area_code_info.location.get("region", "")
+            self.state = self.area_code_info.location.get("state", "")
+            self.country_code = self.area_code_info.location.get("country", "")
+
         resp = lookup(self.phone_number)
         if resp.error:
+            self.save()
             return False
 
         self.carrier = resp.carrier
@@ -120,7 +141,7 @@ class PhoneNumber(models.Model, MojoModel):
         self.owner_type = resp.caller_type
         self.lookup_provider = resp.lookup_provider
         self.lookup_expires_at = dates.add(days=90)
-        self.lookup_data = resp.lookup_data
+        self.lookup_data = {}
         self.last_lookup_at = dates.utcnow()
         self.lookup_count += 1
         self.save()
@@ -134,7 +155,10 @@ class PhoneNumber(models.Model, MojoModel):
     @classmethod
     def lookup(cls, phone_number):
         normalized = cls.normalize(phone_number)
-        phone, created = cls.objects.get_or_create(phone_number=normalized)
-        if created or phone.needs_lookup:
+        phone = cls.objects.filter(phone_number=normalized).first()
+        if phone is None:
+            phone = cls(phone_number=normalized)
+            phone.refresh()
+        elif phone.is_expired:
             phone.refresh()
         return phone

@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.113 - October 24, 2025
+
+NEW phonehub which provide detailed compliance for phone numbers
+
+
 ## v0.1.112 - October 22, 2025
 
 BUGFIX searching for group members

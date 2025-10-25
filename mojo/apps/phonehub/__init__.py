@@ -18,7 +18,9 @@ Simple Usage:
     sms = phonehub.send_sms('+14155551234', 'Hello from PhoneHub!')
 """
 # Import convenience functions from services
-from .services.phonenumbers import normalize
+from .services.phonenumbers import normalize, validate
+from objict import objict
+
 
 def lookup(phone_number):
     from .models import PhoneNumber
@@ -28,3 +30,7 @@ def lookup(phone_number):
 def send_sms(phone_number, message):
     from .models import SMS
     return SMS.send(body=message, to_number=phone_number)
+
+def get_area_code_info(phone_number):
+    from .services.area_codes import get_area_code_info
+    return objict.fromdict(get_area_code_info(phone_number))
