@@ -214,7 +214,7 @@ def requires_bearer(bearer):
 
         @wraps(func)
         def wrapper(request, *args, **kwargs):
-            if request.bearer.lower() != bearer.lower():
+            if request.bearer is None or request.bearer.lower() != bearer.lower():
                 raise mojo.errors.PermissionDeniedException(f"invalid bearer token '{request.bearer}'")
             return func(request, *args, **kwargs)
         return wrapper

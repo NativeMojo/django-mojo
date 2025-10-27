@@ -42,3 +42,58 @@ def on_geo_located_ip_lookup(request):
     auto_refresh = request.DATA.get('auto_refresh', True)
     geo_ip = GeoLocatedIP.geolocate(ip_address, auto_refresh=auto_refresh)
     return geo_ip.on_rest_get(request)
+
+
+@md.URL('location/address/validate')
+@md.requires_auth()
+@md.requires_params("address1", "city", "state", "zip")
+def on_address_validate(request, pk=None):
+    from mojo.helprs.location.google import get_google_api
+    google = get_google_api()
+    return {"status": True, "data": google.validate_address(request.DATA)}
+
+@md.URL('location/address/suggestions')
+@md.requires_auth()
+@md.requires_params("address")
+def on_address_suggestions(request, pk=None):
+    from mojo.helprs.location.google import get_google_api
+    google = get_google_api()
+    return {"status": True, "data": google.get_address_suggestions(request.DATA.address)}
+
+
+@md.URL('location/address/geocode')
+@md.requires_auth()
+@md.requires_params("address")
+def on_address_geocode_address(request, pk=None):
+    from mojo.helprs.location.google import get_google_api
+    google = get_google_api()
+    return {
+        "status": True,
+        "data": google.geocode_address(request.DATA.address)
+    }
+
+
+@md.URL('location/geocode')
+@md.requires_auth()
+@md.requires_params("lat", "lng")
+def on_address_geocode_reverse(request, pk=None):
+    from mojo.helprs.location.google import get_google_api
+    google = get_google_api()
+    return {
+        "status": True,
+        "data": google.reverse_geocode(
+            request.DATA.lat, request.DATA.lng)
+    }
+
+
+@md.URL('location/timezone')
+@md.requires_auth()
+@md.requires_params("lat", "lng")
+def on_address_timezone(request, pk=None):
+    from mojo.helprs.location.google import get_google_api
+    google = get_google_api()
+    return {
+        "status": True,
+        "data": google.get_timezone(
+            request.DATA.lat, request.DATA.lng)
+    }

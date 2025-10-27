@@ -6,28 +6,7 @@ from mojo.helpers import dates
 from mojo.apps import jobs
 
 GEOLOCATION_ALLOW_SUBNET_LOOKUP = settings.get('GEOLOCATION_ALLOW_SUBNET_LOOKUP', False)
-GEOLOCATION_CACHE_DURATION_DAYS = settings.get('GEOLOCATION_CACHE_DURATION_DAYS', 30)
-
-
-def trigger_refresh_task(ip_address, check_threats=False):
-    """
-    Publishes a task to refresh the geolocation data for a given IP address.
-
-    Args:
-        ip_address: IP address to refresh
-        check_threats: If True, also perform threat intelligence checks
-    """
-    from mojo.helpers.location.geolocation import refresh_geolocation_for_ip
-    jobs.publish_local(refresh_geolocation_for_ip, ip_address, check_threats)
-
-
-def trigger_threat_check_task(ip_address):
-    """
-    Publishes a task to perform threat intelligence checks on an IP address.
-    This is separate from geolocation refresh and focuses only on threat data.
-    """
-    from mojo.helpers.location.geolocation import check_threats_for_ip
-    jobs.publish_local(check_threats_for_ip, ip_address)
+GEOLOCATION_CACHE_DURATION_DAYS = settings.get('GEOLOCATION_CACHE_DURATION_DAYS', 90)
 
 
 class GeoLocatedIP(models.Model, MojoModel):
@@ -101,11 +80,11 @@ class GeoLocatedIP(models.Model, MojoModel):
     class RestMeta:
         VIEW_PERMS = ['manage_users']
         SEARCH_FIELDS = ["ip_address", "city", "country_name", "asn_org", "isp"]
-        POST_SAVE_ACTIONS = ["refresh"]
+        POST_SAVE_ACTIONS = ["refresh", "threat_analysis"],
         GRAPHS = {
             'default': {
                 'extra': ['is_threat', 'is_suspicious', 'risk_score'],
-                'exclude': ['data']
+                'exclude': ['data', 'provider']
             },
             'detailed': {
                 # Include all fields including raw data
@@ -185,11 +164,11 @@ class GeoLocatedIP(models.Model, MojoModel):
         Args:
             check_threats: If True, also perform threat intelligence checks
         """
-        from mojo.helpers.location import geolocation
+        from mojo.helpers import geoip
 
-        geo_data = geolocation.geolocate_ip(self.ip_address, check_threats=check_threats)
+        geo_data = geoip.geolocate_ip(self.ip_address, check_threats=check_threats)
 
-        if not geo_data:
+        if not geo_data or not geo_data.get("provider"):
             return False
 
         # Update self with new data
@@ -215,9 +194,9 @@ class GeoLocatedIP(models.Model, MojoModel):
 
         This can be called independently or as part of refresh().
         """
-        from mojo.helpers.location.threat_intel import perform_threat_check, recalculate_threat_level
+        from mojo.helpers.geoip import threat_intel
 
-        threat_results = perform_threat_check(self.ip_address)
+        threat_results = threat_intel.perform_threat_check(self.ip_address)
 
         # Update threat flags
         self.is_known_attacker = threat_results['is_known_attacker']
@@ -230,7 +209,7 @@ class GeoLocatedIP(models.Model, MojoModel):
         self.data['threat_checked_at'] = dates.utcnow().isoformat()
 
         # Recalculate threat level with new data
-        self.threat_level = recalculate_threat_level(self)
+        self.threat_level = threat_intel.recalculate_threat_level(self)
 
         self.save()
         return threat_results
@@ -238,8 +217,15 @@ class GeoLocatedIP(models.Model, MojoModel):
     def on_action_refresh(self, value):
         self.refresh(check_threats=True)
 
+    def on_action_threat_analysis(self, value):
+        self.check_threats()
+
     @classmethod
-    def geolocate(cls, ip_address, auto_refresh=False, subdomain_only=False):
+    def lookup(cls, ip_address, auto_refresh=True, subdomain_only=GEOLOCATION_ALLOW_SUBNET_LOOKUP):
+        return cls.geolocate(ip_address, auto_refresh, subdomain_only)
+
+    @classmethod
+    def geolocate(cls, ip_address, auto_refresh=True, subdomain_only=GEOLOCATION_ALLOW_SUBNET_LOOKUP):
         """
         Get or create a GeoLocatedIP record for the given IP address.
 
@@ -255,7 +241,7 @@ class GeoLocatedIP(models.Model, MojoModel):
         subnet = ip_address[:ip_address.rfind('.')]
         geo_ip = cls.objects.filter(ip_address=ip_address).first()
 
-        if not geo_ip and (GEOLOCATION_ALLOW_SUBNET_LOOKUP or subdomain_only):
+        if not geo_ip and subdomain_only:
             geo_ip = cls.objects.filter(subnet=subnet).last()
             if geo_ip:
                 geo_ip.id = None

@@ -3,7 +3,7 @@ from django.db import models
 from mojo.helpers.settings import settings
 from mojo.models import MojoModel
 from mojo.helpers import dates, request as rhelper
-from .geolocated_ip import GeoLocatedIP, trigger_refresh_task
+from .geolocated_ip import GeoLocatedIP
 
 GEOLOCATION_DEVICE_LOCATION_AGE = settings.get('GEOLOCATION_DEVICE_LOCATION_AGE', 300)
 
@@ -170,8 +170,9 @@ class UserDeviceLocation(models.Model, MojoModel):
                     location.geolocation = geo_ip
                 location.save(update_fields=['last_seen', 'geolocation'])
 
-        # Finally, if the geo data is stale or new, trigger a refresh.
+        # Finally, if the geo data is stale or new, refresh it.
+        # TODO: Add optional async job execution
         if geo_ip.is_expired:
-            trigger_refresh_task(ip_address)
+            geo_ip.refresh()
 
         return location

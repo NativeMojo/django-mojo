@@ -67,6 +67,13 @@ def warn(*args):
         _mojo_logger = get_logger("mojo", "mojo.log")
     _mojo_logger.warning(*args)
 
+def warning(*args):
+    """Log warning messages to mojo.log"""
+    global _mojo_logger
+    if _mojo_logger is None:
+        _mojo_logger = get_logger("mojo", "mojo.log")
+    _mojo_logger.warning(*args)
+
 def debug(*args):
     """Log debug messages to debug.log"""
     global _debug_logger

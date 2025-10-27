@@ -50,6 +50,7 @@ def register_device(request):
 
 
 @md.POST('account/member/device/register')
+@md.requires_auth()
 def register_legacy_device(request):
     device_id = request.DATA.get("device_id", request.duid)
     if not device_id:
