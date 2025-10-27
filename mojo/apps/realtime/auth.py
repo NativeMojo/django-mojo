@@ -18,8 +18,8 @@ from asgiref.sync import sync_to_async
 
 # Reuse the same handler maps as the HTTP middleware for a single source of truth
 from mojo.middleware.auth import (
-    AUTH_BEARER_HANDLERS_MAP,
-    AUTH_BEARER_HANDLERS,
+    AUTH_BEARER_HANDLER_PATHS,
+    AUTH_BEARER_HANDLERS_CACHE,
     AUTH_BEARER_NAME_MAP,
 )
 from mojo.helpers import modules
@@ -50,21 +50,21 @@ def resolve_bearer_handler(prefix):
 
     prefix = prefix.lower()
 
-    if prefix not in AUTH_BEARER_HANDLERS:
+    if prefix not in AUTH_BEARER_HANDLERS_CACHE:
         # Load from settings map if available
-        if prefix not in AUTH_BEARER_HANDLERS_MAP:
+        if prefix not in AUTH_BEARER_HANDLER_PATHS:
             return None, None, "Invalid token type"
         try:
-            fn = modules.load_function(AUTH_BEARER_HANDLERS_MAP[prefix])
+            fn = modules.load_function(AUTH_BEARER_HANDLER_PATHS[prefix])
         except Exception as e:
             logger.exception("Failed to load handler for prefix '%s': %s", prefix, e)
             return None, None, "failed to load handler"
         if not callable(fn):
             logger.error("Loaded handler for prefix '%s' is not callable: %r", prefix, fn)
             return None, None, "invalid handler"
-        AUTH_BEARER_HANDLERS[prefix] = fn
+        AUTH_BEARER_HANDLERS_CACHE[prefix] = fn
 
-    handler = AUTH_BEARER_HANDLERS[prefix]
+    handler = AUTH_BEARER_HANDLERS_CACHE[prefix]
     if not callable(handler):
         logger.error("Configured handler for prefix '%s' is not callable: %r", prefix, handler)
         return None, None, "invalid handler"

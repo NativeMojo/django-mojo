@@ -67,26 +67,18 @@ class PhoneNumber(models.Model, MojoModel):
         ]
 
     class RestMeta:
-        VIEW_PERMS = ["view_phone_numbers", "manage_phone_numbers"]
-        SAVE_PERMS = ["manage_phone_numbers"]
+        VIEW_PERMS = ["view_phone_numbers", "manage_phone_numbers", "manage_users"]
+        SAVE_PERMS = ["manage_phone_numbers", "manage_users"]
         DELETE_PERMS = ["manage_phone_numbers"]
         SEARCH_FIELDS = ["phone_number", "carrier", "registered_owner"]
         LIST_DEFAULT_FILTERS = {"is_valid": True}
         GRAPHS = {
             "basic": {
-                "fields": ["id", "phone_number", "country_code", "carrier",
-                          "line_type", "is_mobile", "is_voip", "is_valid",
-                          "registered_owner", "caller_type"]
+
             },
             "default": {
-                "fields": ["id", "phone_number", "country_code", "carrier",
-                          "line_type", "is_mobile", "is_voip", "is_valid",
-                          "registered_owner", "caller_type",
-                          "lookup_expires_at", "last_lookup_at", "created"]
+
             },
-            "full": {
-                "exclude": []
-            }
         }
 
     def __str__(self):

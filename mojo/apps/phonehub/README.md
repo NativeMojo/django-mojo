@@ -1,397 +1,403 @@
 # PhoneHub - SMS and Phone Lookup Service
 
-A simple Django app providing SMS and phone lookup capabilities via Twilio and AWS SNS.
+Simple Django app for SMS and phone number operations using Twilio.
 
-## Features
-
-- **Phone Number Normalization**: Convert phone numbers to E.164 format
-- **Phone Lookup**: Get carrier, line type (mobile/voip), validity, and **caller name** (registered owner)
-- **Caller Name Verification**: Lookup registered customer name via Twilio CNAM
-- **SMS Sending**: Send SMS via Twilio or AWS SNS
-- **SMS Receiving**: Handle incoming SMS via webhooks
-- **Caching**: Store lookup results with configurable expiration
-- **Multi-provider**: Support for both Twilio and AWS
-- **Multi-tenant**: Organization-specific or system-wide configurations
-
-## Models
-
-### PhoneNumber (`mojo.apps.phonehub.models.PhoneNumber`)
-**Pure lookup cache - shared across entire system to minimize Twilio API charges.**
-
-Stores phone number lookup data with caching and expiration. Not tied to users or groups - this is intentional to maximize cache hits and minimize costs. If the same number is looked up by different parts of your system, they all share the same cached data.
-
-**Key Fields:**
-- `phone_number`: E.164 formatted number (+1234567890) - unique across system
-- `country_code`: Country code (US, CA, GB, etc.)
-- `carrier`: Carrier/operator name
-- `line_type`: mobile, landline, voip, etc.
-- `is_mobile`, `is_voip`: Boolean flags
-- `caller_name`: Registered owner/caller name from carrier (CNAM)
-- `caller_type`: BUSINESS or CONSUMER
-- `address_*`: Address fields if available (when present in carrier data)
-- `lookup_expires_at`: When to re-lookup this number
-- `lookup_count`: How many times this number has been looked up
-- `lookup_data`: Raw provider response (JSON)
-
-### PhoneConfig (`mojo.apps.phonehub.models.PhoneConfig`)
-Phone service configuration with encrypted credentials (via MojoSecrets).
-
-**Key Fields:**
-- `group`: Organization (null = system default)
-- `provider`: 'twilio' or 'aws'
-- `twilio_from_number`: Default Twilio sending number
-- `aws_region`: AWS region for SNS
-- `lookup_enabled`: Enable/disable lookups
-- `lookup_cache_days`: Days to cache lookup results (default: 30)
-- `test_mode`: Don't send real SMS in test mode
-
-**Secrets (encrypted in mojo_secrets):**
-- Twilio: `twilio_account_sid`, `twilio_auth_token`
-- AWS: `aws_access_key_id`, `aws_secret_access_key`
-
-### SMS (`mojo.apps.phonehub.models.SMS`)
-Stores sent and received SMS messages with delivery tracking.
-
-**Key Fields:**
-- `direction`: 'outbound' or 'inbound'
-- `from_number`, `to_number`: Phone numbers
-- `body`: Message content
-- `status`: queued, sending, sent, delivered, failed, etc.
-- `provider_message_id`: Provider's tracking ID
-- `error_code`, `error_message`: Error details if failed
-
-## Simple API Usage
-
-PhoneHub provides a clean, simple API for common operations:
+## Quick Start
 
 ```python
 from mojo.apps import phonehub
 
-# Normalize phone number to E.164 format
-num = phonehub.normalize('(415) 555-1234')  # Returns: +14155551234
+# Normalize phone numbers to E.164 format
+phone = phonehub.normalize('(415) 555-1234')  # Returns: +14155551234
 
-# Lookup phone info (carrier, mobile/voip detection)
+# Validate phone numbers (USA/Canada only)
+is_valid = phonehub.validate('4155551234')  # Returns: True or False
+
+# Get detailed validation info
+result = phonehub.validate('415-555-1234', detailed=True)
+print(result.valid)                      # True
+print(result.normalized)                 # +14155551234
+print(result.area_code)                  # 415
+print(result.area_code_info.location.state)   # CA
+print(result.area_code_info.location.region)  # San Francisco
+
+# Get area code information
+info = phonehub.get_area_code_info('415')
+print(info.location.state)    # CA
+print(info.location.region)   # San Francisco
+
+# Lookup phone details (carrier, line type, registered owner)
 phone = phonehub.lookup('+14155551234')
-print(f"Carrier: {phone.carrier}, Mobile: {phone.is_mobile}")
-
-# Lookup with organization context
-phone = phonehub.lookup('+14155551234', group=my_group)
+print(phone.carrier)           # e.g., "Verizon Wireless"
+print(phone.is_mobile)         # True/False
+print(phone.registered_owner)  # Registered customer name
+print(phone.owner_type)        # BUSINESS or CONSUMER
 
 # Send SMS
-sms = phonehub.send_sms('+14155551234', 'Hello from PhoneHub!')
-print(f"Status: {sms.status}")
-
-# Send SMS with organization context
-sms = phonehub.send_sms(
-    '+14155551234', 
-    'Hello!',
-    group=my_group,
-    user=request.user
-)
-```
-
-## Services API
-
-For more control, you can also use the service functions directly:
-
-Located in `mojo.apps.phonehub.services.phone`:
-
-### `normalize_phone(phone_number, country_code='US')`
-Normalize phone number to E.164 format.
-
-```python
-from mojo.apps.phonehub.services import normalize_phone
-
-normalized = normalize_phone('415-555-1234')  # Returns: +14155551234
-```
-
-### `lookup_phone(phone_number, group=None, force_refresh=False)`
-Lookup phone number info (uses cached data if available and not expired).
-
-```python
-from mojo.apps.phonehub.services import lookup_phone
-
-phone = lookup_phone('+14155551234', group=my_group, force_refresh=True)
-print(f"Carrier: {phone.carrier}, Type: {phone.line_type}")
-print(f"Mobile: {phone.is_mobile}, VOIP: {phone.is_voip}")
-```
-
-### `send_sms(to_number, body, from_number=None, group=None, user=None, metadata=None)`
-Send SMS message via configured provider.
-
-```python
-from mojo.apps.phonehub.services import send_sms
-
-sms = send_sms(
-    to_number='+14155551234',
-    body='Hello from PhoneHub!',
-    group=my_group,
-    user=request.user,
-    metadata={'campaign_id': 123}
-)
-print(f"Status: {sms.status}, Message ID: {sms.provider_message_id}")
-```
-
-### `handle_incoming_sms(from_number, to_number, body, provider='twilio', ...)`
-Handle incoming SMS (called by webhook handlers).
-
-## REST API Endpoints
-
-### Phone Number Operations
-
-**Normalize Phone Number**
-```
-POST /api/phonehub/phone/normalize
-{
-    "phone_number": "415-555-1234",
-    "country_code": "US"
-}
-```
-
-**Lookup Phone Number**
-```
-POST /api/phonehub/phone/lookup
-{
-    "phone_number": "+14155551234",
-    "force_refresh": false
-}
-```
-
-**CRUD Phone Numbers**
-```
-GET /api/phonehub/phone          # List all
-GET /api/phonehub/phone/123      # Get one
-POST /api/phonehub/phone         # Create
-PUT /api/phonehub/phone/123      # Update
-DELETE /api/phonehub/phone/123   # Delete
-```
-
-### SMS Operations
-
-**Send SMS**
-```
-POST /api/phonehub/sms/send
-{
-    "to_number": "+14155551234",
-    "body": "Hello!",
-    "from_number": "+14155556789",  // optional
-    "metadata": {}                   // optional
-}
-```
-
-**CRUD SMS Messages**
-```
-GET /api/phonehub/sms           # List all
-GET /api/phonehub/sms/123       # Get one
-```
-
-**Webhooks** (no auth required - called by providers)
-```
-POST /api/phonehub/sms/webhook/twilio          # Incoming SMS
-POST /api/phonehub/sms/webhook/twilio/status   # Status updates
-POST /api/phonehub/sms/webhook/aws             # AWS webhook (placeholder)
-```
-
-### Configuration
-
-**CRUD Configs**
-```
-GET /api/phonehub/config          # List all
-GET /api/phonehub/config/123      # Get one
-POST /api/phonehub/config         # Create
-PUT /api/phonehub/config/123      # Update
-DELETE /api/phonehub/config/123   # Delete
-```
-
-**Test Configuration**
-```
-POST /api/phonehub/config/123/test
-```
-
-**Set Credentials**
-```
-POST /api/phonehub/config/123/credentials
-{
-    "provider": "twilio",
-    "twilio_account_sid": "ACxxxx",
-    "twilio_auth_token": "xxxx"
-}
+sms = phonehub.send_sms('+14155551234', 'Hello!')
+print(sms.status)  # sent, failed, etc.
 ```
 
 ## Setup
 
-### 1. Install Dependencies
+### 1. Add Twilio Credentials to Django Settings
 
-**For Twilio:**
+```python
+# settings.py
+TWILIO_ACCOUNT_SID = 'ACxxxxxxxxxxxxxxxxx'
+TWILIO_AUTH_TOKEN = 'your_auth_token_here'
+```
+
+### 2. Install Dependencies
+
 ```bash
 pip install twilio
 ```
 
-**For AWS:**
-```bash
-pip install boto3
-```
-
-### 2. Run Migrations
+### 3. Run Migrations
 
 ```bash
-# From your Django project (not this framework)
-python manage.py makemigrations phonehub
 python manage.py migrate phonehub
 ```
 
-### 3. Create Configuration
+## Core Functions
+
+### `normalize(phone_number, country_code='US')`
+
+Converts phone numbers to E.164 format (+1XXXXXXXXXX). Only handles USA/Canada/Caribbean (NANP).
 
 ```python
-from mojo.apps.phonehub.models import PhoneConfig
+phonehub.normalize('4155551234')          # +14155551234
+phonehub.normalize('(415) 555-1234')      # +14155551234
+phonehub.normalize('1-415-555-1234')      # +14155551234
+phonehub.normalize('+14155551234')        # +14155551234
 
-# Create system-wide Twilio config
-config = PhoneConfig.objects.create(
-    name="System Twilio",
-    provider='twilio',
-    twilio_from_number='+14155551234',
-    lookup_enabled=True,
-    lookup_cache_days=30
-)
-
-# Set credentials (encrypted)
-config.set_twilio_credentials(
-    account_sid='ACxxxxxxxxxxxx',
-    auth_token='your_auth_token'
-)
-config.save()
-
-# Test connection
-result = config.test_connection()
-print(result)
+# International numbers return None
+phonehub.normalize('+442071234567')       # None (UK number)
 ```
 
-### 4. Configure Twilio Webhooks (for receiving SMS)
+**Returns:** E.164 formatted string or `None` if invalid/international
 
-In your Twilio console, set the webhook URL for incoming messages:
-```
-https://yourdomain.com/api/phonehub/sms/webhook/twilio
-```
+---
 
-For status callbacks, set:
-```
-https://yourdomain.com/api/phonehub/sms/webhook/twilio/status
-```
+### `validate(phone_number, country_code='US', detailed=False)`
 
-## Usage Examples
+Validates USA/Canada phone numbers according to NANP rules.
 
-### Send SMS
+**Simple validation (boolean):**
 ```python
-from mojo.apps import phonehub
-
-# Simple send
-sms = phonehub.send_sms('+14155551234', 'Your verification code is: 123456')
-
-if sms.status == 'sent':
-    print(f"SMS sent! ID: {sms.provider_message_id}")
-else:
-    print(f"Failed: {sms.error_message}")
-
-# Send with organization context
-sms = phonehub.send_sms(
-    '+14155551234',
-    'Your verification code is: 123456',
-    group=request.group,
-    user=request.user
-)
+phonehub.validate('4155551234')           # True
+phonehub.validate('123')                  # False
+phonehub.validate('+442071234567')        # False (international)
 ```
 
-### Lookup Phone
+**Detailed validation:**
 ```python
-from mojo.apps import phonehub
+result = phonehub.validate('415-555-1234', detailed=True)
 
+# Valid number response structure
+result.valid                               # True
+result.normalized                          # '+14155551234'
+result.area_code                           # '415'
+result.area_code_info.valid                # True
+result.area_code_info.area_code            # '415'
+result.area_code_info.type                 # 'geographic'
+result.area_code_info.description          # 'Geographic area code (USA/Canada/Caribbean)'
+result.area_code_info.location.state       # 'CA'
+result.area_code_info.location.region      # 'San Francisco'
+result.area_code_info.location.country     # 'US'
+result.error                               # None
+
+# International number (helpful error)
+result = phonehub.validate('+3322312111', detailed=True)
+{
+    'valid': False,
+    'normalized': None,
+    'error': 'International number detected: France (+33) - only USA/Canada/Caribbean supported',
+    'international': {
+        'country_code': '33',
+        'country': 'France',
+        'region': 'Europe',
+        'is_nanp': False
+    }
+}
+```
+
+**Validation Rules (NANP):**
+- Area code must be valid and assigned
+- Area code cannot start with 0 or 1
+- Area code cannot be N11 format (211, 311, etc.)
+- Exchange (first 3 digits after area code) cannot start with 0 or 1
+- Exchange cannot be N11 service codes (411, 911, etc.)
+- Cannot be all same digits (e.g., 8888888888)
+
+---
+
+### `get_area_code_info(phone_number)`
+
+Returns information about an area code. Can accept area code alone or full phone number.
+
+```python
+# Just area code
+info = phonehub.get_area_code_info('415')
+
+# Full phone number (extracts area code)
+info = phonehub.get_area_code_info('+14155551234')
+info = phonehub.get_area_code_info('(415) 555-1234')
+```
+
+**Returns:**
+```python
+# Geographic area code
+info = phonehub.get_area_code_info('415')
+info.valid                  # True
+info.area_code              # '415'
+info.type                   # 'geographic' (or 'toll_free', 'invalid')
+info.description            # 'Geographic area code (USA/Canada/Caribbean)'
+info.location.state         # 'CA'
+info.location.region        # 'San Francisco'
+info.location.country       # 'US'
+
+# Toll-free numbers
+info = phonehub.get_area_code_info('800')
+info.valid                  # True
+info.area_code              # '800'
+info.type                   # 'toll_free'
+info.description            # 'Toll-free number'
+info.location               # None
+```
+
+**Supported Area Codes:** 400+ USA/Canada area codes with state/region mapping
+
+---
+
+### `lookup(phone_number)`
+
+Looks up phone number details via Twilio API. Results are cached to minimize API charges.
+
+```python
 phone = phonehub.lookup('+14155551234')
 
-if phone:
-    print(f"Number: {phone.phone_number}")
-    print(f"Caller Name: {phone.caller_name}")  # Registered owner
-    print(f"Caller Type: {phone.caller_type}")  # BUSINESS or CONSUMER
-    print(f"Carrier: {phone.carrier}")
+print(phone.phone_number)       # +14155551234
+print(phone.carrier)            # "Verizon Wireless"
+print(phone.line_type)          # "mobile", "landline", "voip"
+print(phone.is_mobile)          # True/False
+print(phone.is_voip)            # True/False
+print(phone.is_valid)           # True/False
+print(phone.registered_owner)   # "John Smith" (registered customer)
+print(phone.owner_type)         # "BUSINESS" or "CONSUMER"
+print(phone.country_code)       # "US"
+print(phone.region)             # "San Francisco"
+print(phone.state)              # "CA"
+```
+
+**Caching:** Lookups are cached for 90 days by default. Cache is shared system-wide to minimize costs.
+
+**PhoneNumber Model Fields:**
+- `phone_number` - E.164 format (+14155551234)
+- `country_code` - Country code (US, CA, etc.)
+- `region` - Geographic region (San Francisco)
+- `state` - State/province code (CA, NY, ON)
+- `carrier` - Carrier/operator name
+- `line_type` - mobile, landline, voip, etc.
+- `is_mobile` - Boolean
+- `is_voip` - Boolean
+- `is_valid` - Boolean (whether reachable)
+- `registered_owner` - Registered owner name (CNAM)
+- `owner_type` - BUSINESS or CONSUMER
+- `address_line1`, `address_city`, `address_state`, `address_zip`, `address_country` - Address if available
+- `lookup_provider` - twilio or aws
+- `lookup_expires_at` - When to refresh
+- `lookup_count` - Times looked up
+- `last_lookup_at` - Last successful lookup timestamp
+- `lookup_data` - Raw provider response (JSON)
+
+---
+
+### `send_sms(to_number, message)`
+
+Sends SMS via Twilio.
+
+```python
+sms = phonehub.send_sms('+14155551234', 'Your code is: 123456')
+
+print(sms.status)              # 'queued', 'sent', 'delivered', 'failed'
+print(sms.provider_message_id) # Twilio message SID
+print(sms.error_message)       # Error if failed
+```
+
+**SMS Model Fields:**
+- `direction` - 'outbound' or 'inbound'
+- `from_number` - Sender
+- `to_number` - Recipient
+- `body` - Message content
+- `status` - Delivery status
+- `provider_message_id` - Twilio SID
+- `error_code`, `error_message` - If failed
+
+## International Number Detection
+
+When validating international numbers, PhoneHub provides helpful error messages:
+
+```python
+# France
+result = phonehub.validate('+3322312111', detailed=True)
+# Error: "International number detected: France (+33) - only USA/Canada/Caribbean supported"
+
+# UK
+result = phonehub.validate('+442071234567', detailed=True)
+# Error: "International number detected: United Kingdom (+44) - only USA/Canada/Caribbean supported"
+
+# Germany
+result = phonehub.validate('+4915112345678', detailed=True)
+# Error: "International number detected: Germany (+49) - only USA/Canada/Caribbean supported"
+```
+
+**Supported country codes:** 50+ common international country codes including UK, Germany, France, Japan, China, India, Australia, etc.
+
+## Examples
+
+### Validate User Input
+
+```python
+from mojo.apps import phonehub
+
+def clean_phone_number(user_input):
+    """Validate and normalize user phone input"""
+    result = phonehub.validate(user_input, detailed=True)
     
-    if phone.is_mobile:
-        print("This is a mobile number")
-    elif phone.is_voip:
-        print("This is a VOIP number")
-    else:
-        print(f"This is a {phone.line_type} number")
+    if not result.valid:
+        if result.get('international'):
+            raise ValueError(
+                f"International numbers not supported. "
+                f"Detected: {result.international.country}"
+            )
+        raise ValueError(result.error)
+    
+    return result.normalized
 ```
 
-### Normalize Phone Numbers
+### Check Area Code Location
+
 ```python
-from mojo.apps import phonehub
+def get_location_from_phone(phone_number):
+    """Get geographic location from phone number"""
+    info = phonehub.get_area_code_info(phone_number)
+    
+    if info.valid and info.location:
+        return f"{info.location.region}, {info.location.state}"
+    return "Unknown"
 
-# Handles various formats
-num = phonehub.normalize('415-555-1234')      # +14155551234
-num = phonehub.normalize('(415) 555-1234')   # +14155551234
-num = phonehub.normalize('4155551234')       # +14155551234
+print(get_location_from_phone('4155551234'))  # "San Francisco, CA"
+print(get_location_from_phone('2125551234'))  # "Manhattan, NY"
 ```
 
-### Check if Lookup is Stale
+### Verify Mobile Number
+
 ```python
-from mojo.apps import phonehub
+def is_mobile_number(phone_number):
+    """Check if phone number is mobile"""
+    phone = phonehub.lookup(phone_number)
+    return phone and phone.is_mobile
 
-phone = phonehub.PhoneNumber.objects.get(phone_number='+14155551234')
-
-if phone.needs_lookup:
-    # Re-lookup
-    phone = phonehub.lookup(phone.phone_number, force_refresh=True)
+if is_mobile_number('+14155551234'):
+    # Send SMS
+    phonehub.send_sms('+14155551234', 'Verification code: 123456')
+else:
+    # Use different verification method
+    send_email_verification()
 ```
 
-## Permissions
+### Batch Normalize Phone Numbers
 
-**Phone Numbers:**
-- `view_phone_numbers`: View phone lookup data
-- `manage_phone_numbers`: Create/update/delete phone numbers
+```python
+def normalize_phone_list(phone_numbers):
+    """Normalize a list of phone numbers"""
+    normalized = []
+    errors = []
+    
+    for phone in phone_numbers:
+        result = phonehub.validate(phone, detailed=True)
+        if result.valid:
+            normalized.append(result.normalized)
+        else:
+            errors.append({'phone': phone, 'error': result.error})
+    
+    return normalized, errors
+```
 
-**SMS:**
-- `view_sms`: View SMS messages
-- `manage_sms`: Send SMS and manage messages
+## Toll-Free Numbers
 
-**Configuration:**
-- `manage_phone_config`: Manage phone configurations
-- `manage_groups`: Manage group-level configs
+PhoneHub supports all USA toll-free numbers:
+
+```python
+# All toll-free codes are valid
+codes = ['800', '888', '877', '866', '855', '844', '833']
+
+for code in codes:
+    result = phonehub.validate(f'{code}5551234', detailed=True)
+    print(f"{code}: {result.valid}")  # All True
+    print(result.area_code_info.type)  # 'toll_free'
+```
+
+## Testing
+
+Run the PhoneHub test suite:
+
+```bash
+# From your Django project
+python manage.py testit -m test_phonehub.phonenumbers
+```
+
+**Test coverage:**
+- 27 comprehensive tests
+- Phone normalization (NANP and international)
+- NANP validation rules
+- International number detection
+- Area code lookup and parsing
+- Edge cases and error handling
 
 ## Notes
 
-- **Test Mode**: Set `test_mode=True` on PhoneConfig to prevent sending real SMS during development
-- **AWS Limitations**: AWS SNS doesn't provide comprehensive phone lookup like Twilio. Use Twilio for lookups.
-- **Caching**: Phone lookups are cached by default for 30 days (configurable via `lookup_cache_days`)
-- **Security**: All credentials are encrypted using MojoSecrets - never exposed in API responses
-- **Multi-tenant**: Each organization can have its own configuration, or use system default
+- **USA/Canada Only**: PhoneHub currently only validates and processes NANP (North American) numbers
+- **International Numbers**: Detected and rejected with helpful error messages identifying the country
+- **Caching**: Phone lookups are cached system-wide (not per-user) to minimize Twilio API charges
+- **E.164 Format**: All phone numbers are normalized to E.164 format (+1XXXXXXXXXX)
+- **Area Codes**: 400+ area codes mapped to states/regions for USA/Canada
+- **Twilio Required**: Twilio credentials required for `lookup()` and `send_sms()` functions
+
+## Area Code Coverage
+
+PhoneHub includes comprehensive area code mapping for:
+- **USA**: All 50 states + territories
+- **Canada**: All provinces and territories  
+- **Caribbean**: NANP countries (Bermuda, Jamaica, etc.)
+- **Toll-free**: 800, 888, 877, 866, 855, 844, 833
+
+Examples:
+- `415` → San Francisco, CA
+- `212` → Manhattan, NY
+- `613` → Ottawa, ON (Canada)
+- `800` → Toll-free
+- `787` → Puerto Rico
 
 ## File Structure
 
 ```
 mojo/apps/phonehub/
-├── __init__.py
-├── README.md
+├── __init__.py                          # Main API exports
+├── README.md                            # This file
 ├── models/
-│   ├── __init__.py
-│   ├── phone.py       # PhoneNumber model
-│   ├── config.py      # PhoneConfig model
-│   └── sms.py         # SMS model
+│   ├── phone.py                        # PhoneNumber model (cached lookups)
+│   ├── sms.py                          # SMS model (message tracking)
+│   └── config.py                       # PhoneConfig (Twilio credentials)
 ├── services/
-│   ├── __init__.py
-│   └── phone.py       # Business logic
-└── rest/
-    ├── __init__.py
-    ├── phone.py       # Phone endpoints
-    ├── sms.py         # SMS endpoints
-    └── config.py      # Config endpoints
+│   ├── phonenumbers.py                 # normalize, validate
+│   ├── area_codes.py                   # NANP area code validation
+│   ├── area_code_mapping.py            # Area code → state/region mapping
+│   ├── international_codes.py          # Country code detection
+│   └── phone.py                        # lookup, send_sms
+└── tests/
+    └── test_phonehub/
+        └── phonenumbers.py             # 27 comprehensive tests
 ```
-
-## Future Enhancements
-
-- MMS support (media messages)
-- AWS Pinpoint integration for better SMS receiving
-- Scheduled SMS sending
-- SMS templates
-- Bulk SMS operations
-- Analytics and reporting
-- Rate limiting
-- Cost tracking

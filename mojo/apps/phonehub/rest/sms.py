@@ -48,6 +48,7 @@ def on_sms_send(request):
 
 
 @md.POST('sms/webhook/twilio')
+@md.public_endpoint()
 def on_sms_webhook_twilio(request):
     """
     Twilio webhook endpoint for incoming SMS.
@@ -87,6 +88,7 @@ def on_sms_webhook_twilio(request):
 
 
 @md.POST('sms/webhook/twilio/status')
+@md.public_endpoint()
 def on_sms_webhook_twilio_status(request):
     """
     Twilio webhook endpoint for SMS status updates.
