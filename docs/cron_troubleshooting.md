@@ -124,7 +124,7 @@ def daily_task():
 Use the test file `tests/test_helpers/cron.py` to verify your patterns:
 
 ```bash
-/bin/testit -m test_helpers.cron
+./bin/testit.py -m test_helpers.cron
 ```
 
 ### 2. Manual Testing

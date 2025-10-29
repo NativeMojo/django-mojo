@@ -85,7 +85,7 @@ Want details or examples? Dive into the docs:
 - [Authentication & JWT](docs/auth.md)
 - [Helpers & Utilities](docs/helpers.md)
 - [Tasks & Cron Schedules](docs/tasks.md)  
-- [Testing Framework](docs/testit.md)
+- [Testing Framework](docs/testit/index.md)
 - [Developing & Contributing](docs/developer_guide.md)
 - [Decorators Reference](docs/decorators.md)
 - [Metrics](docs/metrics.md)

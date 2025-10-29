@@ -1,0 +1,14 @@
+{
+  "tests": [
+    "test_accounts",
+    "test_helpers.cron"
+  ],
+  "ignore": [
+    "test_aws"
+  ],
+  "stop_on_fail": true,
+  "show_errors": true,
+  "verbose": true,
+  "nomojo": true,
+  "extra": "run-backfill"
+}

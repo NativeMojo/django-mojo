@@ -13,7 +13,7 @@ Welcome to the documentation for Django-MOJO, a lightweight yet powerful REST an
 - **[Auth System Under the Hood](auth.md)**
 - **[Task Runner & Cron Scheduling](tasks.md), [Cron Patterns](cron.md)**
 - **[Metrics & Monitoring](metrics.md)**
-- **[Testing Framework](testit.md)**
+- **[Testing Framework](testit/index.md)**
 - **[Future Docs, Patches, and Ideas](future/patches.md)**
 
 ---

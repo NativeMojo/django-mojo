@@ -144,7 +144,7 @@ def invite(request):
 
 4. **Testing:**
    - Use the `testit` suite and REST client for tests.
-   - Place your tests following the existing pattern; see [`docs/testit.md`](testit.md).
+   - Place your tests following the existing pattern; see [`docs/testit/index.md`](testit/index.md).
 
 5. **Add Documentation:**
    - Reference or update documentation in `docs/` for new features.
@@ -191,7 +191,7 @@ This pattern guarantees clear, auditable separation of tenant-specific (group) p
 
 - **High-level overview:** [`README.md`](../README.md)
 - **REST Pattern & Graphs:** [`rest_developer.md`](rest_developer.md)
-- **Testing framework:** [`testit.md`](testit.md)
+- **Testing framework:** [`testit/index.md`](testit/index.md)
 - **Decorators & Helpers:** [`decorators.md`](decorators.md), [`helpers.md`](helpers.md)
 
 ---
