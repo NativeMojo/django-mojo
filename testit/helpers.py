@@ -1,20 +1,33 @@
-import sys
-from objict import objict
-from mojo.helpers import logit
+import json
+import os
+import time
 import functools
 import traceback
+from objict import objict
+from mojo.helpers import logit
 
 
 TEST_RUN = objict(
-    total=0, passed=0, failed=0,
+    total=0,
+    passed=0,
+    failed=0,
+    skipped=0,
     tests=objict(active_test=None),
-    results=objict())
+    results=objict(),
+    records=[],
+    started_at=None,
+    finished_at=None,
+)
 STOP_ON_FAIL = True
 VERBOSE = False
 INDENT = "    "
 
 
 class TestitAbort(Exception):
+    pass
+
+
+class TestitSkip(Exception):
     pass
 
 
@@ -71,6 +84,8 @@ def django_unit_setup():
 
 
 def _run_unit(func, name, *args, **kwargs):
+    if TEST_RUN.started_at is None:
+        TEST_RUN.started_at = time.time()
     TEST_RUN.total += 1
     if name:
         test_name = name
@@ -80,22 +95,29 @@ def _run_unit(func, name, *args, **kwargs):
             test_name = test_name[5:]
 
     # Print test start message
-    logit.color_print(f"{INDENT}{test_name.ljust(60, '.')}", logit.ConsoleLogger.YELLOW, end="")
+    name_line = f"{INDENT}{test_name.ljust(60, '.')}"
 
     try:
         result = func(*args, **kwargs)
-        TEST_RUN.results[f"{TEST_RUN.active_test}:{test_name}"] = True
+        _record_result(test_name, status="passed")
         TEST_RUN.passed += 1
-
-        logit.color_print("PASSED", logit.ConsoleLogger.GREEN, end="\n")
+        logit.color_print(f"{name_line}PASSED", logit.ConsoleLogger.GREEN, end="\n")
         return result
+
+    except TestitSkip as skip:
+        _record_result(test_name, status="skipped", detail=str(skip))
+        TEST_RUN.skipped += 1
+        logit.color_print(f"{name_line}SKIPPED", logit.ConsoleLogger.BLUE, end="\n")
+        if str(skip):
+            logit.color_print(f"{INDENT}{INDENT}{skip}", logit.ConsoleLogger.BLUE)
+        return None
 
     except AssertionError as error:
         TEST_RUN.failed += 1
-        TEST_RUN.results[f"{TEST_RUN.active_test}:{test_name}"] = False
+        _record_result(test_name, status="failed", detail=str(error))
 
         # Print failure message
-        logit.color_print("FAILED", logit.ConsoleLogger.RED, end="\n")
+        logit.color_print(f"{name_line}FAILED", logit.ConsoleLogger.RED, end="\n")
         logit.color_print(f"{INDENT}{INDENT}{error}", logit.ConsoleLogger.PINK)
 
         if STOP_ON_FAIL:
@@ -103,15 +125,77 @@ def _run_unit(func, name, *args, **kwargs):
 
     except Exception as error:
         TEST_RUN.failed += 1
-        TEST_RUN.results[f"{TEST_RUN.active_test}:{test_name}"] = False
+        detail = traceback.format_exc() if VERBOSE else str(error)
+        _record_result(test_name, status="error", detail=detail)
 
         # Print error message
-        logit.color_print("FAILED", logit.ConsoleLogger.RED, end="\n")
+        logit.color_print(f"{name_line}FAILED", logit.ConsoleLogger.RED, end="\n")
         if VERBOSE:
             logit.color_print(traceback.format_exc(), logit.ConsoleLogger.PINK)
         if STOP_ON_FAIL:
             raise TestitAbort()
     return False
+
+
+def _active_context():
+    active = TEST_RUN.tests.active_test or ""
+    parts = active.split(":") if active else []
+    context = objict(
+        active=active or None,
+        module=parts[0] if len(parts) > 0 else None,
+        test_module=parts[1] if len(parts) > 1 else None,
+        function=parts[2] if len(parts) > 2 else None,
+    )
+    return context
+
+
+def _result_key(test_name):
+    context = _active_context()
+    if context.active:
+        return f"{context.active}:{test_name}"
+    return test_name
+
+
+def _record_result(test_name, *, status, detail=None):
+    context = _active_context()
+    key = _result_key(test_name)
+    if status == "passed":
+        TEST_RUN.results[key] = True
+    elif status in {"failed", "error"}:
+        TEST_RUN.results[key] = False
+    else:
+        TEST_RUN.results[key] = None
+
+    record = {
+        "module": context.module,
+        "test_module": context.test_module,
+        "function": context.function,
+        "name": test_name,
+        "status": status,
+    }
+    if detail:
+        record["detail"] = detail
+    TEST_RUN.records.append(record)
+
+
+def _normalize_extra(extra):
+    if extra is None:
+        return set()
+    if isinstance(extra, str):
+        items = [part.strip() for part in extra.split(",")]
+        return {item for item in items if item}
+    if isinstance(extra, (list, tuple, set)):
+        return {str(item).strip() for item in extra if str(item).strip()}
+    if isinstance(extra, dict):
+        return {str(key).strip() for key, value in extra.items() if value}
+    return {str(extra).strip()} if str(extra).strip() else set()
+
+
+def _extra_satisfied(extra, requirement):
+    values = _normalize_extra(extra)
+    if requirement is None:
+        return bool(values)
+    return requirement in values
 
 # Test Decorator
 def unit_test(name=None):
@@ -127,6 +211,8 @@ def unit_test(name=None):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
             _run_unit(func, name, *args, **kwargs)
+        if hasattr(func, "_requires_extra"):
+            wrapper._requires_extra = getattr(func, "_requires_extra")
         return wrapper
     return decorator
 
@@ -160,6 +246,8 @@ def django_unit_test(arg=None):
         # Store the custom test name if provided
         if isinstance(arg, str):
             wrapper._test_name = arg
+        if hasattr(func, "_requires_extra"):
+            wrapper._requires_extra = getattr(func, "_requires_extra")
         return wrapper
 
     if callable(arg):
@@ -168,6 +256,78 @@ def django_unit_test(arg=None):
     else:
         # Used as @django_unit_test("name") or @django_unit_test()
         return decorator
+
+
+def requires_extra(flag=None):
+    """
+    Decorator to short-circuit tests unless a matching --extra flag is provided.
+    """
+    def decorator(func):
+        requirement = flag
+
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            if not args:
+                return func(*args, **kwargs)
+
+            opts = args[0]
+            extra = getattr(opts, "extra_list", None)
+            if not extra:
+                extra = getattr(opts, "extra", None)
+            if _extra_satisfied(extra, requirement):
+                return func(*args, **kwargs)
+
+            display_name = getattr(wrapper, "_test_name", None)
+            if display_name is None:
+                display_name = wrapper.__name__
+                if display_name.startswith("test_"):
+                    display_name = display_name[5:]
+
+            requirement_msg = (
+                f"requires extra flag '{requirement}'" if requirement else "requires --extra data"
+            )
+            raise TestitSkip(requirement_msg)
+
+        wrapper._test_name = getattr(func, "_test_name", None)
+        wrapper._requires_extra = requirement
+        return wrapper
+
+    return decorator
+
+
+def reset_test_run():
+    TEST_RUN.total = 0
+    TEST_RUN.passed = 0
+    TEST_RUN.failed = 0
+    TEST_RUN.skipped = 0
+    TEST_RUN.tests.active_test = None
+    TEST_RUN.results = objict()
+    TEST_RUN.records = []
+    TEST_RUN.started_at = None
+    TEST_RUN.finished_at = None
+
+
+def save_results(path):
+    payload = {
+        "total": TEST_RUN.total,
+        "passed": TEST_RUN.passed,
+        "failed": TEST_RUN.failed,
+        "skipped": TEST_RUN.skipped,
+        "started_at": TEST_RUN.started_at,
+        "finished_at": TEST_RUN.finished_at,
+        "duration": None,
+        "records": TEST_RUN.records,
+        "results": dict(TEST_RUN.results),
+    }
+    if TEST_RUN.started_at and TEST_RUN.finished_at:
+        payload["duration"] = TEST_RUN.finished_at - TEST_RUN.started_at
+
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
 
 
 def get_mock_request(user=None, ip="127.0.0.1", path='/', method='GET', META=None):

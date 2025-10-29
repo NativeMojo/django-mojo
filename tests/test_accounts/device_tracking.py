@@ -104,24 +104,24 @@ def test_geolocation_refresh_logic(opts):
     from mojo.apps.account.models.geolocated_ip import GeoLocatedIP
 
     # 1. Create a GeoLocatedIP object to test with (using Cloudflare's DNS IP)
-    geo_ip, created = GeoLocatedIP.objects.get_or_create(ip_address='1.1.1.1')
+    geo_ip, created = GeoLocatedIP.objects.get_or_create(ip_address='80.96.70.170')
 
     # 2. Call the refresh method (makes real API call)
     result = geo_ip.refresh()
-    print(geo_ip.to_dict())
+    # print(geo_ip.to_dict())
 
     # 3. Assertions - verify data was fetched and saved
     # Reload the object from the database to confirm it was saved
-    refreshed_geo_ip = GeoLocatedIP.objects.get(ip_address='1.1.1.1')
+    refreshed_geo_ip = GeoLocatedIP.objects.get(ip_address='80.96.70.170')
 
     # Debug: Print what we got
-    print(f"\nGeoIP Result for 1.1.1.1:")
-    print(f"  Provider: {refreshed_geo_ip.provider}")
-    print(f"  Country Code: {refreshed_geo_ip.country_code}")
-    print(f"  Country Name: {refreshed_geo_ip.country_name}")
-    print(f"  City: {refreshed_geo_ip.city}")
-    print(f"  Region: {refreshed_geo_ip.region}")
-    print(f"  Refresh Result: {result}")
+    # print(f"\nGeoIP Result for 80.96.70.170:")
+    # print(f"  Provider: {refreshed_geo_ip.provider}")
+    # print(f"  Country Code: {refreshed_geo_ip.country_code}")
+    # print(f"  Country Name: {refreshed_geo_ip.country_name}")
+    # print(f"  City: {refreshed_geo_ip.city}")
+    # print(f"  Region: {refreshed_geo_ip.region}")
+    # print(f"  Refresh Result: {result}")
 
     # Should have a provider set
     assert refreshed_geo_ip.provider is not None, f"Expected provider to be set, got: {refreshed_geo_ip.provider}"
@@ -129,5 +129,3 @@ def test_geolocation_refresh_logic(opts):
     # If refresh succeeded, we should have some geolocation data
     if result is True:
         assert refreshed_geo_ip.country_name is not None, f"Expected country_name to be set after successful refresh"
-
-    print(f"✓ Successfully geolocated 1.1.1.1 using {refreshed_geo_ip.provider}")

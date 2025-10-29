@@ -70,32 +70,32 @@ Tests management and scheduler components:
 
 ### Run All Refactored Tests
 ```bash
-/bin/testit -m test_jobs_refactored
+./bin/testit.py -m test_jobs_refactored
 ```
 
 ### Run Specific Test File
 ```bash
 # Basic tests
-/bin/testit -m test_jobs_refactored.test_basic
+./bin/testit.py -m test_jobs_refactored.test_basic
 
 # Execution tests
-/bin/testit -m test_jobs_refactored.test_job_execution
+./bin/testit.py -m test_jobs_refactored.test_job_execution
 
 # Redis tests
-/bin/testit -m test_jobs_refactored.test_redis_operations
+./bin/testit.py -m test_jobs_refactored.test_redis_operations
 
 # Manager tests
-/bin/testit -m test_jobs_refactored.test_manager
+./bin/testit.py -m test_jobs_refactored.test_manager
 ```
 
 ### Run Specific Test
 ```bash
-/bin/testit -m test_jobs_refactored.test_basic -t test_create_job_directly
+./bin/testit.py -m test_jobs_refactored.test_basic -t test_create_job_directly
 ```
 
 ### Verbose Output
 ```bash
-/bin/testit -m test_jobs_refactored -v
+./bin/testit.py -m test_jobs_refactored -v
 ```
 
 ## Key Differences from Original Tests
