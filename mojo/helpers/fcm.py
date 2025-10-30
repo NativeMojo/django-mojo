@@ -175,7 +175,7 @@ class FCMv1Client:
         resp_msg = response.json() if response.text else {}
         if settings.LOG_PUSH_MESSAGES:
             from mojo.helpers import logit
-            logit.info("FCM PUSH", "sending:", message, "received:", response.json()
+            logit.info("FCM PUSH", "sending:", message, "received:", response.json())
         # Parse response
         if response.status_code == 200:
             return {
