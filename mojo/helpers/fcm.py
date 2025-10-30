@@ -9,7 +9,7 @@ import json
 import time
 import requests
 from datetime import datetime, timedelta
-
+from mojo.helpers.settings import settings
 
 class FCMv1Client:
     """
@@ -173,7 +173,7 @@ class FCMv1Client:
             json={'message': message}
         )
         resp_msg = response.json() if response.text else {}
-        if LOG_PUSH_MESSAGES:
+        if settings.LOG_PUSH_MESSAGES:
             from mojo.helpers import logit
             logit.info("FCM PUSH", "sending:", message, "received:", response.json()
         # Parse response
