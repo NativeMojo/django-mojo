@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.116 - October 30, 2025
+
+ability to log Push notifications for debugging
+
+
 ## v0.1.115 - October 28, 2025
 
 New Phonehub, qrcode, improved testit
