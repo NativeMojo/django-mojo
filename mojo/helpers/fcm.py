@@ -98,7 +98,7 @@ class FCMv1Client:
 
         return self._access_token
 
-    def send(self, token, title=None, body=None, data=None, sound=None, badge=None):
+    def send(self, token, title=None, body=None, data=None, sound=None, badge=None, priority="high"):
         """
         Send notification via FCM v1 API.
 
@@ -151,7 +151,7 @@ class FCMv1Client:
                     apns_config['payload']['aps']['badge'] = badge
         else:
             # Silent notification (data-only)
-            android_config['priority'] = 'high'
+            android_config['priority'] = priority
             apns_config['headers'] = {'apns-priority': '5'}
             apns_config['payload'] = {'aps': {'content-available': 1}}
 
@@ -172,21 +172,23 @@ class FCMv1Client:
             headers=headers,
             json={'message': message}
         )
-
+        resp_msg = response.json() if response.text else {}
+        if LOG_PUSH_MESSAGES:
+            from mojo.helpers import logit
+            logit.info("FCM PUSH", "sending:", message, "received:", response.json()
         # Parse response
         if response.status_code == 200:
             return {
                 'success': True,
-                'message_id': response.json().get('name'),
+                'message_id': resp_msg.get('name'),
                 'status_code': response.status_code
             }
         else:
-            error_data = response.json() if response.text else {}
             return {
                 'success': False,
                 'status_code': response.status_code,
-                'error': error_data.get('error', {}),
-                'message': error_data.get('error', {}).get('message', 'Unknown error')
+                'error': resp_msg.get('error', {}),
+                'message': resp_msg.get('error', {}).get('message', 'Unknown error')
             }
 
     def send_multicast(self, tokens, title=None, body=None, data=None, sound=None, badge=None):
