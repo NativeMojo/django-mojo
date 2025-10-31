@@ -148,8 +148,8 @@ class GoogleAddressService:
 
         if address_data.get("address2"):
             payload["address"]["addressLines"].append(address_data["address2"])
-        if address_data.get("zip"):
-            payload["address"]["postalCode"] = address_data["zip"]
+        if address_data.get("postal_code"):
+            payload["address"]["postalCode"] = address_data["postal_code"]
 
         # Make request with automatic token refresh
         max_retries = 2
@@ -248,7 +248,7 @@ class GoogleAddressService:
                 "line2": address_lines[1] if len(address_lines) > 1 else None,
                 "city": postal_address.get("locality", ""),
                 "state": postal_address.get("administrativeArea", ""),
-                "zip": postal_address.get("postalCode", ""),
+                "postal_code": postal_address.get("postalCode", ""),
                 "zip4": None,
                 "full_zip": postal_address.get("postalCode", "")
             },
@@ -299,7 +299,9 @@ class GoogleAddressService:
             return {
                 "success": False,
                 "error": "Input too short (minimum 3 characters)",
-                "suggestions": []
+                "data": [],
+                "size": 0,
+                "count": 0
             }
 
         params = {
@@ -334,7 +336,9 @@ class GoogleAddressService:
                 return {
                     "success": False,
                     "error": f"API returned status {response.status_code}",
-                    "suggestions": []
+                    "data": [],
+                    "size": 0,
+                    "count": 0
                 }
 
             data = response.json()
@@ -343,7 +347,9 @@ class GoogleAddressService:
             if status == "ZERO_RESULTS":
                 return {
                     "success": True,
-                    "suggestions": [],
+                    "data": [],
+                    "size": 0,
+                    "count": 0,
                     "message": "No addresses found"
                 }
 
@@ -353,7 +359,9 @@ class GoogleAddressService:
                 return {
                     "success": False,
                     "error": error_message,
-                    "suggestions": []
+                    "data": [],
+                    "size": 0,
+                    "count": 0
                 }
 
             # Parse predictions
@@ -361,8 +369,10 @@ class GoogleAddressService:
             suggestions = []
 
             for prediction in predictions:
+                place_id = prediction.get("place_id")
                 suggestions.append({
-                    "place_id": prediction.get("place_id"),
+                    "id": place_id,  # Required by UI framework
+                    "place_id": place_id,
                     "description": prediction.get("description"),
                     "main_text": prediction.get("structured_formatting", {}).get("main_text"),
                     "secondary_text": prediction.get("structured_formatting", {}).get("secondary_text"),
@@ -371,7 +381,8 @@ class GoogleAddressService:
 
             return {
                 "success": True,
-                "suggestions": suggestions,
+                "data": suggestions,
+                "size": len(suggestions),
                 "count": len(suggestions)
             }
 
@@ -461,7 +472,7 @@ class GoogleAddressService:
             "county": None,
             "state": None,
             "state_code": None,
-            "zip": None,
+            "postal_code": None,
             "country": None,
             "country_code": None
         }
@@ -483,7 +494,7 @@ class GoogleAddressService:
                 address["state"] = long_name
                 address["state_code"] = short_name
             elif "postal_code" in types:
-                address["zip"] = long_name
+                address["postal_code"] = long_name
             elif "country" in types:
                 address["country"] = long_name
                 address["country_code"] = short_name
@@ -516,7 +527,7 @@ class GoogleAddressService:
                 address.get("address1"),
                 address.get("city"),
                 address.get("state"),
-                address.get("zip")
+                address.get("postal_code")
             ]
             address = ", ".join([p for p in parts if p])
 
@@ -823,3 +834,19 @@ def get_google_api():
     if not google_api:
         google_api = GoogleAddressService(use_service_account=False)
     return google_api
+
+
+def validate_address(address_data):
+    """
+    Validate address using Google Address Validation API
+
+    Convenience function that uses singleton instance.
+
+    Args:
+        address_data: Dict with address components
+
+    Returns:
+        Dict with validation result
+    """
+    service = get_google_api()
+    return service.validate_address(address_data)
