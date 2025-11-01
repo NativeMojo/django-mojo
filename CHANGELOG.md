@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.120 - November 01, 2025
+
+No auth required for address suggestions
+
+
 ## v0.1.119 - October 31, 2025
 
 Updating geo location
