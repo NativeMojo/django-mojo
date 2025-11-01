@@ -11,7 +11,7 @@ from mojo.helpers import location
 
 
 @md.POST('location/address/validate')
-@md.requires_authentication()
+@md.public_endpoint()
 @md.requires_params("address1", "state")
 def rest_validate_address(request):
     """
@@ -61,7 +61,7 @@ def rest_validate_address(request):
 
 
 @md.GET('location/address/suggestions')
-@md.requires_authentication()
+@md.public_endpoint()
 @md.requires_params("input")
 def rest_address_suggestions(request):
     """
@@ -135,7 +135,7 @@ def rest_address_suggestions(request):
 
 
 @md.GET('location/address/place-details')
-@md.requires_authentication()
+@md.public_endpoint()
 @md.requires_params("place_id")
 def rest_place_details(request):
     """
@@ -176,7 +176,7 @@ def rest_place_details(request):
 
 
 @md.POST('location/address/geocode')
-@md.requires_authentication()
+@md.public_endpoint()
 @md.requires_params("address")
 def rest_geocode_address(request):
     """
@@ -210,7 +210,7 @@ def rest_geocode_address(request):
 
 
 @md.GET('location/address/reverse-geocode')
-@md.requires_authentication()
+@md.public_endpoint()
 @md.requires_params("lat", "lng")
 def rest_reverse_geocode(request):
     """
@@ -247,7 +247,7 @@ def rest_reverse_geocode(request):
 
 
 @md.GET('location/timezone')
-@md.requires_authentication()
+@md.public_endpoint()
 @md.requires_params("lat", "lng")
 def rest_get_timezone(request):
     """
