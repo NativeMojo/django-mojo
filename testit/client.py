@@ -35,6 +35,8 @@ class RestClient:
         self.is_authenticated = False
         self.bearer = "bearer"
         self.access_token = None
+        if "Authorization" in self.headers:
+            del self.headers["Authorization"]
 
     def get_headers(self):
         if self.is_authenticated:
