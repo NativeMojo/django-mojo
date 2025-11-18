@@ -17,8 +17,13 @@ from . import paths
 # Resolve paths
 LOG_DIR = paths.LOG_ROOT
 
-# Ensure log directory exists
-os.makedirs(LOG_DIR, exist_ok=True)
+# Ensure log directory exists (but don't crash if we can't)
+try:
+    os.makedirs(LOG_DIR, exist_ok=True)
+except (OSError, PermissionError) as e:
+    # Can't create log directory - will fall back to console logging only
+    sys.stderr.write(f"Warning: Cannot create log directory {LOG_DIR}: {e}\n")
+    LOG_DIR = None
 
 # Constants
 MAX_LOG_SIZE = 10 * 1024 * 1024  # 10MB
@@ -141,12 +146,24 @@ class LogManager:
             logger = logging.getLogger(name)
             logger.setLevel(level)
 
-            # Create file handler
-            if filename:
-                log_path = os.path.join(LOG_DIR, filename)
-                file_handler = logging.FileHandler(log_path)
-                file_handler.setFormatter(self._get_formatter())
-                logger.addHandler(file_handler)
+            # Create file handler (if we have permission to write logs)
+            if filename and LOG_DIR:
+                try:
+                    log_path = os.path.join(LOG_DIR, filename)
+                    file_handler = logging.FileHandler(log_path)
+                    file_handler.setFormatter(self._get_formatter())
+                    logger.addHandler(file_handler)
+                except (OSError, PermissionError) as e:
+                    # Can't write to log file - fall back to console only
+                    sys.stderr.write(f"Warning: Cannot write to log file {filename}: {e}\n")
+                    console_handler = logging.StreamHandler(sys.stderr)
+                    console_handler.setFormatter(self._get_formatter())
+                    logger.addHandler(console_handler)
+            else:
+                # No LOG_DIR or no filename - use console
+                console_handler = logging.StreamHandler(sys.stderr)
+                console_handler.setFormatter(self._get_formatter())
+                logger.addHandler(console_handler)
 
             # Capture to master logger if exists
             if self.master_logger:

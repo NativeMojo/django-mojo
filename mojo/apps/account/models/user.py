@@ -596,6 +596,7 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
         cc=None,
         bcc=None,
         reply_to=None,
+        template_prefix=None,
         **kwargs
     ):
         """Send template email to this user using mailbox determined by user's org domain or system default
@@ -612,7 +613,7 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
         Raises:
             ValueError: If no mailbox can be found or template not found
         """
-        from mojo.apps.aws.models import Mailbox
+        from mojo.apps.aws.models import Mailbox, EmailTemplate
 
         mailbox = None
 
@@ -635,6 +636,13 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
 
         if not mailbox:
             raise ValueError("No mailbox available for sending email. Please configure a system default mailbox.")
+
+        if template_prefix is None and self.org:
+            template_prefix = self.org.get_metadata_value("email_template")
+        if template_prefix:
+            new_template_name = f"{template_prefix}_{template_name}"
+            if EmailTemplate.objects.filter(name=new_template_name).exists():
+                template_name = new_template_name
 
         # Add user to context if not already present
         if context is None:

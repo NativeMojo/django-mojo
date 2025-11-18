@@ -37,6 +37,36 @@ def get_local_time(timezone, dt_utc=None):
     local_tz = pytz.timezone(timezone)
     return dt_utc.astimezone(local_tz)
 
+def get_utc_hour(timezone, local_hour):
+    """
+    Convert a local hour (0-23) in a given timezone to UTC hour.
+
+    Args:
+        timezone: Timezone string (e.g., 'America/New_York', 'Europe/London')
+        local_hour: Hour in local time (0-23)
+
+    Returns:
+        int: Hour in UTC (0-23)
+
+    Example:
+        # 9 AM in New York (EST/EDT) -> UTC hour
+        get_utc_hour('America/New_York', 9)  # Returns 14 or 13 depending on DST
+    """
+    if not 0 <= local_hour <= 23:
+        raise ValueError("local_hour must be between 0 and 23")
+
+    local_tz = pytz.timezone(timezone)
+    now_utc = datetime.now(tz=pytz.UTC)
+    now_local = now_utc.astimezone(local_tz)
+
+    # Create a datetime for the specified hour today in the local timezone
+    local_dt = local_tz.localize(datetime(
+        now_local.year, now_local.month, now_local.day, local_hour, 0, 0))
+
+    # Convert to UTC and return the hour
+    utc_dt = local_dt.astimezone(pytz.UTC)
+    return utc_dt.hour
+
 def utcnow():
     """look at django setting to get proper datetime aware or not"""
     if settings.USE_TZ:
