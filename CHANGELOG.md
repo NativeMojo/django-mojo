@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.123 - November 18, 2025
+
+* ADDED logic for improved date handling in relation to government ids"
+
+
 ## v0.1.122 - November 17, 2025
 
 * CRITICAL FIX in log permissions fail gracefully
