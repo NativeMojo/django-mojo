@@ -383,11 +383,68 @@ class JobEngine:
             message = json.loads(data.decode('utf-8'))
             command = message.get('command')
 
-            if command == 'ping':
-                # Respond with pong (direct control)
+            if command == 'execute':
+                # Execute function on this runner
+                func_path = message.get('func')
+                if func_path:
+                    try:
+                        logger.info(f"Executing broadcast function {func_path}")
+                        func = load_job_function(func_path)
+                        # Execute with the message data as context
+                        result = func(message.get('data', {}))
+                        logger.info(f"Executed broadcast function {func_path}: {result}")
+
+                        # Send reply if reply_channel is provided
+                        reply_channel = message.get('reply_channel')
+                        if reply_channel:
+                            reply = {
+                                'runner_id': self.runner_id,
+                                'func': func_path,
+                                'result': str(result) if result else None,
+                                'status': 'success',
+                                'timestamp': dates.utcnow().isoformat(),
+                            }
+                            try:
+                                self.redis.publish(reply_channel, json.dumps(reply))
+                            except Exception as e:
+                                logger.warning(f"Failed to publish execute reply: {e}")
+                    except Exception as e:
+                        logger.error(f"Broadcast execution failed for {func_path}: {e}")
+                        logger.error(traceback.format_exc())
+
+                        # Send error reply if reply_channel is provided
+                        reply_channel = message.get('reply_channel')
+                        if reply_channel:
+                            reply = {
+                                'runner_id': self.runner_id,
+                                'func': func_path,
+                                'error': str(e),
+                                'status': 'error',
+                                'timestamp': dates.utcnow().isoformat(),
+                            }
+                            try:
+                                self.redis.publish(reply_channel, json.dumps(reply))
+                            except Exception:
+                                pass
+                else:
+                    logger.warning("Execute command received without func path")
+
+            elif command == 'ping':
+                # Respond with pong
+                # Support both old response_key (Redis key) and new reply_channel (pub/sub)
                 response_key = message.get('response_key')
-                if response_key:
+                reply_channel = message.get('reply_channel')
+
+                if reply_channel:
+                    # New pub/sub method
+                    try:
+                        self.redis.publish(reply_channel, 'pong')
+                    except Exception as e:
+                        logger.warning(f"Failed to publish ping reply: {e}")
+                elif response_key:
+                    # Legacy Redis key method
                     self.redis.set(response_key, 'pong', ex=5)
+
                 logger.info("Responded to ping from control channel")
 
             elif command == 'status':

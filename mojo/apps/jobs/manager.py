@@ -363,6 +363,89 @@ class JobManager:
         pubsub.close()
         return responses
 
+    def broadcast_execute(self, func_path: str, data: Dict = None,
+                         timeout: float = 2.0, collect_replies: bool = False) -> List[Dict]:
+        """
+        Execute a function on all active runners.
+
+        This is a fire-and-forget broadcast execution mechanism that runs
+        a function on every active runner simultaneously. Unlike regular jobs,
+        this does not create Job records, has no retry mechanism, and provides
+        no persistence. Use for operations like cache clearing, configuration
+        reloading, or local metrics collection.
+
+        Args:
+            func_path: Module path to function (e.g., 'myapp.jobs.cleanup_cache')
+            data: Data dictionary to pass to the function
+            timeout: Time to wait for responses if collect_replies=True
+            collect_replies: Whether to wait for and collect responses
+
+        Returns:
+            List of responses from runners (if collect_replies=True), empty list otherwise
+
+        Example:
+            # Clear all runner caches
+            manager.broadcast_execute('mojo.apps.jobs.tasks.clear_local_cache')
+
+            # Reload configuration on all runners
+            manager.broadcast_execute('myapp.tasks.reload_config')
+
+            # Warm up caches with specific data
+            manager.broadcast_execute(
+                'myapp.tasks.warmup_cache',
+                data={'keys': ['user_data', 'settings']}
+            )
+
+            # Collect results from all runners
+            results = manager.broadcast_execute(
+                'myapp.tasks.get_local_stats',
+                collect_replies=True,
+                timeout=5.0
+            )
+        """
+        import uuid as uuid_module
+
+        message = {
+            'command': 'execute',
+            'func': func_path,
+            'data': data or {},
+            'timestamp': timezone.now().isoformat()
+        }
+
+        if collect_replies:
+            reply_channel = f"mojo:jobs:replies:{uuid_module.uuid4().hex[:8]}"
+            message['reply_channel'] = reply_channel
+
+            # Subscribe to replies before sending
+            pubsub = self.redis.pubsub()
+            pubsub.subscribe(reply_channel)
+
+            # Send broadcast
+            self.redis.publish("mojo:jobs:runners:broadcast", json.dumps(message))
+
+            # Collect responses
+            responses = []
+            start_time = time.time()
+
+            while time.time() - start_time < timeout:
+                msg = pubsub.get_message(timeout=0.1)
+                if msg and msg['type'] == 'message':
+                    try:
+                        response_data = msg['data']
+                        if isinstance(response_data, bytes):
+                            response_data = response_data.decode('utf-8')
+                        response = json.loads(response_data)
+                        responses.append(response)
+                    except Exception as e:
+                        logit.debug(f"Failed to parse execute reply: {e}")
+
+            pubsub.close()
+            return responses
+        else:
+            # Fire-and-forget
+            self.redis.publish("mojo:jobs:runners:broadcast", json.dumps(message))
+            return []
+
     def ping(self, runner_id: str, timeout: float = 2.0) -> bool:
         """
         Ping a runner to check if it's responsive.
@@ -375,14 +458,18 @@ class JobManager:
             True if runner responded, False otherwise
         """
         try:
-            # Create a unique response key
-            response_key = f"{self.keys.runner_ctl(runner_id)}:response:{uuid.uuid4().hex[:8]}"
+            import uuid as uuid_module
+            reply_channel = f"mojo:jobs:ping:{uuid_module.uuid4().hex[:8]}"
+
+            # Subscribe to reply channel before sending
+            pubsub = self.redis.pubsub()
+            pubsub.subscribe(reply_channel)
 
             # Send ping command
             control_key = self.keys.runner_ctl(runner_id)
             message = json.dumps({
                 'command': 'ping',
-                'response_key': response_key
+                'reply_channel': reply_channel
             })
 
             self.redis.publish(control_key, message)
@@ -390,14 +477,20 @@ class JobManager:
             # Wait for response
             start_time = time.time()
             while time.time() - start_time < timeout:
-                response = self.redis.get(response_key)
-                if response == 'pong':
-                    self.redis.delete(response_key)
-                    return True
-                time.sleep(0.1)
+                msg = pubsub.get_message(timeout=0.1)
+                if msg and msg['type'] == 'message':
+                    try:
+                        response_data = msg['data']
+                        if isinstance(response_data, bytes):
+                            response_data = response_data.decode('utf-8')
+                        if response_data == 'pong':
+                            pubsub.close()
+                            return True
+                    except Exception as e:
+                        logit.debug(f"Failed to parse ping response: {e}")
 
             # Timeout
-            self.redis.delete(response_key)
+            pubsub.close()
             return False
 
         except Exception as e:
