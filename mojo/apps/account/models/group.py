@@ -245,11 +245,14 @@ class Group(MojoSecrets, MojoModel):
         return queryset
 
     @property
-    def top_most_parent(self, kind=None):
+    def top_most_parent(self):
         """
         Finds the top-most parent (root ancestor) of this group.
         Returns self if the group has no parent.
         """
+        return self.get_top_most_parent()
+
+    def get_top_most_parent(self, kind=None):
         current = self
         while current.parent:
             current = current.parent
@@ -274,6 +277,14 @@ class Group(MojoSecrets, MojoModel):
         """
         return child_group.is_child_of(self)
 
+    def get_metadata_value(self, key):
+        current = self
+        while current:
+            if key in current.metadata:
+                return current.metadata[key]
+            current = current.parent
+        return None
+
     def invite(self, email, context=None):
         """
         Invites a user to join the group.
@@ -286,16 +297,12 @@ class Group(MojoSecrets, MojoModel):
             ms = self.add_member(user)
         elif not user:
             user = User(is_active=True, email=email)
+            user.org = self.top_most_parent
             user.on_rest_pre_save(dict(email=None), True)
             user.save()
             ms = self.add_member(user)
-            user.send_invite(group=self.to_dict("basic"))
-            return ms
-        if context is None:
-            context = {}
-        context['group'] = self.to_dict("basic")
         try:
-            user.send_template_email('group_invite', context)
+            ms.send_invite(context=context)
         except Exception as e:
             logit.error(f"Error sending email: {e}")
         return ms

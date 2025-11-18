@@ -33,6 +33,7 @@ class GroupMember(models.Model, MojoModel):
         VIEW_PERMS = ["view_members", "view_groups", "manage_groups", "manage_group"]
         SAVE_PERMS = ["manage_groups", "manage_group"]
         SEARCH_FIELDS = ["user__username", "user__email", "user__display_name"]
+        POST_SAVE_ACTIONS = ['resend_invite']
         CREATED_BY_OWNER_FIELD = 'created_by'  # we do this to protect user
         LIST_DEFAULT_FILTERS = {
             "is_active": True
@@ -142,3 +143,19 @@ class GroupMember(models.Model, MojoModel):
             self.save(update_fields=['last_activity'])
         if METRICS_TRACK_USER_ACTIVITY:
             metrics.record(f"member_activity:{self.pk}", category="member", min_granularity="minutes")
+
+    def on_action_resend_invite(self, value):
+        # Implement resend invite logic here
+        self.send_invite()
+        return {'status': True }
+
+    def send_invite(self, context=None):
+        if context is None:
+            context = {}
+        context['group'] = self.group.to_dict("basic")
+        email_template = "group_invite"
+        template_prefix = self.group.get_metadata_value('email_template')
+        self.user.send_template_email(
+            email_template, context=context,
+            template_prefix=template_prefix)
+        return {'status': True }

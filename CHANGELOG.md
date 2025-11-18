@@ -1,5 +1,12 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.122 - November 17, 2025
+
+* CRITICAL FIX in log permissions fail gracefully
+* sysinfo in correct fields
+* improved email template handling
+
+
 ## v0.1.120 - November 01, 2025
 
 No auth required for address suggestions

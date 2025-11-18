@@ -26,6 +26,9 @@ def get_tcp_established(filter_type=None):
     :param filter_type: Optionally filter by type ('https', 'redis', 'postgres', etc.)
     :return: List of connections according to filter
     """
+    if psutil is None:
+        raise RuntimeError("psutil is not installed. Install it with: pip install psutil")
+
     connections = psutil.net_connections(kind="tcp")
     established_connections = [c for c in connections if c.status == psutil.CONN_ESTABLISHED]
     return filter_connections(established_connections, filter_type)
@@ -99,6 +102,9 @@ def get_host_info(include_versions=False, include_blocked=False):
     :param include_blocked: Include blocked hosts if True
     :return: Dictionary with host information
     """
+    if psutil is None:
+        raise RuntimeError("psutil is not installed. Install it with: pip install psutil")
+
     mem = psutil.virtual_memory()
     disk = psutil.disk_usage('/')
     net = psutil.net_io_counters()
@@ -106,7 +112,6 @@ def get_host_info(include_versions=False, include_blocked=False):
     host_info = {
         "time": time.time(),
         "datetime": datetime.now().isoformat(),
-        "version": version.VERSION,  # check if this needs to be imported correctly or version info retrieval needs adaptation
         "os": {
             "system": platform.system(),
             "version": platform.version(),
