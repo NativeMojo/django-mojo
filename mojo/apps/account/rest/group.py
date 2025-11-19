@@ -21,7 +21,8 @@ def on_group_member(request, pk=None):
 @md.requires_params('email', 'group')
 @md.custom_security("securted by group security")
 def on_group_invite_member(request):
-    if not request.group.user_has_permission(request.user, ["manage_users", "manage_members"]):
+    perms = ["manage_users", "manage_members", "manage_group", "manage_groups"]
+    if not request.group.user_has_permission(request.user, perms):
         raise merrors.PermissionDeniedException()
     ms = request.group.invite(request.DATA.email)
     if "permissions" in request.DATA:

@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.129 - November 19, 2025
+
+syntax error
+
+
 ## v0.1.128 - November 19, 2025
 
 BUGFIX in permissions for member invites
