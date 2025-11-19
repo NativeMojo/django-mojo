@@ -518,11 +518,15 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
     def send_invite(self, **kwargs):
         from mojo.apps.account.utils import tokens
 
-        context = kwargs.copy()
-        context.update({
+        context = {
             "user": self.to_dict("basic"),
             "token": tokens.generate_token(self)
-        })
+        }
+        for key, value in kwargs.items():
+            if hasattr(value, 'to_dict'):
+                context[key] = value.to_dict('basic')
+            elif isinstance(value, (str, int, float)):
+                context[key] = value
 
         self.send_template_email(
             template_name="invite",
