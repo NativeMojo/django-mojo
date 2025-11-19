@@ -171,36 +171,78 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
         if req:
             req.device = UserDevice.track(request=req, user=self)
 
-    def get_groups(self, is_active=True):
+    def get_groups(self, is_active=True, include_children=True):
         """
         Returns a QuerySet of all groups the user is a member of.
 
         Args:
             is_active: Filter by active members (default True). Set to None to get all.
+            include_children: Include child groups down the parent chain (default True).
+                             Set to False to get only direct memberships.
 
         Returns:
             QuerySet of Group objects
         """
         from mojo.apps.account.models import Group
+
+        # Get direct groups the user is a member of
         queryset = Group.objects.filter(members__user=self)
         if is_active is not None:
             queryset = queryset.filter(members__is_active=is_active)
+
+        # If not including children, return direct memberships only
+        if not include_children:
+            return queryset.distinct()
+
+        # Collect all group IDs including children
+        direct_groups = queryset
+        all_group_ids = set()
+        for group in direct_groups:
+            all_group_ids.add(group.id)
+            # Add all child group IDs
+            child_ids = group._get_all_child_ids()
+            all_group_ids.update(child_ids)
+
+        # Return queryset with all groups
+        queryset = Group.objects.filter(id__in=all_group_ids)
+        if is_active is not None:
+            queryset = queryset.filter(is_active=is_active)
+
         return queryset.distinct()
 
-    def get_group_ids(self, is_active=True):
+    def get_group_ids(self, is_active=True, include_children=True):
         """
         Returns a list of group IDs the user is a member of.
 
         Args:
             is_active: Filter by active members (default True). Set to None to get all.
+            include_children: Include child groups down the parent chain (default True).
+                             Set to False to get only direct memberships.
 
         Returns:
             List of group IDs
         """
+        from mojo.apps.account.models import Group
+
+        # Get direct group memberships
         queryset = self.members.all()
         if is_active is not None:
             queryset = queryset.filter(is_active=is_active)
-        return list(queryset.values_list('group_id', flat=True))
+        direct_group_ids = list(queryset.values_list('group_id', flat=True))
+
+        # If not including children, return direct memberships only
+        if not include_children:
+            return direct_group_ids
+
+        # Collect all group IDs including children
+        all_group_ids = set(direct_group_ids)
+        direct_groups = Group.objects.filter(id__in=direct_group_ids)
+        for group in direct_groups:
+            # Add all child group IDs
+            child_ids = group._get_all_child_ids()
+            all_group_ids.update(child_ids)
+
+        return list(all_group_ids)
 
     def get_groups_with_permission(self, perms, is_active=True):
         """
