@@ -515,15 +515,34 @@ class MojoModel:
             format_key = format.split("_")[0]
             serializer = manager.get_format_serializer(format_key)
             formats = cls.get_rest_meta_prop("FORMATS")
+            localize = None
+
             if formats is not None and format in formats:
                 fields = formats[format]
             else:
-                graph = cls.get_rest_meta_graph(["basic", "default"])
-                if not graph or not graph.get("fields"):
+                graph_obj = cls.get_rest_meta_graph(["basic", "default"])
+                if not graph_obj or not graph_obj.get("fields"):
                     raise me.ValueException("No valid graph found")
-                fields = graph.get("fields")
+                fields = graph_obj.get("fields")
+                # Get localize config from graph if available
+                localize = graph_obj.get("localize")
+
+            # Check if localize is defined in FORMATS_LOCALIZE
+            formats_localize = cls.get_rest_meta_prop("FORMATS_LOCALIZE")
+            if formats_localize and format in formats_localize:
+                localize = formats_localize[format]
+
+            # Get timezone from request for localization
+            timezone = request.DATA.get("timezone")
+
             logger.info(f"Serializing queryset with fields: {fields}")
-            return serializer.serialize_queryset(queryset, fields=fields, filename=request.DATA.get("filename", f"{cls.__name__}.csv"))
+            return serializer.serialize_queryset(
+                queryset,
+                fields=fields,
+                filename=request.DATA.get("filename", f"{cls.__name__}.csv"),
+                localize=localize,
+                timezone=timezone
+            )
         serializer = manager.get_serializer(paged_queryset, graph=graph, many=True)
         resp = serializer.to_response(request, count=count, start=page_start, size=page_size)
         resp.log_context = {

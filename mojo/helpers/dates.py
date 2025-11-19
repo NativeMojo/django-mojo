@@ -18,15 +18,16 @@ def parse_datetime(value, timezone=None):
     return date.astimezone(local_tz)
 
 
-def get_local_day(timezone, dt_utc=None):
+def get_local_day(timezone, dt_utc=None, hour=0):
     if dt_utc is None:
         dt_utc = datetime.now(tz=pytz.UTC)
     local_tz = pytz.timezone(timezone)
     local_dt = dt_utc.astimezone(local_tz)
     start_of_day = local_tz.localize(datetime(
-        local_dt.year, local_dt.month, local_dt.day, 0, 0, 0))
+        local_dt.year, local_dt.month, local_dt.day, hour, 0, 0))
     end_of_day = start_of_day + timedelta(days=1)
     return start_of_day.astimezone(pytz.UTC), end_of_day.astimezone(pytz.UTC)
+
 
 def get_local_time(timezone, dt_utc=None):
     """Convert a passed in datetime to the group's timezone."""
