@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.127 - November 19, 2025
+
+* BUGFIX tier level access for a platform vs kyc customer
+
+
 ## v0.1.126 - November 19, 2025
 
 BUGFIX when publishing templates with non native types
