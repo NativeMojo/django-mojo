@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.125 - November 19, 2025
+
+fixing issue when inviting kyc client vs customer
+
+
 ## v0.1.124 - November 18, 2025
 
 HOTFIX cyber report downloads failing in csv format
