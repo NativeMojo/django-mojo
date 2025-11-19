@@ -32,7 +32,7 @@ class CsvFormatter:
         self.streaming_threshold = streaming_threshold
 
     def serialize_queryset(self, queryset, fields=None, graph=None, filename="export.csv",
-                          headers=None, localize=None, stream=True):
+                          headers=None, localize=None, stream=True, timezone=None):
         """
         Serialize a Django QuerySet to CSV format.
 
@@ -43,6 +43,7 @@ class CsvFormatter:
         :param headers: Custom header names (overrides field names)
         :param localize: Localization configuration
         :param stream: Enable streaming for large datasets
+        :param timezone: Timezone string for datetime localization (e.g., 'America/New_York')
         :return: HttpResponse or StreamingHttpResponse
         """
         # Determine if we should stream based on queryset size
@@ -53,10 +54,10 @@ class CsvFormatter:
 
         if should_stream:
             return self._create_streaming_response(queryset, field_config, filename,
-                                                 headers, localize)
+                                                 headers, localize, timezone)
         else:
             return self._create_standard_response(queryset, field_config, filename,
-                                                headers, localize)
+                                                headers, localize, timezone)
 
     def serialize_data(self, data, fields=None, filename="export.csv", headers=None):
         """
@@ -142,7 +143,7 @@ class CsvFormatter:
         }
 
     def _create_streaming_response(self, queryset, field_config, filename,
-                                 headers, localize):
+                                 headers, localize, timezone=None):
         """
         Create streaming HTTP response for large datasets.
         """
@@ -160,7 +161,7 @@ class CsvFormatter:
             # Yield data rows
             for obj in queryset.iterator():  # Use iterator for memory efficiency
                 try:
-                    row = self._extract_row_data(obj, field_config['field_names'], localize)
+                    row = self._extract_row_data(obj, field_config['field_names'], localize, timezone)
                     yield writer.writerow(row)
                 except Exception as e:
                     logger.error(f"Error processing row for object {obj.pk}: {e}")
@@ -173,7 +174,7 @@ class CsvFormatter:
         return response
 
     def _create_standard_response(self, queryset, field_config, filename,
-                                headers, localize):
+                                headers, localize, timezone=None):
         """
         Create standard HTTP response for smaller datasets.
         """
@@ -187,7 +188,7 @@ class CsvFormatter:
         # Write data rows
         for obj in queryset:
             try:
-                row = self._extract_row_data(obj, field_config['field_names'], localize)
+                row = self._extract_row_data(obj, field_config['field_names'], localize, timezone)
                 writer.writerow(row)
             except Exception as e:
                 logger.error(f"Error processing row for object {obj.pk}: {e}")
@@ -205,7 +206,7 @@ class CsvFormatter:
         response['Content-Disposition'] = f'attachment; filename={filename}'
         return response
 
-    def _extract_row_data(self, obj, field_names, localize=None):
+    def _extract_row_data(self, obj, field_names, localize=None, timezone=None):
         """
         Extract row data from an object based on field names.
         """
@@ -214,7 +215,7 @@ class CsvFormatter:
         for field_name in field_names:
             try:
                 value = self._get_field_value(obj, field_name)
-                value = self._process_field_value(value, field_name, localize)
+                value = self._process_field_value(value, field_name, localize, timezone)
                 row.append(self._format_csv_value(value))
             except Exception as e:
                 logger.warning(f"Error extracting field '{field_name}': {e}")
@@ -303,7 +304,7 @@ class CsvFormatter:
             logger.warning(f"Error accessing nested field '{field_path}': {e}")
             return None
 
-    def _process_field_value(self, value, field_name, localize=None):
+    def _process_field_value(self, value, field_name, localize=None, timezone=None):
         """
         Process field value with localization and special handling.
         """
@@ -323,9 +324,22 @@ class CsvFormatter:
                 from mojo.serializers.formats.localizers import get_localizer
                 localizer = get_localizer(localizer_name)
                 if localizer:
+                    # Pass timezone as context for datetime localizers
+                    if timezone and localizer_name in ('datetime', 'date', 'time'):
+                        # Use timezone parameter instead of extra if not already specified
+                        if not extra or '|' not in localizer_config:
+                            return localizer(value, extra, timezone=timezone)
                     return localizer(value, extra)
             except Exception as e:
                 logger.warning(f"Localization failed for field '{field_name}': {e}")
+
+        # Auto-convert datetime to timezone if no localizer specified
+        if timezone and isinstance(value, datetime):
+            try:
+                from mojo.helpers import dates
+                value = dates.get_local_time(timezone, value)
+            except Exception as e:
+                logger.warning(f"Timezone conversion failed for field '{field_name}': {e}")
 
         return value
 

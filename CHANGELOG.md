@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.124 - November 18, 2025
+
+HOTFIX cyber report downloads failing in csv format
+
+
 ## v0.1.123 - November 18, 2025
 
 * ADDED logic for improved date handling in relation to government ids"
