@@ -300,7 +300,10 @@ class Group(MojoSecrets, MojoModel):
             user.org = self.top_most_parent
             user.on_rest_pre_save(dict(email=None), True)
             user.save()
+            # this is important to invite the user to the group
+            user.send_invite(group=self)
             ms = self.add_member(user)
+            return ms
         try:
             ms.send_invite(context=context)
         except Exception as e:
