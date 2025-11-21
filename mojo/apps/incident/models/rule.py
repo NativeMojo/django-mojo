@@ -446,6 +446,10 @@ class Rule(models.Model, MojoModel):
                     return int(field_value), int(comp_value)
                 elif self.value_type == "float":
                     return float(field_value), float(comp_value)
+                elif self.value_type == "bool":
+                    return bool(field_value), bool(comp_value)
+                elif self.value_type == "str":
+                    return str(field_value), str(comp_value)
             except ValueError:
                 return None, None
         return field_value, comp_value
