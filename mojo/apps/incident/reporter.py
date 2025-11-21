@@ -1,4 +1,4 @@
-
+import socket
 
 # TODO make this async using our job queue
 def report_event(details, title=None, category="api_error", level=1, request=None, **kwargs):
@@ -26,7 +26,9 @@ def _create_event_dict(details, title=None, category="api_error", level=1, reque
         "source_ip": kwargs.pop("source_ip", None)
     }
 
-    event_metadata = {}
+    event_metadata = {
+        "server": socket.gethostname()
+    }
 
     if request:
         event_data["source_ip"] = request.ip if event_data["source_ip"] is None else event_data["source_ip"]

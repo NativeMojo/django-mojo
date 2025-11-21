@@ -10,6 +10,10 @@ except ImportError:
     psutil = None
 
 
+def get_hostname():
+    """Get the hostname of the current system."""
+    return socket.gethostname()
+
 def get_host_ip():
     """Get the IP address associated with the current hostname."""
     hostname = socket.gethostname()
