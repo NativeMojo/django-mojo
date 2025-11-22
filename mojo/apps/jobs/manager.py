@@ -315,7 +315,8 @@ class JobManager:
         return results
 
     def broadcast_command(self, command: str, data: Dict = None,
-                         timeout: float = 2.0) -> List[Dict]:
+                         timeout: float = 2.0, expected_runners: Optional[int] = None,
+                         channel: Optional[str] = None) -> List[Dict]:
         """
         Send command to all runners and collect responses.
 
@@ -323,11 +324,21 @@ class JobManager:
             command: Command to send (status, shutdown, pause, resume)
             data: Additional command data
             timeout: Time to wait for responses
+            expected_runners: Expected number of runners (auto-detected if None).
+                            Used to exit early when all runners respond.
+            channel: Filter to runners on specific channel (None for all runners)
 
         Returns:
             List of responses from runners
         """
         import uuid as uuid_module
+
+        # Get expected runner count if not provided
+        if expected_runners is None:
+            runners = self.get_runners(channel=channel)
+            expected_runners = len([r for r in runners if r.get('alive', False)])
+            logit.debug(f"Broadcasting command '{command}' to {expected_runners} active runners")
+
         reply_channel = f"mojo:jobs:replies:{uuid_module.uuid4().hex[:8]}"
 
         # Subscribe to replies before sending
@@ -348,6 +359,7 @@ class JobManager:
         responses = []
         start_time = time.time()
 
+        # Exit early if we get all expected responses or timeout
         while time.time() - start_time < timeout:
             msg = pubsub.get_message(timeout=0.1)
             if msg and msg['type'] == 'message':
@@ -357,6 +369,11 @@ class JobManager:
                         response_data = response_data.decode('utf-8')
                     response = json.loads(response_data)
                     responses.append(response)
+
+                    # Exit early if we got all expected responses
+                    if len(responses) >= expected_runners:
+                        logit.debug(f"Received all {expected_runners} responses, exiting early")
+                        break
                 except Exception as e:
                     logit.debug(f"Failed to parse response: {e}")
 
@@ -364,7 +381,9 @@ class JobManager:
         return responses
 
     def broadcast_execute(self, func_path: str, data: Dict = None,
-                         timeout: float = 2.0, collect_replies: bool = False) -> List[Dict]:
+                         timeout: float = 2.0, collect_replies: bool = False,
+                         expected_runners: Optional[int] = None,
+                         channel: Optional[str] = None) -> List[Dict]:
         """
         Execute a function on all active runners.
 
@@ -379,6 +398,9 @@ class JobManager:
             data: Data dictionary to pass to the function
             timeout: Time to wait for responses if collect_replies=True
             collect_replies: Whether to wait for and collect responses
+            expected_runners: Expected number of runners (auto-detected if None).
+                            Used to exit early when all runners respond.
+            channel: Filter to runners on specific channel (None for all runners)
 
         Returns:
             List of responses from runners (if collect_replies=True), empty list otherwise
@@ -396,11 +418,18 @@ class JobManager:
                 data={'keys': ['user_data', 'settings']}
             )
 
-            # Collect results from all runners
+            # Collect results from all runners (exits early when all respond)
             results = manager.broadcast_execute(
                 'myapp.tasks.get_local_stats',
                 collect_replies=True,
                 timeout=5.0
+            )
+
+            # Execute on runners for specific channel only
+            results = manager.broadcast_execute(
+                'myapp.tasks.process_backlog',
+                channel='high_priority',
+                collect_replies=True
             )
         """
         import uuid as uuid_module
@@ -413,6 +442,12 @@ class JobManager:
         }
 
         if collect_replies:
+            # Get expected runner count if not provided
+            if expected_runners is None:
+                runners = self.get_runners(channel=channel)
+                expected_runners = len([r for r in runners if r.get('alive', False)])
+                logit.debug(f"Broadcasting to {expected_runners} active runners")
+
             reply_channel = f"mojo:jobs:replies:{uuid_module.uuid4().hex[:8]}"
             message['reply_channel'] = reply_channel
 
@@ -427,6 +462,7 @@ class JobManager:
             responses = []
             start_time = time.time()
 
+            # Exit early if we get all expected responses or timeout
             while time.time() - start_time < timeout:
                 msg = pubsub.get_message(timeout=0.1)
                 if msg and msg['type'] == 'message':
@@ -436,6 +472,11 @@ class JobManager:
                             response_data = response_data.decode('utf-8')
                         response = json.loads(response_data)
                         responses.append(response)
+
+                        # Exit early if we got all expected responses
+                        if len(responses) >= expected_runners:
+                            logit.debug(f"Received all {expected_runners} responses, exiting early")
+                            break
                     except Exception as e:
                         logit.debug(f"Failed to parse execute reply: {e}")
 
@@ -445,6 +486,81 @@ class JobManager:
             # Fire-and-forget
             self.redis.publish("mojo:jobs:runners:broadcast", json.dumps(message))
             return []
+
+    def execute_on_runner(self, runner_id: str, func_path: str, data: Dict = None,
+                          timeout: float = 2.0, wait_for_reply: bool = True) -> Optional[Dict]:
+        """
+        Execute a function on a specific runner.
+
+        Args:
+            runner_id: Target runner identifier
+            func_path: Module path to function (e.g., 'myapp.jobs.cleanup_cache')
+            data: Data dictionary to pass to the function
+            timeout: Time to wait for response if wait_for_reply=True
+            wait_for_reply: Whether to wait for and return the response
+
+        Returns:
+            Response dict from the runner (if wait_for_reply=True), None otherwise
+
+        Example:
+            # Execute on a specific runner and get result
+            result = manager.execute_on_runner(
+                'runner-host1-abc123',
+                'myapp.tasks.get_local_stats',
+                timeout=5.0
+            )
+
+            # Fire-and-forget execution
+            manager.execute_on_runner(
+                'runner-host1-abc123',
+                'myapp.tasks.clear_cache',
+                wait_for_reply=False
+            )
+        """
+        import uuid as uuid_module
+
+        message = {
+            'command': 'execute',
+            'func': func_path,
+            'data': data or {},
+            'timestamp': timezone.now().isoformat()
+        }
+
+        if wait_for_reply:
+            reply_channel = f"mojo:jobs:replies:{uuid_module.uuid4().hex[:8]}"
+            message['reply_channel'] = reply_channel
+
+            # Subscribe to reply channel before sending
+            pubsub = self.redis.pubsub()
+            pubsub.subscribe(reply_channel)
+
+            # Send to specific runner's control channel
+            control_key = self.keys.runner_ctl(runner_id)
+            self.redis.publish(control_key, json.dumps(message))
+
+            # Wait for response
+            start_time = time.time()
+            while time.time() - start_time < timeout:
+                msg = pubsub.get_message(timeout=0.1)
+                if msg and msg['type'] == 'message':
+                    try:
+                        response_data = msg['data']
+                        if isinstance(response_data, bytes):
+                            response_data = response_data.decode('utf-8')
+                        response = json.loads(response_data)
+                        pubsub.close()
+                        return response
+                    except Exception as e:
+                        logit.debug(f"Failed to parse execute reply: {e}")
+
+            # Timeout
+            pubsub.close()
+            return None
+        else:
+            # Fire-and-forget
+            control_key = self.keys.runner_ctl(runner_id)
+            self.redis.publish(control_key, json.dumps(message))
+            return None
 
     def ping(self, runner_id: str, timeout: float = 2.0) -> bool:
         """
