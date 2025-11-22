@@ -487,3 +487,24 @@ def status(job_id: str) -> Optional[Dict[str, Any]]:
     except Exception as e:
         logit.error(f"Failed to get status from DB for {job_id}: {e}")
         return None
+
+
+def broadcast_command(command, data=None, timeout=2.0):
+    from .manager import get_manager
+    manager = get_manager()
+    return manager.broadcast_command(command, data, timeout)
+
+def broadcast_execute(func_path, data=None, timeout=2.0, collect_replies=False):
+    from .manager import get_manager
+    manager = get_manager()
+    return manager.broadcast_execute(func_path, data, timeout, collect_replies)
+
+def ping(runnder_id, timeout=2.0):
+    from .manager import get_manager
+    manager = get_manager()
+    return manager.ping(runnder_id, timeout)
+
+def get_runners(channel=None):
+    from .manager import get_manager
+    manager = get_manager()
+    return manager.get_runners(channel)

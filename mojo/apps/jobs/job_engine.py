@@ -400,7 +400,7 @@ class JobEngine:
                             reply = {
                                 'runner_id': self.runner_id,
                                 'func': func_path,
-                                'result': str(result) if result else None,
+                                'result': result,
                                 'status': 'success',
                                 'timestamp': dates.utcnow().isoformat(),
                             }
