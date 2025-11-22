@@ -377,10 +377,12 @@ class JobEngine:
         finally:
             pubsub.close()
 
-    def _handle_control_message(self, data: bytes, channel: Optional[str] = None):
+    def _handle_control_message(self, data, channel=None):
         """Handle a control channel message or broadcast command."""
         try:
-            message = json.loads(data.decode('utf-8'))
+            if isinstance(data, bytes):
+                data = data.decode('utf-8')
+            message = json.loads(data)
             command = message.get('command')
 
             if command == 'execute':
@@ -409,8 +411,7 @@ class JobEngine:
                             except Exception as e:
                                 logger.warning(f"Failed to publish execute reply: {e}")
                     except Exception as e:
-                        logger.error(f"Broadcast execution failed for {func_path}: {e}")
-                        logger.error(traceback.format_exc())
+                        logger.exception(f"Broadcast execution failed for {func_path}: {e}")
 
                         # Send error reply if reply_channel is provided
                         reply_channel = message.get('reply_channel')
@@ -472,7 +473,7 @@ class JobEngine:
                 logger.warning(f"Unknown control command: {command}")
 
         except Exception as e:
-            logger.error(f"Failed to handle control message: {e}")
+            logger.exception(f"Failed to handle control message: {e}")
 
     def _main_loop(self):
         """Main processing loop - claims jobs from List queues based on capacity."""

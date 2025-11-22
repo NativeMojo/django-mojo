@@ -674,8 +674,8 @@ class MojoModel:
                     value = None
                 target_dict[key] = cls.normalize_rest_value(request, field_name, value)
 
-        logger.info("filters", filters)
-        logger.info("excludes", excludes)
+        # logger.info("filters", filters)
+        # logger.info("excludes", excludes)
 
         queryset = cls.on_rest_list_search(request, queryset)
         queryset = queryset.filter(**filters)
@@ -941,13 +941,13 @@ class MojoModel:
 
     def on_rest_save_file(self, name, file):
         # Implement file saving logic here
-        self.debug("Finding file for field: %s", name)
+        # self.debug("Finding file for field: %s", name)
         field = self.get_model_field(name)
         if field is None:
             return
-        self.debug("Saving file for field: %s", name)
+        # self.debug("Saving file for field: %s", name)
         if field.related_model and hasattr(field.related_model, "create_from_file"):
-            self.debug("Found file for field: %s", name)
+            # self.debug("Found file for field: %s", name)
             related_model = field.related_model
             instance = related_model.create_from_file(file, name)
             setattr(self, name, instance)
