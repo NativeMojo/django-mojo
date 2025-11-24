@@ -104,6 +104,7 @@ class RuleSet(models.Model, MojoModel):
         help_text="Time window in minutes for bundling events (0=disabled/no bundling, >0=time window in minutes)")
     bundle_by = models.IntegerField(default=BundleBy.MODEL_NAME_AND_ID, choices=BundleBy.CHOICES,
         help_text="How to group events into incidents")
+    bundle_by_rule_set = models.BooleanField(default=True, help_text="Bundle by rule set")
     match_by = models.IntegerField(default=MatchBy.ALL, choices=MatchBy.CHOICES,
         help_text="Rule matching mode")
     # handler syntax is a url like string that can be chained by commas
