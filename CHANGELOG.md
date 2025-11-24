@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.133 - November 23, 2025
+
+BUGFIX in bundling incidents by rules
+
+
 ## v0.1.132 - November 21, 2025
 
 BUGFIX is broadcast messages

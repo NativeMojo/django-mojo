@@ -240,6 +240,7 @@ class Event(models.Model, MojoModel):
             incident = Incident(
                 priority=self.level,
                 state=0,
+                rule_set=rule_set,
                 category=self.category,
                 country_code=self.country_code,
                 title=self.title,
@@ -266,6 +267,9 @@ class Event(models.Model, MojoModel):
         bundle_criteria = {
             "category": self.category
         }
+
+        if rule_set.bundle_by_rule_set:
+            bundle_criteria['rule_set'] = rule_set
 
         # Add time window if specified
         # bundle_minutes=0 or None means disabled (don't add time filter, will not find existing incidents)
