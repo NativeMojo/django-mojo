@@ -73,7 +73,7 @@ class GroupMember(models.Model, MojoModel):
     def can_change_permission(self, perm, value, request):
         if request.user.has_permission(["manage_groups", "manage_users"]):
             return True
-        req_member = self.group.get_member_for_user(request.user)
+        req_member = self.group.get_member_for_user(request.user, check_parents=True)
         if req_member is not None:
             if perm in MEMBER_PERMS_PROTECTION:
                 return req_member.has_permission(MEMBER_PERMS_PROTECTION[perm])

@@ -768,7 +768,7 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
             group = Group.objects.filter(pk=int(topic.split(":")[1])).last()
             if group is None:
                 return False
-            return group.get_member_for_user(self) is not None
+            return group.get_member_for_user(self, check_parents=True) is not None
         if topic == f"user:{self.id}":
             return True
         if topic == "general_announcements":
