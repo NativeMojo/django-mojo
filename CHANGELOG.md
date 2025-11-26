@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.136 - November 25, 2025
+
+BUGFIX search
+
+
 ## v0.1.135 - November 25, 2025
 
 BUGFIX: membership not propogating

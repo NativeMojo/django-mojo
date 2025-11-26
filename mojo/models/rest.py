@@ -690,6 +690,16 @@ class MojoModel:
         """
         Search queryset based on 'search' param in the request for fields defined in 'SEARCH_FIELDS'.
 
+        Supports advanced search syntax:
+        - "bob smith" - searches for the exact phrase "bob smith"
+        - bob smith - searches for records matching BOTH "bob" AND "smith" (default AND logic)
+        - -excluded - exclude records containing "excluded"
+        - field:value - search only in a specific field (e.g., email:john@example.com)
+        - Combined: term1 term2 -excluded field:value "exact phrase"
+
+        Note: By default, multiple unquoted terms use AND logic (all must match).
+        Use quotes for exact phrase matching.
+
         Args:
             request: Django HTTP request object.
             queryset: The queryset to search.
@@ -697,7 +707,14 @@ class MojoModel:
         Returns:
             The filtered queryset based on the search criteria.
         """
+        import re
+
         search_query = request.DATA.get('search', None)
+        if not search_query:
+            return queryset
+
+        # Trim whitespace
+        search_query = search_query.strip()
         if not search_query:
             return queryset
 
@@ -708,12 +725,71 @@ class MojoModel:
                 if field.get_internal_type() in ["CharField", "TextField"]
             ]
 
-        query_filters = dm.Q()
-        for field in search_fields:
-            query_filters |= dm.Q(**{f"{field}__icontains": search_query})
+        # Parse search query to extract different term types
+        # Pattern matches: quoted strings, field:value pairs, or words with optional - prefix
+        pattern = r'"([^"]+)"|(-?)(\w+):(\S+)|(-?)(\S+)'
+        matches = re.findall(pattern, search_query)
 
-        logger.info("search_filters", query_filters)
-        return queryset.filter(query_filters)
+        search_terms = []  # Terms that must match (AND logic by default)
+        excluded_terms = []  # Terms to exclude (NOT logic)
+        field_searches = []  # Field-specific searches
+
+        for match in matches:
+            quoted, field_prefix, field_name, field_value, prefix, term = match
+
+            if quoted:
+                # Quoted phrase - always required (AND logic)
+                search_terms.append(quoted)
+            elif field_name and field_value:
+                # Field-specific search (field:value)
+                # Check if field exists in search_fields
+                if field_name in search_fields:
+                    is_excluded = field_prefix == '-'
+                    field_searches.append((field_name, field_value, is_excluded))
+            elif term:
+                # Regular term with optional - prefix
+                term = term.strip()
+                if len(term) < 1:  # Skip empty terms
+                    continue
+
+                if prefix == '-':
+                    excluded_terms.append(term)
+                else:
+                    # Default behavior: unquoted terms use AND logic
+                    search_terms.append(term)
+
+        # Build the query
+        final_query = dm.Q()
+
+        # Add search terms (AND logic - all must match)
+        # Each term can match ANY of the search fields
+        for term in search_terms:
+            term_filter = dm.Q()
+            for field in search_fields:
+                term_filter |= dm.Q(**{f"{field}__icontains": term})
+            final_query &= term_filter
+
+        # Add field-specific searches
+        for field_name, field_value, is_excluded in field_searches:
+            field_filter = dm.Q(**{f"{field_name}__icontains": field_value})
+            if is_excluded:
+                final_query &= ~field_filter
+            else:
+                final_query &= field_filter
+
+        # Add excluded terms (NOT logic)
+        for term in excluded_terms:
+            exclude_filter = dm.Q()
+            for field in search_fields:
+                exclude_filter |= dm.Q(**{f"{field}__icontains": term})
+            final_query &= ~exclude_filter
+
+        # Only apply filter if we have any search criteria
+        if search_terms or excluded_terms or field_searches:
+            logger.info("search_filters", search_query, final_query)
+            return queryset.filter(final_query)
+
+        return queryset
 
     @classmethod
     def on_rest_list_sort(cls, request, queryset):

@@ -296,7 +296,7 @@ def test_user_can_access_child_group_via_parent(opts):
     assert resp.response.data.id == opts.team_group_id, "id does not match"
 
 
-@th.unit_test("test_get_groups_with_permission")
+@th.django_unit_test("test_get_groups_with_permission")
 def test_get_groups_with_permission(opts):
     """Test User.get_groups_with_permission() includes child groups"""
     from mojo.apps.account.models import User
