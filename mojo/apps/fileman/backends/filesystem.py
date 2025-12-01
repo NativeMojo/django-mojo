@@ -104,6 +104,16 @@ class FileSystemStorageBackend(StorageBackend):
         except Exception:
             return False
 
+    def delete_folder(self, folder_path: str) -> bool:
+        """Delete a folder and its contents from the file system"""
+        try:
+            full_path = self._get_full_path(folder_path)
+            if os.path.isdir(full_path):
+                shutil.rmtree(full_path, ignore_errors=True)
+            return True
+        except Exception:
+            return False
+
     def exists(self, file_path: str) -> bool:
         """Check if a file exists in the file system"""
         try:

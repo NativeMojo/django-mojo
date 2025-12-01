@@ -26,7 +26,7 @@ class FileManager(MojoSecrets, MojoModel):
             "default": {
                 "extra": ["aws_region", "aws_key", "aws_secret_masked", "allowed_origins"],
                 "fields": [
-                    "created", "id", "name", "backend_type", "backend_url",
+                    "created", "id", "name", "use", "backend_type", "backend_url",
                     "is_active", "is_default"],
                 "graphs": {
                     "user": "basic",
@@ -35,7 +35,7 @@ class FileManager(MojoSecrets, MojoModel):
             },
             "list": {
                 "extra": ["aws_region", "aws_key", "aws_secret_masked", "allowed_origins"],
-                "fields": ["created", "id", "name", "backend_type",  "backend_url",
+                "fields": ["created", "id", "name", "use", "backend_type",  "backend_url",
                     "is_active", "is_default"],
                 "graphs": {
                     "user": "basic",
@@ -151,15 +151,24 @@ class FileManager(MojoSecrets, MojoModel):
         help_text="Used if this file manager is a child of another file manager, and inherits settings from its parent"
     )
 
+    use = models.CharField(
+        max_length=64,
+        db_index=True,
+        blank=True,
+        default="",
+        help_text="Optional purpose key (e.g., 'invoices') to support multiple managers per group"
+    )
+
     class Meta:
         unique_together = [
             ['group', 'name'],
         ]
         indexes = [
             models.Index(fields=['backend_type', 'is_active']),
-            models.Index(fields=['group', 'is_default']),
+            models.Index(fields=['group', 'use', 'is_default']),
             models.Index(fields=['user', 'is_default']),
             models.Index(fields=['group', 'backend_type']),
+            models.Index(fields=['group', 'use', 'backend_type']),
         ]
 
     def __str__(self):
@@ -355,13 +364,14 @@ class FileManager(MojoSecrets, MojoModel):
                 self.backend.make_path_private()
 
     def generate_name(self):
+        use_part = f"{self.use} " if getattr(self, "use", "") else ""
         if self.user and self.group:
-            return f"{self.user.username}@{self.group.name}'s {self.backend_type} FileManager"
+            return f"{self.user.username}@{self.group.name}'s {use_part}{self.backend_type} FileManager"
         elif self.user:
-            return f"{self.user.username}'s {self.backend_type} FileManager"
+            return f"{self.user.username}'s {use_part}{self.backend_type} FileManager"
         elif self.group:
-            return f"{self.group.name}'s {self.backend_type} FileManager"
-        return f"{self.backend_type} FileManager"
+            return f"{self.group.name}'s {use_part}{self.backend_type} FileManager"
+        return f"{use_part}{self.backend_type} FileManager"
 
     def on_action_test_connection(self, value):
         try:
@@ -579,11 +589,13 @@ class FileManager(MojoSecrets, MojoModel):
     @classmethod
     def get_from_request(cls, request):
         """Get the file manager from the request"""
-        if request.DATA.get(["fileman", "filemanager"]):
-            return cls.objects.get(pk=request.DATA.get(["fileman", "filemanager"]))
-        if request.DATA.use_groups_fileman and request.group:
-            return cls.get_for_user_group(group=request.group)
-        return cls.get_for_user_group(user=request.user, group=request.group)
+        fm_id = request.DATA.get(["fileman", "filemanager", "file_manager", "manager", "file_manager_id"])
+        if fm_id:
+            return cls.objects.get(pk=fm_id)
+        use = request.DATA.get(["use", "fileman_use", "file_manager_use"], "")
+        if getattr(request.DATA, "use_groups_fileman", False) and request.group:
+            return cls.get_for_user_group(group=request.group, use=use)
+        return cls.get_for_user_group(user=request.user, group=request.group, use=use)
 
     @classmethod
     def get_for_user(cls, user):
@@ -629,12 +641,19 @@ class FileManager(MojoSecrets, MojoModel):
         return file_manager
 
     @classmethod
-    def get_for_group(cls, group=None):
+    def get_for_group(cls, group=None, use=""):
         from django.db import transaction, IntegrityError
 
-        file_manager = cls.objects.filter(
-            user=None, group=group, is_default=True, is_active=True
-        ).first()
+        # Prefer a manager matching the specific use if provided; otherwise default group manager
+        if use:
+            file_manager = cls.objects.filter(
+                user=None, group=group, use=use, is_default=True, is_active=True
+            ).first()
+        else:
+            file_manager = cls.objects.filter(
+                user=None, group=group, is_default=True, is_active=True
+            ).first()
+
         if file_manager is None:
             sys_manager = cls.objects.filter(
                 user=None, group=None, is_default=True, is_active=True
@@ -642,23 +661,30 @@ class FileManager(MojoSecrets, MojoModel):
             if sys_manager is not None:
                 # Generate name before creating to avoid race conditions
                 temp_manager = cls(group=group, is_default=True, user=None, parent=sys_manager)
-                temp_manager.set_backend_url(sys_manager.backend_url, group.get_uuid())
+                if use:
+                    temp_manager.use = use
+                    temp_manager.set_backend_url(sys_manager.backend_url, group.get_uuid(), use)
+                else:
+                    temp_manager.set_backend_url(sys_manager.backend_url, group.get_uuid())
                 name = temp_manager.generate_name()
 
                 try:
                     with transaction.atomic():
                         # Use get_or_create to handle race conditions
+                        defaults = {
+                            'is_default': True,
+                            'parent': sys_manager,
+                            'backend_type': sys_manager.backend_type,
+                            'backend_url': temp_manager.backend_url,
+                            'is_active': True,
+                        }
+                        if use:
+                            defaults['use'] = use
                         file_manager, created = cls.objects.get_or_create(
                             user=None,
                             group=group,
                             name=name,
-                            defaults={
-                                'is_default': True,
-                                'parent': sys_manager,
-                                'backend_type': sys_manager.backend_type,
-                                'backend_url': temp_manager.backend_url,
-                                'is_active': True,
-                            }
+                            defaults=defaults
                         )
                         if created:
                             # Copy secrets from parent
@@ -666,13 +692,18 @@ class FileManager(MojoSecrets, MojoModel):
                             file_manager.save()
                 except IntegrityError:
                     # If still a race condition, fetch the existing one
-                    file_manager = cls.objects.filter(
-                        user=None, group=group, is_default=True, is_active=True
-                    ).first()
+                    if use:
+                        file_manager = cls.objects.filter(
+                            user=None, group=group, use=use, is_default=True, is_active=True
+                        ).first()
+                    else:
+                        file_manager = cls.objects.filter(
+                            user=None, group=group, is_default=True, is_active=True
+                        ).first()
         return file_manager
 
     @classmethod
-    def get_for_user_group(cls, user=None, group=None):
+    def get_for_user_group(cls, user=None, group=None, use=""):
         """Get the file manager from the user and/or group
 
         If group is provided, returns the group's FileManager (user-agnostic).
@@ -680,7 +711,7 @@ class FileManager(MojoSecrets, MojoModel):
         """
         if group:
             # Always use group manager when group is present, ignore user
-            return cls.get_for_group(group=group)
+            return cls.get_for_group(group=group, use=use or "")
         elif user:
             # Only use user manager if no group
             return cls.get_for_user(user=user)

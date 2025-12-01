@@ -1,6 +1,8 @@
 from objict import objict
 from django.http import HttpResponse
+import socket
 
+HOST_NAME = socket.gethostname().split('.')[0]
 
 class JsonResponse(HttpResponse):
     def __init__(self, data, status=200, safe=True, **kwargs):
@@ -15,6 +17,7 @@ class JsonResponse(HttpResponse):
             data = objict.from_dict(data)
         if "code" not in data:
             data.code = status
+        data.server = HOST_NAME
         data = data.to_json(as_string=True)
         super().__init__(content=data, status=status, **kwargs)
 
