@@ -216,7 +216,73 @@ def period_from_dr_slug(slug):
         return f"{period[-2:]}:00"
     if gran_lbl == GRANULARITY_PREFIX_MAP["minutes"]:
         return period[-5:].replace('-', ':')
+    if gran_lbl == GRANULARITY_PREFIX_MAP["weeks"]:
+        return format_week_label(period)
     return period
+
+
+def format_week_label(period):
+    """
+    Convert ISO week format (YYYY-WW) to human-readable date range.
+
+    Examples:
+    - Same month: "Jan 15-21"
+    - Different months, same year: "Jan 29 - Feb 4"
+    - Different years: "Dec 30, 2024 - Jan 5, 2025"
+
+    Args:
+        period (str): ISO week format like "2024-24" (year-week)
+
+    Returns:
+        str: Human-readable week range
+    """
+    try:
+        # Parse the ISO week format (YYYY-WW where WW is the week number)
+        year, week = period.split('-')
+        year = int(year)
+        week = int(week)
+
+        # Python's %U format: Week 0 is the days before the first Sunday
+        # Week 1 starts on the first Sunday
+        # We need to find the Sunday of the given week number
+        jan1 = datetime.datetime(year, 1, 1)
+
+        # Find what day of the week Jan 1 is (0=Monday, 6=Sunday)
+        jan1_weekday = jan1.weekday()
+
+        # Days from Jan 1 to the first Sunday
+        if jan1_weekday == 6:  # Jan 1 is Sunday (Week 1 starts on Jan 1)
+            days_to_first_sunday = 0
+        else:
+            days_to_first_sunday = 6 - jan1_weekday
+
+        # Week 1 starts on the first Sunday
+        # Week N starts N-1 weeks after week 1
+        first_sunday = jan1 + timedelta(days=days_to_first_sunday)
+        week_start = first_sunday + timedelta(weeks=(week - 1))
+        week_end = week_start + timedelta(days=6)
+
+        # Format based on context
+        start_month = week_start.strftime("%b")
+        end_month = week_end.strftime("%b")
+        start_day = week_start.day
+        end_day = week_end.day
+        start_year = week_start.year
+        end_year = week_end.year
+
+        if start_year != end_year:
+            # Different years: "Dec 30, 2024 - Jan 5, 2025"
+            return f"{start_month} {start_day}, {start_year} - {end_month} {end_day}, {end_year}"
+        elif start_month != end_month:
+            # Different months, same year: "Jan 29 - Feb 4"
+            return f"{start_month} {start_day} - {end_month} {end_day}"
+        else:
+            # Same month: "Jan 15-21"
+            return f"{start_month} {start_day}-{end_day}"
+
+    except Exception as e:
+        # Fallback to original format if parsing fails
+        return period
 
 
 def get_expires_at(granularity, slug, category=None):

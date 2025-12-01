@@ -535,7 +535,7 @@ class MojoModel:
             # Get timezone from request for localization
             timezone = request.DATA.get("timezone")
 
-            logger.info(f"Serializing queryset with fields: {fields}")
+            # logger.info(f"Serializing queryset with fields: {fields}")
             return serializer.serialize_queryset(
                 queryset,
                 fields=fields,
@@ -786,7 +786,7 @@ class MojoModel:
 
         # Only apply filter if we have any search criteria
         if search_terms or excluded_terms or field_searches:
-            logger.info("search_filters", search_query, final_query)
+            # logger.info("search_filters", search_query, final_query)
             return queryset.filter(final_query)
 
         return queryset
@@ -1054,7 +1054,7 @@ class MojoModel:
             field_value = int(field_value)
             if not bool(field_value):
                 # None, "", 0 will set it to None
-                logger.info(f"Setting field {field.name} to None")
+                # logger.info(f"Setting field {field.name} to None")
                 setattr(self, field.name, None)
                 return
             field_value = int(field_value)

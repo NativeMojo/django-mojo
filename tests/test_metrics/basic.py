@@ -121,8 +121,9 @@ def test_metrics_utils_periods_from_dr_slugs(opts):
     # test utils.generate_slug
     slugs = utils.generate_slugs_for_range("example", start, end, "weeks", "mojo")
     periods = utils.periods_from_dr_slugs(slugs)
-    weeks = ['2025-06', '2025-07', '2025-08', '2025-09', '2025-10', '2025-11',
-        '2025-12', '2025-13', '2025-14', '2025-15', '2025-16', '2025-17']
+    weeks = ['Feb 9-15', 'Feb 16-22', 'Feb 23 - Mar 1', 'Mar 2-8',
+        'Mar 9-15', 'Mar 16-22', 'Mar 23-29', 'Mar 30 - Apr 5',
+        'Apr 6-12', 'Apr 13-19', 'Apr 20-26', 'Apr 27 - May 3']
     assert periods == weeks, f"weeks slugs: {periods}"
 
     # test utils.generate_slug

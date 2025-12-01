@@ -308,7 +308,7 @@ class File(models.Model, MojoModel):
         if self.file_manager.is_public:
             self.download_url = self.file_manager.backend.get_url(self.storage_file_path)
             return self.download_url
-        return self.file_manager.backend.get_url(self.storage_file_path, self.get_setting("urls_expire_in", 3600))
+        return self.file_manager.backend.get_url(self.storage_file_path, self.file_manager.get_setting("urls_expire_in", 3600))
 
     def on_action_action(self, action):
         if action == "mark_as_completed":
@@ -373,11 +373,11 @@ class File(models.Model, MojoModel):
         if not self.file_size:
             return "Unknown"
 
-        for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
-            if self.file_size < 1024.0:
-                return f"{self.file_size:.1f} {unit}"
-            self.file_size /= 1024.0
-        return f"{self.file_size:.1f} PB"
+        size = float(self.file_size)
+        for unit in ['B', 'KB', 'MB', 'GB', 'TB', 'PB']:
+            if size < 1024.0 or unit == 'PB':
+                return f"{size:.1f} {unit}"
+            size /= 1024.0
 
     def can_be_accessed_by(self, user=None, group=None):
         """Check if file can be accessed by user/group"""
@@ -387,7 +387,7 @@ class File(models.Model, MojoModel):
         if self.is_public:
             return True
 
-        if user and self.uploaded_by == user:
+        if user and self.user == user:
             return True
 
         if group and self.group == group:
@@ -399,19 +399,25 @@ class File(models.Model, MojoModel):
         self.content_type = file.content_type
         self.category = utils.get_file_category(self.content_type)
         self.set_filename(file.name)
-        self.file_manager = FileManager.get_from_request(self.active_request)
+        if not getattr(self, "file_manager", None):
+            req = self.active_request
+            if req:
+                self.file_manager = FileManager.get_from_request(req)
+            else:
+                self.file_manager = FileManager.get_for_user_group(self.user, self.group)
         self.generate_storage_filename()
         self.mark_as_uploading(True)
         self.file_manager.backend.save(file, self.storage_file_path, self.content_type)
         self.mark_as_completed(commit=True)
 
     @classmethod
-    def create_from_file(cls, file, name, request=None, user=None, group=None):
+    def create_from_file(cls, file, name, request=None, user=None, group=None, file_manager=None):
         """Create a new file instance from a file"""
-        if request:
-            file_manager = FileManager.get_from_request(request)
-        else:
-            file_manager = FileManager.get_for_user_group(user, group)
+        if file_manager is None:
+            if request:
+                file_manager = FileManager.get_from_request(request)
+            else:
+                file_manager = FileManager.get_for_user_group(user, group)
         instance = cls()
         instance.filename = file.name
         instance.file_size = file.size
