@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.139 - December 03, 2025
+
+fixing bug in calculating totals
+
+
 ## v0.1.138 - December 01, 2025
 
 missing fileman migrations

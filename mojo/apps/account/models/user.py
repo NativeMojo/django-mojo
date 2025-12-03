@@ -468,6 +468,13 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
         # Replace underscores and dots with spaces, then title case
         return base_username.replace("_", " ").replace(".", " ").title()
 
+    def on_rest_created(self):
+        metrics.set_value("total_users", User.objects.filter(is_active=True).count(), account="global")
+
+    def on_rest_saved(self, changed_fields, created):
+        if "is_active" in changed_fields:
+            metrics.set_value("total_users", User.objects.filter(is_active=True).count(), account="global")
+
     def on_rest_pre_save(self, changed_fields, created):
         creds_changed = False
         if "email" in changed_fields:
@@ -515,7 +522,6 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
         if "is_active" in changed_fields:
             if not self.is_active:
                 metrics.record("user_deactivated", category="user", min_granularity="hours")
-            metrics.set_value("total_users", User.objects.filter(is_active=True).count(), account="global")
 
     def check_edit_permission(self, perms, request):
         if "owner" in perms and self.is_request_user():

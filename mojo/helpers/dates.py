@@ -4,6 +4,10 @@ import objict
 from .settings import settings
 
 
+def parse(value, timezone=None):
+    return parse_datetime(value, timezone)
+
+
 def parse_datetime(value, timezone=None):
     if isinstance(value, datetime):
         date = value
