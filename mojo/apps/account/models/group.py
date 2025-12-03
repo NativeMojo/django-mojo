@@ -486,6 +486,13 @@ class Group(MojoSecrets, MojoModel):
             realtime.publish_topic(topic, value.get("message"))
         return {"status": True}
 
+    def on_rest_created(self):
+        metrics.set_value("total_groups", Group.objects.filter(is_active=True).count(), account="global")
+
+    def on_rest_saved(self, changed_fields, created):
+        if "is_active" in changed_fields:
+            metrics.set_value("total_groups", Group.objects.filter(is_active=True).count(), account="global")
+
     @classmethod
     def on_rest_handle_list(cls, request):
         if cls.rest_check_permission(request, "VIEW_PERMS"):
