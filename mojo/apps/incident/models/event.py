@@ -240,6 +240,7 @@ class Event(models.Model, MojoModel):
         if not incident:
             # Create a new incident if none found
             created = True
+            self.sync_metadata()
             incident = Incident(
                 priority=self.level,
                 state=0,
@@ -254,7 +255,6 @@ class Event(models.Model, MojoModel):
                 model_id=self.model_id,
                 source_ip=self.source_ip
             )
-            self.sync_metadata()
             self.save()
             incident.metadata.update(self.metadata)
             incident.save()
