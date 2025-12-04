@@ -1127,7 +1127,7 @@ class MojoModel:
     def atomic_save(self):
         return self.save_now()
 
-    def report_incident(self, details, event_type="info", level=1, request=None, **context):
+    def report_incident(self, details, event_type="info", level=1, request=None, scope=None, **context):
         """
         Instance-level audit/event reporting. Automatically includes model+id.
         """
@@ -1136,11 +1136,11 @@ class MojoModel:
         if hasattr(self, 'id') and self.id is not None:
             context.setdefault("model_id", self.id)
         self.__class__.class_report_incident(
-            details, event_type=event_type, level=level, request=request, **context
+            details, event_type=event_type, level=level, request=request, scope=scope, **context
         )
 
     @classmethod
-    def class_report_incident_for_user(cls, details, event_type="info", level=1, request=None, **context):
+    def class_report_incident_for_user(cls, details, event_type="info", level=1, request=None, scope=None, **context):
         """
         Class-level audit/event reporting for a specific user.
         details: Human description.
@@ -1152,11 +1152,11 @@ class MojoModel:
         if request is None:
             request = ACTIVE_REQUEST.get()
         if request and request.user.is_authenticated:
-            return request.user.report_incident(details, event_type=event_type, level=level, request=request, **context)
-        return cls.class_report_incident(details, event_type=event_type, level=level, request=request, **context)
+            return request.user.report_incident(details, event_type=event_type, level=level, request=request, scope=scope, **context)
+        return cls.class_report_incident(details, event_type=event_type, level=level, request=request, scope=scope, **context)
 
     @classmethod
-    def class_report_incident(cls, details, event_type="info", level=1, request=None, **context):
+    def class_report_incident(cls, details, event_type="info", level=1, request=None, scope=None, **context):
         """
         Class-level audit/event reporting.
         details: Human description.
@@ -1170,10 +1170,16 @@ class MojoModel:
         context.setdefault("model_name", cls.__name__)
         if request is None:
             request = ACTIVE_REQUEST.get()
+        if scope is None:
+            if hasattr(cls, "_meta"):
+                scope = cls._meta.app_config.label
+            else:
+                scope = "global"
         incident.report_event(
             details,
             title=details[:80],
             category=event_type,
+            scope=scope,
             level=level,
             request=request,
             **context

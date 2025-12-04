@@ -1,22 +1,23 @@
 import socket
 
 # TODO make this async using our job queue
-def report_event(details, title=None, category="api_error", level=1, request=None, **kwargs):
+def report_event(details, title=None, category="api_error", level=1, request=None, scope="global", **kwargs):
     from .models import Event
-    event_data = _create_event_dict(details, title, category, level, request, **kwargs)
+    event_data = _create_event_dict(details, title, category, level, request, scope, **kwargs)
     event = Event(**event_data)
     event.sync_metadata()
     event.save()
     event.publish()
 
 
-def _create_event_dict(details, title=None, category="api_error", level=1, request=None, **kwargs):
+def _create_event_dict(details, title=None, category="api_error", level=1, request=None, scope="global", **kwargs):
     if title is None:
         title = details[:50]
 
     event_data = {
         "details": details,
         "title": title,
+        "scope": scope,
         "category": category,
         "level": level,
         "uid": kwargs.pop("uid", None),

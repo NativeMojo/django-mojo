@@ -20,6 +20,7 @@ class Event(models.Model, MojoModel):
     created = models.DateTimeField(auto_now_add=True, editable=False, db_index=True)
 
     level = models.IntegerField(default=0, db_index=True)
+    scope = models.CharField(max_length=64, db_index=True, default="global")
     category = models.CharField(max_length=124, db_index=True)
     source_ip = models.CharField(max_length=16, null=True, default=None, db_index=True)
     hostname = models.CharField(max_length=16, null=True, default=None, db_index=True)
@@ -55,6 +56,7 @@ class Event(models.Model, MojoModel):
             "csv": [
                 "created",
                 "level",
+                "scope",
                 "category",
                 "source_ip",
                 "hostname",
@@ -88,6 +90,7 @@ class Event(models.Model, MojoModel):
         # Gather all field values into the metadata
         field_values = {
             'level': self.level,
+            'scope': self.scope,
             'category': self.category,
             'source_ip': self.source_ip,
             'title': self.title,
@@ -241,6 +244,7 @@ class Event(models.Model, MojoModel):
                 priority=self.level,
                 state=0,
                 rule_set=rule_set,
+                scope=self.scope,
                 category=self.category,
                 country_code=self.country_code,
                 title=self.title,
