@@ -19,7 +19,7 @@ def on_ossec_alert(request):
     ossec_alert["model_id"] = ossec_alert.get("rule_id", 1)
 
     # Use getattr to avoid attribute errors if 'text' is missing
-    reporter.report_event(ossec_alert.get("text", ""), category="ossec", **ossec_alert)
+    reporter.report_event(ossec_alert.get("text", ""), category="ossec", scope="ossec", **ossec_alert)
     return JsonResponse({"status": True})
 
 
@@ -58,7 +58,7 @@ def on_ossec_alert_batch(request):
                pass
 
         # Use getattr to avoid attribute errors if 'text' is missing
-        reporter.report_event(getattr(alert, "text", ""), category="ossec", **alert)
+        reporter.report_event(getattr(alert, "text", ""), category="ossec", scope="ossec", **alert)
 
     return JsonResponse({"status": True})
 

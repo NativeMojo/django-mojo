@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.140 - December 03, 2025
+
+* adding scope to security events
+
+
 ## v0.1.139 - December 03, 2025
 
 fixing bug in calculating totals
