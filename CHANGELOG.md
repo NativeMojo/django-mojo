@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v1.0.1 - December 03, 2025
+
+we are ready for 1.0 release
+
+
 ## v0.1.141 - December 03, 2025
 
 fixing bug in category
