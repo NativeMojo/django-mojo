@@ -98,7 +98,8 @@ def record(slug, when=None, count=1, category=None, account="global",
 # ========
 
 def fetch(slug, dt_start=None, dt_end=None, granularity="hours",
-          redis_con=None, account="global", with_labels=False, dr_slugs=None):
+          redis_con=None, account="global", with_labels=False,
+          dr_slugs=None, allow_empty=True):
     """
     Fetches metrics for a slug/list of slugs. Uses cluster-safe MGET.
     """
@@ -117,6 +118,8 @@ def fetch(slug, dt_start=None, dt_end=None, granularity="hours",
             )
         for s in slug:
             values = fetch(s, dt_start, dt_end, granularity, redis_con, account)
+            if not allow_empty and not any(values) and len(resp.data):
+                continue
             trunc_slug = s.split(":")[-1]
             if with_labels:
                 resp.data[trunc_slug] = values
