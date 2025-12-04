@@ -247,14 +247,19 @@ def on_set_value(request):
 
 @md.GET('value/get', docs=VALUE_GET_DOCS)
 @md.custom_security("protected by metrics permissions")
-@md.requires_params("slugs")
 def on_get_value(request):
     """
     Get simple global values for multiple slugs (not time-series).
     """
-    slugs = request.DATA.get("slugs")
     account = request.DATA.get("account", "public")
     default = request.DATA.get("default")
+    allow_empty = request.DATA.get_typed("allow_empty", False, typed=bool)
+
+    category = request.DATA.get("category", None)
+    if "slugs" in request.DATA:
+        slugs = request.DATA.get_typed("slugs", typed=list)
+    elif category:
+        slugs = list(metrics.get_category_slugs(category, account=account))
 
     check_view_permissions(request, account)
 
@@ -271,7 +276,10 @@ def on_get_value(request):
     data = {}
     for slug in slugs_list:
         value = metrics.get_value(slug, account=account, default=default)
-        data[slug] = value
+        if isinstance(value, list) and all(x == 0 for x in value) and not allow_empty:
+            continue
+        trunc_slug = slug.split(":")[-1]
+        data[trunc_slug] = value
 
     return JsonResponse({
         "data": data,

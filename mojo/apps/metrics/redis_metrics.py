@@ -117,10 +117,11 @@ def fetch(slug, dt_start=None, dt_end=None, granularity="hours",
             )
         for s in slug:
             values = fetch(s, dt_start, dt_end, granularity, redis_con, account)
+            trunc_slug = s.split(":")[-1]
             if with_labels:
-                resp.data[s] = values
+                resp.data[trunc_slug] = values
             else:
-                resp[s] = values
+                resp[trunc_slug] = values
         return resp
 
     dr_slugs = utils.generate_slugs_for_range(slug, dt_start, dt_end, granularity, account)
@@ -130,7 +131,8 @@ def fetch(slug, dt_start=None, dt_end=None, granularity="hours",
 
     if not with_labels:
         return values
-    return nobjict(labels=utils.periods_from_dr_slugs(dr_slugs), data={slug: values})
+    trunc_slug = slug.split(":")[-1]
+    return nobjict(labels=utils.periods_from_dr_slugs(dr_slugs), data={trunc_slug: values})
 
 
 def fetch_values(slugs, when=None, granularity="hours", redis_con=None, account="global", timezone=None):
