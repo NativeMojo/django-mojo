@@ -120,9 +120,11 @@ class Job(models.Model, MojoModel):
             'default': {
                 'extra': ['duration_ms'],
                 'fields': [
-                    'id', 'channel', 'func', 'status',
-                    'created', 'modified', 'attempt',
-                    'started_at', 'finished_at', 'run_at'
+                    'id', 'channel', 'func', 'payload', 'status',
+                    'run_at', 'expires_at', 'attempt', 'max_retries',
+                    'broadcast', 'cancel_requested', 'max_exec_seconds',
+                    'runner_id', 'last_error', 'metadata',
+                    'created', 'modified', 'started_at', 'finished_at'
                 ]
             },
             'detail': {
@@ -131,7 +133,7 @@ class Job(models.Model, MojoModel):
                     'id', 'channel', 'func', 'payload', 'status',
                     'run_at', 'expires_at', 'attempt', 'max_retries',
                     'broadcast', 'cancel_requested', 'max_exec_seconds',
-                    'runner_id', 'last_error', 'metadata'
+                    'runner_id', 'last_error', 'metadata',
                     'created', 'modified', 'started_at', 'finished_at'
                 ]
             },

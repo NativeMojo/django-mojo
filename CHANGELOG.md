@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v1.0.4 - December 04, 2025
+
+bug fix when using isnull=False
+
+
 ## v1.0.3 - December 03, 2025
 
 bug fix in sync of metadata

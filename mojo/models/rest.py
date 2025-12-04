@@ -588,6 +588,9 @@ class MojoModel:
     @classmethod
     def normalize_rest_value(cls, request, field_name, value):
         field = cls.get_model_field(field_name)
+        # Preserve boolean values (e.g., __isnull filters) and do not coerce them to dates
+        if isinstance(value, bool):
+            return value
         if field.get_internal_type() == "BooleanField":
             if isinstance(value, str):
                 value = value.lower() in ("true", "1")
@@ -654,7 +657,7 @@ class MojoModel:
                     # Remove __not suffix for exclude()
                     key = key.replace("__not", "")
                 elif key.endswith("__isnull"):
-                    value = value.lower() == "true"
+                    value = str(value).strip().lower() in ("true", "1", "yes", "y", "t")
                 elif value == "null":
                     value = None
                 target_dict[key] = value
@@ -669,13 +672,13 @@ class MojoModel:
                     # Remove __not suffix for exclude()
                     key = key.replace("__not", "")
                 elif key.endswith("__isnull"):
-                    value = value.lower() == "true"
+                    value = str(value).strip().lower() in ("true", "1", "yes", "y", "t")
                 elif value == "null":
                     value = None
                 target_dict[key] = cls.normalize_rest_value(request, field_name, value)
 
-        # logger.info("filters", filters)
-        # logger.info("excludes", excludes)
+        logger.info("filters", filters)
+        logger.info("excludes", excludes)
 
         queryset = cls.on_rest_list_search(request, queryset)
         queryset = queryset.filter(**filters)
