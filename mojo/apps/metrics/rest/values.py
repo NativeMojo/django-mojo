@@ -253,8 +253,6 @@ def on_get_value(request):
     """
     account = request.DATA.get("account", "public")
     default = request.DATA.get("default")
-    allow_empty = request.DATA.get_typed("allow_empty", False, typed=bool)
-
     category = request.DATA.get("category", None)
     if "slugs" in request.DATA:
         slugs = request.DATA.get_typed("slugs", typed=list)
@@ -276,8 +274,6 @@ def on_get_value(request):
     data = {}
     for slug in slugs_list:
         value = metrics.get_value(slug, account=account, default=default)
-        if isinstance(value, list) and all(x == 0 for x in value) and not allow_empty:
-            continue
         trunc_slug = slug.split(":")[-1]
         data[trunc_slug] = value
 

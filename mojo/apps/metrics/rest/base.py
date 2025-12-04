@@ -157,13 +157,15 @@ def on_metrics_data(request):
 
     category = request.DATA.get("category", None)
     if "slugs" in request.DATA:
+        allow_empty = request.DATA.get_typed("allow_empty", typed=bool, default=True)
         slugs = request.DATA.get_typed("slugs", typed=list)
     elif category:
+        allow_empty = request.DATA.get_typed("allow_empty", typed=bool, default=False)
         slugs = list(metrics.get_category_slugs(category, account=account))
     else:
         raise mojo.errors.ValueException("missing required parameter")
     if len(slugs) == 1:
         slugs = slugs[0]
     records = metrics.fetch(slugs, dt_start=dt_start, dt_end=dt_end,
-        granularity=granularity, account=account, with_labels=True)
+        granularity=granularity, account=account, with_labels=True, allow_empty=allow_empty)
     return JsonResponse(dict(status=True, data=records))
