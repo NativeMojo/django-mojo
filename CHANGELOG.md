@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v1.0.3 - December 03, 2025
+
+bug fix in sync of metadata
+
+
 ## v1.0.2 - December 03, 2025
 
 fixing bug in fetching category data
