@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v0.1.141 - December 03, 2025
+
+fixing bug in category
+
+
 ## v0.1.140 - December 03, 2025
 
 * adding scope to security events
