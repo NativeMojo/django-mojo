@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v1.0.5 - December 06, 2025
+
+fixing realtime debugging
+
+
 ## v1.0.4 - December 04, 2025
 
 bug fix when using isnull=False

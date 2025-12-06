@@ -148,7 +148,7 @@ class MojoModel:
         try:
             return cls.objects.get(pk=pk)
         except ObjectDoesNotExist:
-            return cls.rest_error_response(None, 404, error=f"{cls.__name__} not found")
+            raise me.ValueException(f"{cls.__name__} not found", code=404, status=404)
 
     @classmethod
     def get_instance_from_request(cls, request, field_name=None):
