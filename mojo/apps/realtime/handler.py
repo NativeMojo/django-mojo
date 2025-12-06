@@ -32,17 +32,120 @@ class WebSocketHandler:
         self.user_type = None
         self.subscribed_topics = set()
 
+        # Capture remote IP and User-Agent from helpers (KISS)
+        self.remote_ip = self.resolve_remote_ip()
+        self.user_agent = self.resolve_user_agent()
+
         # Redis clients - separate for pub/sub
         self.redis_client = get_connection()
         self.pubsub = None
 
         # Control flags
         self.running = True
+        self.connected_at = time.time()
         self.last_activity = time.time()
+
+    def _log(self, message):
+        try:
+            rip = self.remote_ip
+        except Exception:
+            rip = None
+        logger.info(f"[{self.connection_id} -> {rip}]: {message}")
+
+    def resolve_remote_ip(self):
+        """
+        Resolve the remote IP using ASGI scope first, then fallbacks.
+        """
+        try:
+            scope = getattr(self.websocket, "scope", None)
+            if scope:
+                ip = self.get_remote_ip(scope)
+                if ip:
+                    return ip
+            # Fallback to wrapper-provided request headers
+            headers = getattr(self.websocket, "request_headers", None)
+            if headers:
+                xff = headers.get("x-forwarded-for") or headers.get("X-Forwarded-For")
+                xreal = headers.get("x-real-ip") or headers.get("X-Real-IP")
+                if xff:
+                    return xff.split(",")[0].strip()
+                if xreal:
+                    return xreal.strip()
+            # Final fallback to transport peername
+            transport = getattr(self.websocket, "transport", None)
+            if transport and hasattr(transport, "get_extra_info"):
+                peer = transport.get_extra_info("peername")
+                if peer:
+                    return peer[0] if isinstance(peer, (tuple, list)) else str(peer)
+        except Exception:
+            self._log_exception("resolve_remote_ip")
+        return None
+
+    def get_remote_ip(self, scope):
+        # Prefer the ASGI client tuple (ip, port)
+        client = scope.get("client")
+        if client and client[0]:
+            return client[0]
+
+        # Build lowercase header dict for fallbacks
+        headers = {}
+        for k, v in scope.get("headers", []):
+            try:
+                headers[k.decode().lower()] = v.decode()
+            except Exception:
+                pass
+
+        # RFC 7239 Forwarded header: for=...
+        fwd = headers.get("forwarded")
+        if fwd:
+            # naive parse – good enough for common cases
+            parts = [p.strip() for p in fwd.split(";")]
+            for p in parts:
+                if p.startswith("for="):
+                    return p.split("=", 1)[1].strip('"')
+
+        # X-Forwarded-For: first IP
+        xff = headers.get("x-forwarded-for")
+        if xff:
+            return xff.split(",")[0].strip()
+
+        # X-Real-IP
+        xri = headers.get("x-real-ip")
+        if xri:
+            return xri
+
+        return None
+
+    def resolve_user_agent(self):
+        """
+        Resolve the User-Agent from ASGI scope headers or request_headers.
+        """
+        try:
+            scope = getattr(self.websocket, "scope", None)
+            if scope:
+                for k, v in scope.get("headers", []):
+                    try:
+                        if k.decode().lower() == "user-agent":
+                            return v.decode()
+                    except Exception:
+                        pass
+            headers = getattr(self.websocket, "request_headers", None)
+            if headers:
+                return headers.get("user-agent") or headers.get("User-Agent")
+        except Exception:
+            pass
+        return None
+
+    def _log_exception(self, message):
+        try:
+            rip = self.remote_ip
+        except Exception:
+            rip = None
+        logger.exception(f"[{self.connection_id} -> {rip}]: {message}")
 
     async def handle_connection(self):
         """Main connection handler - manages entire connection lifecycle"""
-        logger.info(f"New WebSocket connection: {self.connection_id}")
+        self._log("connected")
 
         try:
             # Register connection in Redis
@@ -76,7 +179,7 @@ class WebSocketHandler:
                     pass
 
         except Exception as e:
-            logger.exception(f"Error in connection {self.connection_id}: {e}")
+            self._log_exception("connection error")
         finally:
             await self.cleanup_connection()
 
@@ -87,7 +190,8 @@ class WebSocketHandler:
             "authenticated": False,
             "connected_at": time.time(),
             "last_ping": time.time(),
-            "topics": []
+            "topics": [],
+            "remote_ip": self.remote_ip
         }
 
         key = f"realtime:connections:{self.connection_id}"
@@ -97,7 +201,7 @@ class WebSocketHandler:
                 lambda: self.redis_client.setex(key, 3600, json.dumps(connection_data))
             )
         except Exception as e:
-            logger.warning(f"Failed to register connection {self.connection_id} in Redis: {e}")
+            self._log_exception("registration failed")
 
     async def update_connection_auth(self):
         """Update connection with authentication info"""
@@ -108,7 +212,9 @@ class WebSocketHandler:
             "authenticated": True,
             "connected_at": time.time(),
             "last_ping": time.time(),
-            "topics": list(self.subscribed_topics)
+            "topics": list(self.subscribed_topics),
+            "remote_ip": self.remote_ip,
+            "user_agent": self.user_agent
         }
 
         key = f"realtime:connections:{self.connection_id}"
@@ -118,7 +224,7 @@ class WebSocketHandler:
                 lambda: self.redis_client.setex(key, 3600, json.dumps(connection_data))
             )
         except Exception as e:
-            logger.warning(f"Failed to update connection auth {self.connection_id} in Redis: {e}")
+            self._log_exception("update failed")
 
     async def register_user_online(self):
         """Register user as online in Redis"""
@@ -146,7 +252,7 @@ class WebSocketHandler:
 
                 self.redis_client.setex(key, 3600, json.dumps(user_data))
             except Exception as e:
-                logger.warning(f"Failed to register user online for {self.connection_id}: {e}")
+                self._log_exception("Failed to register user online")
 
         await asyncio.get_event_loop().run_in_executor(None, get_and_update)
 
@@ -156,12 +262,14 @@ class WebSocketHandler:
             await asyncio.sleep(5)  # Check every 5 seconds
 
             time_since_activity = time.time() - self.last_activity
+            connected_duration = time.time() - self.connected_at
 
             if time_since_activity >= 30:
                 if not self.authenticated:
+                    await self.report_incident("auth timeout", "auth", 6)
                     await self.send_error("Authentication timeout")
                 else:
-                    logger.info(f"Connection {self.connection_id} timed out due to inactivity")
+                    self._log(f"timeout due to no activity for {time_since_activity} seconds, connected for {connected_duration} seconds")
                 await self.close_connection()
                 break
 
@@ -178,14 +286,14 @@ class WebSocketHandler:
                 except json.JSONDecodeError:
                     await self.send_error("Invalid JSON")
                 except Exception as e:
-                    logger.exception(f"Error processing client message: {e}")
+                    self._log_exception("message processing error")
                     await self.send_error("Message processing error")
 
         except Exception as e:
             if "closed" in str(e).lower():
-                logger.info(f"Client connection closed: {self.connection_id}")
+                self._log("disconnected")
             else:
-                logger.exception(f"Error in client message handler: {e}")
+                self._log_exception("client message handler error")
         finally:
             self.running = False
 
@@ -218,10 +326,10 @@ class WebSocketHandler:
                         data = json.loads(message['data'])
                         await self.process_redis_message(data)
                     except Exception as e:
-                        logger.exception(f"Error processing Redis message: {e}")
+                        self._log(f"Error processing Redis message: {e}")
 
         except Exception as e:
-            logger.exception(f"Error in Redis message handler: {e}")
+            self._log_exception(f"Error in Redis message handler: {e}")
         finally:
             if self.pubsub:
                 await asyncio.get_event_loop().run_in_executor(
@@ -263,6 +371,7 @@ class WebSocketHandler:
         prefix = data.get("prefix", "bearer")
 
         if not token:
+            await self.report_incident("auth with no token", "auth", 8)
             await self.send_error("Missing token")
             return
 
@@ -270,6 +379,7 @@ class WebSocketHandler:
         user, error, key_name = await async_validate_bearer_token(prefix, token)
 
         if error or not user:
+            await self.report_incident("auth failed", "auth", 4)
             await self.send_error(f"Authentication failed: {error}")
             return
 
@@ -286,7 +396,19 @@ class WebSocketHandler:
         await self.subscribe_to_topic(user_topic)
 
         # Call user's connected hook if available
-        if hasattr(self.user, 'on_realtime_connected'):
+        if hasattr(self.user, 'on_realtime_connection'):
+            connection_data = {
+                "connection_id": self.connection_id,
+                "remote_ip": self.remote_ip,
+                "user_agent": self.user_agent
+            }
+            def call_hook():
+                return self.user.on_realtime_connection(connection_data)
+            result = await asyncio.get_event_loop().run_in_executor(None, call_hook)
+            # Process hook response
+            if result:
+                await self._process_hook_response(result)
+        elif hasattr(self.user, 'on_realtime_connected'):
             def call_hook():
                 return self.user.on_realtime_connected()
             result = await asyncio.get_event_loop().run_in_executor(None, call_hook)
@@ -322,10 +444,11 @@ class WebSocketHandler:
                     None, check_permission
                 )
                 if not can_subscribe:
+                    await self.report_incident(f"access denied for topic {topic}", "permission_denied", 4)
                     await self.send_error(f"Access denied to topic: {topic}")
                     return
             except Exception as e:
-                logger.exception(f"Error checking topic permission for {topic}: {e}")
+                self._log_exception(f"Error checking topic permission for {topic}: {e}")
                 await self.send_error("Authorization check failed")
                 return
 
@@ -368,7 +491,7 @@ class WebSocketHandler:
 
     async def handle_custom_message(self, data):
         """Handle custom message - delegate to user's hook if available"""
-        logger.debug(f"Processing custom message for {self.connection_id}: {data}")
+
 
         if hasattr(self.user, 'on_realtime_message'):
             def call_hook():
@@ -378,40 +501,40 @@ class WebSocketHandler:
                 response = await asyncio.get_event_loop().run_in_executor(
                     None, call_hook
                 )
-                logger.debug(f"User hook returned for {self.connection_id}: {response}")
+
                 if response:
                     await self._process_hook_response(response)
                 else:
-                    logger.debug(f"No response from user hook for {self.connection_id}")
+                    self._log("No response from user hook")
             except Exception as e:
-                logger.exception(f"Error in user message hook: {e}")
+                self._log_exception(f"Error in user message hook: {e}")
                 await self.send_error("Message processing error")
         else:
-            logger.debug(f"No on_realtime_message hook for user {self.user}")
+
             await self.send_error("Unsupported message type")
 
     async def _process_hook_response(self, response):
         """Process unified response from user hooks"""
-        logger.debug(f"Processing hook response for {self.connection_id}: {response}")
+
 
         if isinstance(response, dict):
             # Send response message to client
             if "response" in response:
-                logger.debug(f"Sending response to client {self.connection_id}: {response['response']}")
+
                 await self.send_message(response["response"])
 
             # Process subscription requests
             if "subscriptions" in response:
-                logger.debug(f"Processing subscriptions for {self.connection_id}: {response['subscriptions']}")
+
                 for topic in response["subscriptions"]:
                     if topic and isinstance(topic, str):
                         try:
                             await self.subscribe_to_topic(topic)
                         except Exception as e:
-                            logger.warning(f"Failed to subscribe to topic {topic}: {e}")
+                            self._log(f"Failed to subscribe to topic {topic}: {e}")
         else:
             # Backward compatibility - treat non-dict as direct response
-            logger.debug(f"Sending direct response to client {self.connection_id}: {response}")
+
             await self.send_message(response)
 
     async def subscribe_to_topic(self, topic):
@@ -428,7 +551,7 @@ class WebSocketHandler:
                 # Subscribe to Redis channel
                 self.pubsub.subscribe(f"realtime:topic:{topic}")
             except Exception as e:
-                logger.warning(f"Failed to subscribe {self.connection_id} to topic {topic}: {e}")
+                self._log(f"Failed to subscribe to topic {topic}: {e}")
                 raise
 
         await asyncio.get_event_loop().run_in_executor(None, subscribe)
@@ -447,7 +570,7 @@ class WebSocketHandler:
                 # Unsubscribe from Redis channel
                 self.pubsub.unsubscribe(f"realtime:topic:{topic}")
             except Exception as e:
-                logger.warning(f"Failed to unsubscribe {self.connection_id} from topic {topic}: {e}")
+                self._log(f"Failed to unsubscribe from topic {topic}: {e}")
 
         await asyncio.get_event_loop().run_in_executor(None, unsubscribe)
         self.subscribed_topics.discard(topic)
@@ -474,14 +597,14 @@ class WebSocketHandler:
 
     async def send_message(self, message):
         """Send message to WebSocket client"""
-        logger.debug(f"Sending WebSocket message to {self.connection_id}: {message}")
+        # logger.debug(f"Sending WebSocket message to {self.connection_id}: {message}")
         try:
             await self.websocket.send(json.dumps(message))
         except Exception as e:
             if "closed" in str(e).lower():
                 self.running = False
             else:
-                logger.exception(f"Error sending message: {e}")
+                self._log_exception(f"Error sending message: {e}")
                 self.running = False
 
     async def send_error(self, error_message):
@@ -490,6 +613,43 @@ class WebSocketHandler:
             "type": "error",
             "message": error_message
         })
+
+    async def report_incident(self, details, event_type="info", level=1, scope="realtime", **context):
+        """
+        Report an incident (audit/event) from any websocket event without blocking the event loop.
+        Captures connection/user context and executes the synchronous reporter in a thread pool.
+        """
+        try:
+            payload = dict(context or {})
+            payload.setdefault("connection_id", self.connection_id)
+            payload.setdefault("user_type", self.user_type)
+            payload.setdefault("source_ip", self.remote_ip)
+            payload.setdefault("request_ip", self.remote_ip)
+            payload.setdefault("http_protocol", "websocket")
+            payload.setdefault("http_user_agent", self.user_agent)
+            if self.subscribed_topics:
+                payload.setdefault("topics", list(self.subscribed_topics))
+            if self.user and "uid" not in payload:
+                payload["uid"] = self.user.id
+
+            # Local import to avoid top-level dependency changes
+            from mojo.apps import incident
+
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None,
+                lambda: incident.report_event(
+                    details,
+                    title=details[:80],
+                    category=event_type,
+                    level=level,
+                    request=None,   # no HTTP request in websocket context
+                    scope=scope,
+                    **payload
+                )
+            )
+        except Exception as e:
+            self._log_exception("failed to report incident")
 
     async def close_connection(self):
         """Close WebSocket connection"""
@@ -501,8 +661,7 @@ class WebSocketHandler:
 
     async def cleanup_connection(self):
         """Clean up connection state in Redis"""
-        logger.info(f"Cleaning up connection: {self.connection_id}")
-
+        self._log("disconnected")
         def cleanup():
             try:
                 # Remove connection record
@@ -530,7 +689,7 @@ class WebSocketHandler:
                             # No more connections, remove online status
                             self.redis_client.delete(key)
             except Exception as e:
-                logger.warning(f"Failed to cleanup connection {self.connection_id} in Redis: {e}")
+                self._log_exception("redis cleanup failed")
 
         await asyncio.get_event_loop().run_in_executor(None, cleanup)
 
@@ -541,11 +700,11 @@ class WebSocketHandler:
             try:
                 await asyncio.get_event_loop().run_in_executor(None, call_hook)
             except Exception as e:
-                logger.exception(f"Error in user disconnect hook: {e}")
+                self._log_exception("user disconnect hook failed")
 
         # Close pubsub
         if self.pubsub:
             try:
                 await asyncio.get_event_loop().run_in_executor(None, self.pubsub.close)
             except Exception as e:
-                logger.warning(f"Failed to close pubsub for {self.connection_id}: {e}")
+                self._log(f"Failed to close pubsub: {e}")

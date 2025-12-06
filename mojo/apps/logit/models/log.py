@@ -97,6 +97,9 @@ class Log(dm.Model, MojoModel):
             ip_address = request.ip
             method = request.method
             user_agent = request.user_agent
+        else:
+            ip_address = kwargs.get("ip_address", None)
+            user_agent = kwargs.get("user_agent", None)
 
         path = kwargs.get("path", path)
         method = kwargs.get("method", method)
