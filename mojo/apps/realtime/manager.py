@@ -118,20 +118,49 @@ def get_user_connections(user_type, user_id):
     """
     Get all connection IDs for a user.
 
+    Supports both legacy JSON string value and the newer Redis Set value.
+
     Args:
         user_type: Type of user (e.g., "user", "customer")
         user_id: User's ID
 
     Returns:
-        list: List of connection IDs
+        list: List of connection IDs (strings)
     """
     redis_client = get_redis()
     key = f"realtime:online:{user_type}:{user_id}"
+
+    # Prefer set semantics
+    try:
+        key_type = redis_client.type(key)
+        if isinstance(key_type, (bytes, bytearray)):
+            key_type = key_type.decode()
+    except Exception:
+        key_type = None
+
+    if key_type == "set":
+        members = redis_client.smembers(key) or set()
+        return [
+            m.decode() if isinstance(m, (bytes, bytearray)) else str(m)
+            for m in members
+        ]
+
+    # Fallback to legacy JSON string
     data = redis_client.get(key)
-    if data:
+    if not data:
+        return []
+    if isinstance(data, (bytes, bytearray)):
+        try:
+            data = data.decode()
+        except Exception:
+            return []
+    try:
         user_data = json.loads(data)
-        return user_data.get("connection_ids", [])
-    return []
+        ids = user_data.get("connection_ids", [])
+        # Ensure strings
+        return [i.decode() if isinstance(i, (bytes, bytearray)) else str(i) for i in ids]
+    except Exception:
+        return []
 
 
 def get_topic_subscribers(topic):
@@ -142,10 +171,14 @@ def get_topic_subscribers(topic):
         topic: Topic name
 
     Returns:
-        list: List of connection IDs subscribed to topic
+        list: List of connection IDs subscribed to topic (strings)
     """
     redis_client = get_redis()
-    return list(redis_client.smembers(f"realtime:topic:{topic}"))
+    members = redis_client.smembers(f"realtime:topic:{topic}") or set()
+    return [
+        m.decode() if isinstance(m, (bytes, bytearray)) else str(m)
+        for m in members
+    ]
 
 
 def get_redis_info(connection_id):
@@ -184,6 +217,12 @@ def get_online_users(user_type=None):
 
     online_users = []
     for key in redis_client.keys(pattern):
+        # Normalize to string key
+        if isinstance(key, (bytes, bytearray)):
+            try:
+                key = key.decode()
+            except Exception:
+                continue
         # Parse key: realtime:online:{user_type}:{user_id}
         parts = key.split(":", 3)
         if len(parts) == 4:

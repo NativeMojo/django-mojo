@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v1.0.6 - December 06, 2025
+
+fixing bug when lock syncs via realtime more then once
+
+
 ## v1.0.5 - December 06, 2025
 
 fixing realtime debugging

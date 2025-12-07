@@ -21,6 +21,12 @@ from .auth import async_validate_bearer_token
 
 logger = logit.get_logger("realtime", "realtime.log")
 
+# Presence/connection/topic TTLs (seconds)
+CONNECTION_TTL_SECONDS = 300         # connection record TTL
+ONLINE_TTL_SECONDS = 300             # user online presence TTL
+TOPIC_TTL_SECONDS = 300              # topic membership TTL
+PRESENCE_REFRESH_MIN_INTERVAL = 30   # throttle presence refreshes
+
 
 class WebSocketHandler:
     def __init__(self, websocket, path):
@@ -44,6 +50,7 @@ class WebSocketHandler:
         self.running = True
         self.connected_at = time.time()
         self.last_activity = time.time()
+        self.last_presence_refresh = 0
 
     def _log(self, message):
         try:
@@ -51,6 +58,9 @@ class WebSocketHandler:
         except Exception:
             rip = None
         logger.info(f"[{self.connection_id} -> {rip}]: {message}")
+
+    def user_online_key(self):
+        return f"realtime:online:{self.user_type}:{self.user.id}"
 
     def resolve_remote_ip(self):
         """
@@ -198,7 +208,7 @@ class WebSocketHandler:
         try:
             await asyncio.get_event_loop().run_in_executor(
                 None,
-                lambda: self.redis_client.setex(key, 3600, json.dumps(connection_data))
+                lambda: self.redis_client.setex(key, CONNECTION_TTL_SECONDS, json.dumps(connection_data))
             )
         except Exception as e:
             self._log_exception("registration failed")
@@ -221,7 +231,7 @@ class WebSocketHandler:
         try:
             await asyncio.get_event_loop().run_in_executor(
                 None,
-                lambda: self.redis_client.setex(key, 3600, json.dumps(connection_data))
+                lambda: self.redis_client.setex(key, CONNECTION_TTL_SECONDS, json.dumps(connection_data))
             )
         except Exception as e:
             self._log_exception("update failed")
@@ -231,27 +241,14 @@ class WebSocketHandler:
         if not self.user or not self.user_type:
             return
 
-        key = f"realtime:online:{self.user_type}:{self.user.id}"
+        key = self.user_online_key()
 
-        # Get existing data or create new
         def get_and_update():
             try:
-                existing = self.redis_client.get(key)
-                if existing:
-                    user_data = json.loads(existing)
-                    connection_ids = set(user_data.get("connection_ids", []))
-                else:
-                    connection_ids = set()
-
-                connection_ids.add(self.connection_id)
-
-                user_data = {
-                    "connection_ids": list(connection_ids),
-                    "last_seen": time.time()
-                }
-
-                self.redis_client.setex(key, 3600, json.dumps(user_data))
-            except Exception as e:
+                # Add this connection to the user's online set and refresh TTL
+                self.redis_client.sadd(key, self.connection_id)
+                self.redis_client.expire(key, ONLINE_TTL_SECONDS)
+            except Exception:
                 self._log_exception("Failed to register user online")
 
         await asyncio.get_event_loop().run_in_executor(None, get_and_update)
@@ -483,6 +480,9 @@ class WebSocketHandler:
             await self.send_error("Authentication required")
             return
 
+        # Refresh presence TTLs on ping (throttled)
+        await self.refresh_presence()
+
         await self.send_message({
             "type": "pong",
             "user_type": self.user_type,
@@ -546,7 +546,7 @@ class WebSocketHandler:
             try:
                 # Add to topic subscribers
                 self.redis_client.sadd(f"realtime:topic:{topic}", self.connection_id)
-                self.redis_client.expire(f"realtime:topic:{topic}", 3600)
+                self.redis_client.expire(f"realtime:topic:{topic}", TOPIC_TTL_SECONDS)
 
                 # Subscribe to Redis channel
                 self.pubsub.subscribe(f"realtime:topic:{topic}")
@@ -614,6 +614,32 @@ class WebSocketHandler:
             "message": error_message
         })
 
+    async def refresh_presence(self, force=False):
+        """
+        Refresh connection and online presence TTLs without blocking the event loop.
+        Throttled by PRESENCE_REFRESH_MIN_INTERVAL unless force=True.
+        """
+        now = time.time()
+        if not force and (now - getattr(self, "last_presence_refresh", 0)) < PRESENCE_REFRESH_MIN_INTERVAL:
+            return
+
+        self.last_presence_refresh = now
+        conn_key = f"realtime:connections:{self.connection_id}"
+
+        def do_refresh():
+            try:
+                # Extend connection record TTL
+                self.redis_client.expire(conn_key, CONNECTION_TTL_SECONDS)
+                # Extend user online presence TTL, if authenticated
+                if self.user and self.user_type:
+                    online_key = f"realtime:online:{self.user_type}:{self.user.id}"
+                    self.redis_client.expire(online_key, ONLINE_TTL_SECONDS)
+            except Exception:
+                # Keep presence refresh best-effort
+                pass
+
+        await asyncio.get_event_loop().run_in_executor(None, do_refresh)
+
     async def report_incident(self, details, event_type="info", level=1, scope="realtime", **context):
         """
         Report an incident (audit/event) from any websocket event without blocking the event loop.
@@ -673,21 +699,14 @@ class WebSocketHandler:
 
                 # Update user online status
                 if self.user and self.user_type:
-                    key = f"realtime:online:{self.user_type}:{self.user.id}"
-                    existing = self.redis_client.get(key)
-                    if existing:
-                        user_data = json.loads(existing)
-                        connection_ids = set(user_data.get("connection_ids", []))
-                        connection_ids.discard(self.connection_id)
-
-                        if connection_ids:
-                            # Still has other connections
-                            user_data["connection_ids"] = list(connection_ids)
-                            user_data["last_seen"] = time.time()
-                            self.redis_client.setex(key, 3600, json.dumps(user_data))
-                        else:
-                            # No more connections, remove online status
-                            self.redis_client.delete(key)
+                    key = self.user_online_key()
+                    # Remove this connection from the online set
+                    self.redis_client.srem(key, self.connection_id)
+                    # If set is empty, delete; otherwise refresh TTL
+                    if self.redis_client.scard(key) == 0:
+                        self.redis_client.delete(key)
+                    else:
+                        self.redis_client.expire(key, ONLINE_TTL_SECONDS)
             except Exception as e:
                 self._log_exception("redis cleanup failed")
 
