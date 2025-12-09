@@ -266,7 +266,7 @@ class WebSocketHandler:
                     await self.report_incident("auth timeout", "auth", 6)
                     await self.send_error("Authentication timeout")
                 else:
-                    self._log(f"timeout due to no activity for {time_since_activity} seconds, connected for {connected_duration} seconds")
+                    self._log(f"timeout due to no activity for {time_since_activity:.2f} seconds, connected for {connected_duration:.2f} seconds")
                 await self.close_connection()
                 break
 
