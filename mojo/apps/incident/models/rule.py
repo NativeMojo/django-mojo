@@ -398,7 +398,7 @@ class Rule(models.Model, MojoModel):
     index = models.IntegerField(default=0, db_index=True)
     comparator = models.CharField(max_length=32, default="==")
     field_name = models.CharField(max_length=124, default=None, null=True)
-    value = models.CharField(max_length=124, default="")
+    value = models.TextField(default="")
     value_type = models.CharField(max_length=10, default="int")
     is_required = models.IntegerField(default=0)  # 0=no 1=yes
 
