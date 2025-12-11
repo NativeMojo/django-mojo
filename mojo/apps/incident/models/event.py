@@ -115,7 +115,10 @@ class Event(models.Model, MojoModel):
         from mojo.apps.incident.models import RuleSet
         # Record metrics and find the RuleSet by category
         self.record_event_metrics()
-        rule_set = RuleSet.check_by_category(self.category, self)
+        # check by scope first
+        rule_set = RuleSet.check_by_category(self.scope, self)
+        if rule_set is None:
+            rule_set = RuleSet.check_by_category(self.category, self)
 
         # Honor action=ignore from RuleSet metadata
         if rule_set and rule_set.handler == "ignore":

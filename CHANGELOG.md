@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v1.0.8 - December 11, 2025
+
+fix for iso format null
+
+
 ## v1.0.7 - December 09, 2025
 
 fixing rule field to text

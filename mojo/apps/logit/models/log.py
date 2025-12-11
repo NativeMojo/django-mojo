@@ -63,7 +63,7 @@ class Log(dm.Model, MojoModel):
             def convert_value(value):
                 if isinstance(value, bytes):
                     return value.decode('utf-8', errors='replace')
-                elif hasattr(value, 'isoformat'):  # datetime objects
+                elif hasattr(value, 'isoformat') and callable(getattr(value, 'isoformat')):  # datetime objects
                     return value.isoformat()
                 elif isinstance(value, str):
                     return value
