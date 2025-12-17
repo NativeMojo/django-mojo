@@ -1,5 +1,11 @@
 
 ## v0.1.3 - May 29, 2025
+## v1.0.9 - December 17, 2025
+
+bug fix when using list helpers
+allow incidents to ignore rules
+
+
 ## v1.0.8 - December 11, 2025
 
 fix for iso format null
