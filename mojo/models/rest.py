@@ -631,6 +631,8 @@ class MojoModel:
         reserved_keys = ["start", "size", "download_format", "dr_start", "dr_end", "limit", "offset"]
         filters = {}
         excludes = {}
+        if not hasattr(cls, '__rest_field_names__'):
+            cls.__rest_field_names__ = [f.name for f in cls._meta.get_fields()]
 
         for key, value in request.QUERY_PARAMS.items():
             # Split key to check for foreign key relationships
@@ -806,6 +808,8 @@ class MojoModel:
         Returns:
             The sorted queryset.
         """
+        if not hasattr(cls, '__rest_field_names__'):
+            cls.__rest_field_names__ = [f.name for f in cls._meta.get_fields()]
         sort_field = request.DATA.pop("sort", "-id")
         if sort_field.lstrip('-') in cls.__rest_field_names__:
             return queryset.order_by(sort_field)
