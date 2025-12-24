@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v1.0.10 - December 24, 2025
+
+bug fix for issue when multiple people access IoT lock
+
+
 ## v1.0.9 - December 17, 2025
 
 bug fix when using list helpers

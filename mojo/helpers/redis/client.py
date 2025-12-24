@@ -85,7 +85,9 @@ def get_connection():
     url = _build_url()
     max_conn = int(settings.get("REDIS_MAX_CONN", 500))
     connect_timeout = float(settings.get("REDIS_CONNECT_TIMEOUT", 2))
-    socket_timeout  = float(settings.get("REDIS_SOCKET_TIMEOUT", 2))
+    # socket_timeout must be higher than any brpop/blpop timeout used in the app
+    # Default to 300s (5 min) to support blocking operations while still failing on hung connections
+    socket_timeout  = float(settings.get("REDIS_SOCKET_TIMEOUT", 60))
 
     # Start with a basic client to detect cluster (works for both redis:// and rediss://)
     base = redis.Redis.from_url(
