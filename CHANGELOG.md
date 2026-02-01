@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v1.0.12 - February 01, 2026
+
+* Fixing Phone lookup for international numbers
+
+
 ## v1.0.11 - February 01, 2026
 
 * Improved API key access
