@@ -23,7 +23,7 @@ Key concepts:
 - One WebSocket endpoint for all apps: `ws/realtime/`
 - Message-based auth using the exact same bearer handlers as HTTP middleware
 - Generic identity:
-  - `instance` — the authenticated Django model (e.g., `User`, `Customer`, `Terminal`, etc.)
+  - `instance` — the authenticated Django model (e.g., `User`, `Customer`, `Device`, etc.)
   - `instance_kind` — the normalized bearer name (e.g., `"user"`, `"customer"`) from your HTTP middleware mapping
 - Topic-based pub/sub:
   - External topic names (e.g., `user:123`) normalized to Channels-safe groups under the hood

@@ -6,6 +6,7 @@ import ujson
 
 
 class Log(dm.Model, MojoModel):
+    id = dm.BigAutoField(primary_key=True)
     created = dm.DateTimeField(auto_now_add=True)
     level = dm.CharField(max_length=12, default="info")
     kind = dm.CharField(max_length=200, default=None, null=True)

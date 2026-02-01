@@ -19,6 +19,8 @@ logger = logit.get_logger("error", "error.log")
 # Global registry for REST routes
 REGISTERED_URLS = {}
 URLPATTERN_METHODS = {}
+# Global list for absolute URLs (those starting with "/") that bypass app prefixes
+ABSOLUTE_URLPATTERNS = []
 MOJO_API_MODULE = settings.get("MOJO_API_MODULE", "api")
 MOJO_APPEND_SLASH = settings.get("MOJO_APPEND_SLASH", False)
 
@@ -125,6 +127,10 @@ def _register_route(method="ALL"):
     Decorator to automatically register a Django view for a specific HTTP method.
     Supports defining a custom pattern inside the decorator.
 
+    Paths starting with "/" are treated as absolute and bypass the app prefix:
+    - md.URL("myapi") in "myapp" -> /api/myapp/myapi
+    - md.URL("/root/myapi") in "myapp" -> /api/root/myapi (bypasses "myapp" prefix)
+
     :param method: The HTTP method (GET, POST, etc.).
     """
     def decorator(pattern=None, docs=None):
@@ -145,29 +151,51 @@ def _register_route(method="ALL"):
             else:
                 pattern_used = pattern
 
+            # Check if this is an absolute path (starts with "/")
+            is_absolute = pattern_used.startswith("/")
+
+            # Strip leading "/" for absolute paths since Django path() doesn't expect it
+            if is_absolute:
+                pattern_used = pattern_used.lstrip("/")
+
             if MOJO_APPEND_SLASH:
                 pattern_used = pattern if pattern_used.endswith("/") else f"{pattern_used}/"
+
             # Register view in URL mapping
             app_name = module.__name__.split(".")[-1]
-            # print(f"{module.__name__}.urlpatterns")
-            root_key = f"{app_name}__{pattern_used}"
+
+            # For absolute paths, use a special prefix to indicate they bypass app prefix
+            if is_absolute:
+                root_key = f"__absolute__{pattern_used}"
+            else:
+                root_key = f"{app_name}__{pattern_used}"
+
             key = f"{root_key}__{method}"
-            # print(f"{app_name} -> {pattern_used} -> {key}")
             URLPATTERN_METHODS[key] = view_func
 
             # Determine whether to use path() or re_path()
             url_func = path if not (pattern_used.startswith("^") or pattern_used.endswith("$")) else re_path
 
-            # Add to `urlpatterns`
-            module.urlpatterns.append(url_func(
+            # Create the URL pattern
+            url_pattern = url_func(
                 pattern_used, dispatcher,
                 kwargs={
                     "__mojo_rest_root_key__": root_key
-                }))
+                })
+
+            # Add to appropriate urlpatterns list
+            if is_absolute:
+                # Absolute paths go to global list (bypass app prefix)
+                ABSOLUTE_URLPATTERNS.append(url_pattern)
+            else:
+                # Regular paths go to module urlpatterns (get app prefix)
+                module.urlpatterns.append(url_pattern)
+
             # Attach metadata
             view_func.__app_module_name__ = module.__name__
             view_func.__app_name__ = app_name
             view_func.__url__ = (method, pattern_used)
+            view_func.__is_absolute__ = is_absolute
             view_func.__docs__ = docs or {}
             return view_func
         return wrapper

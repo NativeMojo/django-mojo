@@ -76,3 +76,23 @@ def encrypt_ecb(data, key_str):
     padded = data.encode("utf-8") + bytes([pad_len]) * pad_len
     ct = cipher.encrypt(padded)
     return b64encode(ct).decode("utf-8")
+
+def calculate_kcv(key):
+    """
+    Calculate Key Check Value (KCV) using AES encryption.
+
+    KCV is the first 3 bytes of AES-encrypting a zero block with the key.
+    This matches the firmware's PSA Crypto implementation.
+    """
+    # Convert hex string to bytes
+    key_bytes = bytes.fromhex(key)
+
+    # Create AES cipher in ECB mode
+    cipher = AES.new(key_bytes, AES.MODE_ECB)
+
+    # Encrypt a zero block (16 bytes of 0x00)
+    zero_block = b'\x00' * 16
+    encrypted = cipher.encrypt(zero_block)
+
+    # KCV is first 3 bytes
+    return encrypted[:3].hex().upper()

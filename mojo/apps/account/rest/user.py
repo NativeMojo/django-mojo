@@ -69,7 +69,7 @@ def on_user_login(request):
 def jwt_login(request, user, legacy=False):
     user.last_login = dates.utcnow()
     user.track()
-    keys = dict(uid=user.id)
+    keys = dict(uid=user.id, ip=request.ip)
     if request.device:
         keys['device'] = request.device.id
     access_token_expiry = JWT_TOKEN_EXPIRY
@@ -157,3 +157,36 @@ def on_user_password_reset_token(request):
     user.set_password(new_password)
     user.save()
     return jwt_login(request, user)
+
+
+@md.POST("auth/generate_api_key")
+@md.requires_auth()
+@md.requires_params("allowed_ips")
+def generate_api_key(request):
+    allowed_ips = request.DATA.get_typed("allowed_ips", typed=list)
+    if len(allowed_ips) == 0:
+        raise merrors.ValueException("Requires allowed_ips")
+    expire_days = request.DATA.get_typed("expire_days", 360, typed=int)
+    if expire_days > 360:
+        raise merrors.ValueException("Invalid expire_days")
+    token = request.user.generate_api_token(allowed_ips=allowed_ips, expire_days=expire_days)
+    request.user.log(f"API Key Generated {token.jti} expire {expire_days} days", "api_key:generated")
+    return dict(status=True, data=token)
+
+
+@md.POST("auth/manage/generate_api_key")
+@md.requires_perms("manage_users")
+@md.requires_params("allowed_ips", "uid")
+def generate_user_api_key(request):
+    allowed_ips = request.DATA.get_typed("allowed_ips", typed=list)
+    if len(allowed_ips) == 0:
+        raise merrors.ValueException("Requires allowed_ips")
+    expire_days = request.DATA.get_typed("expire_days", 360, typed=int)
+    if expire_days > 360:
+        raise merrors.ValueException("Invalid expire_days")
+    user = User.objects.filter(pk=request.DATA.uid).last()
+    if user is None:
+        raise merrors.ValueException("Invalid User")
+    token = user.generate_api_token(allowed_ips=allowed_ips, expire_days=expire_days)
+    user.log(f"API Key Generated {token.jti} expire {expire_days} days by {request.user.username}", "api_key:generated")
+    return dict(status=True, data=token)

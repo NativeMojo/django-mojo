@@ -7,6 +7,7 @@ from mojo.helpers import dates
 from mojo.apps.account.utils.jwtoken import JWToken
 from mojo.apps import metrics
 from .device import UserDevice
+from objict import objict
 import uuid
 
 SYS_USER_PERMS_PROTECTION = {
@@ -781,6 +782,20 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
             return True
         return False
 
+    def generate_api_token(self, expire_days=360, allowed_ips=[]):
+        expire_seconds = expire_days * 24 * 60 * 60
+        access_token_expiry = expire_seconds
+        refresh_token_expiry = expire_seconds
+        token = JWToken(
+            self.get_auth_key(),
+            access_token_expiry=access_token_expiry,
+            refresh_token_expiry=refresh_token_expiry)
+        package = token.create(uid=self.pk, allowed_ips=allowed_ips)
+        return objict(
+            jti=token.payload.jti,
+            expires=token.payload.exp,
+            token=package.access_token)
+
     @classmethod
     def validate_jwt(cls, token, request=None):
         token_manager = JWToken()
@@ -795,5 +810,9 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
             if token_manager.is_expired:
                 return user, "Token expired"
             return user, "Token has invalid signature"
+        # verify ip address is allowed
+        if isinstance(jwt_data.allowed_ips, list):
+            if request.ip not in jwt_data.allowed_ips:
+                return user, f"Not allowed from location"
         user.track()
         return user, None

@@ -6,14 +6,18 @@ from . import international_codes
 def normalize(phone_number, country_code='US'):
     """
     Normalize phone number to E.164 format (+1234567890).
-    Only handles NANP (USA/Canada/Caribbean) numbers.
+
+    Handles both NANP (USA/Canada/Caribbean) and international numbers.
+    - NANP numbers without + are assumed to be country code +1
+    - International numbers must include + or country code prefix
+    - Returns normalized E.164 format for all valid numbers
 
     Args:
         phone_number: Phone number string (various formats accepted)
         country_code: ISO country code for default country (default: US)
 
     Returns:
-        Normalized phone number in E.164 format or None if invalid/international
+        Normalized phone number in E.164 format (+...) or None if invalid
     """
     if not phone_number:
         return None
@@ -30,34 +34,33 @@ def normalize(phone_number, country_code='US'):
     if not digits:
         return None
 
-    # If original had +, check if it's NANP (country code 1)
+    # If original had +, it's already in international format
     if has_plus:
         # E.164 format with explicit country code
-        if digits.startswith('1') and len(digits) == 11:
-            # Valid NANP: +14155551234
+        # Validate length (E.164 allows 1-15 digits)
+        if 7 <= len(digits) <= 15:
             return f'+{digits}'
-        elif not digits.startswith('1'):
-            # International number (not NANP)
-            return None
         else:
-            # Starts with 1 but wrong length
+            # Invalid length for E.164
             return None
 
-    # No + prefix - assume NANP if reasonable length
+    # No + prefix - need to determine if NANP or international
     if digits.startswith('1') and len(digits) == 11:
-        # 11 digits starting with 1: 14155551234
+        # 11 digits starting with 1: 14155551234 (NANP with country code)
         return f'+{digits}'
     elif len(digits) == 10:
-        # 10 digits: 4155551234 - assume NANP, add country code
-        return f'+1{digits}'
-    elif digits.startswith('1') and len(digits) > 11:
-        # Too long, invalid
-        return None
-    elif len(digits) > 10:
-        # Ambiguous - could be international, reject
+        # 10 digits: 4155551234 - assume NANP if country_code is US/CA, add +1
+        if country_code in ['US', 'CA']:
+            return f'+1{digits}'
+        else:
+            # Ambiguous without country code
+            return None
+    elif len(digits) >= 7 and not digits.startswith('1'):
+        # Could be international number without +
+        # For safety, require + for non-NANP numbers
         return None
     else:
-        # Less than 10 digits, invalid
+        # Invalid length
         return None
 
 

@@ -203,6 +203,166 @@ Notes:
   - REST endpoints default `account="public"`.
 
 
+### Group-based metrics (multi-tenant with Mojo Groups)
+
+Mojo Metrics provides special handling for group-based multi-tenancy when using the `mojo.apps.account` Group model. This allows you to:
+
+1. Record metrics per group/tenant
+2. Enforce group-level permissions automatically
+3. Isolate metrics data between tenants
+
+**Account naming convention:**
+
+Use `account="group-<group_id>"` where `<group_id>` is the numeric ID of your Group instance.
+
+Example:
+
+    from mojo.apps import metrics
+    from mojo.apps.account.models import Group
+
+    # Get a group
+    group = Group.objects.get(id=42)
+
+    # Record metrics for this specific group
+    metrics.record("page_views", account=f"group-{group.id}")
+    metrics.record("user_signups", account=f"group-{group.id}", count=3)
+
+    # Fetch metrics for this group
+    data = metrics.fetch(
+        "page_views",
+        granularity="days",
+        account=f"group-{group.id}",
+        with_labels=True
+    )
+
+**Permission enforcement (REST API):**
+
+When accessing group metrics via REST endpoints, the system automatically checks:
+
+1. User must be authenticated
+2. If user has global `view_metrics` permission → access granted
+3. Otherwise, check if user is a member of the group with `view_metrics` permission
+
+This is implemented in `rest/base.py` for the `on_metrics_data` endpoint:
+
+    # From rest/base.py (lines 142-150)
+    elif account.startswith("group-"):
+        if not request.user.is_authenticated:
+            raise mojo.errors.PermissionDeniedException()
+        if not request.user.has_permission("view_metrics"):
+            from mojo.apps.account.models import Group
+            group_id = account.split("-")[1]
+            group = Group.objects.get(id=group_id)
+            if not group.user_has_permission(request.user, "view_metrics", False):
+                raise mojo.errors.PermissionDeniedException()
+
+**Multi-tenant isolation:**
+
+Each group's metrics are completely isolated in Redis:
+
+    # Group 42 metrics
+    metrics.record("page_views", account="group-42")
+    # Stored in Redis key: {mets:group-42}:page_views:days:2025-01
+
+    # Group 99 metrics
+    metrics.record("page_views", account="group-99")
+    # Stored in Redis key: {mets:group-99}:page_views:days:2025-01
+
+**Full example - SaaS application with per-tenant metrics:**
+
+    from datetime import datetime, timedelta
+    from mojo.apps import metrics
+    from mojo.apps.account.models import Group
+    from mojo.helpers.response import JsonResponse
+
+    class TenantMetrics:
+        """Helper for recording tenant-specific metrics"""
+
+        def __init__(self, group):
+            self.group = group
+            self.account = f"group-{group.id}"
+
+        def record_page_view(self):
+            """Track page view for this tenant"""
+            metrics.record("page_views", account=self.account)
+
+        def record_api_call(self, endpoint):
+            """Track API usage for this tenant"""
+            metrics.record(f"api_calls:{endpoint}", account=self.account, category="api")
+
+        def record_user_login(self):
+            """Track user login for this tenant"""
+            metrics.record("user_logins", account=self.account, category="auth")
+
+        def get_dashboard_stats(self, dt_start, dt_end):
+            """Get dashboard metrics for this tenant"""
+            return {
+                "page_views": metrics.fetch(
+                    "page_views",
+                    dt_start=dt_start,
+                    dt_end=dt_end,
+                    granularity="days",
+                    account=self.account,
+                    with_labels=True
+                ),
+                "api_usage": metrics.fetch_by_category(
+                    "api",
+                    dt_start=dt_start,
+                    dt_end=dt_end,
+                    granularity="days",
+                    account=self.account,
+                    with_labels=True
+                ),
+                "auth_events": metrics.fetch_by_category(
+                    "auth",
+                    dt_start=dt_start,
+                    dt_end=dt_end,
+                    granularity="hours",
+                    account=self.account,
+                    with_labels=True
+                )
+            }
+
+    # Usage in your views
+    def dashboard_view(request):
+        group = request.group  # Assumes middleware sets request.group
+        tenant_metrics = TenantMetrics(group)
+
+        # Record this page view
+        tenant_metrics.record_page_view()
+
+        # Get stats for last 30 days
+        stats = tenant_metrics.get_dashboard_stats(
+            dt_start=datetime.now() - timedelta(days=30),
+            dt_end=datetime.now()
+        )
+
+        return JsonResponse({"stats": stats})
+
+**REST API with group accounts:**
+
+Frontend can fetch group-specific metrics:
+
+    // GET /api/metrics/fetch?slugs=page_views,user_signups&account=group-42&granularity=days
+    // Returns metrics only for group 42 (permission checked automatically)
+
+    fetch('/api/metrics/fetch?slugs=page_views&account=group-42&granularity=days')
+      .then(r => r.json())
+      .then(data => {
+        console.log(data.labels);  // ["2025-01-01", "2025-01-02", ...]
+        console.log(data.data);    // {"page_views": [120, 145, ...]}
+      });
+
+**Best practices for group-based metrics:**
+
+1. **Always use the account parameter** when recording group-specific metrics
+2. **Use helper classes** (like `TenantMetrics` above) to encapsulate the account string
+3. **Use categories** to organize related metrics per tenant
+4. **Set appropriate permissions** on your Group model for `view_metrics` and `write_metrics`
+5. **Don't mix group and global metrics** - keep them in separate accounts for clarity
+6. **Consider retention** - group metrics can accumulate quickly across many tenants
+
+
 ## REST API (optional)
 
 If you expose the included views, you get a small JSON API:

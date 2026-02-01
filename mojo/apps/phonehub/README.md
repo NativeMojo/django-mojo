@@ -64,19 +64,37 @@ python manage.py migrate phonehub
 
 ### `normalize(phone_number, country_code='US')`
 
-Converts phone numbers to E.164 format (+1XXXXXXXXXX). Only handles USA/Canada/Caribbean (NANP).
+Converts phone numbers to E.164 format. Handles both NANP (USA/Canada/Caribbean) and international numbers.
 
+**NANP Numbers (automatic country code):**
 ```python
 phonehub.normalize('4155551234')          # +14155551234
 phonehub.normalize('(415) 555-1234')      # +14155551234
 phonehub.normalize('1-415-555-1234')      # +14155551234
 phonehub.normalize('+14155551234')        # +14155551234
-
-# International numbers return None
-phonehub.normalize('+442071234567')       # None (UK number)
 ```
 
-**Returns:** E.164 formatted string or `None` if invalid/international
+**International Numbers (must include +):**
+```python
+# UK
+phonehub.normalize('+442071234567')       # +442071234567
+
+# France
+phonehub.normalize('+33123456789')        # +33123456789
+
+# Germany
+phonehub.normalize('+4915112345678')      # +4915112345678
+
+# Japan
+phonehub.normalize('+819012345678')       # +819012345678
+
+# Without + prefix, returns None (ambiguous)
+phonehub.normalize('442071234567')        # None (ambiguous - use +)
+```
+
+**Returns:** E.164 formatted string or `None` if invalid
+
+**Note:** International numbers must include the `+` prefix. Without it, 10-digit numbers are assumed to be NANP and will have `+1` prepended.
 
 ---
 
@@ -359,11 +377,15 @@ python manage.py testit -m test_phonehub.phonenumbers
 
 ## Notes
 
-- **USA/Canada Only**: PhoneHub currently only validates and processes NANP (North American) numbers
-- **International Numbers**: Detected and rejected with helpful error messages identifying the country
+- **Normalization**: Supports both NANP and international numbers in E.164 format
+- **Validation**: Currently only validates NANP (USA/Canada/Caribbean) numbers
+- **International Numbers**: 
+  - `normalize()` - Supports international numbers with `+` prefix
+  - `validate()` - Detects international numbers and provides helpful error messages
+  - `lookup()` and `send_sms()` - Work with any valid E.164 number via Twilio
 - **Caching**: Phone lookups are cached system-wide (not per-user) to minimize Twilio API charges
-- **E.164 Format**: All phone numbers are normalized to E.164 format (+1XXXXXXXXXX)
-- **Area Codes**: 400+ area codes mapped to states/regions for USA/Canada
+- **E.164 Format**: All phone numbers are normalized to E.164 format (+CountryCodeNumber)
+- **Area Codes**: 400+ NANP area codes mapped to states/regions for USA/Canada
 - **Twilio Required**: Twilio credentials required for `lookup()` and `send_sms()` functions
 
 ## Area Code Coverage
