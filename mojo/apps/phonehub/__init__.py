@@ -18,7 +18,7 @@ Simple Usage:
     sms = phonehub.send_sms('+14155551234', 'Hello from PhoneHub!')
 """
 # Import convenience functions from services
-from .services.phonenumbers import normalize, validate
+from .services.phonenumbers import normalize, validate, detect_country
 from objict import objict
 
 
