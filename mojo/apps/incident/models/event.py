@@ -10,6 +10,7 @@ from mojo.apps.account.models import GeoLocatedIP
 INCIDENT_LEVEL_THRESHOLD = settings.get('INCIDENT_LEVEL_THRESHOLD', 7)
 
 class Event(models.Model, MojoModel):
+    id = models.BigAutoField(primary_key=True)
     """
     Event model.
 

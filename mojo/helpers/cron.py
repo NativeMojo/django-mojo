@@ -81,9 +81,13 @@ def matches(cron_value: str, actual_value: int) -> bool:
     """
     if cron_value == '*':
         return True
+    if isinstance(cron_value, str):
+        patterns = cron_value.split(',')
+    else:
+        patterns = cron_value
 
     # Split by comma to handle multiple patterns
-    for pattern in cron_value.split(','):
+    for pattern in patterns:
         pattern = pattern.strip()
 
         # Handle step values (e.g., */5, 10-50/5)

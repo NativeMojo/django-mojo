@@ -3,6 +3,7 @@ from mojo.models import MojoModel
 
 
 class Incident(models.Model, MojoModel):
+    id = models.BigAutoField(primary_key=True)
     """
     Incident model.
     """

@@ -1,5 +1,14 @@
 
 ## v0.1.3 - May 29, 2025
+## v1.0.11 - February 01, 2026
+
+* Improved API key access
+* better docs for realtime and metricsw
+* new improved ability to have absolute routing ie prefix with /
+* major bug fix in cron parsing of multiple times
+* new domain helper utility
+
+
 ## v1.0.10 - December 24, 2025
 
 bug fix for issue when multiple people access IoT lock

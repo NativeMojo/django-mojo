@@ -1,6 +1,6 @@
 [project]
 name = "django-nativemojo"
-version = "1.0.10"
+version = "1.0.11"
 description = "A REST framework for DJANGO with some extra apps that make it easy to provide a secure robust graph like REST API."
 authors = [{ name = "MOJO Dev Team", email = "gotmojo@nativemojo.com" }]
 readme = "README.md"
@@ -25,6 +25,9 @@ dependencies = [
     "phonenumberslite (>=9.0.17,<10.0.0)",
     "qrcode[pil] (>=7.4.2,<8.0.0)",
     "Pillow (>=10.4.0,<11.0.0)",
+    "cryptography (>=46.0.4,<47.0.0)",
+    "dnspython (>=2.8.0,<3.0.0)",
+    "python-whois (>=0.9.6,<0.10.0)",
 ]
 
 [tool.poetry]

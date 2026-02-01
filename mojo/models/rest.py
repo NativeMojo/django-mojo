@@ -391,6 +391,9 @@ class MojoModel:
         Returns:
             JsonResponse representing the result of the create operation.
         """
+        if not cls.get_rest_meta_prop("CAN_CREATE", True):
+            return cls.rest_error_response(request, 403, error=f"CREATE not allowed: {cls.__name__}")
+
         if cls.rest_check_permission(request, ["CREATE_PERMS", "SAVE_PERMS", "VIEW_PERMS"]):
             instance = cls.create_from_request(request)
             return instance.on_rest_get(request)

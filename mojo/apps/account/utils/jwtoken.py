@@ -1,4 +1,5 @@
 import jwt
+import secrets
 import datetime
 import time
 from objict import objict
@@ -20,6 +21,7 @@ class JWToken:
         self.invalid_sig = False
         self.is_valid = False
         self.payload = None
+        self.token = token
         if token is not None:
             self.is_valid, self.payload = self.decode(token)
 
@@ -41,7 +43,10 @@ class JWToken:
         payload['exp'] = self._get_exp_time(self.access_token_expiry)
         payload['token_type'] = "access"
         payload["iat"] = int(time.time())
+        payload["jti"] = secrets.token_hex(4)
         token = jwt.encode(payload, self.key, algorithm=self.alg)
+        self.payload = payload
+        self.token = token
         return token
 
     def create_refresh_token(self, **kwargs):
@@ -49,6 +54,7 @@ class JWToken:
         payload['exp'] = self._get_exp_time(self.refresh_token_expiry)
         payload['token_type'] = "refresh"
         payload["iat"] = int(time.time())
+        payload["jti"] = secrets.token_hex(4)
         token = jwt.encode(payload, self.key, algorithm=self.alg)
         return token
 
@@ -70,6 +76,7 @@ class JWToken:
             self.is_expired = False
             self.invalid_sig = False
             jwt.decode(token, self.key, algorithms=['HS256'])
+            self.is_valid = True
             return True
         except jwt.ExpiredSignatureError:
             self.is_expired = True
