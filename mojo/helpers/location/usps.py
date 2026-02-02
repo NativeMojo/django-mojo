@@ -190,20 +190,22 @@ class USPSAddressValidator:
         url = f"{self.api_base_url}/addresses/v3/address"
 
         # Prepare query parameters (API uses GET method with query params)
+        # Note: State must be uppercase (API validates against regex with uppercase only)
+        # City and street are typically sent in title case for best results
         params = {
-            "streetAddress": address_data["address1"],
-            "state": address_data["state"],
+            "streetAddress": address_data["address1"].strip(),
+            "state": address_data["state"].upper().strip(),
         }
 
         # Add optional fields
         if address_data.get("address2"):
-            params["secondaryAddress"] = address_data["address2"]
+            params["secondaryAddress"] = address_data["address2"].strip()
         if address_data.get("city"):
-            params["city"] = address_data["city"]
+            params["city"] = address_data["city"].strip()
         if address_data.get("postal_code"):
-            params["ZIPCode"] = address_data["postal_code"]
+            params["ZIPCode"] = str(address_data["postal_code"]).strip()
         if address_data.get("firm"):
-            params["firm"] = address_data["firm"]
+            params["firm"] = address_data["firm"].strip()
 
         # Try validation with automatic token re-authentication
         max_retries = 2
