@@ -1,3 +1,4 @@
+from mojo.helpers.settings import settings
 
 
 def validate_address(address_data):
@@ -21,10 +22,18 @@ def validate_address(address_data):
     """
     from . import google
     from . import usps
-    if address_data.get("provider") == "google":
-        return google.validate_address(address_data)
-    return usps.validate_address(address_data)
 
+    provider = address_data.get("provider", "usps")
+    if provider == "usps" and not bool(settings.USPS_CLIENT_ID):
+        provider = "google"
+
+    try:
+        if provider == "google":
+            return google.validate_address(address_data)
+        return usps.validate_address(address_data)
+    except Exception as err:
+        from objict import objict
+        return objict(error=str(err), status=False)
 
 def get_address_suggestions(input_text, session_token=None, country="US", location=None, radius=None):
     """
