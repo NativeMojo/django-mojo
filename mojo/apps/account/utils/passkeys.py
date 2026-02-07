@@ -13,17 +13,20 @@ import uuid
 from typing import List, Tuple
 from urllib.parse import urlparse
 
-from fido2.server import Fido2Server
-from fido2.utils import websafe_decode, websafe_encode
-from fido2.webauthn import (
-    AttestedCredentialData,
-    AuthenticationResponse,
-    PublicKeyCredentialDescriptor,
-    PublicKeyCredentialRpEntity,
-    PublicKeyCredentialType,
-    PublicKeyCredentialUserEntity,
-    RegistrationResponse,
-)
+try:
+    from fido2.server import Fido2Server
+    from fido2.utils import websafe_decode, websafe_encode
+    from fido2.webauthn import (
+        AttestedCredentialData,
+        AuthenticationResponse,
+        PublicKeyCredentialDescriptor,
+        PublicKeyCredentialRpEntity,
+        PublicKeyCredentialType,
+        PublicKeyCredentialUserEntity,
+        RegistrationResponse,
+    )
+except Exception:
+    pass
 
 from mojo import errors as merrors
 from mojo.helpers import dates

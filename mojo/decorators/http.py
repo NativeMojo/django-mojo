@@ -86,7 +86,20 @@ def dispatch_error_handler(func):
                     request_path=getattr(request, "path", None),
                     stack_trace=traceback.format_exc(),
                 )
-            return JsonResponse({"error": err.reason, "code": err.code}, status=err.status)
+            return JsonResponse({"error": err.reason, "code": err.code, "status": False }, status=err.status)
+        except PermissionError as err:
+            if API_METRICS:
+                metrics.record("api_denied", category="mojo_api", min_granularity=API_METRICS_GRANULARITY)
+            if EVENTS_ON_ERRORS:
+                rest.MojoModel.class_report_incident_for_user(
+                    details=f"Permission Denied: {err}",
+                    event_type="api_denied",
+                    request_data=request.DATA,
+                    request=request,
+                    level=4,
+                    request_path=getattr(request, "path", None)
+                )
+            return JsonResponse({"error": str(err), "code": 403, "status": False }, status=403)
         except ValueError as err:
             if API_METRICS:
                 metrics.record("api_errors", category="mojo_api", min_granularity=API_METRICS_GRANULARITY)
@@ -101,7 +114,7 @@ def dispatch_error_handler(func):
                     request_path=getattr(request, "path", None),
                     stack_trace=traceback.format_exc()
                 )
-            return JsonResponse({"error": str(err), "code": 555 }, status=500)
+            return JsonResponse({"error": str(err), "code": 400, "status": False  }, status=400)
         except Exception as err:
             if API_METRICS:
                 metrics.record("api_errors", category="mojo_api", min_granularity=API_METRICS_GRANULARITY)
@@ -117,7 +130,7 @@ def dispatch_error_handler(func):
                     stack_trace=traceback.format_exc(),
                     request_path=getattr(request, "path", None),
                 )
-            return JsonResponse({"error": str(err), "code": 500 }, status=500)
+            return JsonResponse({"error": str(err), "code": 500, "status": False  }, status=500)
 
     return wrapper
 

@@ -1,7 +1,227 @@
-# MOJO REST Developer Guide: Graphs Deep Dive
+# MOJO REST Developer Guide
 
-This guide explains how to define, extend, and leverage the `RestMeta.GRAPHS` system in Django-MOJO models.
+This guide explains the MOJO REST framework including the enhanced request object, graphs system, and REST endpoint development patterns.
 It is intended for Django/MOJO backend developers. For REST API consumers, see the docs in `rest_api/`.
+
+---
+
+## Enhanced Request Object
+
+The MOJO framework enhances Django's request object with additional attributes and intelligent data parsing.
+
+### Request Data: request.DATA
+
+All incoming request data (GET params, POST body, JSON payloads) is parsed and available as `request.DATA`, which is an **objict** instance - a smart dictionary that supports both dict-style and attribute-style access.
+
+```python
+@md.POST('projects')
+def create_project(request):
+    # Access data multiple ways
+    name = request.DATA.name              # Attribute access
+    name = request.DATA["name"]           # Dict access
+    name = request.DATA.get("name")       # Safe get with default
+    
+    # Nested access works seamlessly
+    owner_email = request.DATA.owner.email
+    
+    # Check existence
+    if request.DATA.description:
+        # Has description field
+        pass
+```
+
+**objict features:**
+- **Attribute access**: `request.DATA.field_name`
+- **Safe access**: Returns `None` for missing keys instead of raising KeyError
+- **Nested access**: `request.DATA.user.profile.avatar`
+- **Type conversion**: `.get_typed("count", typed=int)`
+- **All dict methods**: `.keys()`, `.values()`, `.items()`, etc.
+
+See [objict.md](objict.md) for complete objict documentation.
+
+### Request Attributes
+
+The MOJO middleware adds several useful attributes to every request:
+
+#### Authentication & User Context
+
+```python
+# User object (from JWT Bearer token or anonymous)
+request.user              # User instance or ANONYMOUS_USER objict
+request.user.username     # Access user properties
+request.user.is_authenticated  # Check if authenticated
+
+# Group context (multi-tenant)
+request.group             # Group instance if ?group=<id> was passed
+request.group.name        # Access group properties
+
+# Bearer token info
+request.bearer            # Token type prefix ("bearer", "api_key", etc.)
+request.auth_token        # objict(prefix="bearer", token="...")
+```
+
+**Anonymous User:**
+```python
+# When not authenticated, request.user is:
+ANONYMOUS_USER = objict(
+    display_name="Anonymous",
+    username="anonymous", 
+    email="anonymous@example.com",
+    is_authenticated=False,
+    has_permission=lambda: False
+)
+```
+
+#### Request Metadata
+
+```python
+# Client information
+request.ip                # Client IP address (handles proxies/CDN)
+request.user_agent        # User agent string
+request.duid              # Device unique ID (from cookie/header)
+
+# Request tracking
+request.started_at        # Unix timestamp when request started
+request.request_log       # Request log instance (if logging enabled)
+
+# Device context  
+request.device            # UserDevice instance (tracked automatically for authenticated users)
+```
+
+### Device Tracking
+
+MOJO automatically tracks devices for authenticated users. Each unique device is identified by a `duid` (device unique ID) from a cookie/header, or falls back to a hash of the user agent string.
+
+```python
+@md.POST('login')
+def login(request):
+    user = authenticate(request.DATA.username, request.DATA.password)
+    
+    # Device is automatically tracked after authentication
+    # Access device information
+    if request.device:
+        print(f"Device ID: {request.device.duid}")
+        print(f"Last IP: {request.device.last_ip}")
+        print(f"First seen: {request.device.first_seen}")
+        print(f"Device info: {request.device.device_info}")
+        
+        # Device info includes parsed user agent:
+        # {
+        #     "browser": "Chrome",
+        #     "browser_version": "120.0",
+        #     "os": "macOS",
+        #     "os_version": "14.2",
+        #     "device_type": "Desktop"
+        # }
+```
+
+**Device Tracking Features:**
+- Automatically tracks unique devices per user
+- Stores device information (browser, OS, device type from user agent)
+- Records IP addresses used by each device
+- Tracks first seen and last seen timestamps
+- Links devices to geolocation data via IP addresses
+
+**Manual Device Tracking:**
+```python
+from mojo.apps.account.models import UserDevice
+
+# Track device manually (usually automatic via middleware)
+device = UserDevice.track(request, user=request.user)
+
+# Access device locations (IP history)
+for location in device.locations.all():
+    print(f"IP: {location.ip_address}")
+    print(f"Location: {location.geolocation.city}, {location.geolocation.country}")
+    print(f"Last seen: {location.last_seen}")
+```
+
+**Device-based Security:**
+```python
+@md.POST('sensitive-action')
+@md.requires_auth()
+def sensitive_action(request):
+    # Check if device is recognized
+    if not request.device or request.device.first_seen > (datetime.now() - timedelta(hours=1)):
+        # New or very recent device
+        return JsonResponse({
+            "error": "New device detected. Please verify your identity.",
+            "requires_2fa": True
+        }, status=403)
+    
+    # Proceed with action
+    return JsonResponse({"status": True})
+```
+
+**Settings:**
+```python
+# How long before device location data is considered stale (seconds)
+GEOLOCATION_DEVICE_LOCATION_AGE = 300  # 5 minutes
+```
+
+
+### Authentication Middleware
+
+The authentication middleware processes the `Authorization` header and populates request attributes:
+
+```python
+# Request with header: Authorization: Bearer <jwt_token>
+request.user              # Populated with User from JWT
+request.bearer            # "bearer"
+request.auth_token.token  # The actual JWT token
+
+# Request with header: Authorization: ApiKey <key>
+request.api_key           # Populated with ApiKey instance
+request.bearer            # "api_key" 
+request.auth_token.token  # The actual API key
+```
+
+**Custom Bearer Handlers:**
+```python
+# settings.py
+AUTH_BEARER_HANDLERS = {
+    "bearer": "mojo.apps.account.models.user.User.validate_jwt",
+    "api_key": "myapp.auth.validate_api_key",
+    "device": "myapp.auth.validate_device_token"
+}
+
+AUTH_BEARER_NAME_MAP = {
+    "bearer": "user",
+    "api_key": "api_key", 
+    "device": "device"
+}
+```
+
+### Using Request Data in Views
+
+```python
+@md.POST('projects')
+@md.requires_auth()
+@md.requires_params("name", "description")  # Validates presence
+def create_project(request):
+    # All data pre-parsed as objict
+    project = Project.objects.create(
+        name=request.DATA.name,
+        description=request.DATA.description,
+        owner=request.user,
+        metadata=request.DATA.get("metadata", {})  # Optional with default
+    )
+    
+    # Access nested data
+    if request.DATA.settings:
+        project.update_settings(request.DATA.settings.to_dict())
+    
+    return JsonResponse({
+        "status": True,
+        "project": project.to_dict(graph="default")
+    })
+```
+
+---
+
+## Graphs: Declarative Serialization
+
+Graphs are declarative, named serialization configurations for your Django models. They tell the MOJO framework how to output your model (and any related/nested models) when returning API responses—allowing you to control exactly what fields and relationships are exposed under various API contexts.
 
 ---
 
@@ -92,39 +312,300 @@ You can nest graphs multiple layers deep for more complex domains (organizations
 
 ---
 
-## Build the Rest ROUTES
+## URL Routing & Prefixes
 
-Rest Routes are built into the apps/rest folder with a file for each model and their desired routes.
+### Automatic App Prefixes
 
-The basic routes should always you our simple CRUD patthern.
+MOJO automatically prefixes REST URLs with the app name. Routes are defined in `apps/<app_name>/rest/<model>.py`:
+
+```python
+# File: apps/projects/rest/project.py
+from mojo import decorators as md
+
+@md.URL('project')
+def on_project(request):
+    # URL becomes: /api/projects/project
+    pass
+```
+
+**URL Structure:**
+- Base API prefix: `/api/` (configurable via `MOJO_PREFIX`)
+- App prefix: Automatically added based on app name (e.g., `projects/`)
+- Route pattern: Your defined pattern (e.g., `project`)
+- Final URL: `/api/projects/project`
+
+### Absolute Paths (Bypassing App Prefix)
+
+Use a leading `/` to create absolute paths that bypass the app prefix:
+
+```python
+# File: apps/projects/rest/project.py
+
+@md.URL('project')
+def on_project(request):
+    # URL: /api/projects/project (includes app prefix)
+    pass
+
+@md.URL('/public/status')
+def on_status(request):
+    # URL: /api/public/status (bypasses app prefix)
+    pass
+```
+
+**When to use absolute paths:**
+- Shared utility endpoints (health checks, status)
+- Cross-app endpoints (not tied to one app)
+- Public endpoints that shouldn't show app structure
+- Legacy URL compatibility
+
+### Configuring URL Behavior
+
+```python
+# settings.py
+
+# Base API prefix (default: "api")
+MOJO_PREFIX = "api"
+
+# Automatically add trailing slashes (default: False)
+MOJO_APPEND_SLASH = False
+
+# Let MOJO handle the prefix automatically (default: False)
+# If True: Use path("", include('mojo.urls')) in Django urls.py
+# If False: Use path("api/", include('mojo.urls')) in Django urls.py
+REST_AUTO_PREFIX = False
+```
+
+---
+
+## Building REST Endpoints
+
+REST routes are defined in `apps/<app_name>/rest/<model>.py` with one file per model.
+
+### Keep It Simple: CRUD Pattern
+
+**Always start with the simple CRUD pattern** - one endpoint handles Create, Read, Update, Delete:
 
 ```python
 from mojo import decorators as md
 from mojo.apps.account.models import Group
-from mojo.helpers.response import JsonResponse
-
 
 @md.URL('group')
 @md.URL('group/<int:pk>')
 def on_group(request, pk=None):
-    # this handles CRUD, and all security checks are also automatically handled
+    # Single endpoint handles:
+    # GET /api/account/group           -> List all
+    # GET /api/account/group/123       -> Get one
+    # POST /api/account/group          -> Create
+    # PUT /api/account/group/123       -> Update
+    # DELETE /api/account/group/123    -> Delete
     return Group.on_rest_request(request, pk)
+```
 
+**Why simple CRUD?**
+- Client code is simpler: `model.save()` always POSTs to same endpoint
+- One URL to secure, one endpoint to test
+- Standard REST conventions
+- Automatic permission handling via RestMeta
 
+### Primary Key vs Alternative Key Lookups
+
+MOJO automatically supports lookups by both primary key (integer ID) and alternative keys (UUID, slug, etc.):
+
+```python
+class Project(MojoModel):
+    # id field is automatic (integer primary key)
+    uuid = models.UUIDField(default=uuid.uuid4, unique=True)
+    slug = models.SlugField(unique=True)
+    name = models.CharField(max_length=255)
+
+    class RestMeta:
+        ALT_PK_FIELD = "uuid"  # Use UUID for non-numeric lookups
+        GRAPHS = {"default": {"fields": ["id", "uuid", "slug", "name"]}}
+
+# All these work with the same endpoint:
+# GET /api/projects/project/123          -> Lookup by ID (numeric)
+# GET /api/projects/project/550e8400-... -> Lookup by UUID (ALT_PK_FIELD)
+# PUT /api/projects/project/my-project   -> Lookup by UUID if ALT_PK_FIELD set
+```
+
+**How it works:**
+- **Numeric strings** (`"123"`) → Converted to int, lookup by `pk` (ID field)
+- **Non-numeric strings** (`"550e8400-..."`) → Lookup by `ALT_PK_FIELD` 
+- **Integers** (`123`) → Lookup by `pk` directly
+
+**Common ALT_PK_FIELD values:**
+```python
+class RestMeta:
+    ALT_PK_FIELD = "uuid"    # UUID field (most common)
+    # ALT_PK_FIELD = "slug"  # Slug field for human-readable URLs
+    # ALT_PK_FIELD = "code"  # Custom unique code field
+```
+
+**Benefits:**
+- ✅ Clients can use friendly identifiers (UUIDs, slugs) instead of database IDs
+- ✅ Database IDs stay hidden from public URLs
+- ✅ Same endpoint works with both ID and alternative key
+- ✅ No code changes needed - automatic detection
+
+**Example with slug:**
+```python
+class Article(MojoModel):
+    slug = models.SlugField(unique=True)
+    title = models.CharField(max_length=255)
+
+    class RestMeta:
+        ALT_PK_FIELD = "slug"
+
+# GET /api/blog/article/123                    -> By ID
+# GET /api/blog/article/how-to-use-mojo-rest  -> By slug
+# Both work automatically!
+```
+
+### Actions Over Custom Endpoints
+
+**Don't create custom endpoints for model actions.** Instead, use `POST_SAVE_ACTIONS` to handle actions via POST data:
+
+**❌ Bad: Custom endpoints for actions**
+```python
+# Multiple endpoints = more client code
+@md.POST('project/<int:pk>/cancel')
+def cancel_project(request, pk):
+    project = Project.objects.get(pk=pk)
+    project.cancel()
+    return JsonResponse({"status": True})
+
+@md.POST('project/<int:pk>/retry')
+def retry_project(request, pk):
+    project = Project.objects.get(pk=pk)
+    project.retry()
+    return JsonResponse({"status": True})
+
+@md.POST('project/<int:pk>/archive')
+def archive_project(request, pk):
+    project = Project.objects.get(pk=pk)
+    project.archive()
+    return JsonResponse({"status": True})
+```
+
+**✅ Good: Use POST_SAVE_ACTIONS**
+```python
+# One endpoint handles everything
+@md.URL('project')
+@md.URL('project/<int:pk>')
+def on_project(request, pk=None):
+    return Project.on_rest_request(request, pk)
+```
+
+**Define actions in your model:**
+```python
+class Project(MojoModel):
+    name = models.CharField(max_length=255)
+    status = models.CharField(max_length=50)
+
+    class RestMeta:
+        POST_SAVE_ACTIONS = ["cancel", "retry", "archive", "assign"]
+        GRAPHS = {"default": {"fields": ["id", "name", "status"]}}
+
+    def on_action_cancel(self, value):
+        """Called when POST /api/projects/project/123 {"cancel": true}"""
+        if value:  # Only if truthy
+            self.status = "cancelled"
+            self.save()
+            # Send notifications, update related records, etc.
+
+    def on_action_retry(self, value):
+        """Called when POST /api/projects/project/123 {"retry": true}"""
+        if value:
+            self.status = "pending"
+            self.retry_count += 1
+            self.save()
+
+    def on_action_archive(self, value):
+        """Called when POST /api/projects/project/123 {"archive": true}"""
+        if value:
+            self.archived = True
+            self.save()
+
+    def on_action_assign(self, user_id):
+        """Called when POST /api/projects/project/123 {"assign": 42}"""
+        if user_id:
+            self.assigned_to_id = user_id
+            self.save()
+```
+
+**Client usage is simple:**
+```javascript
+// All actions use the same endpoint
+await project.save({id: 123, cancel: true})
+await project.save({id: 123, retry: true})
+await project.save({id: 123, assign: 42})
+
+// No need to track multiple URLs or methods
+// Just POST data to the model's endpoint
+```
+
+**Benefits of POST_SAVE_ACTIONS:**
+- ✅ Client has one URL: `projects/project/123`
+- ✅ Standard POST method for all actions
+- ✅ Actions are discoverable in model code
+- ✅ Same permission checking as save
+- ✅ Actions run in same transaction as save
+- ✅ Can combine actions: `{archive: true, notify_users: true}`
+- ✅ Simpler client code: `model.save(data)`
+
+### When to Create Custom Endpoints
+
+Only create custom endpoints when:
+
+1. **Not tied to a specific model instance** (collection operations)
+2. **Complex queries or reports** (not simple CRUD)
+3. **External integrations** (webhooks, callbacks)
+4. **Public APIs** (no authentication)
+
+```python
+# Collection operation - OK for custom endpoint
+@md.POST('project/bulk_archive')
+@md.requires_perms("manage_projects")
+def bulk_archive(request):
+    project_ids = request.DATA.ids
+    Project.objects.filter(id__in=project_ids).update(archived=True)
+    return JsonResponse({"status": True, "count": len(project_ids)})
+
+# Complex report - OK for custom endpoint
+@md.GET('project/stats')
+def project_stats(request):
+    stats = Project.objects.aggregate(
+        total=Count('id'),
+        active=Count('id', filter=Q(status='active')),
+        cancelled=Count('id', filter=Q(status='cancelled'))
+    )
+    return JsonResponse({"status": True, "stats": stats})
+
+# Public webhook - OK for custom endpoint
+@md.POST('/webhook/github')  # Absolute path for public endpoint
+def github_webhook(request):
+    # Process GitHub webhook
+    return JsonResponse({"status": True})
+```
+
+### Simple Custom Endpoints
+
+For endpoints that don't need CRUD:
+
+```python
 @md.GET('group/hello')
-@md.requires_perms("manage_groups")   # requires the user to be authenticated and have the "manage_groups" permission
+@md.requires_perms("manage_groups")
 def on_group_hello(request):
-    return JsonResponse(dict(status=True, data='Hello World'))
-
+    return JsonResponse({"status": True, "data": "Hello World"})
 
 @md.POST('group/echo')
-@md.requires_auth()  # requires the user to be authenticated
-@md.requries_params("echo")
+@md.requires_auth()
+@md.requires_params("echo")  # Validates presence of parameters
 def on_group_echo(request):
-    return JsonResponse(dict(status=True, data=request.DATA["echo"]))
-
-
+    return JsonResponse({"status": True, "data": request.DATA.echo})
 ```
+
+---
 
 ## POST Save Actions
 

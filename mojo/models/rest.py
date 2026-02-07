@@ -143,12 +143,20 @@ class MojoModel:
             pk: Primary key of the instance to retrieve.
 
         Returns:
-            The requested instance or a JsonResponse for a 404 error.
+            The requested instance or raises ValueException for 404 error.
         """
-        try:
-            return cls.objects.get(pk=pk)
-        except ObjectDoesNotExist:
+        alt_pk_field = cls.get_rest_meta_prop("ALT_PK_FIELD", "uuid")
+        if isinstance(pk, int):
+            obj = cls.objects.filter(pk=pk).first()
+        elif isinstance(pk, str) and pk.isdigit():
+            # String that looks like a number - convert to int
+            obj = cls.objects.filter(pk=int(pk)).first()
+        elif isinstance(pk, str) and cls.has_field(alt_pk_field):
+            # Non-numeric string - use alt_pk_field (UUID, slug, etc.)
+            obj = cls.objects.filter(**{alt_pk_field: pk}).first()
+        if obj is None:
             raise me.ValueException(f"{cls.__name__} not found", code=404, status=404)
+        return obj
 
     @classmethod
     def get_instance_from_request(cls, request, field_name=None):
