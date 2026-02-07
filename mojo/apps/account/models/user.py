@@ -317,6 +317,9 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
         """Check if user has any permissions in a given app."""
         return True  # Or customize based on your `permissions` JSON
 
+    def has_perm(self, perm_key):
+        return self.has_permission(perm_key)
+
     def has_permission(self, perm_key):
         """Check if user has a specific permission in JSON field."""
         if isinstance(perm_key, (list, set)):
@@ -327,6 +330,9 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
         if perm_key == "all":
             return True
         return self.permissions.get(perm_key, False)
+
+    def add_perm(self, perm_key, value=True, commit=True):
+        self.add_permission(perm_key, value, commit)
 
     def add_permission(self, perm_key, value=True, commit=True):
         """Dynamically add a permission."""
@@ -344,6 +350,9 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
             self.log(f"Added permission {perm_key}", "permission:added")
         if commit and changed:
             self.save()
+
+    def remove_perm(self, perm_key, commit=True):
+        self.remove_permission(perm_key, commit)
 
     def remove_permission(self, perm_key, commit=True):
         """Remove a permission."""
