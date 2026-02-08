@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v1.0.14 - February 07, 2026
+
+* Major cleanup of domain utils
+
+
 ## v1.0.13 - February 01, 2026
 
 * BUGFIX USPS requires caps on states
