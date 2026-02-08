@@ -60,6 +60,22 @@ except ImportError:
 from objict import objict
 
 
+# Free email provider domains
+FREE_EMAIL_PROVIDERS = {
+    # US/global
+    "gmail.com", "googlemail.com", "yahoo.com", "yahoo.co.uk", "ymail.com", "hotmail.com", "outlook.com",
+    "live.com", "msn.com", "aol.com", "icloud.com", "me.com",
+    # EU/other
+    "gmx.com", "gmx.de", "proton.me", "protonmail.com", "zoho.com", "yandex.ru", "mail.ru", "qq.com",
+}
+
+# Disposable/temporary email provider domains
+DISPOSABLE_PROVIDERS = {
+    "10minutemail.com", "temp-mail.org", "guerrillamail.com", "sharklasers.com", "mailinator.com",
+    "yopmail.com", "trashmail.com", "getnada.com", "dropmail.me", "tempmailo.com", "fakemailgenerator.com",
+    "moakt.com", "mintemail.com", "throwawaymail.com", "maildrop.cc", "33mail.com",
+}
+
 # Known email provider patterns (MX hostname patterns -> provider info)
 EMAIL_PROVIDERS = {
     # Major providers
@@ -91,13 +107,6 @@ EMAIL_PROVIDERS = {
     
     # Educational
     'edu': {'provider': 'Educational Institution', 'type': 'education', 'confidence': 'medium'},
-    
-    # Common disposable email providers
-    'mailinator.com': {'provider': 'Mailinator', 'type': 'disposable', 'confidence': 'high', 'is_disposable': True},
-    'guerrillamail.com': {'provider': 'Guerrilla Mail', 'type': 'disposable', 'confidence': 'high', 'is_disposable': True},
-    'tempmail.com': {'provider': 'TempMail', 'type': 'disposable', 'confidence': 'high', 'is_disposable': True},
-    '10minutemail.com': {'provider': '10 Minute Mail', 'type': 'disposable', 'confidence': 'high', 'is_disposable': True},
-    'throwaway.email': {'provider': 'Throwaway Email', 'type': 'disposable', 'confidence': 'high', 'is_disposable': True},
 }
 
 
@@ -915,18 +924,62 @@ def email_provider(domain: str) -> objict:
         print(result.type)              # "business"  
         print(result.custom_domain)     # True (using Google with custom domain)
         print(result.is_disposable)     # False
+        print(result.is_free)           # False
     """
     domain = _normalize_domain(domain)
     
-    # Check if domain itself is a known provider (gmail.com, outlook.com, etc.)
-    if domain in EMAIL_PROVIDERS:
-        provider_info = EMAIL_PROVIDERS[domain].copy()
+    # Check if domain is disposable
+    is_disposable = domain in DISPOSABLE_PROVIDERS
+    
+    # Check if domain is free email provider
+    is_free = domain in FREE_EMAIL_PROVIDERS
+    
+    # If domain is a direct free email provider (gmail.com, yahoo.com, etc.)
+    if is_free:
+        # Map common free providers to their names
+        provider_map = {
+            'gmail.com': 'Gmail',
+            'googlemail.com': 'Gmail',
+            'yahoo.com': 'Yahoo',
+            'yahoo.co.uk': 'Yahoo',
+            'ymail.com': 'Yahoo',
+            'hotmail.com': 'Outlook',
+            'outlook.com': 'Outlook',
+            'live.com': 'Outlook',
+            'msn.com': 'Outlook',
+            'aol.com': 'AOL',
+            'icloud.com': 'iCloud',
+            'me.com': 'iCloud',
+            'gmx.com': 'GMX',
+            'gmx.de': 'GMX',
+            'proton.me': 'ProtonMail',
+            'protonmail.com': 'ProtonMail',
+            'zoho.com': 'Zoho',
+            'yandex.ru': 'Yandex',
+            'mail.ru': 'Mail.ru',
+            'qq.com': 'QQ Mail',
+        }
         return objict(
-            provider=provider_info.get('provider', 'Unknown'),
-            type=provider_info.get('type', 'unknown'),
-            confidence=provider_info.get('confidence', 'high'),
+            provider=provider_map.get(domain, 'Free Email Provider'),
+            type='personal',
+            confidence='high',
             custom_domain=False,
-            is_disposable=provider_info.get('is_disposable', False),
+            is_disposable=False,
+            is_free=True,
+            is_corporate=False,
+            mx_records=[],
+            error=None
+        )
+    
+    # If domain is disposable
+    if is_disposable:
+        return objict(
+            provider='Disposable Email',
+            type='disposable',
+            confidence='high',
+            custom_domain=False,
+            is_disposable=True,
+            is_free=False,
             is_corporate=False,
             mx_records=[],
             error=None
@@ -940,7 +993,8 @@ def email_provider(domain: str) -> objict:
             type='unknown',
             confidence='none',
             custom_domain=False,
-            is_disposable=False,
+            is_disposable=is_disposable,
+            is_free=is_free,
             is_corporate=False,
             mx_records=[],
             error=mx_result.error
@@ -952,7 +1006,8 @@ def email_provider(domain: str) -> objict:
             type='unknown',
             confidence='none',
             custom_domain=False,
-            is_disposable=False,
+            is_disposable=is_disposable,
+            is_free=is_free,
             is_corporate=False,
             mx_records=[],
             error='No MX records found'
@@ -984,7 +1039,8 @@ def email_provider(domain: str) -> objict:
                 type='education',
                 confidence='medium',
                 custom_domain=True,
-                is_disposable=False,
+                is_disposable=is_disposable,
+                is_free=is_free,
                 is_corporate=False,
                 mx_records=mx_result.records,
                 error=None
@@ -996,20 +1052,29 @@ def email_provider(domain: str) -> objict:
             type='corporate',
             confidence='medium',
             custom_domain=True,
-            is_disposable=False,
+            is_disposable=is_disposable,
+            is_free=is_free,
             is_corporate=True,
             mx_records=mx_result.records,
             error=None
         )
     
-    # Provider detected via MX records
+    # Provider detected via MX records (custom domain with 3rd party provider)
+    # Using a custom domain means it's typically corporate/business, not personal/free
+    provider_type = detected_provider.get('type', 'unknown')
+    
+    # Override type to 'business' if it's 'personal' - custom domains are business use
+    if provider_type == 'personal':
+        provider_type = 'business'
+    
     return objict(
         provider=detected_provider.get('provider', 'Unknown'),
-        type=detected_provider.get('type', 'unknown'),
+        type=provider_type,
         confidence=confidence,
         custom_domain=True,  # Using provider but with custom domain
-        is_disposable=detected_provider.get('is_disposable', False),
-        is_corporate=False,
+        is_disposable=is_disposable,
+        is_free=False,  # Custom domain = not free (paying for domain + service)
+        is_corporate=True,  # Custom domain = business/organization
         mx_records=mx_result.records,
         error=None
     )
