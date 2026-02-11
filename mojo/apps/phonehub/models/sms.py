@@ -184,3 +184,4 @@ class SMS(models.Model, MojoModel):
         else:
             sms.mark_failed(error_code=resp.code, error_message=resp.error)
         sms.save()
+        return sms

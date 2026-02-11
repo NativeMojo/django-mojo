@@ -1081,6 +1081,8 @@ class MojoModel:
                 return
             related_instance = field.related_model.objects.get(pk=field_value)
             setattr(self, field.name, related_instance)
+        elif field_value is None:
+            setattr(self, field.name, None)
 
     def on_rest_update_jsonfield(self, field_name, field_value):
         """helper to update jsonfield by merge in changes"""

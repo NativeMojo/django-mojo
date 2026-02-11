@@ -440,6 +440,129 @@ class S3StorageBackend(StorageBackend):
             else:
                 raise ValueError(f"S3 connection error: {e}")
 
+    # -------------------------------
+    # PUBLIC ACCESS AUDIT (KISS)
+    # -------------------------------
+    def check_public_access_for_prefix(self):
+        """
+        Check whether the configured prefix for this FileManager is actually publicly readable.
+
+        This does NOT attempt an anonymous HTTP GET. It audits:
+          - S3 PublicAccessBlock configuration (bucket-level)
+          - Bucket policy statement that make_path_public() would create
+
+        Returns:
+            (ok, issues, details)
+        """
+        issues = []
+        details = {
+            "bucket": self.bucket_name,
+            "prefix": self.folder_path,
+            "expected_sid": f"AllowPublicReadForPrefix_{self.folder_path.replace('/', '_')}",
+            "expected_resource": f"arn:aws:s3:::{self.bucket_name}/{self.folder_path}*",
+            "public_access_block": None,
+            "policy": None,
+            "policy_has_expected_statement": False,
+        }
+
+        # 1) PublicAccessBlock (bucket-level)
+        try:
+            pab = self.client.get_public_access_block(Bucket=self.bucket_name)
+            cfg = pab.get("PublicAccessBlockConfiguration") or {}
+            details["public_access_block"] = cfg
+
+            # These settings commonly prevent public bucket policies from taking effect.
+            if cfg.get("BlockPublicPolicy"):
+                issues.append("Bucket PublicAccessBlock.BlockPublicPolicy is enabled (public bucket policies may be blocked).")
+            if cfg.get("RestrictPublicBuckets"):
+                issues.append("Bucket PublicAccessBlock.RestrictPublicBuckets is enabled (public access may be restricted even if policy exists).")
+        except ClientError as e:
+            code = (e.response.get("Error") or {}).get("Code")
+            if code in ("NoSuchPublicAccessBlockConfiguration", "NoSuchPublicAccessBlock"):
+                # No config set is fine; treat as not blocking.
+                details["public_access_block"] = None
+            elif code in ("AccessDenied", "AllAccessDisabled"):
+                issues.append("AccessDenied reading bucket PublicAccessBlock configuration (insufficient permissions to audit).")
+            else:
+                issues.append(f"Error reading bucket PublicAccessBlock configuration: {code or str(e)}")
+
+        # 2) Bucket policy statement for our prefix
+        try:
+            policy_str = self.client.get_bucket_policy(Bucket=self.bucket_name).get("Policy")
+            if policy_str:
+                policy = json.loads(policy_str)
+            else:
+                policy = None
+            details["policy"] = policy
+
+            statements = []
+            if isinstance(policy, dict):
+                st = policy.get("Statement", [])
+                if isinstance(st, dict):
+                    statements = [st]
+                elif isinstance(st, list):
+                    statements = st
+
+            expected_sid = details["expected_sid"]
+            expected_resource = details["expected_resource"]
+
+            def _principal_is_public(principal):
+                if principal == "*":
+                    return True
+                if isinstance(principal, dict):
+                    aws = principal.get("AWS")
+                    if aws == "*" or aws == ["*"]:
+                        return True
+                return False
+
+            def _action_has_get_object(action):
+                if action == "s3:GetObject":
+                    return True
+                if isinstance(action, list) and "s3:GetObject" in action:
+                    return True
+                return False
+
+            def _resource_covers_prefix(resource):
+                if resource == expected_resource:
+                    return True
+                if isinstance(resource, list) and expected_resource in resource:
+                    return True
+                return False
+
+            for stmt in statements:
+                if not isinstance(stmt, dict):
+                    continue
+                if stmt.get("Sid") != expected_sid:
+                    continue
+                if stmt.get("Effect") != "Allow":
+                    continue
+                if not _principal_is_public(stmt.get("Principal")):
+                    continue
+                if not _action_has_get_object(stmt.get("Action")):
+                    continue
+                if not _resource_covers_prefix(stmt.get("Resource")):
+                    continue
+
+                details["policy_has_expected_statement"] = True
+                break
+
+            if not details["policy_has_expected_statement"]:
+                issues.append("Bucket policy does not include the expected public-read statement for this prefix.")
+        except self.client.exceptions.from_code("NoSuchBucketPolicy"):
+            details["policy"] = None
+            issues.append("No bucket policy is set (prefix is not publicly readable).")
+        except ClientError as e:
+            code = (e.response.get("Error") or {}).get("Code")
+            if code in ("AccessDenied", "AllAccessDisabled"):
+                issues.append("AccessDenied reading bucket policy (insufficient permissions to audit).")
+            else:
+                issues.append(f"Error reading bucket policy: {code or str(e)}")
+        except Exception as e:
+            issues.append(f"Error parsing bucket policy: {str(e)}")
+
+        ok = len(issues) == 0
+        return ok, issues, details
+
     def make_path_public(self):
         # Get the current bucket policy (if any)
         try:

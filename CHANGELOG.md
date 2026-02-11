@@ -1,5 +1,11 @@
 
 ## v0.1.3 - May 29, 2025
+## v1.0.15 - February 10, 2026
+
+* ADDED auto email templates
+* Cleanup of filemaner and is_public check
+
+
 ## v1.0.14 - February 07, 2026
 
 * Major cleanup of domain utils

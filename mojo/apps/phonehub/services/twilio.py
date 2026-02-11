@@ -3,7 +3,7 @@ from objict import objict
 
 ACCOUNT_SID = settings.get('TWILIO_ACCOUNT_SID')
 AUTH_TOKEN = settings.get('TWILIO_AUTH_TOKEN')
-FROM_NUMBER = settings.get('TWILIO_FROM_NUMBER')
+FROM_NUMBER = settings.get('TWILIO_NUMBER')
 PROVIDER = "twilio"
 
 def lookup(phone_number):
