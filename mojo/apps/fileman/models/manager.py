@@ -27,7 +27,7 @@ class FileManager(MojoSecrets, MojoModel):
                 "extra": ["aws_region", "aws_key", "aws_secret_masked", "allowed_origins"],
                 "fields": [
                     "created", "id", "name", "use", "backend_type", "backend_url",
-                    "is_active", "is_default"],
+                    "is_active", "is_default", "is_public"],
                 "graphs": {
                     "user": "basic",
                     "group": "basic"
@@ -36,7 +36,7 @@ class FileManager(MojoSecrets, MojoModel):
             "list": {
                 "extra": ["aws_region", "aws_key", "aws_secret_masked", "allowed_origins"],
                 "fields": ["created", "id", "name", "use", "backend_type",  "backend_url",
-                    "is_active", "is_default"],
+                    "is_active", "is_default", "is_public"],
                 "graphs": {
                     "user": "basic",
                     "group": "basic"
@@ -373,6 +373,47 @@ class FileManager(MojoSecrets, MojoModel):
             return f"{self.group.name}'s {use_part}{self.backend_type} FileManager"
         return f"{use_part}{self.backend_type} FileManager"
 
+    def audit_is_public(self):
+        is_public = self.check_public_access()
+        if self.is_public != is_public:
+            self.is_public = is_public
+            self.save()
+        return self.is_public
+
+    def check_public_access(self):
+        """
+        Dev-friendly boolean check.
+
+        Returns:
+            bool: True if this FileManager's configured S3 prefix appears publicly readable
+                  (based on bucket policy + PublicAccessBlock audit), else False.
+        """
+        try:
+            if not self.is_s3:
+                return False
+            self.backend.test_connection()
+            ok, issues, details = self.backend.check_public_access_for_prefix()
+            return bool(ok)
+        except Exception:
+            return False
+
+    def check_public_access_report(self):
+        """
+        Dev-friendly detailed report (previous behavior).
+
+        Returns:
+            dict: {status: bool, result: {ok: bool, issues: [...], details: {...}}} on success
+                  or {status: False, error: "..."} on failure.
+        """
+        try:
+            if not self.is_s3:
+                return dict(status=False, error="Public access auditing is only supported for S3 backends.")
+            self.backend.test_connection()
+            ok, issues, details = self.backend.check_public_access_for_prefix()
+            return dict(status=True, result=dict(ok=ok, issues=issues, details=details))
+        except Exception as e:
+            return dict(status=False, error=str(e))
+
     def on_action_test_connection(self, value):
         try:
             self.backend.test_connection()
@@ -402,6 +443,20 @@ class FileManager(MojoSecrets, MojoModel):
             return dict(status=True, result=result)
         except Exception as e:
             return dict(status=False, error=str(e))
+
+    def on_action_check_public_access(self, value):
+        """
+        Audit whether this FileManager is *really* publicly readable in S3.
+
+        This is useful when `is_public=True` but direct URLs still return `AccessDenied`.
+        The S3 backend checks:
+          - Bucket PublicAccessBlock settings
+          - Bucket policy statement for the configured prefix
+
+        Returns:
+            {status: bool, result: {ok: bool, issues: [...], details: {...}}}
+        """
+        return self.check_public_access_report()
 
     def on_action_clone(self, value):
         secrets = self.secrets
@@ -645,13 +700,13 @@ class FileManager(MojoSecrets, MojoModel):
         from django.db import transaction, IntegrityError
 
         # Prefer a manager matching the specific use if provided; otherwise default group manager
-        if use:
+        if use != "":
             file_manager = cls.objects.filter(
-                user=None, group=group, use=use, is_default=True, is_active=True
+                user=None, group=group, use=use, is_active=True
             ).first()
         else:
             file_manager = cls.objects.filter(
-                user=None, group=group, is_default=True, is_active=True
+                user=None, group=group, use=use, is_default=True, is_active=True
             ).first()
 
         if file_manager is None:
@@ -690,6 +745,7 @@ class FileManager(MojoSecrets, MojoModel):
                             # Copy secrets from parent
                             file_manager.set_secrets(sys_manager.secrets)
                             file_manager.save()
+                            file_manager.audit_is_public()
                 except IntegrityError:
                     # If still a race condition, fetch the existing one
                     if use:
