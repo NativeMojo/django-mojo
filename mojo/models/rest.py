@@ -1006,7 +1006,7 @@ class MojoModel:
         field = self.get_model_field(key)
         if field is None:
             return
-        if field.get_internal_type() == "ForeignKey":
+        if field.is_relation:
             self.on_rest_save_related_field(field, value, request)
         elif field.get_internal_type() == "JSONField":
             self.on_rest_update_jsonfield(key, value)
@@ -1026,7 +1026,7 @@ class MojoModel:
                         value = dates.parse_datetime(value)
                 elif value == "" and field.get_internal_type() in ["IntegerField", "FloatField", "BigIntegerField"]:
                     value = 0
-            self._set_field_change(key, getattr(self, key), value)
+            self._set_field_change(key, getattr(self, key, None), value)
             setattr(self, key, value)
 
     def on_rest_save_files(self, files):
@@ -1091,6 +1091,8 @@ class MojoModel:
         if isinstance(field_value, dict) and isinstance(existing_value, dict):
             merged_value = objict.merge_dicts(existing_value, field_value)
             setattr(self, field_name, merged_value)
+        else:
+            setattr(self, field_name, field_value)
 
     def jsonfield_as_objict(self, field_name):
         existing_value = getattr(self, field_name, {})

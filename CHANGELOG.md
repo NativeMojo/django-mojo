@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v1.0.17 - February 12, 2026
+
+BUGFIX for OneToOne fields
+
+
 ## v1.0.16 - February 12, 2026
 
 NEW FILEVAULT APP
