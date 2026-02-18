@@ -18,7 +18,11 @@ TEST_PWORD = "testit##mojo"
 
 @th.django_unit_setup()
 def setup_vault_service(opts):
+    from django.apps import apps
+    from django.db import connection, models
+    from mojo.models import MojoModel
     from mojo.apps.account.models import User, Group
+    from mojo.apps.fileman.models import FileManager
 
     # ensure test user
     user = User.objects.filter(username=TEST_USER).last()
@@ -39,6 +43,71 @@ def setup_vault_service(opts):
     from mojo.apps.filevault.models import VaultFile, VaultData
     VaultFile.objects.filter(group=group).delete()
     VaultData.objects.filter(group=group).delete()
+
+    # ensure a system default FileManager exists for filevault tests
+    base_path = "/tmp/mojo-fileman-tests"
+    sys_manager = FileManager.objects.filter(
+        user=None, group=None, is_default=True, is_active=True
+    ).first()
+    if sys_manager is None or sys_manager.backend_type != FileManager.FILE_SYSTEM:
+        sys_manager, _ = FileManager.objects.get_or_create(
+            user=None,
+            group=None,
+            name="Test FileManager (file)",
+            defaults={
+                "backend_type": FileManager.FILE_SYSTEM,
+                "backend_url": "file:///",
+                "is_default": True,
+                "is_active": True,
+            },
+        )
+        if sys_manager.backend_type != FileManager.FILE_SYSTEM:
+            sys_manager.backend_type = FileManager.FILE_SYSTEM
+        sys_manager.backend_url = "file:///"
+        sys_manager.is_default = True
+        sys_manager.is_active = True
+        sys_manager.set_settings({"base_path": base_path})
+        sys_manager.save()
+
+    # ensure this manager is the system default
+    FileManager.objects.filter(
+        user=None, group=None, is_default=True
+    ).exclude(pk=sys_manager.pk).update(is_default=False)
+
+    # dynamic model for MojoModel file handling integration
+    VaultAttachmentTest = apps.all_models.get("filevault", {}).get("vaultattachmenttest")
+    if VaultAttachmentTest is None:
+        class VaultAttachmentTest(models.Model, MojoModel):
+            name = models.CharField(max_length=64, default="")
+            attachment = models.ForeignKey(
+                "filevault.VaultFile",
+                null=True, blank=True,
+                on_delete=models.SET_NULL,
+            )
+            user = models.ForeignKey(
+                "account.User",
+                null=True, blank=True,
+                on_delete=models.SET_NULL,
+            )
+            group = models.ForeignKey(
+                "account.Group",
+                null=True, blank=True,
+                on_delete=models.SET_NULL,
+            )
+
+            class Meta:
+                app_label = "filevault"
+
+        apps.register_model("filevault", VaultAttachmentTest)
+
+    opts.VaultAttachmentTest = VaultAttachmentTest
+
+    table_name = VaultAttachmentTest._meta.db_table
+    if table_name not in connection.introspection.table_names():
+        with connection.schema_editor() as schema_editor:
+            schema_editor.create_model(VaultAttachmentTest)
+
+    VaultAttachmentTest.objects.all().delete()
 
 
 # ---------------------------------------------------------------------------
@@ -79,6 +148,35 @@ def test_upload_file(opts):
     opts.vault_file_id = vault_file.pk
     opts.vault_file_uuid = vault_file.uuid
     opts.original_content = content
+
+
+@th.django_unit_test("VaultFile.create_from_file uses ACTIVE_REQUEST context")
+def test_create_from_file_active_request(opts):
+    from io import BytesIO
+    from objict import objict
+    from mojo.models import rest
+    from mojo.apps.filevault.models import VaultFile
+    from mojo.apps.filevault.services import vault as vault_service
+
+    content = b"Create-from-file active request content."
+    f = BytesIO(content)
+    f.name = "active_request.txt"
+    f.size = len(content)
+    f.content_type = "text/plain"
+
+    req = objict(user=opts.user, group=opts.group, DATA=objict())
+    token = rest.ACTIVE_REQUEST.set(req)
+    try:
+        vault_file = VaultFile.create_from_file(f, "attachment")
+    finally:
+        rest.ACTIVE_REQUEST.reset(token)
+
+    assert_true(vault_file.pk is not None, "VaultFile should be created")
+    assert_eq(vault_file.group_id, opts.group.pk, "group should be set from ACTIVE_REQUEST")
+    assert_eq(vault_file.user_id, opts.user.pk, "user should be set from ACTIVE_REQUEST")
+
+    decrypted = vault_service.download_file(vault_file)
+    assert_eq(decrypted, content, "decrypted content should match original")
 
 
 @th.django_unit_test("download_file decrypts correctly")
@@ -143,6 +241,37 @@ def test_download_missing_password(opts):
         assert False, "should have raised ValueError for missing password"
     except ValueError as e:
         assert_true("Password required" in str(e), "error should mention password required")
+
+
+@th.django_unit_test("MojoModel file handling creates VaultFile via create_from_file")
+def test_mojomodel_file_handling(opts):
+    from io import BytesIO
+    from objict import objict
+    from mojo.models import rest
+    from mojo.apps.filevault.services import vault as vault_service
+
+    content = b"MojoModel file handling content."
+    f = BytesIO(content)
+    f.name = "mojomodel_file.txt"
+    f.size = len(content)
+    f.content_type = "text/plain"
+
+    req = objict(user=opts.user, group=opts.group, DATA=objict())
+    token = rest.ACTIVE_REQUEST.set(req)
+    try:
+        instance = opts.VaultAttachmentTest()
+        instance.on_rest_save(req, {
+            "name": "attachment-test",
+            "files": {"attachment": f},
+        })
+    finally:
+        rest.ACTIVE_REQUEST.reset(token)
+
+    assert_true(instance.pk is not None, "model instance should be saved")
+    assert_true(instance.attachment_id is not None, "attachment should be set")
+
+    decrypted = vault_service.download_file(instance.attachment)
+    assert_eq(decrypted, content, "decrypted content should match original")
 
 
 # ---------------------------------------------------------------------------
@@ -270,6 +399,8 @@ def test_cleanup(opts):
 
     VaultFile.objects.filter(group=opts.group).delete()
     VaultData.objects.filter(group=opts.group).delete()
+    if hasattr(opts, "VaultAttachmentTest"):
+        opts.VaultAttachmentTest.objects.all().delete()
 
     remaining_files = VaultFile.objects.filter(group=opts.group).count()
     remaining_data = VaultData.objects.filter(group=opts.group).count()

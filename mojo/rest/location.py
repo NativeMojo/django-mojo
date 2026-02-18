@@ -131,7 +131,7 @@ def rest_address_suggestions(request):
         result["session_token"] = session_token
         return JsonResponse(result)
     except Exception as e:
-        return JsonResponse(dict(success=False, error=str(e), data=[], size=0, count=0), status=400)
+        return JsonResponse(dict(success=False, status=False, error=str(e), data=[], size=0, count=0), status=400)
 
 
 @md.GET('location/address/place-details')
@@ -172,7 +172,7 @@ def rest_place_details(request):
         )
         return JsonResponse(result)
     except Exception as e:
-        return JsonResponse(dict(success=False, error=str(e)), status=400)
+        return JsonResponse(dict(success=False, status=False, error=str(e)), status=400)
 
 
 @md.POST('location/address/geocode')
@@ -206,7 +206,7 @@ def rest_geocode_address(request):
         result = service.geocode_address(address)
         return JsonResponse(result)
     except Exception as e:
-        return JsonResponse(dict(success=False, error=str(e)), status=400)
+        return JsonResponse(dict(success=False, status=False, error=str(e)), status=400)
 
 
 @md.GET('location/address/reverse-geocode')
@@ -236,14 +236,14 @@ def rest_reverse_geocode(request):
     lng = request.DATA.get_typed("lng", None, float)
 
     if lat is None or lng is None:
-        return JsonResponse(dict(success=False, error="Invalid lat/lng coordinates"), status=400)
+        return JsonResponse(dict(success=False, status=False, error="Invalid lat/lng coordinates"), status=400)
 
     try:
         service = google.get_google_api()
         result = service.reverse_geocode(lat, lng)
         return JsonResponse(result)
     except Exception as e:
-        return JsonResponse(dict(success=False, error=str(e)), status=400)
+        return JsonResponse(dict(success=False, status=False, error=str(e)), status=400)
 
 
 @md.GET('location/timezone')
@@ -277,14 +277,14 @@ def rest_get_timezone(request):
     timestamp = request.DATA.get_typed("timestamp", None, int)
 
     if lat is None or lng is None:
-        return JsonResponse(dict(success=False, error="Invalid lat/lng coordinates"), status=400)
+        return JsonResponse(dict(success=False, status=False, error="Invalid lat/lng coordinates"), status=400)
 
     try:
         service = google.get_google_api()
         result = service.get_timezone(lat, lng, timestamp)
         return JsonResponse(result)
     except Exception as e:
-        return JsonResponse(dict(success=False, error=str(e)), status=400)
+        return JsonResponse(dict(success=False, status=False, error=str(e)), status=400)
 
 
 # Public endpoint for testing (no auth required)
