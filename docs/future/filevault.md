@@ -43,15 +43,15 @@ All file encryption uses AES-256-GCM (Galois/Counter Mode). GCM provides:
 - **Authenticity** — Any modification to the ciphertext is detected on decryption. There is no need for a separate integrity hash.
 - **Performance** — GCM is hardware-accelerated on modern CPUs via AES-NI.
 
-### Chunk-Based Streaming
+### Chunk-Based Format (Streaming Download)
 
-Files are split into fixed-size chunks (default 5MB) for encryption. Each chunk is encrypted independently with its own nonce and authentication tag. This enables:
+Files are encrypted into a fixed-size chunked format (default 5MB). Each chunk is encrypted independently with its own nonce and authentication tag. This enables:
 
-- **Bounded memory usage** — At most one plaintext chunk and one ciphertext chunk are in memory at any time (~10MB total regardless of file size).
-- **Streaming upload** — Chunks are encrypted and uploaded via S3 multipart upload as they arrive through ASGI/nginx.
-- **Streaming download** — Chunks are downloaded from S3 via range requests, decrypted, and streamed to the client.
 - **Per-chunk integrity** — A tampered chunk is detected immediately without processing the entire file.
-- **No file size limit** — The chunk-based approach has no practical ceiling.
+- **Streaming download** — The implementation supports streaming decryption (`download_file_streaming`) without loading the full file into memory.
+- **Random-access friendly** — The header + fixed chunk sizes make byte offsets predictable.
+
+**Important**: the current upload path reads the entire file into memory and writes one encrypted blob via the FileManager backend. It is chunked on disk, but not streamed on upload. Large uploads therefore require memory roughly proportional to file size.
 
 ### Key Derivation: PBKDF2-HMAC-SHA256
 
@@ -86,12 +86,13 @@ This key is the secret that protects the file. It is never exposed through the R
 
 ### Wrapped Key Storage
 
-The `ekey` is encrypted before being stored in the database using the server's `SECRET_KEY`:
+The `ekey` is encrypted before being stored in the database using a passphrase derived from the server's `SECRET_KEY` and the file UUID:
 
 ```
 Wrapping:
   wrap_salt = 32 random bytes
-  wrap_key = PBKDF2-HMAC-SHA256(SECRET_KEY, wrap_salt, iterations=600000, dklen=32)
+  wrap_passphrase = SECRET_KEY + file_uuid
+  wrap_key = PBKDF2-HMAC-SHA256(wrap_passphrase, wrap_salt, iterations=600000, dklen=32)
   wrap_nonce = 12 random bytes
   encrypted_ekey, auth_tag = AES-256-GCM(wrap_key, wrap_nonce, ekey)
 
@@ -187,35 +188,14 @@ This enables S3 range requests to fetch individual chunks without downloading th
 
 ---
 
-## S3 Storage
+## FileManager Storage
 
-### Layout
+FileVault stores encrypted blobs using the FileManager subsystem:
 
-```
-s3://{VAULT_S3_BUCKET}/vault/files/{uuid}
-```
-
-Each file is a single S3 object. The UUID is generated at upload time and has no relation to the encryption key.
-
-### Upload: S3 Multipart
-
-Files are uploaded using S3 multipart upload:
-
-1. Initiate multipart upload.
-2. For each chunk: encrypt and upload as a part.
-3. Complete multipart upload.
-
-The 5MB chunk size matches S3's minimum multipart part size. This is handled by `boto3`.
-
-### Download: Range Requests
-
-On download, the file header is fetched first (bytes 0-63) to read the KDF salt, chunk size, and chunk count. Each subsequent chunk is fetched via an S3 range request, decrypted, and streamed to the client.
-
-Alternatively, the entire object can be streamed sequentially and chunked in the application layer, which avoids the per-request overhead of range requests. The choice depends on whether random-access to individual chunks is needed (it generally isn't for sequential downloads).
-
-### Deletion
-
-Deleting a VaultFile deletes the single S3 object and the database record. No orphaned chunks or manifests.
+- Storage is resolved via `FileManager.get_for_group(group, use="filevault")`.
+- Objects are written to `{fm.root_path}/{uuid}` using `fm.backend.save(...)`.
+- The backend is usually S3, but can be any FileManager-compatible storage.
+- Deletion removes the single object and the database record.
 
 ---
 
@@ -249,7 +229,7 @@ An authenticated user requests a download link:
 3. Django constructs the token payload with the file ID, client IP, and a short expiration (default 300 seconds).
 4. Django signs the payload with HMAC-SHA256 using `SECRET_KEY`.
 5. The token and download URL are returned.
-6. An audit log entry is written (who unlocked which file, when, from what IP).
+6. Optionally record an audit log entry (who unlocked which file, when, from what IP).
 
 ### Validating a Token (Download)
 
@@ -284,13 +264,13 @@ The token binds to whatever IP address Django sees in the request. For this to w
 
 ---
 
-## Upload Flow
+## Upload Flow (Current Implementation)
 
 ```
-1. Client POSTs file to the upload endpoint (authenticated, streamed via ASGI/nginx).
-
-2. Create VaultFile record:
-   a. Generate UUID for S3 path.
+1. Client POSTs file to the upload endpoint (authenticated, multipart).
+2. Server reads the full file into memory.
+3. Create VaultFile record:
+   a. Generate UUID for storage path.
    b. Generate ekey (32 random alphanumeric characters).
    c. Generate KDF salt (32 random bytes).
    d. If password provided:
@@ -298,29 +278,15 @@ The token binds to whatever IP address Django sees in the request. For this to w
       - Combine password + ekey as passphrase.
    e. Derive AES key via PBKDF2(passphrase, salt, 600k iterations).
    f. Encrypt ekey with SECRET_KEY and store wrapped blob.
-
-3. Initiate S3 multipart upload.
-
-4. Write file header (64 bytes) as first part of the data stream.
-
-5. Stream file body in chunks:
-   a. Read up to 5MB from the request body.
-   b. Derive nonce from chunk index.
-   c. Encrypt chunk with AES-256-GCM.
-   d. Upload as S3 multipart part.
-   e. Increment chunk count.
-   f. Repeat until request body is exhausted.
-
-6. Complete S3 multipart upload.
-
-7. Update VaultFile record with final size and chunk count.
+4. Encrypt the file in-memory into the vault chunked format.
+5. Save the encrypted blob via `fm.backend.save(...)`.
 ```
 
-**Memory usage**: ~10MB peak (one plaintext chunk + one ciphertext chunk).
+**Memory usage**: roughly 2x file size for uploads (plaintext + encrypted blob).
 
 ---
 
-## Download Flow
+## Download Flow (Streaming)
 
 ### Authenticated Access (Unlock + Download)
 
@@ -336,12 +302,13 @@ The token binds to whatever IP address Django sees in the request. For this to w
 8. If password-protected, verify password from request.
 9. Unwrap ekey from database using SECRET_KEY.
 10. Derive AES key via PBKDF2.
-11. Fetch file header from S3 (first 64 bytes).
-12. Stream chunks:
-    a. Fetch encrypted chunk from S3.
+11. Open the encrypted blob via `fm.backend.open(...)`.
+12. Read and parse the 64-byte header.
+13. Stream chunks:
+    a. Read encrypted chunk from storage.
     b. Decrypt with AES-256-GCM (validates auth tag).
     c. Yield plaintext chunk to StreamingHttpResponse.
-13. Response streams through ASGI/nginx to client.
+14. Response streams through ASGI/nginx to client.
 ```
 
 **Memory usage**: ~10MB peak.
@@ -368,24 +335,14 @@ The token binds to whatever IP address Django sees in the request. For this to w
 | is_encrypted    | IntegerField    | 0=plaintext, 2=AES-256-GCM chunked                 |
 | ekey            | TextField       | Wrapped encryption key (encrypted with SECRET_KEY) |
 | hashed_password | TextField       | PBKDF2 password hash + salt, nullable              |
-| member          | FK(Member)      | User who uploaded the file                         |
-| unlocked_by     | FK(Member)      | User who last generated a download token           |
+| metadata        | JSONField       | Arbitrary metadata                                 |
+| user            | FK(User)        | User who uploaded the file                         |
+| unlocked_by     | FK(User)        | User who last generated a download token           |
 | group           | FK(Group)       | Owning organization (CASCADE delete)               |
 
-**Fields hidden from REST API** (`NO_SHOW_FIELDS`): `ekey`, `hashed_password`
+**Fields excluded from REST graphs**: `ekey`, `hashed_password`, `uuid`, `chunk_count`
 
-**Fields not settable via REST API** (`NO_SAVE_FIELDS`): `id`, `pk`, `ekey`, `uuid`, `chunk_count`
-
-### VaultFileMetaData
-
-Key/value metadata storage for VaultFile. Extends `MetaDataBase`.
-
-| Field    | Type          | Description                   |
-| -------- | ------------- | ----------------------------- |
-| parent   | FK(VaultFile) | Related file (CASCADE delete) |
-| category | CharField     | Metadata category             |
-| key      | CharField     | Metadata key                  |
-| value    | TextField     | Metadata value                |
+**Fields not settable via REST API** (`NO_SAVE_FIELDS`): `id`, `pk`, `ekey`, `uuid`, `chunk_count`, `hashed_password`, `is_encrypted`
 
 ### VaultData
 
@@ -401,14 +358,91 @@ Encrypted JSON data stored in the database (not S3).
 | ekey            | TextField     | Wrapped encryption key                |
 | edata           | TextField     | AES-256-GCM encrypted JSON (base64)   |
 | hashed_password | TextField     | PBKDF2 password hash + salt, nullable |
-| member          | FK(Member)    | Owning member                         |
+| metadata        | JSONField     | Arbitrary metadata                    |
+| user            | FK(User)      | Owning user                           |
 | group           | FK(Group)     | Owning organization (CASCADE delete)  |
+
+**Fields excluded from REST graphs**: `ekey`, `edata`, `hashed_password`
+
+**Fields not settable via REST API** (`NO_SAVE_FIELDS`): `id`, `pk`, `ekey`, `edata`, `hashed_password`
 
 VaultData uses the same encryption (AES-256-GCM) and key wrapping as VaultFile, but without chunking — the data is small enough for single-operation GCM.
 
-### VaultDataMetaData
+Both models include a `metadata` JSONField for arbitrary key/value storage.
 
-Key/value metadata storage for VaultData. Same structure as VaultFileMetaData.
+---
+
+## Using FileVault in Django Apps
+
+### Service API (Python)
+
+Import `mojo.apps.filevault.services.vault` as `vault_service` and call it directly:
+
+```python
+from mojo.apps.filevault.services import vault as vault_service
+
+vault_file = vault_service.upload_file(
+    file_obj=uploaded_file,
+    name=uploaded_file.name,
+    group=request.group,
+    user=request.user,
+    password=request.DATA.get("password"),
+    description=request.DATA.get("description"),
+    metadata={"source": "invoices"},
+)
+
+download_bytes = vault_service.download_file(vault_file, password="secret")
+
+stream = vault_service.download_file_streaming(vault_file, password="secret")
+
+token = vault_service.generate_download_token(vault_file, client_ip)
+vault_file = vault_service.validate_download_token(token, client_ip)
+
+vault_data = vault_service.store_data(
+    group=request.group,
+    user=request.user,
+    name="settings",
+    data={"foo": "bar"},
+    password=None,
+)
+
+data = vault_service.retrieve_data(vault_data, password=None)
+```
+
+### REST + MojoModel Integration
+
+- `VaultFile` and `VaultData` are `MojoModel` subclasses; standard CRUD routes are exposed via `on_rest_request`.
+- Uploading encrypted files must use `POST /api/filevault/file/upload`. The standard `POST /api/filevault/file` only creates metadata and does not upload or encrypt file contents.
+- Encrypted JSON data must use `POST /api/filevault/data/store`, and decrypted payloads are returned by `POST /api/filevault/data/<pk>/retrieve`.
+- Custom endpoints return dicts directly. If you want the canonical REST envelope (`status`/`data`), wrap with `MojoModel.return_rest_response(...)` or `JsonResponse(...)`.
+
+### Using `on_rest_save_file` / `create_from_file`
+
+`MojoModel.on_rest_save_file` only handles relation fields when the related model implements `create_from_file(file, name)`. It does **not** pass the request, so `create_from_file` must look up context itself (for example via `mojo.models.rest.ACTIVE_REQUEST.get()`).
+
+Uploaded files are parsed into `request.DATA["files"]` by the request parser. The file field name must match the model field name (for example, an `attachment` FK expects a multipart field named `attachment`).
+
+VaultFile implements `create_from_file(...)`, so MojoModel file handling will create encrypted VaultFile records automatically when a relation field points at VaultFile.
+
+If you need custom routing (for example, custom password logic), override your model’s `on_rest_save_file` and call `vault_service.upload_file(...)` directly using `self.active_request` for user/group context.
+
+Example override in your model (no code changes in FileVault required):
+
+```python
+from mojo.apps.filevault.services import vault as vault_service
+
+def on_rest_save_file(self, name, file):
+    if name != "attachment":
+        return
+    req = self.active_request
+    self.attachment = vault_service.upload_file(
+        file_obj=file,
+        name=file.name,
+        group=req.group,
+        user=req.user,
+        password=req.DATA.get("password"),
+    )
+```
 
 ---
 
@@ -419,23 +453,35 @@ Key/value metadata storage for VaultData. Same structure as VaultFileMetaData.
 | Method | Path                    | Auth     | Description                                   |
 | ------ | ----------------------- | -------- | --------------------------------------------- |
 | GET    | `file`                  | Required | List files (scoped to user's group)           |
-| POST   | `file`                  | Required | Upload a new file                             |
+| POST   | `file`                  | Required | Create/update metadata only                   |
 | GET    | `file/<pk>`             | Required | Get file metadata                             |
 | PUT    | `file/<pk>`             | Required | Update file metadata                          |
 | DELETE | `file/<pk>`             | Required | Delete file (removes S3 object and DB record) |
+| POST   | `file/upload`           | Required | Upload + encrypt file                         |
 | POST   | `file/<pk>/unlock`      | Required | Generate a signed download token              |
 | POST   | `file/<pk>/password`    | Required | Verify a password without downloading         |
 | GET    | `file/download/<token>` | None     | Download file using signed token              |
 
 ### Data Endpoints
 
-| Method | Path        | Auth     | Description           |
-| ------ | ----------- | -------- | --------------------- |
-| GET    | `data`      | Required | List data records     |
-| POST   | `data`      | Required | Create encrypted data |
-| GET    | `data/<pk>` | Required | Get data metadata     |
-| PUT    | `data/<pk>` | Required | Update data           |
-| DELETE | `data/<pk>` | Required | Delete data           |
+| Method | Path        | Auth     | Description                          |
+| ------ | ----------- | -------- | ------------------------------------ |
+| GET    | `data`      | Required | List data records (metadata only)    |
+| POST   | `data`      | Required | Create/update metadata only          |
+| GET    | `data/<pk>` | Required | Get data metadata                    |
+| PUT    | `data/<pk>` | Required | Update data metadata                 |
+| DELETE | `data/<pk>` | Required | Delete data                          |
+| POST   | `data/store` | Required | Encrypt + store JSON payload        |
+| POST   | `data/<pk>/retrieve` | Required | Decrypt + return JSON payload |
+
+### Custom Endpoint Payloads
+
+- `POST file/upload`: multipart with `file` plus optional `name`, `description`, `password`, `metadata` (JSON string or object). Returns VaultFile metadata.
+- `POST file/<pk>/unlock`: optional `ttl` (seconds). Returns `token`, `download_url`, `ttl`.
+- `POST file/<pk>/password`: `password` required. Returns `valid`.
+- `GET file/download/<token>`: optional `password` if the file is protected. Streams file bytes.
+- `POST data/store`: `name` and `data` required; optional `password`, `description`, `metadata`. Returns VaultData metadata.
+- `POST data/<pk>/retrieve`: optional `password`. Returns decrypted `data`.
 
 ### Response Graphs
 
@@ -452,7 +498,7 @@ Key/value metadata storage for VaultData. Same structure as VaultFileMetaData.
     "is_encrypted": 2,
     "requires_password": false,
     "metadata": { ... },
-    "member": { "id": 1, "username": "jdoe" },
+    "user": { "id": 1, "username": "jdoe" },
     "unlocked_by": null
 }
 ```
@@ -467,7 +513,7 @@ The `ekey`, `hashed_password`, `uuid`, and `chunk_count` fields are never includ
 
 ```
 Layer 1: ekey encrypted with SECRET_KEY (database at rest)
-Layer 2: File encrypted with ekey + optional password (S3 at rest)
+Layer 2: File encrypted with ekey + optional password (storage backend at rest)
 Layer 3: Signed, IP-bound tokens (download access)
 Layer 4: TLS via nginx (transport)
 ```
@@ -492,7 +538,7 @@ Layer 4: TLS via nginx (transport)
 | ekey (unwrapped)  | Server memory during request      | Exists only for duration of encrypt/decrypt operation |
 | User password     | Nowhere (hashed only)             | PBKDF2 hash in database, never stored plaintext       |
 | AES key (derived) | Server memory during request      | Derived from ekey+password+salt, never stored         |
-| File plaintext    | Server memory during streaming    | One chunk at a time (~5MB), never stored on disk      |
+| File plaintext    | Server memory during operations   | Upload loads full file; download streams by chunk     |
 
 ---
 
@@ -503,9 +549,8 @@ Layer 4: TLS via nginx (transport)
 | `hashlib` (stdlib) | PBKDF2-HMAC-SHA256                            | No install needed                            |
 | `hmac` (stdlib)    | Token signing, constant-time comparison       | No install needed                            |
 | `json` (stdlib)    | Token payload encoding                        | No install needed                            |
-| `cryptography`     | AES-256-GCM encrypt/decrypt                   | Widely used, actively maintained, has wheels |
-| `boto3`            | S3 multipart upload, range requests, deletion | Already in use                               |
-| `pycryptodome`     | Secure random generation (`Crypto.Random`)    | Already in use                               |
+| `boto3`            | S3 backend operations (via fileman)           | Already in use                               |
+| `pycryptodome`     | AES-256-GCM, PBKDF2, secure random generation | Already in use                               |
 
 ---
 
@@ -514,7 +559,5 @@ Layer 4: TLS via nginx (transport)
 | Setting                | Description                                      | Example                      |
 | ---------------------- | ------------------------------------------------ | ---------------------------- |
 | `SECRET_KEY`           | Root of trust for key wrapping and token signing | Set via environment variable |
-| `VAULT_S3_BUCKET`      | S3 bucket for encrypted file storage             | `"camlock"`                  |
-| `VAULT_CHUNK_SIZE`     | Chunk size in bytes (default 5MB)                | `5242880`                    |
-| `VAULT_TOKEN_TTL`      | Default download token lifetime in seconds       | `300`                        |
-| `VAULT_KDF_ITERATIONS` | PBKDF2 iteration count                           | `600000`                     |
+
+Encryption parameters (chunk size, token TTL, KDF iterations) are currently defined as constants in `mojo/helpers/crypto/vault.py` (`VAULT_CHUNK_SIZE`, `VAULT_TOKEN_TTL`, `VAULT_KDF_ITERATIONS`).

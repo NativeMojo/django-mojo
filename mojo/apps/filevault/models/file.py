@@ -117,3 +117,61 @@ class VaultFile(models.Model, MojoModel):
             delete_s3_object(self)
         except Exception:
             logit.error(f"filevault: failed to delete S3 object for VaultFile {self.pk}")
+
+    @classmethod
+    def create_from_file(
+        cls,
+        file,
+        name,
+        request=None,
+        user=None,
+        group=None,
+        password=None,
+        description=None,
+        metadata=None,
+    ):
+        """
+        Create a VaultFile from an uploaded file.
+
+        This is used by MojoModel.on_rest_save_file when a related field
+        points at VaultFile.
+        """
+        if request is None:
+            try:
+                from mojo.models.rest import ACTIVE_REQUEST
+                request = ACTIVE_REQUEST.get()
+            except Exception:
+                request = None
+
+        if request is not None:
+            if user is None:
+                user = getattr(request, "user", None)
+            if group is None:
+                group = getattr(request, "group", None)
+            if password is None and hasattr(request, "DATA"):
+                password = request.DATA.get("password", None)
+            if description is None and hasattr(request, "DATA"):
+                description = request.DATA.get("description", None)
+            if metadata is None and hasattr(request, "DATA"):
+                metadata = request.DATA.get("metadata", {})
+
+        if isinstance(metadata, str):
+            import json
+            metadata = json.loads(metadata)
+        if metadata is None:
+            metadata = {}
+
+        if not group:
+            raise ValueError("Group required for VaultFile.create_from_file")
+
+        filename = getattr(file, "name", None) or name
+        from mojo.apps.filevault.services import vault as vault_service
+        return vault_service.upload_file(
+            file_obj=file,
+            name=filename,
+            group=group,
+            user=user,
+            password=password,
+            description=description,
+            metadata=metadata,
+        )

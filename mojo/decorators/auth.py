@@ -2,11 +2,14 @@ from functools import wraps
 import mojo.errors
 from mojo.helpers import logit
 from mojo.helpers import modules
+from mojo.helpers.settings import settings
 
 logger = logit.get_logger("error", "error.log")
 
 # Global security registry - stores security metadata for all decorated functions
 SECURITY_REGISTRY = {}
+REQUIRES_PERMS_IS_GROUP = settings.get('REQUIRES_PERMS_IS_GROUP', True)
+
 
 def requires_perms(*required_perms):
     def decorator(func):
@@ -29,9 +32,23 @@ def requires_perms(*required_perms):
             if not request.user.is_authenticated:
                 raise mojo.errors.PermissionDeniedException()
             perms = set(required_perms)
-            if not request.user.has_permission(perms):
+
+            # First check user-based permissions
+            if request.user.has_permission(perms):
+                return func(request, *args, **kwargs)
+
+            # If user doesn't have permissions, fallback to group-based checking
+            if REQUIRES_PERMS_IS_GROUP:
+                if "group" in request.DATA and not request.group:
+                    request.group = modules.get_model_instance("account", "Group", int(request.DATA.group))
+                if not request.group or not request.group.user_has_permission(request.user, perms, True):
+                    logger.error(f"{request.user.username} is missing {perms}")
+                    raise mojo.errors.PermissionDeniedException()
+            else:
+                # No group checking allowed, user already failed permission check
                 logger.error(f"{request.user.username} is missing {perms}")
                 raise mojo.errors.PermissionDeniedException()
+
             return func(request, *args, **kwargs)
         return wrapper
     return decorator
@@ -58,9 +75,15 @@ def requires_group_perms(*required_perms):
             if not request.user.is_authenticated:
                 raise mojo.errors.PermissionDeniedException()
             perms = set(required_perms)
-            if "group" in request.DATA:
+
+            # First check user-based permissions
+            if request.user.has_permission(perms):
+                return func(request, *args, **kwargs)
+
+            # If user doesn't have permissions, fallback to group-based checking
+            if "group" in request.DATA and not request.group:
                 request.group = modules.get_model_instance("account", "Group", int(request.DATA.group))
-            if not request.group.user_has_permission(request.user, perms, True):
+            if not request.group or not request.group.user_has_permission(request.user, perms, True):
                 logger.error(f"{request.user.username} is missing {perms}")
                 raise mojo.errors.PermissionDeniedException()
             return func(request, *args, **kwargs)
