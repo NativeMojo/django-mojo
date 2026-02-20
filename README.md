@@ -41,7 +41,7 @@ Django-MOJO helps you rapidly build secure APIs and manage authentication in Dja
 from django.db import models
 from mojo.models import MojoModel
 
-class Group(MojoModel):
+class Group(models.Model, MojoModel):
     name = models.CharField(max_length=200)
     class RestMeta:
         VIEW_PERMS = ["view_groups"]
@@ -78,18 +78,42 @@ def on_group(request, pk=None):
 
 ## Documentation
 
-Want details or examples? Dive into the docs:
+Documentation is organized by audience:
 
-- [Getting Started & Installing](docs/llm_context.md)
-- [REST API & Graph Serialization](docs/rest.md)
-- [Authentication & JWT](docs/auth.md)
-- [Helpers & Utilities](docs/helpers.md)
-- [Tasks & Cron Schedules](docs/tasks.md)  
-- [Testing Framework](docs/testit/index.md)
-- [Developing & Contributing](docs/developer_guide.md)
-- [Decorators Reference](docs/decorators.md)
-- [Metrics](docs/metrics.md)
-- [Cron Scheduler](docs/cron.md)
+### [Django Developer Reference](docs/django_developer/README.md)
+For developers building applications with django-mojo. Covers models, REST framework, helpers, and all built-in apps. Written for both human developers and AI agents (LLM-optimized).
+
+| Section | Description |
+|---|---|
+| [Core](docs/django_developer/core/README.md) | MojoModel, REST framework, decorators, middleware, serialization |
+| [Helpers](docs/django_developer/helpers/README.md) | logit, dates, settings, crypto, request, redis, and other utilities |
+| [Account](docs/django_developer/account/README.md) | User, Group, JWT authentication, permissions |
+| [Logging](docs/django_developer/logging/README.md) | Database logging, security incidents |
+| [Files](docs/django_developer/files/README.md) | File upload, storage backends, renditions |
+| [Email](docs/django_developer/email/README.md) | AWS SES email, templates, inbound handling |
+| [Jobs](docs/django_developer/jobs/README.md) | Async task queue |
+| [Metrics](docs/django_developer/metrics/README.md) | Redis-backed time-series metrics |
+| [Realtime](docs/django_developer/realtime/README.md) | WebSocket pub/sub |
+| [PhoneHub](docs/django_developer/phonehub/README.md) | Phone number management and SMS |
+| [FileVault](docs/django_developer/filevault/README.md) | Encrypted file vault |
+| [DocIt](docs/django_developer/docit/README.md) | Documentation/wiki system |
+
+### [REST API Reference](docs/web_developer/README.md)
+For web developers integrating with django-mojo APIs. Covers endpoints, authentication, filtering, and all app APIs.
+
+| Section | Description |
+|---|---|
+| [Core](docs/web_developer/core/README.md) | Authentication, request format, filtering, pagination, graphs |
+| [Account](docs/web_developer/account/README.md) | Login, users, groups, API keys |
+| [Logging](docs/web_developer/logging/README.md) | Log queries, incident management |
+| [Files](docs/web_developer/files/README.md) | File uploads, downloads |
+| [Email](docs/web_developer/email/README.md) | Templates, mailboxes |
+| [Jobs](docs/web_developer/jobs/README.md) | Job status |
+| [Metrics](docs/web_developer/metrics/README.md) | Time-series metrics |
+| [Realtime](docs/web_developer/realtime/README.md) | WebSocket protocol |
+| [PhoneHub](docs/web_developer/phonehub/README.md) | Phone lookup and normalization |
+| [FileVault](docs/web_developer/filevault/README.md) | Encrypted file vault |
+| [DocIt](docs/web_developer/docit/README.md) | Documentation pages |
 
 ---
 

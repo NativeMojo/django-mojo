@@ -1,0 +1,69 @@
+# Django Developer Reference
+
+LLM-optimized reference documentation for building Django applications with the django-mojo framework.
+
+## Framework Core
+
+| Section | Description |
+|---|---|
+| [core/](core/README.md) | MojoModel, REST framework, decorators, middleware, serialization |
+| [helpers/](helpers/README.md) | logit, dates, settings, crypto, request, response, redis, and other utilities |
+
+## Built-in Apps
+
+| Section | Description |
+|---|---|
+| [account/](account/README.md) | User, Group, JWT authentication, permissions |
+| [logging/](logging/README.md) | Database logging (logit app), security incidents |
+| [files/](files/README.md) | File upload, storage backends, renditions |
+| [email/](email/README.md) | AWS SES email, templates, mailboxes, inbound handling |
+| [jobs/](jobs/README.md) | Async task queue, job publishing, worker configuration |
+| [metrics/](metrics/README.md) | Redis-backed time-series metrics |
+| [realtime/](realtime/README.md) | WebSocket pub/sub via Django Channels |
+| [phonehub/](phonehub/README.md) | Phone and device management |
+| [filevault/](filevault/README.md) | Encrypted file vault |
+| [docit/](docit/README.md) | Documentation system |
+
+## Quick Start Pattern
+
+Every feature follows the same pattern:
+
+```python
+# 1. Model (app/models/my_model.py)
+from django.db import models
+from mojo.models import MojoModel
+
+class MyModel(models.Model, MojoModel):
+    user = models.ForeignKey("account.User", null=True, on_delete=models.SET_NULL)
+    group = models.ForeignKey("account.Group", null=True, on_delete=models.SET_NULL)
+    name = models.CharField(max_length=255)
+    created = models.DateTimeField(auto_now_add=True, editable=False, db_index=True)
+    modified = models.DateTimeField(auto_now=True, db_index=True)
+
+    class RestMeta:
+        VIEW_PERMS = ["view_mymodel", "owner"]
+        SAVE_PERMS = ["manage_mymodel", "owner"]
+        GRAPHS = {
+            "list": {"fields": ["id", "name", "created"]},
+            "default": {"fields": ["id", "name", "created", "modified"]},
+        }
+
+# 2. REST endpoint (app/rest/my_model.py)
+import mojo.decorators as md
+from ..models.my_model import MyModel
+
+@md.URL('mymodel')
+@md.URL('mymodel/<int:pk>')
+def on_my_model(request, pk=None):
+    return MyModel.on_rest_request(request, pk)
+```
+
+## Key Conventions
+
+- Always use `request.DATA` (never `request.POST.get()` or `request.GET.get()`)
+- List endpoints must NOT end with trailing slashes
+- Model inheritance: `models.Model, MojoModel` (or `MojoSecrets, MojoModel`)
+- Always include `created` and `modified` fields
+- Add `user` and `group` FKs when model needs access control
+- Never create migration files (user's responsibility)
+- Never use Python type hints

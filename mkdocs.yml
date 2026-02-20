@@ -1,0 +1,136 @@
+site_name: Django-MOJO
+site_description: The Lightweight, Secure, and Extensible REST and Auth Framework for Django
+site_url: https://NativeMojo.github.io/django-mojo/
+repo_url: https://github.com/NativeMojo/django-mojo
+repo_name: NativeMojo/django-mojo
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.highlight
+    - search.suggest
+    - content.code.copy
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+  - admonition
+  - pymdownx.details
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Home: README.md
+  - Django Developer:
+    - Overview: django_developer/README.md
+    - Core:
+      - Overview: django_developer/core/README.md
+      - MojoModel: django_developer/core/mojo_model.md
+      - Decorators: django_developer/core/decorators.md
+      - Middleware: django_developer/core/middleware.md
+      - Graphs: django_developer/core/graphs.md
+    - Helpers:
+      - Overview: django_developer/helpers/README.md
+      - logit: django_developer/helpers/logit.md
+      - Dates: django_developer/helpers/dates.md
+      - Settings: django_developer/helpers/settings.md
+      - Crypto: django_developer/helpers/crypto.md
+      - Request: django_developer/helpers/request.md
+      - Response: django_developer/helpers/response.md
+      - Other: django_developer/helpers/other.md
+    - Account:
+      - Overview: django_developer/account/README.md
+      - User: django_developer/account/user.md
+      - Group: django_developer/account/group.md
+      - Auth: django_developer/account/auth.md
+    - Logging:
+      - Overview: django_developer/logging/README.md
+      - Log Model: django_developer/logging/logit.md
+      - Incidents: django_developer/logging/incidents.md
+    - Files:
+      - Overview: django_developer/files/README.md
+      - File Model: django_developer/files/file.md
+      - File Manager: django_developer/files/file_manager.md
+    - Email:
+      - Overview: django_developer/email/README.md
+      - Architecture: django_developer/email/architecture.md
+      - Sending: django_developer/email/sending.md
+      - Receiving: django_developer/email/receiving.md
+    - Jobs:
+      - Overview: django_developer/jobs/README.md
+      - Publishing: django_developer/jobs/publishing.md
+      - Writing Jobs: django_developer/jobs/writing_jobs.md
+      - Job Model: django_developer/jobs/job_model.md
+    - Metrics:
+      - Overview: django_developer/metrics/README.md
+      - Recording: django_developer/metrics/recording.md
+      - Fetching: django_developer/metrics/fetching.md
+    - Realtime:
+      - Overview: django_developer/realtime/README.md
+      - Architecture: django_developer/realtime/architecture.md
+      - Publishing: django_developer/realtime/publishing.md
+      - Hooks: django_developer/realtime/hooks.md
+    - PhoneHub: django_developer/phonehub/README.md
+    - FileVault: django_developer/filevault/README.md
+    - DocIt: django_developer/docit/README.md
+  - REST API:
+    - Overview: web_developer/README.md
+    - Core:
+      - Overview: web_developer/core/README.md
+      - Authentication: web_developer/core/authentication.md
+      - Request & Response: web_developer/core/request_response.md
+      - Filtering: web_developer/core/filtering.md
+      - Pagination: web_developer/core/pagination.md
+      - Graphs: web_developer/core/graphs.md
+    - Account:
+      - Overview: web_developer/account/README.md
+      - Authentication: web_developer/account/authentication.md
+      - Users: web_developer/account/user.md
+      - Groups: web_developer/account/group.md
+      - API Keys: web_developer/account/api_keys.md
+    - Logging:
+      - Overview: web_developer/logging/README.md
+      - Logs: web_developer/logging/logs.md
+      - Incidents: web_developer/logging/incidents.md
+    - Files:
+      - Overview: web_developer/files/README.md
+      - Upload: web_developer/files/upload.md
+      - Files: web_developer/files/files.md
+    - Email:
+      - Overview: web_developer/email/README.md
+      - Email API: web_developer/email/email.md
+    - Jobs:
+      - Overview: web_developer/jobs/README.md
+      - Jobs API: web_developer/jobs/jobs.md
+    - Metrics:
+      - Overview: web_developer/metrics/README.md
+      - Metrics API: web_developer/metrics/metrics.md
+    - Realtime:
+      - Overview: web_developer/realtime/README.md
+      - WebSocket: web_developer/realtime/websocket.md
+    - PhoneHub: web_developer/phonehub/README.md
+    - FileVault: web_developer/filevault/README.md
+    - DocIt: web_developer/docit/README.md
