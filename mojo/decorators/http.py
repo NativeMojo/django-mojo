@@ -39,6 +39,9 @@ def dispatcher(request, *args, **kwargs):
             request.group = modules.get_model_instance("account", "Group", int(request.DATA.group))
             if request.group is not None:
                 request.group.touch()
+            api_key = getattr(request, "api_key", None)
+            if api_key and request.group and not api_key.is_group_allowed(request.group):
+                return JsonResponse({"error": "Group not accessible with this API key", "code": 403}, status=403)
         except ValueError:
             if EVENTS_ON_ERRORS:
                 rest.MojoModel.class_report_incident(

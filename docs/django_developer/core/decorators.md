@@ -116,6 +116,14 @@ All routed functions are automatically wrapped with error handling that:
 - Reports exceptions to the incident system
 - Tracks error metrics
 
+## Rate Limiting & Metrics Decorators
+
+See [Rate Limiting & Endpoint Metrics](rate_limiting.md) for the full reference on:
+
+- `@md.rate_limit` — fixed-window limits (general API throughput)
+- `@md.strict_rate_limit` — sliding-window limits (login, password reset, MFA)
+- `@md.endpoint_metrics` — per-endpoint usage tracking by IP, duid, api_key, user, or group
+
 ## Decorator Stacking Order
 
 When stacking multiple decorators, routing decorators (`@md.URL`, `@md.GET`, etc.) go first (outermost), followed by auth/validation:

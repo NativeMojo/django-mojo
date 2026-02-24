@@ -2,6 +2,7 @@ from django.utils.deprecation import MiddlewareMixin
 # from django.http import JsonResponse
 from mojo.helpers.response import JsonResponse
 from mojo.apps.account.models.user import User
+from mojo.apps.account.models.api_key import ApiKey
 
 from mojo.helpers.settings import settings
 from mojo.helpers import modules
@@ -11,10 +12,11 @@ from objict import objict
 AUTH_BEARER_HANDLER_PATHS = settings.get("AUTH_BEARER_HANDLERS", {})
 
 AUTH_BEARER_HANDLERS_CACHE = {
-    "bearer": User.validate_jwt
+    "bearer": User.validate_jwt,
+    "apikey": ApiKey.validate_token,
 }
 
-AUTH_BEARER_NAME_MAP = settings.get("AUTH_BEARER_NAME_MAP", {"bearer": "user"})
+AUTH_BEARER_NAME_MAP = settings.get("AUTH_BEARER_NAME_MAP", {"bearer": "user", "apikey": "user"})
 
 class AuthenticationMiddleware(MiddlewareMixin):
     def process_request(self, request):

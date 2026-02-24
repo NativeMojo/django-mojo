@@ -25,6 +25,8 @@ def get_host():
             for line in file:
                 if line.startswith("host"):
                     host = line.split('=')[1].strip()
+                    if host == "0.0.0.0":
+                        host = "127.0.0.1"
                 elif line.startswith("port"):
                     port = line.split('=')[1].strip()
     except FileNotFoundError:
@@ -293,7 +295,11 @@ def run_tests_for_module(opts, module_name, test_root, parent_test_root=None):
     test_files = [f for f in os.listdir(module_path)
                   if f.endswith(".py") and f not in ["__init__.py", "setup.py"]]
 
-    for test_file in sorted(test_files):
+    def _sort_key(name):
+        prefix = name.split("_", 1)[0]
+        return (int(prefix), name) if prefix.isdigit() else (float("inf"), name)
+
+    for test_file in sorted(test_files, key=_sort_key):
         if test_file.startswith("_"):
             continue
         test_name = test_file.rsplit('.', 1)[0]  # Remove .py extension
@@ -420,8 +426,13 @@ def collect_extras_for_module(module_name, test_root, parent_test_root=None, *, 
 
     test_files = [f for f in os.listdir(module_path)
                   if f.endswith(".py") and f not in ["__init__.py", "setup.py"]]
+
+    def _sort_key(name):
+        prefix = name.split("_", 1)[0]
+        return (int(prefix), name) if prefix.isdigit() else (float("inf"), name)
+
     extras = []
-    for test_file in sorted(test_files):
+    for test_file in sorted(test_files, key=_sort_key):
         if test_file.startswith("_"):
             continue
         test_name = test_file.rsplit('.', 1)[0]

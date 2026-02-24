@@ -4,3 +4,4 @@ from .group import *
 from .device import *
 from .push import *
 from .passkeys import *
+from .api_key import *
