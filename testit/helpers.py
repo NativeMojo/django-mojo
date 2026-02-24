@@ -295,6 +295,27 @@ def requires_extra(flag=None):
     return decorator
 
 
+def get_database_kind():
+    """
+    Returns the database engine kind as a short string: 'sqlite', 'postgresql', 'mysql', 'oracle', or the full engine string if unknown.
+    Assumes Django is already configured (call only inside django_unit_test or django_unit_setup).
+    """
+    from django.conf import settings as django_settings
+    engine = django_settings.DATABASES.get("default", {}).get("ENGINE", "")
+    for kind in ("sqlite", "postgresql", "mysql", "oracle"):
+        if kind in engine:
+            return kind
+    return engine
+
+
+def is_sqlite():
+    """
+    Returns True if the default Django database is SQLite.
+    Assumes Django is already configured (call only inside django_unit_test or django_unit_setup).
+    """
+    return get_database_kind() == "sqlite"
+
+
 def reset_test_run():
     TEST_RUN.total = 0
     TEST_RUN.passed = 0
@@ -403,3 +424,21 @@ def assert_in(item, container, msg):
 
 def expect(value, got, name="field"):
     assert value == got, f"{name} expected {value} got {got}"
+
+
+class assert_raises:
+    def __init__(self, expected_exception):
+        self.expected_exception = expected_exception
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type is None:
+            raise AssertionError(f"Expected {self.expected_exception.__name__} to be raised, but nothing was raised")
+
+        if not issubclass(exc_type, self.expected_exception):
+            raise AssertionError(f"Expected {self.expected_exception.__name__}, but got {exc_type.__name__}")
+
+        self.exception = exc_val
+        return True  # suppresses the exception

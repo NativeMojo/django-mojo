@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v1.0.18 - February 24, 2026
+
+- New API KEYs support, new rate limit decorators, and metrics decorators
+
+
 ## v1.0.17 - February 12, 2026
 
 BUGFIX for OneToOne fields
