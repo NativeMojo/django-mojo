@@ -2,290 +2,306 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/account/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
+    </url>
+    <url>
+         <loc>https://NativeMojo.github.io/django-mojo/django_developer/account/api_keys/</loc>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/account/auth/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/account/group/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/account/user/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/core/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/core/decorators/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/core/graphs/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/core/middleware/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/core/mojo_model/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
+    </url>
+    <url>
+         <loc>https://NativeMojo.github.io/django-mojo/django_developer/core/rate_limiting/</loc>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/docit/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/email/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/email/architecture/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/email/receiving/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/email/sending/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/files/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/files/file/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/files/file_manager/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/filevault/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/helpers/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/helpers/crypto/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/helpers/dates/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/helpers/logit/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/helpers/other/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/helpers/request/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/helpers/response/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/helpers/settings/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/jobs/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/jobs/job_model/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/jobs/publishing/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
+    </url>
+    <url>
+         <loc>https://NativeMojo.github.io/django-mojo/django_developer/jobs/webhooks/</loc>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/jobs/writing_jobs/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/logging/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/logging/incidents/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/logging/logit/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/metrics/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/metrics/fetching/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/metrics/recording/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/phonehub/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/realtime/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/realtime/architecture/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/realtime/hooks/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/realtime/publishing/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/web_developer/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/web_developer/account/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/web_developer/account/api_keys/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/web_developer/account/authentication/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/web_developer/account/group/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/web_developer/account/user/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/web_developer/core/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/web_developer/core/authentication/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/web_developer/core/filtering/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/web_developer/core/graphs/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/web_developer/core/pagination/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/web_developer/core/request_response/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/web_developer/docit/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/web_developer/email/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/web_developer/email/email/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/web_developer/files/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/web_developer/files/files/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/web_developer/files/upload/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/web_developer/filevault/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/web_developer/jobs/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/web_developer/jobs/jobs/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/web_developer/logging/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/web_developer/logging/incidents/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/web_developer/logging/logs/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
+    </url>
+    <url>
+         <loc>https://NativeMojo.github.io/django-mojo/web_developer/logging/reporting_events/</loc>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/web_developer/metrics/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/web_developer/metrics/metrics/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/web_developer/phonehub/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/web_developer/realtime/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/web_developer/realtime/websocket/</loc>
-         <lastmod>2026-02-20</lastmod>
+         <lastmod>2026-02-24</lastmod>
     </url>
 </urlset>

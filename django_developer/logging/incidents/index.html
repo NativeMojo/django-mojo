@@ -23,7 +23,7 @@
       
       
       <link rel="icon" href="../../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.2">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.3">
     
     
       
@@ -1288,10 +1288,21 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#overview" class="md-nav__link">
+  <a href="#purpose-and-intent" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Overview
+        Purpose and Intent
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#architecture-overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architecture Overview
       
     </span>
   </a>
@@ -1322,10 +1333,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#from-mojomodel" class="md-nav__link">
+  <a href="#from-any-python-code" class="md-nav__link">
     <span class="md-ellipsis">
       
-        From MojoModel
+        From any Python code
       
     </span>
   </a>
@@ -1333,10 +1344,21 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#directly-via-incident-module" class="md-nav__link">
+  <a href="#from-a-mojomodel-instance" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Directly via incident module
+        From a MojoModel instance
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#automatically-permission-denials" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Automatically — permission denials
       
     </span>
   </a>
@@ -1357,13 +1379,30 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Event Fields">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#custom-metadata-pass-anything-as-keyword-arguments" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Custom metadata — pass anything as keyword arguments
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
-  <a href="#automatic-permission-incident-reporting" class="md-nav__link">
+  <a href="#level-guide" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Automatic Permission Incident Reporting
+        Level Guide
       
     </span>
   </a>
@@ -1394,10 +1433,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#rule-conditions" class="md-nav__link">
+  <a href="#rule" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Rule Conditions
+        Rule
       
     </span>
   </a>
@@ -1405,10 +1444,21 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#rule-handlers" class="md-nav__link">
+  <a href="#bundling" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Rule Handlers
+        Bundling
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#thresholds-pending-new" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Thresholds (pending → new)
       
     </span>
   </a>
@@ -1421,10 +1471,60 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#incident-states" class="md-nav__link">
+  <a href="#handlers" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Incident States
+        Handlers
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Handlers">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#syntax" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Syntax
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#handler-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Handler Types
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ticket-handler-parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ticket Handler Parameters
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#incident-lifecycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Incident Lifecycle
       
     </span>
   </a>
@@ -1432,13 +1532,85 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#incident-merging" class="md-nav__link">
+  <a href="#integration-patterns" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Incident Merging
+        Integration Patterns
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Integration Patterns">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#every-component-should-report-events" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Every component should report events
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#geolocatedip-ip-trust-scoring" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GeoLocatedIP — IP trust scoring
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pattern-rate-limiting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pattern: rate limiting
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pattern-authentication-failures" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pattern: authentication failures
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pattern-payment-anomalies" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pattern: payment anomalies
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pattern-data-integrity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pattern: data integrity
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -1447,6 +1619,17 @@
     <span class="md-ellipsis">
       
         Settings
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-consistency-matters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why Consistency Matters
       
     </span>
   </a>
@@ -3786,10 +3969,21 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#overview" class="md-nav__link">
+  <a href="#purpose-and-intent" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Overview
+        Purpose and Intent
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#architecture-overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architecture Overview
       
     </span>
   </a>
@@ -3820,10 +4014,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#from-mojomodel" class="md-nav__link">
+  <a href="#from-any-python-code" class="md-nav__link">
     <span class="md-ellipsis">
       
-        From MojoModel
+        From any Python code
       
     </span>
   </a>
@@ -3831,10 +4025,21 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#directly-via-incident-module" class="md-nav__link">
+  <a href="#from-a-mojomodel-instance" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Directly via incident module
+        From a MojoModel instance
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#automatically-permission-denials" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Automatically — permission denials
       
     </span>
   </a>
@@ -3855,13 +4060,30 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Event Fields">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#custom-metadata-pass-anything-as-keyword-arguments" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Custom metadata — pass anything as keyword arguments
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
-  <a href="#automatic-permission-incident-reporting" class="md-nav__link">
+  <a href="#level-guide" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Automatic Permission Incident Reporting
+        Level Guide
       
     </span>
   </a>
@@ -3892,10 +4114,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#rule-conditions" class="md-nav__link">
+  <a href="#rule" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Rule Conditions
+        Rule
       
     </span>
   </a>
@@ -3903,10 +4125,21 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#rule-handlers" class="md-nav__link">
+  <a href="#bundling" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Rule Handlers
+        Bundling
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#thresholds-pending-new" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Thresholds (pending → new)
       
     </span>
   </a>
@@ -3919,10 +4152,60 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#incident-states" class="md-nav__link">
+  <a href="#handlers" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Incident States
+        Handlers
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Handlers">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#syntax" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Syntax
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#handler-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Handler Types
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ticket-handler-parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ticket Handler Parameters
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#incident-lifecycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Incident Lifecycle
       
     </span>
   </a>
@@ -3930,13 +4213,85 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#incident-merging" class="md-nav__link">
+  <a href="#integration-patterns" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Incident Merging
+        Integration Patterns
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Integration Patterns">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#every-component-should-report-events" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Every component should report events
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#geolocatedip-ip-trust-scoring" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GeoLocatedIP — IP trust scoring
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pattern-rate-limiting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pattern: rate limiting
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pattern-authentication-failures" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pattern: authentication failures
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pattern-payment-anomalies" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pattern: payment anomalies
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pattern-data-integrity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pattern: data integrity
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -3945,6 +4300,17 @@
     <span class="md-ellipsis">
       
         Settings
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-consistency-matters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why Consistency Matters
       
     </span>
   </a>
@@ -3972,8 +4338,23 @@
 
 
 <h1 id="incident-system-django-developer-reference">Incident System — Django Developer Reference<a class="headerlink" href="#incident-system-django-developer-reference" title="Permanent link">&para;</a></h1>
-<h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
-<p>The incident system captures security events, applies rule-based correlation, and creates actionable incidents. It is the framework's central security intelligence layer.</p>
+<h2 id="purpose-and-intent">Purpose and Intent<a class="headerlink" href="#purpose-and-intent" title="Permanent link">&para;</a></h2>
+<p>The incident system is the framework's central intelligence layer for security and system health. Its job is not simply to log things — it is to <strong>aggregate raw signals, suppress noise, identify patterns, and surface only what matters</strong>.</p>
+<p>Every part of the framework should treat the incident system as its primary channel for reporting anything security-relevant or operationally significant. This includes authentication failures, permission denials, suspicious IPs, payment errors, rate limit hits, data integrity anomalies — anything that, at sufficient volume or severity, indicates a real problem.</p>
+<p>The core insight is that <strong>individual events are rarely meaningful on their own</strong>. A single failed login is noise. Fifty failed logins from the same IP in five minutes is an attack. The incident system exists to bridge that gap automatically, without requiring developers to think about thresholds, deduplication, or alerting in their application code.</p>
+<p>As the framework grows, the incident system will expand into a full analysis engine. Every component that participates today will automatically benefit from improvements to rule evaluation, anomaly detection, and automated response — with no changes to calling code.</p>
+<hr />
+<h2 id="architecture-overview">Architecture Overview<a class="headerlink" href="#architecture-overview" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>Event (raw signal)
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>  → RuleSet.check_by_category()   (rule matching by scope, then category)
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    → Rule.check_rule()            (field-level conditions on event.metadata)
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>  → threshold/bundling logic       (pending → new transition)
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>  → Incident (correlated group)
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    → handler chain               (job, email, notify, ticket)
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    → Ticket (actionable work)
+</code></pre></div>
+<p>Events are the input. Incidents are the output. Rules, RuleSets, and handlers are the processing pipeline in between.</p>
+<hr />
 <h2 id="core-models">Core Models<a class="headerlink" href="#core-models" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -3985,19 +4366,19 @@
 <tbody>
 <tr>
 <td><code>Event</code></td>
-<td>Raw security event (one per occurrence)</td>
+<td>A single raw signal — one occurrence of something noteworthy</td>
 </tr>
 <tr>
 <td><code>RuleSet</code></td>
-<td>Group of rules evaluated against events</td>
+<td>A named policy: which events match, how to bundle them, what to do</td>
 </tr>
 <tr>
 <td><code>Rule</code></td>
-<td>A single matching condition</td>
+<td>A single field-level condition within a RuleSet</td>
 </tr>
 <tr>
 <td><code>Incident</code></td>
-<td>Correlated group of related events</td>
+<td>A correlated group of related events requiring attention</td>
 </tr>
 <tr>
 <td><code>IncidentHistory</code></td>
@@ -4005,47 +4386,59 @@
 </tr>
 <tr>
 <td><code>Ticket</code></td>
-<td>Actionable work item linked to an incident</td>
+<td>An actionable work item linked to an incident</td>
+</tr>
+<tr>
+<td><code>TicketNote</code></td>
+<td>A note or status change attached to a ticket</td>
 </tr>
 </tbody>
 </table>
+<hr />
 <h2 id="reporting-events">Reporting Events<a class="headerlink" href="#reporting-events" title="Permanent link">&para;</a></h2>
-<h3 id="from-mojomodel">From MojoModel<a class="headerlink" href="#from-mojomodel" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># Instance-level (auto-includes model_name, model_id)</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="bp">self</span><span class="o">.</span><span class="n">report_incident</span><span class="p">(</span>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="s2">&quot;Suspicious edit attempt&quot;</span><span class="p">,</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="n">event_type</span><span class="o">=</span><span class="s2">&quot;security_alert&quot;</span><span class="p">,</span>
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">level</span><span class="o">=</span><span class="mi">2</span>
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="p">)</span>
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>
-<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="c1"># Class-level</span>
-<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="n">Book</span><span class="o">.</span><span class="n">class_report_incident</span><span class="p">(</span>
-<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    <span class="s2">&quot;Unauthorized list attempt&quot;</span><span class="p">,</span>
-<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    <span class="n">event_type</span><span class="o">=</span><span class="s2">&quot;permission_denied&quot;</span><span class="p">,</span>
-<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>    <span class="n">request</span><span class="o">=</span><span class="n">request</span>
-<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="p">)</span>
-<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>
-<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="c1"># For current user</span>
-<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="n">Book</span><span class="o">.</span><span class="n">class_report_incident_for_user</span><span class="p">(</span>
-<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>    <span class="s2">&quot;User triggered rate limit&quot;</span><span class="p">,</span>
-<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>    <span class="n">event_type</span><span class="o">=</span><span class="s2">&quot;rate_limit&quot;</span><span class="p">,</span>
-<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>    <span class="n">request</span><span class="o">=</span><span class="n">request</span>
-<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="p">)</span>
-</code></pre></div>
-<h3 id="directly-via-incident-module">Directly via incident module<a class="headerlink" href="#directly-via-incident-module" title="Permanent link">&para;</a></h3>
+<h3 id="from-any-python-code">From any Python code<a class="headerlink" href="#from-any-python-code" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps</span><span class="w"> </span><span class="kn">import</span> <span class="n">incident</span>
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
 <a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="n">incident</span><span class="o">.</span><span class="n">report_event</span><span class="p">(</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    <span class="s2">&quot;Failed login from unusual location&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>    <span class="n">title</span><span class="o">=</span><span class="s2">&quot;Suspicious Login&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>    <span class="n">category</span><span class="o">=</span><span class="s2">&quot;auth:failed&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>    <span class="n">scope</span><span class="o">=</span><span class="s2">&quot;account&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>    <span class="n">level</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    <span class="s2">&quot;User exceeded rate limit&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>    <span class="n">title</span><span class="o">=</span><span class="s2">&quot;Rate Limit Hit&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>    <span class="n">category</span><span class="o">=</span><span class="s2">&quot;rate_limit&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>    <span class="n">scope</span><span class="o">=</span><span class="s2">&quot;api&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>    <span class="n">level</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span>
 <a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>    <span class="n">request</span><span class="o">=</span><span class="n">request</span><span class="p">,</span>
-<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>    <span class="n">source_ip</span><span class="o">=</span><span class="n">request</span><span class="o">.</span><span class="n">ip</span><span class="p">,</span>
-<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>    <span class="n">username</span><span class="o">=</span><span class="n">attempted_username</span>
-<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="p">)</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>    <span class="n">uid</span><span class="o">=</span><span class="n">request</span><span class="o">.</span><span class="n">user</span><span class="o">.</span><span class="n">id</span><span class="p">,</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="p">)</span>
 </code></pre></div>
+<p><code>report_event</code> is the primary API. It:
+1. Creates an <code>Event</code> record with all fields and metadata populated
+2. Calls <code>event.sync_metadata()</code> to enrich with geo-IP data
+3. Calls <code>event.publish()</code> to run rule matching and incident creation</p>
+<h3 id="from-a-mojomodel-instance">From a MojoModel instance<a class="headerlink" href="#from-a-mojomodel-instance" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Report an event tied to a specific model instance (auto-fills model_name, model_id)</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="bp">self</span><span class="o">.</span><span class="n">report_incident</span><span class="p">(</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    <span class="s2">&quot;Suspicious edit attempt&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>    <span class="n">event_type</span><span class="o">=</span><span class="s2">&quot;security_alert&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>    <span class="n">level</span><span class="o">=</span><span class="mi">5</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="p">)</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="c1"># Report at the class level with request context</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="n">MyModel</span><span class="o">.</span><span class="n">class_report_incident</span><span class="p">(</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>    <span class="s2">&quot;Unauthorized list attempt&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>    <span class="n">event_type</span><span class="o">=</span><span class="s2">&quot;permission_denied&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a>    <span class="n">request</span><span class="o">=</span><span class="n">request</span>
+<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="p">)</span>
+</code></pre></div>
+<h3 id="automatically-permission-denials">Automatically — permission denials<a class="headerlink" href="#automatically-permission-denials" title="Permanent link">&para;</a></h3>
+<p>Every permission denial issued by <code>MojoModel</code>'s permission system is automatically reported as an event. Categories include:</p>
+<ul>
+<li><code>unauthenticated</code></li>
+<li><code>view_permission_denied</code></li>
+<li><code>edit_permission_denied</code></li>
+<li><code>group_member_permission_denied</code></li>
+<li><code>user_permission_denied</code></li>
+</ul>
+<p>No extra code required.</p>
+<hr />
 <h2 id="event-fields">Event Fields<a class="headerlink" href="#event-fields" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -4057,90 +4450,327 @@
 <tbody>
 <tr>
 <td><code>level</code></td>
-<td>Severity 1–10 (10 = critical)</td>
+<td>Severity 0–15. 0–3 informational, 4–7 warning, 8–15 critical</td>
 </tr>
 <tr>
 <td><code>scope</code></td>
-<td>App label (e.g., <code>"account"</code>, <code>"myapp"</code>)</td>
+<td>Logical domain: <code>"global"</code>, <code>"account"</code>, <code>"payment"</code>, etc.</td>
 </tr>
 <tr>
 <td><code>category</code></td>
-<td>Dot-notation event type (e.g., <code>"auth:failed"</code>, <code>"permission_denied"</code>)</td>
+<td>Dot-namespaced event type: <code>"auth:failed"</code>, <code>"permission_denied"</code></td>
 </tr>
 <tr>
 <td><code>source_ip</code></td>
-<td>Source IP address</td>
+<td>IP address of the originating request</td>
+</tr>
+<tr>
+<td><code>hostname</code></td>
+<td>Server hostname (auto-populated from <code>socket.gethostname()</code>)</td>
+</tr>
+<tr>
+<td><code>uid</code></td>
+<td>User ID associated with this event</td>
+</tr>
+<tr>
+<td><code>country_code</code></td>
+<td>ISO 3166-1 alpha-2 country code (auto-populated via GeoIP)</td>
+</tr>
+<tr>
+<td><code>title</code></td>
+<td>Short human-readable summary</td>
+</tr>
+<tr>
+<td><code>details</code></td>
+<td>Full description, stack trace, or structured message</td>
+</tr>
+<tr>
+<td><code>model_name</code></td>
+<td>Related model (e.g., <code>"account.User"</code>)</td>
+</tr>
+<tr>
+<td><code>model_id</code></td>
+<td>Related model instance PK</td>
 </tr>
 <tr>
 <td><code>metadata</code></td>
-<td>Dict of arbitrary context</td>
+<td>JSON bag of arbitrary context — also used by Rules for field matching</td>
 </tr>
 </tbody>
 </table>
-<h2 id="automatic-permission-incident-reporting">Automatic Permission Incident Reporting<a class="headerlink" href="#automatic-permission-incident-reporting" title="Permanent link">&para;</a></h2>
-<p>Every permission denial via <code>rest_check_permission</code> automatically reports an incident with:
-- <code>event_type</code>: one of <code>unauthenticated</code>, <code>view_permission_denied</code>, <code>edit_permission_denied</code>, <code>group_member_permission_denied</code>, <code>user_permission_denied</code>
-- Full context: model name, permission keys, request path, instance repr</p>
-<p>No extra code needed — this is built into <code>MojoModel</code>.</p>
-<h2 id="rule-engine">Rule Engine<a class="headerlink" href="#rule-engine" title="Permanent link">&para;</a></h2>
-<p>Rules evaluate incoming events and trigger actions when conditions match.</p>
-<h3 id="ruleset">RuleSet<a class="headerlink" href="#ruleset" title="Permanent link">&para;</a></h3>
-<p>Groups rules. Configures:
-- <code>match_threshold</code>: How many rules must match to trigger
-- <code>bundle_window</code>: Time window for grouping related events into one incident
-- <code>handler</code>: Action to execute (see below)</p>
-<h3 id="rule-conditions">Rule Conditions<a class="headerlink" href="#rule-conditions" title="Permanent link">&para;</a></h3>
-<p>Rules support these comparators:</p>
+<h3 id="custom-metadata-pass-anything-as-keyword-arguments">Custom metadata — pass anything as keyword arguments<a class="headerlink" href="#custom-metadata-pass-anything-as-keyword-arguments" title="Permanent link">&para;</a></h3>
+<p>Any extra keyword argument passed to <code>report_event</code> is automatically stored in <code>metadata</code> and becomes available for rule matching. There is no need to build a dict manually:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">incident</span><span class="o">.</span><span class="n">report_event</span><span class="p">(</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>    <span class="s2">&quot;Failed login attempt&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>    <span class="n">category</span><span class="o">=</span><span class="s2">&quot;auth:failed&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>    <span class="n">level</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>    <span class="n">request</span><span class="o">=</span><span class="n">request</span><span class="p">,</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>    <span class="n">username</span><span class="o">=</span><span class="n">attempted_username</span><span class="p">,</span>   <span class="c1"># custom</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>    <span class="n">attempt_count</span><span class="o">=</span><span class="mi">7</span><span class="p">,</span>               <span class="c1"># custom</span>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>    <span class="n">auth_method</span><span class="o">=</span><span class="s2">&quot;password&quot;</span><span class="p">,</span>        <span class="c1"># custom</span>
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="p">)</span>
+</code></pre></div>
+<p>All three custom fields end up in <code>event.metadata</code> alongside the standard ones. A Rule with <code>field_name="attempt_count"</code> and <code>comparator="&gt;="</code> and <code>value="5"</code> would match this event.</p>
+<p>When a <code>request</code> is passed, metadata is also automatically enriched with:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>request_ip, http_path, http_protocol, http_method,
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>http_query_string, http_user_agent, http_host,
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>user_name, user_email (if authenticated)
+</code></pre></div>
+<hr />
+<h2 id="level-guide">Level Guide<a class="headerlink" href="#level-guide" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
 <tr>
-<th>Comparator</th>
-<th>Behavior</th>
+<th>Range</th>
+<th>Meaning</th>
+<th>Typical Use</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>==</code></td>
-<td>Exact match</td>
+<td>0–3</td>
+<td>Informational</td>
+<td>Routine activity worth recording</td>
 </tr>
 <tr>
-<td><code>&gt;</code>, <code>&gt;=</code>, <code>&lt;</code>, <code>&lt;=</code></td>
-<td>Numeric comparison</td>
+<td>4–6</td>
+<td>Warning</td>
+<td>Anomaly, policy violation, soft error</td>
 </tr>
 <tr>
-<td><code>contains</code></td>
-<td>Substring match</td>
+<td>7–9</td>
+<td>Elevated</td>
+<td>Attack pattern, repeated failures, suspicious behavior</td>
 </tr>
 <tr>
-<td><code>regex</code></td>
-<td>Regular expression match</td>
+<td>10–14</td>
+<td>High severity</td>
+<td>Confirmed attack, data integrity issue</td>
+</tr>
+<tr>
+<td>15</td>
+<td>Critical</td>
+<td>System compromise, emergency</td>
 </tr>
 </tbody>
 </table>
-<h3 id="rule-handlers">Rule Handlers<a class="headerlink" href="#rule-handlers" title="Permanent link">&para;</a></h3>
-<p>When a RuleSet triggers, it executes a handler:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>job://app.module.function     # Execute async job
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>email://admin@example.com     # Send notification email
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>notify://user_id              # Send push notification
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>ticket://queue_name           # Create a support ticket
-</code></pre></div>
-<h2 id="incident-states">Incident States<a class="headerlink" href="#incident-states" title="Permanent link">&para;</a></h2>
-<p>Incidents progress through states:</p>
+<p>Events with <code>level &gt;= INCIDENT_LEVEL_THRESHOLD</code> (default: <code>7</code>) automatically create or escalate an incident even without a matching RuleSet.</p>
+<hr />
+<h2 id="rule-engine">Rule Engine<a class="headerlink" href="#rule-engine" title="Permanent link">&para;</a></h2>
+<p>The rule engine evaluates each event against configured RuleSets. It is the mechanism that separates signal from noise.</p>
+<h3 id="ruleset">RuleSet<a class="headerlink" href="#ruleset" title="Permanent link">&para;</a></h3>
+<p>A RuleSet defines:</p>
+<ul>
+<li><strong><code>category</code></strong> — Which event category it applies to (matched by <code>scope</code> first, then <code>category</code>)</li>
+<li><strong><code>priority</code></strong> — Evaluation order (lower = higher priority). First matching RuleSet wins.</li>
+<li><strong><code>match_by</code></strong> — <code>ALL</code> (all rules must match) or <code>ANY</code> (any rule can match)</li>
+<li><strong><code>bundle_by</code></strong> — How to group events into one incident (see bundling below)</li>
+<li><strong><code>bundle_minutes</code></strong> — Time window for bundling. <code>0</code> = disabled, <code>None</code> = unlimited, <code>&gt;0</code> = window in minutes</li>
+<li><strong><code>handler</code></strong> — What to do when a RuleSet triggers (see handlers below)</li>
+<li><strong><code>metadata</code></strong> — Optional threshold configuration (<code>min_count</code>, <code>window_minutes</code>, <code>pending_status</code>)</li>
+</ul>
+<h3 id="rule">Rule<a class="headerlink" href="#rule" title="Permanent link">&para;</a></h3>
+<p>Each Rule checks one field in <code>event.metadata</code> against a target value:</p>
 <table>
 <thead>
 <tr>
-<th>State</th>
+<th>Field</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>field_name</code></td>
+<td>The metadata key to inspect</td>
+</tr>
+<tr>
+<td><code>comparator</code></td>
+<td><code>==</code>, <code>&gt;</code>, <code>&gt;=</code>, <code>&lt;</code>, <code>&lt;=</code>, <code>contains</code>, <code>regex</code></td>
+</tr>
+<tr>
+<td><code>value</code></td>
+<td>The target value</td>
+</tr>
+<tr>
+<td><code>value_type</code></td>
+<td><code>str</code>, <code>int</code>, <code>float</code>, <code>bool</code></td>
+</tr>
+<tr>
+<td><code>index</code></td>
+<td>Evaluation order within the RuleSet</td>
+</tr>
+</tbody>
+</table>
+<p>Rules operate on <code>event.metadata</code>. Since <code>report_event</code> syncs all standard fields (level, category, source_ip, etc.) into metadata automatically, they are all available for rule matching alongside any custom fields you pass in.</p>
+<h3 id="bundling">Bundling<a class="headerlink" href="#bundling" title="Permanent link">&para;</a></h3>
+<p>Bundling controls how related events are collapsed into a single incident rather than creating a new one for each event.</p>
+<table>
+<thead>
+<tr>
+<th><code>bundle_by</code> value</th>
+<th>Groups events by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>NONE</code></td>
+<td>Each event creates its own incident</td>
+</tr>
+<tr>
+<td><code>HOSTNAME</code></td>
+<td>Same server</td>
+</tr>
+<tr>
+<td><code>MODEL_NAME</code></td>
+<td>Same model type</td>
+</tr>
+<tr>
+<td><code>MODEL_NAME_AND_ID</code></td>
+<td>Same model instance</td>
+</tr>
+<tr>
+<td><code>SOURCE_IP</code></td>
+<td>Same source IP</td>
+</tr>
+<tr>
+<td><code>SOURCE_IP_AND_HOSTNAME</code></td>
+<td>Same IP + server</td>
+</tr>
+<tr>
+<td><code>SOURCE_IP_AND_MODEL_NAME</code></td>
+<td>Same IP + model type</td>
+</tr>
+<tr>
+<td><code>SOURCE_IP_AND_MODEL_NAME_AND_ID</code></td>
+<td>Same IP + model instance</td>
+</tr>
+<tr>
+<td><code>HOSTNAME_AND_MODEL_NAME</code></td>
+<td>Same server + model type</td>
+</tr>
+<tr>
+<td><code>HOSTNAME_AND_MODEL_NAME_AND_ID</code></td>
+<td>Same server + model instance</td>
+</tr>
+</tbody>
+</table>
+<h3 id="thresholds-pending-new">Thresholds (pending → new)<a class="headerlink" href="#thresholds-pending-new" title="Permanent link">&para;</a></h3>
+<p>A RuleSet can hold incidents in <code>pending</code> status until a minimum event count is reached within a time window. This eliminates alerting on isolated events:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">RuleSet</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">create</span><span class="p">(</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>    <span class="n">category</span><span class="o">=</span><span class="s2">&quot;auth:failed&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;Brute Force Detection&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>    <span class="n">bundle_by</span><span class="o">=</span><span class="n">BundleBy</span><span class="o">.</span><span class="n">SOURCE_IP</span><span class="p">,</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>    <span class="n">bundle_minutes</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>    <span class="n">handler</span><span class="o">=</span><span class="s2">&quot;ticket://?status=new&amp;priority=8&amp;category=security&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>    <span class="n">metadata</span><span class="o">=</span><span class="p">{</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>        <span class="s2">&quot;min_count&quot;</span><span class="p">:</span> <span class="mi">10</span><span class="p">,</span>           <span class="c1"># Wait for 10 matching events</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>        <span class="s2">&quot;window_minutes&quot;</span><span class="p">:</span> <span class="mi">10</span><span class="p">,</span>      <span class="c1"># Within 10 minutes</span>
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>        <span class="s2">&quot;pending_status&quot;</span><span class="p">:</span> <span class="s2">&quot;pending&quot;</span>
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>    <span class="p">}</span>
+<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a><span class="p">)</span>
+</code></pre></div>
+<p>Until 10 events accumulate, the incident sits at <code>pending</code>. Once the threshold is crossed, it transitions to <code>new</code> and the handler fires.</p>
+<hr />
+<h2 id="handlers">Handlers<a class="headerlink" href="#handlers" title="Permanent link">&para;</a></h2>
+<p>Handlers execute when a RuleSet triggers. Multiple handlers can be chained with commas.</p>
+<h3 id="syntax">Syntax<a class="headerlink" href="#syntax" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>job://app.module.function
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>email://admin@example.com
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>notify://user_id_or_channel
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>ticket://?status=open&amp;priority=8&amp;category=security&amp;title=Investigate
+</code></pre></div>
+<p>Chained example:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>ticket://?status=new&amp;priority=9&amp;category=security,email://security@example.com
+</code></pre></div>
+<h3 id="handler-types">Handler Types<a class="headerlink" href="#handler-types" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Handler</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>job://</code></td>
+<td>Queues an async job (function path in netloc)</td>
+</tr>
+<tr>
+<td><code>email://</code></td>
+<td>Sends a notification email to the recipient</td>
+</tr>
+<tr>
+<td><code>notify://</code></td>
+<td>Sends a push/in-app notification to a user or channel</td>
+</tr>
+<tr>
+<td><code>ticket://</code></td>
+<td>Creates a Ticket linked to the incident</td>
+</tr>
+</tbody>
+</table>
+<h3 id="ticket-handler-parameters">Ticket Handler Parameters<a class="headerlink" href="#ticket-handler-parameters" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Param</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>title</code></td>
+<td>Ticket title (defaults to event title)</td>
+</tr>
+<tr>
+<td><code>description</code></td>
+<td>Ticket body (defaults to event details)</td>
+</tr>
+<tr>
+<td><code>status</code></td>
+<td>Initial status (<code>open</code>, <code>new</code>, etc.)</td>
+</tr>
+<tr>
+<td><code>priority</code></td>
+<td>Integer priority (defaults to <code>event.level</code>)</td>
+</tr>
+<tr>
+<td><code>category</code></td>
+<td>Ticket category (default: <code>"incident"</code>)</td>
+</tr>
+<tr>
+<td><code>assignee</code></td>
+<td>User ID to assign the ticket to</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="incident-lifecycle">Incident Lifecycle<a class="headerlink" href="#incident-lifecycle" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>pending  →  new  →  open  →  investigating  →  resolved  →  closed
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Status</th>
 <th>Meaning</th>
 </tr>
 </thead>
 <tbody>
 <tr>
+<td><code>pending</code></td>
+<td>Below threshold — waiting for more events</td>
+</tr>
+<tr>
+<td><code>new</code></td>
+<td>Threshold met or level-based trigger — needs triage</td>
+</tr>
+<tr>
 <td><code>open</code></td>
-<td>Active, requires attention</td>
+<td>Acknowledged, active</td>
 </tr>
 <tr>
 <td><code>investigating</code></td>
-<td>Being worked on</td>
+<td>Actively being worked</td>
 </tr>
 <tr>
 <td><code>resolved</code></td>
@@ -4152,10 +4782,97 @@
 </tr>
 </tbody>
 </table>
-<h2 id="incident-merging">Incident Merging<a class="headerlink" href="#incident-merging" title="Permanent link">&para;</a></h2>
-<p>Related incidents can be merged:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">primary_incident</span><span class="o">.</span><span class="n">on_action_merge</span><span class="p">({</span><span class="s2">&quot;incident_id&quot;</span><span class="p">:</span> <span class="n">related_id</span><span class="p">})</span>
+<p>Incidents can be merged when duplicates are identified:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="n">primary_incident</span><span class="o">.</span><span class="n">on_action_merge</span><span class="p">([</span><span class="n">incident_id_1</span><span class="p">,</span> <span class="n">incident_id_2</span><span class="p">])</span>
 </code></pre></div>
+<p>This moves all events from the listed incidents into the primary and deletes the originals.</p>
+<hr />
+<h2 id="integration-patterns">Integration Patterns<a class="headerlink" href="#integration-patterns" title="Permanent link">&para;</a></h2>
+<h3 id="every-component-should-report-events">Every component should report events<a class="headerlink" href="#every-component-should-report-events" title="Permanent link">&para;</a></h3>
+<p>The incident system only works if data flows into it. When writing a new service, model, or REST handler, ask:</p>
+<ul>
+<li>Could this action fail in a way that indicates abuse or misconfiguration?</li>
+<li>Could repeated failures from one source indicate an attack?</li>
+<li>Is this an action with security or compliance significance?</li>
+</ul>
+<p>If yes, report an event.</p>
+<h3 id="geolocatedip-ip-trust-scoring">GeoLocatedIP — IP trust scoring<a class="headerlink" href="#geolocatedip-ip-trust-scoring" title="Permanent link">&para;</a></h3>
+<p><code>GeoLocatedIP</code> classifies IPs as Tor, VPN, proxy, cloud, known attacker, etc. and maintains a <code>risk_score</code>. This data should feed the incident system so rules can act on IP reputation:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">GeoLocatedIP</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps</span><span class="w"> </span><span class="kn">import</span> <span class="n">incident</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="n">geo</span> <span class="o">=</span> <span class="n">GeoLocatedIP</span><span class="o">.</span><span class="n">geolocate</span><span class="p">(</span><span class="n">request</span><span class="o">.</span><span class="n">ip</span><span class="p">)</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="k">if</span> <span class="n">geo</span><span class="o">.</span><span class="n">is_threat</span><span class="p">:</span>
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a>    <span class="n">incident</span><span class="o">.</span><span class="n">report_event</span><span class="p">(</span>
+<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a>        <span class="sa">f</span><span class="s2">&quot;Request from known threat IP </span><span class="si">{</span><span class="n">request</span><span class="o">.</span><span class="n">ip</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a>        <span class="n">category</span><span class="o">=</span><span class="s2">&quot;ip:known_threat&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a>        <span class="n">scope</span><span class="o">=</span><span class="s2">&quot;account&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a>        <span class="n">level</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span>
+<a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a>        <span class="n">request</span><span class="o">=</span><span class="n">request</span><span class="p">,</span>
+<a id="__codelineno-10-13" name="__codelineno-10-13" href="#__codelineno-10-13"></a>        <span class="n">source_ip</span><span class="o">=</span><span class="n">request</span><span class="o">.</span><span class="n">ip</span><span class="p">,</span>
+<a id="__codelineno-10-14" name="__codelineno-10-14" href="#__codelineno-10-14"></a>        <span class="n">is_tor</span><span class="o">=</span><span class="n">geo</span><span class="o">.</span><span class="n">is_tor</span><span class="p">,</span>
+<a id="__codelineno-10-15" name="__codelineno-10-15" href="#__codelineno-10-15"></a>        <span class="n">is_vpn</span><span class="o">=</span><span class="n">geo</span><span class="o">.</span><span class="n">is_vpn</span><span class="p">,</span>
+<a id="__codelineno-10-16" name="__codelineno-10-16" href="#__codelineno-10-16"></a>        <span class="n">threat_level</span><span class="o">=</span><span class="n">geo</span><span class="o">.</span><span class="n">threat_level</span><span class="p">,</span>
+<a id="__codelineno-10-17" name="__codelineno-10-17" href="#__codelineno-10-17"></a>        <span class="n">risk_score</span><span class="o">=</span><span class="n">geo</span><span class="o">.</span><span class="n">risk_score</span><span class="p">,</span>
+<a id="__codelineno-10-18" name="__codelineno-10-18" href="#__codelineno-10-18"></a>    <span class="p">)</span>
+<a id="__codelineno-10-19" name="__codelineno-10-19" href="#__codelineno-10-19"></a><span class="k">elif</span> <span class="n">geo</span><span class="o">.</span><span class="n">is_suspicious</span><span class="p">:</span>
+<a id="__codelineno-10-20" name="__codelineno-10-20" href="#__codelineno-10-20"></a>    <span class="n">incident</span><span class="o">.</span><span class="n">report_event</span><span class="p">(</span>
+<a id="__codelineno-10-21" name="__codelineno-10-21" href="#__codelineno-10-21"></a>        <span class="sa">f</span><span class="s2">&quot;Request from suspicious IP </span><span class="si">{</span><span class="n">request</span><span class="o">.</span><span class="n">ip</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-22" name="__codelineno-10-22" href="#__codelineno-10-22"></a>        <span class="n">category</span><span class="o">=</span><span class="s2">&quot;ip:suspicious&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-23" name="__codelineno-10-23" href="#__codelineno-10-23"></a>        <span class="n">scope</span><span class="o">=</span><span class="s2">&quot;account&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-24" name="__codelineno-10-24" href="#__codelineno-10-24"></a>        <span class="n">level</span><span class="o">=</span><span class="mi">6</span><span class="p">,</span>
+<a id="__codelineno-10-25" name="__codelineno-10-25" href="#__codelineno-10-25"></a>        <span class="n">request</span><span class="o">=</span><span class="n">request</span><span class="p">,</span>
+<a id="__codelineno-10-26" name="__codelineno-10-26" href="#__codelineno-10-26"></a>        <span class="n">source_ip</span><span class="o">=</span><span class="n">request</span><span class="o">.</span><span class="n">ip</span><span class="p">,</span>
+<a id="__codelineno-10-27" name="__codelineno-10-27" href="#__codelineno-10-27"></a>        <span class="n">risk_score</span><span class="o">=</span><span class="n">geo</span><span class="o">.</span><span class="n">risk_score</span><span class="p">,</span>
+<a id="__codelineno-10-28" name="__codelineno-10-28" href="#__codelineno-10-28"></a>    <span class="p">)</span>
+</code></pre></div>
+<p>A RuleSet on <code>category="ip:known_threat"</code> can auto-create a ticket, notify security staff, or trigger a blocking job — without any of that logic living in the calling code. As the analysis engine matures, cross-referencing <code>risk_score</code> trends with auth failure events can enable automatic trust level adjustments per IP.</p>
+<h3 id="pattern-rate-limiting">Pattern: rate limiting<a class="headerlink" href="#pattern-rate-limiting" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="n">incident</span><span class="o">.</span><span class="n">report_event</span><span class="p">(</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>    <span class="sa">f</span><span class="s2">&quot;User </span><span class="si">{</span><span class="n">user</span><span class="o">.</span><span class="n">id</span><span class="si">}</span><span class="s2"> exceeded API rate limit&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>    <span class="n">category</span><span class="o">=</span><span class="s2">&quot;rate_limit:api&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>    <span class="n">scope</span><span class="o">=</span><span class="s2">&quot;api&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>    <span class="n">level</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span>
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>    <span class="n">request</span><span class="o">=</span><span class="n">request</span><span class="p">,</span>
+<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a>    <span class="n">uid</span><span class="o">=</span><span class="n">user</span><span class="o">.</span><span class="n">id</span><span class="p">,</span>
+<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a>    <span class="n">endpoint</span><span class="o">=</span><span class="n">request</span><span class="o">.</span><span class="n">path</span><span class="p">,</span>
+<a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a><span class="p">)</span>
+</code></pre></div>
+<p>A RuleSet bundling by <code>SOURCE_IP</code> with <code>min_count=20</code> and <code>window_minutes=1</code> fires only when a real abuse pattern emerges — not on a single slow request.</p>
+<h3 id="pattern-authentication-failures">Pattern: authentication failures<a class="headerlink" href="#pattern-authentication-failures" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="n">incident</span><span class="o">.</span><span class="n">report_event</span><span class="p">(</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>    <span class="sa">f</span><span class="s2">&quot;Failed login for </span><span class="si">{</span><span class="n">username</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>    <span class="n">category</span><span class="o">=</span><span class="s2">&quot;auth:failed&quot;</span><span class="p">,</span>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>    <span class="n">scope</span><span class="o">=</span><span class="s2">&quot;account&quot;</span><span class="p">,</span>
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>    <span class="n">level</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span>
+<a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a>    <span class="n">request</span><span class="o">=</span><span class="n">request</span><span class="p">,</span>
+<a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a>    <span class="n">username</span><span class="o">=</span><span class="n">username</span><span class="p">,</span>
+<a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a><span class="p">)</span>
+</code></pre></div>
+<h3 id="pattern-payment-anomalies">Pattern: payment anomalies<a class="headerlink" href="#pattern-payment-anomalies" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="n">incident</span><span class="o">.</span><span class="n">report_event</span><span class="p">(</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>    <span class="s2">&quot;Multiple card declines for user&quot;</span><span class="p">,</span>
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>    <span class="n">category</span><span class="o">=</span><span class="s2">&quot;payment:declined&quot;</span><span class="p">,</span>
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>    <span class="n">scope</span><span class="o">=</span><span class="s2">&quot;billing&quot;</span><span class="p">,</span>
+<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a>    <span class="n">level</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span>
+<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a>    <span class="n">uid</span><span class="o">=</span><span class="n">user</span><span class="o">.</span><span class="n">id</span><span class="p">,</span>
+<a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a>    <span class="n">model_name</span><span class="o">=</span><span class="s2">&quot;billing.Order&quot;</span><span class="p">,</span>
+<a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a>    <span class="n">model_id</span><span class="o">=</span><span class="n">order</span><span class="o">.</span><span class="n">id</span><span class="p">,</span>
+<a id="__codelineno-13-9" name="__codelineno-13-9" href="#__codelineno-13-9"></a><span class="p">)</span>
+</code></pre></div>
+<h3 id="pattern-data-integrity">Pattern: data integrity<a class="headerlink" href="#pattern-data-integrity" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="n">incident</span><span class="o">.</span><span class="n">report_event</span><span class="p">(</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>    <span class="sa">f</span><span class="s2">&quot;Unexpected deletion of </span><span class="si">{</span><span class="n">obj</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="n">obj</span><span class="o">.</span><span class="n">pk</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>    <span class="n">category</span><span class="o">=</span><span class="s2">&quot;data:unexpected_delete&quot;</span><span class="p">,</span>
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>    <span class="n">scope</span><span class="o">=</span><span class="s2">&quot;admin&quot;</span><span class="p">,</span>
+<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a>    <span class="n">level</span><span class="o">=</span><span class="mi">7</span><span class="p">,</span>
+<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a>    <span class="n">uid</span><span class="o">=</span><span class="n">request</span><span class="o">.</span><span class="n">user</span><span class="o">.</span><span class="n">id</span><span class="p">,</span>
+<a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a>    <span class="n">model_name</span><span class="o">=</span><span class="n">obj</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="p">,</span>
+<a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a>    <span class="n">model_id</span><span class="o">=</span><span class="n">obj</span><span class="o">.</span><span class="n">pk</span><span class="p">,</span>
+<a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a><span class="p">)</span>
+</code></pre></div>
+<hr />
 <h2 id="settings">Settings<a class="headerlink" href="#settings" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -4167,17 +4884,37 @@
 </thead>
 <tbody>
 <tr>
-<td><code>INCIDENT_DEFAULT_LEVEL</code></td>
-<td><code>1</code></td>
-<td>Default event severity</td>
+<td><code>INCIDENT_LEVEL_THRESHOLD</code></td>
+<td><code>7</code></td>
+<td>Minimum level to auto-create an incident without a matching RuleSet</td>
 </tr>
 <tr>
-<td><code>INCIDENT_BUNDLE_WINDOW</code></td>
-<td><code>300</code></td>
-<td>Default bundle window (seconds)</td>
+<td><code>INCIDENT_EVENT_METRICS</code></td>
+<td>—</td>
+<td>Enable metrics recording for events and incidents</td>
+</tr>
+<tr>
+<td><code>INCIDENT_METRICS_MIN_GRANULARITY</code></td>
+<td><code>"hours"</code></td>
+<td>Granularity for incident metrics</td>
 </tr>
 </tbody>
 </table>
+<hr />
+<h2 id="why-consistency-matters">Why Consistency Matters<a class="headerlink" href="#why-consistency-matters" title="Permanent link">&para;</a></h2>
+<p>The incident system gets more valuable as more components use it. A RuleSet configured to detect brute force across <code>auth:failed</code> events only works if every authentication path reports <code>auth:failed</code> consistently.</p>
+<p>Establish naming conventions per domain and stick to them:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>auth:failed
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>auth:locked
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>auth:mfa_bypass_attempt
+<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a>ip:suspicious
+<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a>ip:known_threat
+<a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a>permission:denied
+<a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a>payment:declined
+<a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a>data:unexpected_delete
+<a id="__codelineno-15-9" name="__codelineno-15-9" href="#__codelineno-15-9"></a>rate_limit:api
+</code></pre></div>
+<p>The rule engine matches on these strings — consistent category naming means rule coverage automatically extends to every code path that reports under the same category, without touching the RuleSet.</p>
 
 
 

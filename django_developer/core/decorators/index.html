@@ -23,7 +23,7 @@
       
       
       <link rel="icon" href="../../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.2">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.3">
     
     
       
@@ -788,6 +788,17 @@
     <span class="md-ellipsis">
       
         Error Handling
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rate-limiting-metrics-decorators" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rate Limiting &amp; Metrics Decorators
       
     </span>
   </a>
@@ -3987,6 +3998,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#rate-limiting-metrics-decorators" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rate Limiting &amp; Metrics Decorators
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#decorator-stacking-order" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4120,6 +4142,13 @@
 - Catches unhandled exceptions and returns a JSON error response
 - Reports exceptions to the incident system
 - Tracks error metrics</p>
+<h2 id="rate-limiting-metrics-decorators">Rate Limiting &amp; Metrics Decorators<a class="headerlink" href="#rate-limiting-metrics-decorators" title="Permanent link">&para;</a></h2>
+<p>See <a href="../rate_limiting/">Rate Limiting &amp; Endpoint Metrics</a> for the full reference on:</p>
+<ul>
+<li><code>@md.rate_limit</code> — fixed-window limits (general API throughput)</li>
+<li><code>@md.strict_rate_limit</code> — sliding-window limits (login, password reset, MFA)</li>
+<li><code>@md.endpoint_metrics</code> — per-endpoint usage tracking by IP, duid, api_key, user, or group</li>
+</ul>
 <h2 id="decorator-stacking-order">Decorator Stacking Order<a class="headerlink" href="#decorator-stacking-order" title="Permanent link">&para;</a></h2>
 <p>When stacking multiple decorators, routing decorators (<code>@md.URL</code>, <code>@md.GET</code>, etc.) go first (outermost), followed by auth/validation:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nd">@md</span><span class="o">.</span><span class="n">POST</span><span class="p">(</span><span class="s1">&#39;resource&#39;</span><span class="p">)</span>
