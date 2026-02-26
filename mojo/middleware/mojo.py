@@ -21,6 +21,7 @@ class MojoMiddleware:
 
     def __call__(self, request):
         request.started_at = time.time()
+        request.bearer = None
         request.user = ANONYMOUS_USER
         request.group = None
         request.device = None

@@ -141,6 +141,27 @@ A reset link with a signed token is emailed.
 
 Returns a JWT on success.
 
+## Login with MFA Enabled
+
+If the account has TOTP or SMS MFA enabled, the login response is different — a short-lived `mfa_token` is returned instead of a JWT:
+
+```json
+{
+  "status": true,
+  "data": {
+    "mfa_required": true,
+    "mfa_token": "a3f1c9d2...",
+    "mfa_methods": ["totp", "sms"],
+    "expires_in": 300
+  }
+}
+```
+
+`mfa_methods` lists the available second factors for this account. Complete the login using the relevant endpoint:
+
+- TOTP (authenticator app) → see [TOTP / Authenticator App](mfa_totp.md)
+- SMS OTP → see [SMS OTP](mfa_sms.md)
+
 ## Error Responses
 
 **Invalid credentials:**

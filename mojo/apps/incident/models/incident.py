@@ -38,7 +38,29 @@ class Incident(models.Model, MojoModel):
         CREATE_PERMS = None
         POST_SAVE_ACTIONS = ["merge"]
         CAN_DELETE = True
+        GRAPHS = {
+            "default": {
+                "graphs": {
+                    "geo_ip": "basic",
+                },
+            },
+            "basic": {
+                "fields": ["id", "created", "priority", "status", "scope", "category",
+                           "country_code", "title", "source_ip", "hostname"],
+            },
+        }
 
+
+    _geo_ip = None
+    @property
+    def geo_ip(self):
+        if self._geo_ip is None and self.source_ip:
+            from mojo.apps.account.models import GeoLocatedIP
+            try:
+                self._geo_ip = GeoLocatedIP.objects.filter(ip_address=self.source_ip).first()
+            except Exception:
+                pass
+        return self._geo_ip
 
     def on_action_merge(self, value):
         """

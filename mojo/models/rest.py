@@ -237,12 +237,15 @@ class MojoModel:
             if "owner" in perms:
                 owner_field = instance.get_rest_meta_prop("OWNER_FIELD", "user")
                 owner = getattr(instance, owner_field, None)
-                if owner is not None and owner.id == request.user.id:
-                    return True
+                if hasattr(request.user, "is_request_user"):
+                    if owner is not None and owner.id == request.user.id:
+                        return True
             if hasattr(instance, "group"):
                 request.group = getattr(instance, "group", None)
 
         if request.group and hasattr(cls, "group"):
+            if hasattr(request, 'api_key') and request.api_key:
+                return request.api_key.has_permission(perms)
             allowed = request.group.user_has_permission(request.user, perms)
             if not allowed:
                 cls.class_report_incident(
@@ -343,7 +346,7 @@ class MojoModel:
         perms = cls.get_rest_meta_prop("VIEW_PERMS", [])
 
         # Check for owner permission
-        if perms and "owner" in perms and request.user.is_authenticated:
+        if perms and "owner" in perms and request.user.is_authenticated and hasattr(request.user, "is_request_user"):
             owner_field = cls.get_rest_meta_prop("OWNER_FIELD", "user")
             if owner_field == "self":
                 q = {"pk": request.user.pk}

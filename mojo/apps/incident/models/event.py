@@ -49,6 +49,7 @@ class Event(models.Model, MojoModel):
             "default": {
                 "graphs": {
                     "incident": "basic",
+                    "geo_ip": "basic",
                 }
             },
         }
@@ -263,6 +264,13 @@ class Event(models.Model, MojoModel):
             incident.metadata.update(self.metadata)
             incident.save()
             self.record_incident_metrics()
+
+            # Update IP threat level when a new incident is created
+            if self.source_ip and self.geo_ip:
+                try:
+                    self.geo_ip.update_threat_from_incident(self.level)
+                except Exception:
+                    pass
 
         return incident, created
 
