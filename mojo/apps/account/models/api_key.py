@@ -3,7 +3,6 @@ from django.db import models
 from mojo.models import MojoModel
 from mojo.models.secrets import MojoSecrets
 from mojo.helpers import crypto, dates
-from objict import objict
 
 
 class ApiKey(MojoSecrets, MojoModel):
@@ -60,6 +59,14 @@ class ApiKey(MojoSecrets, MojoModel):
                 }
             }
         }
+
+    @property
+    def display_name(self):
+        return self.name
+
+    @property
+    def email(self):
+        return f"{self.name}@apikey"
 
     def __str__(self):
         return f"{self.name}@{self.group}"
@@ -158,15 +165,10 @@ class ApiKey(MojoSecrets, MojoModel):
         except Exception:
             pass
 
-        user = objict()
-        user.id = None
-        user.is_authenticated = True
-        user.username = f"apikey:{api_key.id}"
-        user.display_name = api_key.name
-        user.email = ""
-        user.has_permission = api_key.has_permission
+        api_key.is_authenticated = True
+        api_key.username = f"apikey:{api_key.id}"
 
-        return user, None
+        return api_key, None
 
     def get_token(self):
         """Returns the raw token from encrypted storage."""

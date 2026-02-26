@@ -7,7 +7,7 @@ from mojo.apps.account.models.api_key import ApiKey
 from mojo.helpers.settings import settings
 from mojo.helpers import modules
 from objict import objict
-
+from mojo.helpers import logit
 
 AUTH_BEARER_HANDLER_PATHS = settings.get("AUTH_BEARER_HANDLERS", {})
 
@@ -32,6 +32,7 @@ class AuthenticationMiddleware(MiddlewareMixin):
             try:
                 AUTH_BEARER_HANDLERS_CACHE[prefix] = modules.load_function(AUTH_BEARER_HANDLER_PATHS[prefix])
             except Exception as e:
+                logit.exception(f"failed to load handler for {prefix}: {e}")
                 return JsonResponse({'error': "failed to load handler"}, status=500)
 
         handler = AUTH_BEARER_HANDLERS_CACHE[prefix]

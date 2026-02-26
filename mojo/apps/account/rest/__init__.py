@@ -5,3 +5,6 @@ from .device import *
 from .push import *
 from .passkeys import *
 from .api_key import *
+from .totp import *
+from .sms import *
+from .oauth import *

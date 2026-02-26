@@ -24,6 +24,8 @@ def on_user(request, pk=None):
 @md.GET('account/user/me')
 @md.requires_auth()
 def on_user_me(request):
+    if not hasattr(request.user, "is_request_user"):
+        raise merrors.PermissionDeniedException("not valid user", 401, 401)
     return User.on_rest_request(request, request.user.pk)
 
 
@@ -60,10 +62,38 @@ def on_user_login(request):
             request=request)
         raise merrors.PermissionDeniedException()
     if not user.check_password(password):
-        # Authentication successful
         user.report_incident(f"{user.username} enter an invalid password", "invalid_password")
         raise merrors.PermissionDeniedException("Invalid username or password", 401, 401)
+    mfa_methods = get_mfa_methods(user)
+    if mfa_methods:
+        return mfa_required_response(user, mfa_methods)
     return jwt_login(request, user, "account/jwt/login" in request.path)
+
+
+def get_mfa_methods(user):
+    """Return list of enabled MFA methods for a user."""
+    methods = []
+    from mojo.apps.account.models.totp import UserTOTP
+    if UserTOTP.objects.filter(user=user, is_enabled=True).exists():
+        methods.append("totp")
+    if user.phone_number and user.is_phone_verified:
+        methods.append("sms")
+    return methods
+
+
+def mfa_required_response(user, methods):
+    """Return an MFA challenge response instead of a full JWT."""
+    from mojo.apps.account.services import mfa as mfa_service
+    token = mfa_service.create_mfa_token(user, methods)
+    return JsonResponse({
+        "status": True,
+        "data": {
+            "mfa_required": True,
+            "mfa_token": token,
+            "mfa_methods": methods,
+            "expires_in": mfa_service.MFA_TOKEN_TTL,
+        },
+    })
 
 
 def jwt_login(request, user, legacy=False):
@@ -156,6 +186,36 @@ def on_user_password_reset_token(request):
     new_password = request.DATA.get("new_password")
     user.set_password(new_password)
     user.save()
+    return jwt_login(request, user)
+
+
+@md.POST("auth/magic/send")
+@md.requires_params("email")
+@md.public_endpoint()
+def on_magic_login_send(request):
+    """Send a magic login link to the user's email address."""
+    email = request.DATA.email.lower().strip()
+    user = User.objects.filter(email=email).last()
+    if user is None:
+        User.class_report_incident(
+            f"magic login attempt with unknown email {email}",
+            event_type="magic:unknown",
+            level=8,
+            request=request)
+    else:
+        user.report_incident(f"{user.username} requested a magic login link", "magic_login")
+        user.send_template_email("magic_login_link", dict(token=tokens.generate_magic_login_token(user)))
+    # Always return success to prevent email enumeration
+    return JsonResponse(dict(status=True, message="If email is in our system a login link was sent."))
+
+
+@md.POST("auth/magic/login")
+@md.custom_security("requires valid magic login token")
+@md.requires_params("token")
+def on_magic_login_complete(request):
+    """Exchange a magic login token for a JWT — logs the user in."""
+    token = request.DATA.get("token")
+    user = tokens.verify_magic_login_token(token)
     return jwt_login(request, user)
 
 

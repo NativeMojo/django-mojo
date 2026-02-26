@@ -1,6 +1,6 @@
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager
 from django.db import models
-from mojo.models import MojoModel, MojoSecrets
+from mojo.models import MojoModel, MojoSecrets, MojoAuthMixin
 from mojo.helpers.settings import settings
 from mojo import errors as merrors
 from mojo.helpers import dates
@@ -51,7 +51,7 @@ class CustomUserManager(BaseUserManager):
         """Required for Django authentication"""
         return self.get(**{self.model.USERNAME_FIELD: username})
 
-class User(MojoSecrets, AbstractBaseUser, MojoModel):
+class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
     """
     Full custom user model.
     """
@@ -154,7 +154,9 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
             request = self.active_request
         if request is None:
             return False
-        return request.user.id == self.id
+        if hasattr(request.user, "is_request_user"):
+            return request.user.id == self.id
+        return False
 
     def touch(self):
         # can't subtract offset-naive and offset-aware datetimes
@@ -289,6 +291,7 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
         return Group.objects.filter(id__in=list(group_ids))
 
     def get_auth_key(self):
+        # auth_key stored as a dedicated field for backwards compatibility
         if self.auth_key is None:
             self.auth_key = uuid.uuid4().hex
             self.atomic_save()
@@ -599,6 +602,7 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
         cc=None,
         bcc=None,
         reply_to=None,
+        fail_silently=True,
         **kwargs
     ):
         """Send email to this user using mailbox determined by user's org domain or system default
@@ -608,13 +612,11 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
             body_text: Optional plain text body
             body_html: Optional HTML body
             cc, bcc, reply_to: Optional addressing
+            fail_silently: If True (default), log failures via incident reporting instead of raising
             **kwargs: Additional arguments passed to mailbox.send_email()
 
         Returns:
-            SentMessage instance
-
-        Raises:
-            ValueError: If no mailbox can be found
+            SentMessage instance or None if fail_silently and no mailbox
         """
         from mojo.apps.aws.models import Mailbox
 
@@ -638,18 +640,28 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
             mailbox = Mailbox.get_system_default()
 
         if not mailbox:
-            raise ValueError("No mailbox available for sending email. Please configure a system default mailbox.")
+            msg = "No mailbox available for sending email. Please configure a system default mailbox."
+            if fail_silently:
+                self.report_incident(msg, "email:no_mailbox", level=6)
+                return None
+            raise ValueError(msg)
 
-        return mailbox.send_email(
-            to=self.email,
-            subject=subject,
-            body_text=body_text,
-            body_html=body_html,
-            cc=cc,
-            bcc=bcc,
-            reply_to=reply_to,
-            **kwargs
-        )
+        try:
+            return mailbox.send_email(
+                to=self.email,
+                subject=subject,
+                body_text=body_text,
+                body_html=body_html,
+                cc=cc,
+                bcc=bcc,
+                reply_to=reply_to,
+                **kwargs
+            )
+        except Exception as e:
+            if fail_silently:
+                self.report_incident(f"email send failed: {e}", "email:send_failed", level=6)
+                return None
+            raise
 
     def send_template_email(
         self,
@@ -659,6 +671,7 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
         bcc=None,
         reply_to=None,
         template_prefix=None,
+        fail_silently=True,
         **kwargs
     ):
         """Send template email to this user using mailbox determined by user's org domain or system default
@@ -667,13 +680,11 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
             template_name: Name of the EmailTemplate in database
             context: Template context variables (user will be added automatically)
             cc, bcc, reply_to: Optional addressing
+            fail_silently: If True (default), log failures via incident reporting instead of raising
             **kwargs: Additional arguments passed to mailbox.send_template_email()
 
         Returns:
-            SentMessage instance
-
-        Raises:
-            ValueError: If no mailbox can be found or template not found
+            SentMessage instance or None if fail_silently and send fails
         """
         from mojo.apps.aws.models import Mailbox, EmailTemplate
 
@@ -697,7 +708,11 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
             mailbox = Mailbox.get_system_default()
 
         if not mailbox:
-            raise ValueError("No mailbox available for sending email. Please configure a system default mailbox.")
+            msg = "No mailbox available for sending email. Please configure a system default mailbox."
+            if fail_silently:
+                self.report_incident(msg, "email:no_mailbox", level=6)
+                return None
+            raise ValueError(msg)
 
         if template_prefix is None and self.org:
             template_prefix = self.org.get_metadata_value("email_template")
@@ -712,16 +727,22 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
         if 'user' not in context:
             context['user'] = self.to_dict("basic")
 
-        return mailbox.send_template_email(
-            to=self.email,
-            template_name=template_name,
-            context=context,
-            cc=cc,
-            bcc=bcc,
-            reply_to=reply_to,
-            allow_unverified=True,
-            **kwargs
-        )
+        try:
+            return mailbox.send_template_email(
+                to=self.email,
+                template_name=template_name,
+                context=context,
+                cc=cc,
+                bcc=bcc,
+                reply_to=reply_to,
+                allow_unverified=True,
+                **kwargs
+            )
+        except Exception as e:
+            if fail_silently:
+                self.report_incident(f"template email send failed ({template_name}): {e}", "email:send_failed", level=6)
+                return None
+            raise
 
     def on_realtime_connected(self):
         # should always self.refresh_from_db()

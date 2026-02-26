@@ -27,6 +27,15 @@ def setup_users(opts):
     user.is_superuser = True
     user.save_password(ADMIN_PWORD)
 
+    user = User.objects.filter(username="admin").last()
+    if user is None:
+        user = User(username="admin", display_name="System Admin", email=f"admin@example.com")
+        user.is_staff = True
+        user.is_superuser = True
+        user.save()
+        user.save_password(ADMIN_PWORD)
+    user.add_permission(["manage_groups", "manage_users", "view_global", "view_admin"])
+
 
 @th.unit_test("user_jwt_login")
 def test_user_jwt_login(opts):

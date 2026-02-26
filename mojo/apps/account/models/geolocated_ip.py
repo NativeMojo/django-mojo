@@ -62,6 +62,11 @@ class GeoLocatedIP(models.Model, MojoModel):
         help_text="Connection type: residential, business, hosting, cellular, etc."
     )
 
+    # Incident-driven blocking
+    is_blocked = models.BooleanField(default=False, db_index=True, help_text="Is this IP blocked?")
+    blocked_at = models.DateTimeField(null=True, blank=True, help_text="When this IP was blocked")
+    blocked_reason = models.CharField(max_length=50, null=True, blank=True, help_text="auto or manual")
+
     # Auditing and source tracking
     provider = models.CharField(max_length=50, null=True, blank=True)
     data = models.JSONField(default=dict, blank=True)
@@ -75,6 +80,7 @@ class GeoLocatedIP(models.Model, MojoModel):
             models.Index(fields=['threat_level', 'modified']),
             models.Index(fields=['is_cloud', 'is_datacenter']),
             models.Index(fields=['is_mobile', 'mobile_carrier']),
+            models.Index(fields=['is_blocked', 'threat_level']),
         ]
 
     class RestMeta:
@@ -85,6 +91,12 @@ class GeoLocatedIP(models.Model, MojoModel):
             'default': {
                 'extra': ['is_threat', 'is_suspicious', 'risk_score'],
                 'exclude': ['data', 'provider']
+            },
+            'basic': {
+                'fields': ['id', 'ip_address', 'country_code', 'country_name', 'city', 'region',
+                           'is_tor', 'is_vpn', 'is_proxy', 'is_known_attacker', 'is_known_abuser',
+                           'threat_level', 'is_blocked', 'blocked_at', 'blocked_reason'],
+                'extra': ['is_threat', 'is_suspicious', 'risk_score'],
             },
             'detailed': {
                 # Include all fields including raw data
@@ -213,6 +225,42 @@ class GeoLocatedIP(models.Model, MojoModel):
 
         self.save()
         return threat_results
+
+    THREAT_LEVEL_ORDER = [None, 'low', 'medium', 'high', 'critical']
+
+    def update_threat_from_incident(self, priority):
+        """
+        Called when a new incident is created for this IP.
+        Escalates threat_level based on incident priority (0-15 scale).
+        Never downgrades. Auto-sets is_blocked once when threat reaches high/critical,
+        unless the IP was previously manually unblocked (blocked_reason == 'unblocked').
+        """
+        if priority >= 13:
+            new_level = 'critical'
+        elif priority >= 10:
+            new_level = 'high'
+        elif priority >= 7:
+            new_level = 'medium'
+        else:
+            return  # Below threshold, nothing to do
+
+        current_idx = self.THREAT_LEVEL_ORDER.index(self.threat_level) if self.threat_level in self.THREAT_LEVEL_ORDER else 0
+        new_idx = self.THREAT_LEVEL_ORDER.index(new_level)
+
+        if new_idx <= current_idx:
+            return  # Already at this level or higher, no change needed
+
+        self.threat_level = new_level
+        update_fields = ['threat_level']
+
+        # Auto-block only once: if not already blocked and not previously manually unblocked
+        if not self.is_blocked and self.blocked_reason != 'unblocked' and new_level in ('high', 'critical'):
+            self.is_blocked = True
+            self.blocked_at = dates.utcnow()
+            self.blocked_reason = 'auto'
+            update_fields += ['is_blocked', 'blocked_at', 'blocked_reason']
+
+        self.save(update_fields=update_fields)
 
     def on_action_refresh(self, value):
         self.refresh(check_threats=True)
