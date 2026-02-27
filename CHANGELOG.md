@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v1.0.20 - February 27, 2026
+
+* superuser rightfully has all permissions
+
+
 ## v1.0.19 - February 26, 2026
 
 new oauth flows
