@@ -325,6 +325,8 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
 
     def has_permission(self, perm_key):
         """Check if user has a specific permission in JSON field."""
+        if self.is_superuser:
+            return True
         if isinstance(perm_key, (list, set)):
             for pk in perm_key:
                 if self.has_permission(pk):
