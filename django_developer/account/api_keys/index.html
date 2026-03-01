@@ -3674,6 +3674,9 @@
 
 <h1 id="api-keys-django-developer-reference">API Keys — Django Developer Reference<a class="headerlink" href="#api-keys-django-developer-reference" title="Permanent link">&para;</a></h1>
 <p>API keys give programmatic clients authenticated access scoped to a group, without requiring a user login. They authenticate via the standard <code>Authorization</code> header and plug into the existing permission system with no special cases.</p>
+<blockquote>
+<p><strong>API Keys vs User Auth Tokens:</strong> MOJO has two authentication mechanisms for programmatic access. <strong>API Keys</strong> (<code>ApiKey</code> model, <code>Authorization: apikey &lt;token&gt;</code>) are group-scoped with explicit permissions — use these for external integrations. <strong>User Auth Tokens</strong> (<code>User.generate_api_token()</code>, <code>Authorization: bearer &lt;token&gt;</code>) are JWT tokens that carry a user's full system-level permissions — use these only when you need to act as a specific user. See <a href="../../../web_developer/account/api_keys/">REST API docs</a> for the REST-facing comparison.</p>
+</blockquote>
 <h2 id="how-it-works">How It Works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>Authorization: apikey &lt;raw_token&gt;
 </code></pre></div>

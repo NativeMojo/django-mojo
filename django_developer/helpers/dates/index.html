@@ -3937,7 +3937,8 @@
 </code></pre></div>
 <h3 id="datesadddt-seconds0-minutes0-hours0-days0"><code>dates.add(dt, seconds=0, minutes=0, hours=0, days=0)</code><a class="headerlink" href="#datesadddt-seconds0-minutes0-hours0-days0" title="Permanent link">&para;</a></h3>
 <p>Returns a new datetime with the interval added.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">expires</span> <span class="o">=</span> <span class="n">dates</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">dates</span><span class="o">.</span><span class="n">utcnow</span><span class="p">(),</span> <span class="n">days</span><span class="o">=</span><span class="mi">30</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">expires</span> <span class="o">=</span> <span class="n">dates</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">days</span><span class="o">=</span><span class="mi">30</span><span class="p">)</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="n">started</span> <span class="o">=</span> <span class="n">dates</span><span class="o">.</span><span class="n">subtract</span><span class="p">(</span><span class="n">evnt</span><span class="o">.</span><span class="n">start_time</span><span class="p">,</span> <span class="n">hours</span><span class="o">=</span><span class="mi">12</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="datessubtractdt-seconds0-minutes0-hours0-days0"><code>dates.subtract(dt, seconds=0, minutes=0, hours=0, days=0)</code><a class="headerlink" href="#datessubtractdt-seconds0-minutes0-hours0-days0" title="Permanent link">&para;</a></h3>
 <p>Returns a new datetime with the interval subtracted.</p>
