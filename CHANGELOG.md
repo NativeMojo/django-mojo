@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v1.0.21 - March 01, 2026
+
+new content guard
+
+
 ## v1.0.20 - February 27, 2026
 
 * superuser rightfully has all permissions
