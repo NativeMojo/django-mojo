@@ -162,7 +162,7 @@ class SMS(models.Model, MojoModel):
         self.save()
 
     @classmethod
-    def send(cls, body, to_number, metadata=None, group=None, user=None):
+    def send(cls, body, to_number, metadata=None, group=None, user=None, from_number=None):
         """Mark message as received."""
         from mojo.apps.phonehub.services.twilio import send_sms, FROM_NUMBER, PROVIDER
         from .phone import PhoneNumber
@@ -171,13 +171,17 @@ class SMS(models.Model, MojoModel):
             user=user,
             group=group,
             direction='outbound',
-            from_number=FROM_NUMBER,
+            from_number=from_number or FROM_NUMBER,
             to_number=to_number,
             body=body,
             status='queued',
             provider=PROVIDER,
             metadata=metadata or {},
         )
+        # handle fake numbers
+        if to_number.startswith("+1555"):
+            sms.mark_sent(f"test{to_number}")
+            return sms
         resp = send_sms(body, to_number)
         if resp.sent:
             sms.mark_sent(resp.id)

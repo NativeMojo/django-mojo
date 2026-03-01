@@ -1,0 +1,19 @@
+# high severity terms — slurs and extreme language
+# these receive higher scoring weight and enable edit-distance matching
+cunt
+fag
+faggot
+fuck
+shit
+slut
+whore
+nigga
+nigger
+retard
+retarded
+kike
+spic
+chink
+gook
+dyke
+tranny

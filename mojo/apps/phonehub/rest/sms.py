@@ -2,6 +2,8 @@
 
 import mojo.decorators as md
 from mojo.apps.phonehub.models import SMS
+from mojo.apps.phonehub.services.twilio import validate_webhook_signature
+from mojo.helpers.response import JsonResponse
 
 
 @md.URL('sms')
@@ -58,14 +60,16 @@ def on_sms_webhook_twilio(request):
     Twilio will POST to this endpoint when SMS is received.
     See: https://www.twilio.com/docs/sms/tutorials/how-to-receive-and-reply-python
     """
-    # Twilio sends form data
+    if not validate_webhook_signature(request):
+        return JsonResponse({'error': 'Invalid signature'}, status=403)
+
     from_number = request.DATA.get('From')
     to_number = request.DATA.get('To')
     body = request.DATA.get('Body', '')
     message_sid = request.DATA.get('MessageSid')
 
     if not from_number or not to_number:
-        return md.response_error('Missing required fields', status=400)
+        return JsonResponse({'error': 'Missing required fields'}, status=400)
 
     # Handle incoming SMS
     sms = SMS(
@@ -79,12 +83,27 @@ def on_sms_webhook_twilio(request):
     )
     sms.save()
 
-    # Return TwiML response (optional - can customize)
+    # Allow projects to handle inbound SMS by setting SMS_INBOUND_HANDLER in settings:
+    #   SMS_INBOUND_HANDLER = "myapp.services.sms.on_inbound"
+    # The handler receives the SMS instance and returns an optional reply string (or None).
+    from mojo.helpers import modules
+    from mojo.helpers.settings import settings
+    reply = None
+    handler_path = settings.get("SMS_INBOUND_HANDLER")
+    if handler_path:
+        try:
+            handler = modules.load_function(handler_path)
+            reply = handler(sms)
+        except Exception as e:
+            from mojo.helpers import logit
+            logit.error("phonehub.sms", f"SMS_INBOUND_HANDLER error: {e}")
+
     from django.http import HttpResponse
-    return HttpResponse(
-        '<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
-        content_type='text/xml'
-    )
+    if reply:
+        twiml = f'<?xml version="1.0" encoding="UTF-8"?><Response><Message>{reply}</Message></Response>'
+    else:
+        twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
+    return HttpResponse(twiml, content_type='text/xml')
 
 
 @md.POST('sms/webhook/twilio/status')
@@ -97,11 +116,14 @@ def on_sms_webhook_twilio_status(request):
 
     Twilio will POST to this endpoint with delivery status updates.
     """
+    if not validate_webhook_signature(request):
+        return JsonResponse({'error': 'Invalid signature'}, status=403)
+
     message_sid = request.DATA.get('MessageSid')
     message_status = request.DATA.get('MessageStatus')
 
     if not message_sid:
-        return md.response_error('Missing MessageSid', status=400)
+        return JsonResponse({'error': 'Missing MessageSid'}, status=400)
 
     # Find SMS by provider message ID
     try:
@@ -136,4 +158,4 @@ def on_sms_webhook_twilio_status(request):
         return {'success': True, 'status': new_status}
 
     except SMS.DoesNotExist:
-        return md.response_error('SMS not found', status=404)
+        return JsonResponse({'error': 'SMS not found'}, status=404)

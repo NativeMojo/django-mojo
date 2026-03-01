@@ -18,6 +18,26 @@ def send_sms(body, to_number, from_number=FROM_NUMBER, account_sid=ACCOUNT_SID, 
     return _send_sms(body, to_number, from_number, account_sid, auth_token)
 
 
+def validate_webhook_signature(request):
+    """
+    Validate a Twilio webhook request signature.
+    Returns True if valid, False otherwise.
+    See: https://www.twilio.com/docs/usage/webhooks/webhooks-security
+    """
+    if not AUTH_TOKEN:
+        return False
+    try:
+        from twilio.request_validator import RequestValidator
+        validator = RequestValidator(AUTH_TOKEN)
+        url = request.build_absolute_uri()
+        signature = request.META.get('HTTP_X_TWILIO_SIGNATURE', '')
+        params = dict(request.POST)
+        flat_params = {k: v[0] if isinstance(v, list) else v for k, v in params.items()}
+        return validator.validate(url, flat_params, signature)
+    except Exception:
+        return False
+
+
 def _lookup(phone_number, account_sid, auth_token):
     """
     Lookup phone using Twilio with caller name information.

@@ -19,7 +19,7 @@ from mojo import errors as merrors
 from mojo.apps.account.models import User
 from mojo.apps.account.rest.user import jwt_login
 from mojo.apps.account.services import mfa as mfa_service
-from mojo.apps.phonehub.services.twilio import send_sms
+from mojo.apps import phonehub
 from mojo.helpers import crypto, dates, logit
 from mojo.helpers.response import JsonResponse
 from mojo.helpers.settings import settings
@@ -38,10 +38,10 @@ def _send_otp(user):
     user.save()
 
     try:
-        result = send_sms(body=f"Your verification code is: {code}", to_number=user.phone_number)
-        if not result.sent:
-            logit.error("account.sms", f"Failed to send SMS OTP to {user.phone_number}: {result.error}")
-            user.report_incident(f"SMS OTP send failed: {result.error}", "sms:send_failed", level=6)
+        sms = phonehub.send_sms(user.phone_number, f"Your verification code is: {code}")
+        if sms.status == "failed":
+            logit.error("account.sms", f"Failed to send SMS OTP to {user.phone_number}")
+            user.report_incident("SMS OTP send failed", "sms:send_failed", level=6)
     except Exception as e:
         logit.error("account.sms", f"SMS OTP exception for {user.phone_number}: {e}")
         user.report_incident(f"SMS OTP send exception: {e}", "sms:send_failed", level=6)

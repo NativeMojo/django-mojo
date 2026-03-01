@@ -6,6 +6,7 @@ from mojo.helpers.settings import settings
 from mojo import errors as me
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import transaction, models as dm
+import json
 import objict
 import datetime
 from mojo.helpers import dates, logit
@@ -1089,8 +1090,13 @@ class MojoModel:
 
     def on_rest_update_jsonfield(self, field_name, field_value):
         """helper to update jsonfield by merge in changes"""
+        # parse JSON strings into dicts/lists (e.g. form submissions send strings)
+        if isinstance(field_value, str):
+            try:
+                field_value = json.loads(field_value)
+            except (json.JSONDecodeError, ValueError):
+                pass
         existing_value = getattr(self, field_name, {})
-        # logger.info("JSONField", existing_value, "New Value", field_value)
         if isinstance(field_value, dict) and isinstance(existing_value, dict):
             merged_value = objict.merge_dicts(existing_value, field_value)
             setattr(self, field_name, merged_value)

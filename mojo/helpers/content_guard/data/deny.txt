@@ -1,0 +1,119 @@
+# content_guard deny list
+# one term per line, lowercase
+# lines starting with # are comments
+# these terms will be matched against normalized variants
+
+# ── English profanity ────────────────────────────────────────────────────────
+ass
+asshole
+bastard
+bitch
+cock
+crap
+cunt
+damn
+dick
+douche
+fag
+faggot
+fuck
+fucker
+fucking
+jackass
+motherfucker
+nigga
+nigger
+piss
+prick
+pussy
+retard
+retarded
+shit
+slut
+twat
+whore
+wanker
+
+# ── Slurs ────────────────────────────────────────────────────────────────────
+kike
+spic
+chink
+gook
+dyke
+tranny
+wetback
+beaner
+gringo
+cracker
+
+# ── Compound / abbreviations ────────────────────────────────────────────────
+stfu
+gtfo
+wtf
+lmfao
+omfg
+ffs
+foad
+diaf
+
+# ── Spanish ──────────────────────────────────────────────────────────────────
+puta
+puto
+mierda
+cabron
+pendejo
+chingar
+verga
+culo
+marica
+cojon
+cojones
+joder
+hijueputa
+
+# ── French ───────────────────────────────────────────────────────────────────
+merde
+putain
+salaud
+salope
+connard
+connasse
+enculer
+nique
+batard
+
+# ── German ───────────────────────────────────────────────────────────────────
+schlampe
+hurensohn
+wichser
+fotze
+arschloch
+missgeburt
+schwuchtel
+scheisse
+
+# ── Portuguese ───────────────────────────────────────────────────────────────
+porra
+caralho
+buceta
+viado
+filhodaputa
+
+# ── Italian ──────────────────────────────────────────────────────────────────
+cazzo
+stronzo
+minchia
+puttana
+vaffanculo
+
+# ── Russian (transliterated) ─────────────────────────────────────────────────
+suka
+blyad
+blyat
+pizda
+nahui
+mudak
+pidar
+gandon
+debil
+ebat
