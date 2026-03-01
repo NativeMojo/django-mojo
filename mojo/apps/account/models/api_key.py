@@ -1,4 +1,5 @@
 import hashlib
+import json
 from django.db import models
 from mojo.models import MojoModel
 from mojo.models.secrets import MojoSecrets
@@ -71,6 +72,18 @@ class ApiKey(MojoSecrets, MojoModel):
     def __str__(self):
         return f"{self.name}@{self.group}"
 
+    def _get_permissions_dict(self):
+        """Return permissions as a dict, handling string values from REST input."""
+        perms = self.permissions
+        if isinstance(perms, str):
+            try:
+                perms = json.loads(perms)
+            except (json.JSONDecodeError, ValueError):
+                return {}
+        if not isinstance(perms, dict):
+            return {}
+        return perms
+
     def has_permission(self, perm_key):
         """
         Check if this API key grants the given permission.
@@ -90,7 +103,7 @@ class ApiKey(MojoSecrets, MojoModel):
             return False
         if perm_key == "all":
             return True
-        return bool(self.permissions.get(perm_key, False))
+        return bool(self._get_permissions_dict().get(perm_key, False))
 
     def is_group_allowed(self, group):
         """

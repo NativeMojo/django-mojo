@@ -1,0 +1,93 @@
+# safelist — terms that contain deny substrings but are innocent
+# prevents false positives
+
+# ── English words containing "ass" ───────────────────────────────────────────
+assistant
+bass
+brass
+class
+classic
+compass
+grasshopper
+hassle
+mass
+massive
+passage
+passion
+passionate
+ambassador
+embassy
+assassin
+
+# ── English words containing "cock" ──────────────────────────────────────────
+cockatoo
+cocktail
+hancock
+peacock
+
+# ── English words containing "dick" ──────────────────────────────────────────
+dickens
+addiction
+
+# ── English words containing "crap" ──────────────────────────────────────────
+crappy
+scrap
+scrapbook
+
+# ── English words containing "prick" ─────────────────────────────────────────
+prickle
+prickly
+
+# ── English words containing "shit" ──────────────────────────────────────────
+shitake
+
+# ── English words containing "piss" ──────────────────────────────────────────
+mississippi
+
+# ── English words containing "dam"/"damn" ────────────────────────────────────
+damage
+amsterdam
+
+# ── English words containing "nig" ───────────────────────────────────────────
+night
+nightmare
+niggle
+
+# ── English words containing "cum" (future-proofing) ─────────────────────────
+document
+docket
+cucumber
+accumulate
+circumstance
+
+# ── English words containing "puta" (Spanish deny term) ──────────────────────
+reputation
+computer
+computing
+dispute
+amputate
+putative
+imputation
+
+# ── English words containing "culo" (Spanish deny term) ──────────────────────
+calculate
+curriculum
+
+# ── English words containing "nique" (French deny term) ──────────────────────
+unique
+technique
+communicate
+
+# ── English words containing "merde" ─────────────────────────────────────────
+# (no common English collisions)
+
+# ── Skeleton false positive prevention ───────────────────────────────────────
+duck
+dock
+thick
+brick
+stick
+socket
+pocket
+ticket
+bucket

@@ -36,7 +36,8 @@ if dates.has_time_elsapsed(user.last_login, hours=24):
 Returns a new datetime with the interval added.
 
 ```python
-expires = dates.add(dates.utcnow(), days=30)
+expires = dates.add(days=30)
+started = dates.subtract(evnt.start_time, hours=12)
 ```
 
 ### `dates.subtract(dt, seconds=0, minutes=0, hours=0, days=0)`

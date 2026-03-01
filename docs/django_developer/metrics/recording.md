@@ -102,3 +102,69 @@ metrics.set_view_perms("public", "public")
 # Restrict write access
 metrics.set_write_perms("group_123", "manage_metrics")
 ```
+
+
+
+## `@md.endpoint_metrics` — Usage Tracking
+
+Records per-endpoint metrics to the time-series metrics system. **Disabled entirely (zero overhead) when `API_METRICS=False`.**
+
+```python
+def endpoint_metrics(slug, by=None, min_granularity="hours")
+```
+
+### Parameters
+
+| Param | Description |
+|---|---|
+| `slug` | Explicit metric name (e.g. `"login_attempts"`, `"assess_calls"`) |
+| `by` | String or list — dimensions to break down by (see below) |
+| `min_granularity` | Granularity passed to `metrics.record()` (default `"hours"`) |
+
+### Supported dimensions
+
+| Value | Tracks by |
+|---|---|
+| `"ip"` | Source IP address |
+| `"duid"` | Device UUID from `request.DATA.get("duid")` |
+| `"api_key"` | API key group PK (`request.api_key.group.pk`) |
+| `"user"` | Authenticated user ID |
+| `"group"` | Request group ID (`request.group.pk`) |
+
+### Examples
+
+```python
+# Global count only
+@md.POST("signup")
+@md.endpoint_metrics("signup_total")
+def on_signup(request):
+    ...
+
+# Global + IP breakdown
+@md.POST("search")
+@md.endpoint_metrics("search_calls", by="ip")
+def on_search(request):
+    ...
+
+# Global + multiple breakdowns
+@md.POST("login")
+@md.endpoint_metrics("login_attempts", by=["ip", "duid"])
+def on_login(request):
+    ...
+
+# API key usage tracking, daily granularity
+@md.POST("assess")
+@md.endpoint_metrics("assess_calls", by="api_key", min_granularity="days")
+def on_assess(request):
+    ...
+```
+
+Each resolved dimension produces an additional metric slug:
+
+```
+login_attempts              ← always recorded (global)
+login_attempts:ip:1.2.3.4   ← per IP
+login_attempts:duid:abc123  ← per device
+```
+
+Dimensions that are absent on the request (no duid, unauthenticated user, no group, no api_key) are skipped silently.

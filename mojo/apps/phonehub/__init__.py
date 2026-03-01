@@ -27,9 +27,16 @@ def lookup(phone_number):
     return PhoneNumber.lookup(phone_number)
 
 
-def send_sms(phone_number, message):
+def send_sms(phone_number, message, metadata=None, group=None, user=None, from_number=None):
     from .models import SMS
-    return SMS.send(body=message, to_number=phone_number)
+    # , body, to_number, metadata=None, group=None, user=None
+    return SMS.send(
+        body=message,
+        to_number=phone_number,
+        metadata=metadata,
+        group=group,
+        user=user,
+        from_number=from_number)
 
 def get_area_code_info(phone_number):
     from .services.area_codes import get_area_code_info
