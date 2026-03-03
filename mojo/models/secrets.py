@@ -14,7 +14,6 @@ class MojoSecrets(models.Model):
     _secrets_changed = False
 
     def set_secrets(self, value):
-        self.debug("Setting secrets", repr(value))
         if isinstance(value, str):
             value = objict.from_json(value)
         self._exposed_secrets = merge_dicts(self.secrets, value)

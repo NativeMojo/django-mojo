@@ -123,6 +123,7 @@ class ApiKey(MojoSecrets, MojoModel):
         """
         token = crypto.random_string(48, allow_special=False)
         self.token_hash = hashlib.sha256(token.encode()).hexdigest()
+        self.set_secret("token", token)
         return token
 
     @classmethod
@@ -190,5 +191,4 @@ class ApiKey(MojoSecrets, MojoModel):
     def on_rest_created(self):
         """Generate token, store hash for lookup, store raw token encrypted."""
         self._raw_token = self.generate_token()
-        self.set_secret("token", self._raw_token)
         self.save()
