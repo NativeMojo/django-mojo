@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v1.0.22 - March 03, 2026
+
+New feature to send and wait for events to come back
+
+
 ## v1.0.21 - March 01, 2026
 
 new content guard
