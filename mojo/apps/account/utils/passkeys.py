@@ -255,7 +255,7 @@ class PasskeyService:
     # -----------------------------------------------------------------
     # Helpers
     # -----------------------------------------------------------------
-    def _build_user_entity(self, user) -> PublicKeyCredentialUserEntity:
+    def _build_user_entity(self, user):
         """Build user entity for WebAuthn."""
         display_name = (
             getattr(user, "display_name", None)
@@ -279,7 +279,7 @@ class PasskeyService:
             display_name=display_name,
         )
 
-    def _load_user_credentials(self, user) -> List[AttestedCredentialData]:
+    def _load_user_credentials(self, user):
         """Load user's credentials for this RP ID."""
         credentials = []
 
@@ -294,7 +294,7 @@ class PasskeyService:
 
         return credentials
 
-    def _decode_passkey(self, passkey) -> AttestedCredentialData:
+    def _decode_passkey(self, passkey):
         """Decode passkey token to AttestedCredentialData."""
         return AttestedCredentialData(websafe_decode(passkey.token))
 

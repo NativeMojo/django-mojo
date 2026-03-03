@@ -8,6 +8,7 @@ check online status, and manage realtime connections.
 
 import json
 import time
+import uuid
 
 def get_redis():
     from mojo.helpers.redis.client import get_connection
@@ -246,3 +247,106 @@ def disconnect_user(user_type, user_id):
             "type": "disconnect",
             "reason": "forced_disconnect"
         })
+
+
+def request(user_type, user_id, data, timeout=30):
+    """
+    Send a message to a user over realtime and wait for their response.
+
+    The client receives a message with type="request" and a unique request_id.
+    They must respond with type="response" and the same request_id.
+
+    Args:
+        user_type: Type of user (e.g., "user")
+        user_id: User's ID
+        data: Dict with message content
+        timeout: Seconds to wait for response (default 30)
+
+    Returns:
+        dict with response data, or None if timeout or user offline
+    """
+    connections = get_user_connections(user_type, user_id)
+    if not connections:
+        return None
+
+    redis_client = get_redis()
+    request_id = str(uuid.uuid4())
+    response_key = f"realtime:response:{request_id}"
+
+    # Send request to all user's connections
+    send_to_user(user_type, user_id, {
+        "type": "request",
+        "request_id": request_id,
+        "data": data,
+        "timestamp": time.time()
+    })
+
+    # Block until response arrives or timeout
+    result = redis_client.blpop(response_key, timeout=timeout)
+
+    # Clean up in case of race
+    redis_client.delete(response_key)
+
+    if result is None:
+        return None
+
+    # BLPOP returns (key, value)
+    _, raw = result
+    if isinstance(raw, (bytes, bytearray)):
+        raw = raw.decode()
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
+def wait_for_event(user_type, user_id, match, timeout=30):
+    """
+    Wait for an incoming message from a user that matches specific fields.
+
+    The client does not need to know Django is waiting — any message that
+    matches all key:value pairs in `match` will be captured.
+
+    Args:
+        user_type: Type of user (e.g., "user")
+        user_id: User's ID
+        match: Dict of field:value pairs that must all match
+        timeout: Seconds to wait (default 30)
+
+    Returns:
+        dict with the matched message data, or None if timeout
+    """
+    redis_client = get_redis()
+    waiter_id = str(uuid.uuid4())
+    waiters_key = f"realtime:waiters:{user_type}:{user_id}"
+    waiter_match_key = f"realtime:waiter:{waiter_id}"
+    waiter_result_key = f"realtime:waiter:{waiter_id}:result"
+
+    # Register waiter with match criteria
+    ttl = timeout + 10
+    redis_client.sadd(waiters_key, waiter_id)
+    redis_client.expire(waiters_key, ttl)
+    redis_client.setex(waiter_match_key, ttl, json.dumps(match))
+
+    try:
+        # Block until a matching message arrives or timeout
+        result = redis_client.blpop(waiter_result_key, timeout=timeout)
+
+        if result is None:
+            return None
+
+        _, raw = result
+        if isinstance(raw, (bytes, bytearray)):
+            raw = raw.decode()
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            return None
+    finally:
+        # Clean up waiter registration
+        redis_client.srem(waiters_key, waiter_id)
+        redis_client.delete(waiter_match_key)
+        redis_client.delete(waiter_result_key)
+        # Remove set if empty
+        if redis_client.scard(waiters_key) == 0:
+            redis_client.delete(waiters_key)

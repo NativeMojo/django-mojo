@@ -349,6 +349,8 @@ class WebSocketHandler:
             await self.handle_subscribe(data)
         elif message_type == "unsubscribe":
             await self.handle_unsubscribe(data)
+        elif message_type == "response":
+            await self.handle_response(data)
         elif message_type == "ping":
             await self.handle_ping(data)
         else:
@@ -489,9 +491,68 @@ class WebSocketHandler:
             "user_id": self.user.id if self.user else None
         })
 
+    async def handle_response(self, data):
+        """Handle client response to a request() call from Django."""
+        if not self.authenticated:
+            await self.send_error("Authentication required")
+            return
+
+        request_id = data.get("request_id")
+        if not request_id:
+            await self.send_error("Missing request_id")
+            return
+
+        response_data = data.get("data", {})
+        response_key = f"realtime:response:{request_id}"
+
+        def push_response():
+            self.redis_client.lpush(response_key, json.dumps(response_data))
+            self.redis_client.expire(response_key, 120)
+
+        await asyncio.get_event_loop().run_in_executor(None, push_response)
+
+    async def check_waiters(self, data):
+        """Check if any active wait_for_event() waiters match this message."""
+        if not self.user or not self.user_type:
+            return
+
+        waiters_key = f"realtime:waiters:{self.user_type}:{self.user.id}"
+
+        def do_check():
+            if not self.redis_client.exists(waiters_key):
+                return
+
+            waiter_ids = self.redis_client.smembers(waiters_key) or set()
+            for waiter_id in waiter_ids:
+                if isinstance(waiter_id, (bytes, bytearray)):
+                    waiter_id = waiter_id.decode()
+
+                match_raw = self.redis_client.get(f"realtime:waiter:{waiter_id}")
+                if not match_raw:
+                    continue
+                if isinstance(match_raw, (bytes, bytearray)):
+                    match_raw = match_raw.decode()
+
+                try:
+                    match = json.loads(match_raw)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+
+                # All match fields must be present with equal values
+                if all(data.get(k) == v for k, v in match.items()):
+                    result_key = f"realtime:waiter:{waiter_id}:result"
+                    self.redis_client.lpush(result_key, json.dumps(data))
+                    # Remove satisfied waiter
+                    self.redis_client.srem(waiters_key, waiter_id)
+                    self.redis_client.delete(f"realtime:waiter:{waiter_id}")
+
+        await asyncio.get_event_loop().run_in_executor(None, do_check)
+
     async def handle_custom_message(self, data):
         """Handle custom message - delegate to user's hook if available"""
 
+        # Check if any wait_for_event() calls match this message
+        await self.check_waiters(data)
 
         if hasattr(self.user, 'on_realtime_message'):
             def call_hook():
