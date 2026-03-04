@@ -578,7 +578,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
 
         return deliveries
 
-    def send_invite(self, **kwargs):
+    def send_invite(self, group=None, **kwargs):
         from mojo.apps.account.utils import tokens
 
         context = {
@@ -593,6 +593,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
 
         self.send_template_email(
             template_name="invite",
+            group=group,
             context=context
             )
 
@@ -674,6 +675,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         reply_to=None,
         template_prefix=None,
         fail_silently=True,
+        group=None,
         **kwargs
     ):
         """Send template email to this user using mailbox determined by user's org domain or system default
@@ -716,6 +718,8 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
                 return None
             raise ValueError(msg)
 
+        if group is not None:
+            template_prefix = group.get_metadata_value("email_template")
         if template_prefix is None and self.org:
             template_prefix = self.org.get_metadata_value("email_template")
         if template_prefix:
@@ -728,6 +732,8 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             context = {}
         if 'user' not in context:
             context['user'] = self.to_dict("basic")
+        if group is not None:
+            context["group"] = group.to_dict('basic')
 
         try:
             return mailbox.send_template_email(
