@@ -1,8 +1,15 @@
 
 ## v0.1.3 - May 29, 2025
+## v1.0.24 - March 04, 2026
+
+NEW django cache support to deal with collisions using django-redis-cache
+
+
 ## v1.0.23 - March 03, 2026
 
 save api keys
+- Added first-party Django Redis cache backend: `mojo.cache.MojoRedisCache` (replaces `redis_cache.RedisCache` usage).
+- Added migration docs for cache backend settings and dependency cleanup.
 
 
 ## v1.0.22 - March 03, 2026
