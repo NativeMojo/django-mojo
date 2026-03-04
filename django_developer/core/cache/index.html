@@ -10,13 +10,13 @@
       
       
       
-        <link rel="canonical" href="https://NativeMojo.github.io/django-mojo/django_developer/core/graphs/">
+        <link rel="canonical" href="https://NativeMojo.github.io/django-mojo/django_developer/core/cache/">
       
       
-        <link rel="prev" href="../middleware/">
+        <link rel="prev" href="../graphs/">
       
       
-        <link rel="next" href="../cache/">
+        <link rel="next" href="../../helpers/">
       
       
         
@@ -27,7 +27,7 @@
     
     
       
-        <title>Graphs - Django-MOJO</title>
+        <title>Cache Backend - Django-MOJO</title>
       
     
     
@@ -78,7 +78,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#serialization-graphs-django-developer-reference" class="md-skip">
+        <a href="#django-cache-backend-redis" class="md-skip">
           Skip to content
         </a>
       
@@ -112,7 +112,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Graphs
+              Cache Backend
             
           </span>
         </div>
@@ -610,6 +610,34 @@
                 
   
   
+  
+  
+    <li class="md-nav__item">
+      <a href="../graphs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Graphs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
     
   
   
@@ -629,7 +657,7 @@
   <span class="md-ellipsis">
     
   
-    Graphs
+    Cache Backend
   
 
     
@@ -647,7 +675,7 @@
   <span class="md-ellipsis">
     
   
-    Graphs
+    Cache Backend
   
 
     
@@ -673,10 +701,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#what-are-graphs" class="md-nav__link">
+  <a href="#recommended-settings" class="md-nav__link">
     <span class="md-ellipsis">
       
-        What Are Graphs
+        Recommended settings
       
     </span>
   </a>
@@ -684,87 +712,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#defining-graphs" class="md-nav__link">
+  <a href="#migration-notes" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Defining Graphs
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#graph-definition-keys" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Graph Definition Keys
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#standard-graph-names" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Standard Graph Names
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#nested-graphs" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Nested Graphs
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#protecting-sensitive-fields" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Protecting Sensitive Fields
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#programmatic-serialization" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Programmatic Serialization
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#download-formats" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Download Formats
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#response-envelope" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Response Envelope
+        Migration notes
       
     </span>
   </a>
@@ -775,34 +726,6 @@
   
 </nav>
       
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../cache/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Cache Backend
-  
-
-    
-  </span>
-  
-  
-
-      </a>
     </li>
   
 
@@ -3747,10 +3670,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#what-are-graphs" class="md-nav__link">
+  <a href="#recommended-settings" class="md-nav__link">
     <span class="md-ellipsis">
       
-        What Are Graphs
+        Recommended settings
       
     </span>
   </a>
@@ -3758,87 +3681,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#defining-graphs" class="md-nav__link">
+  <a href="#migration-notes" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Defining Graphs
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#graph-definition-keys" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Graph Definition Keys
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#standard-graph-names" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Standard Graph Names
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#nested-graphs" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Nested Graphs
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#protecting-sensitive-fields" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Protecting Sensitive Fields
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#programmatic-serialization" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Programmatic Serialization
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#download-formats" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Download Formats
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#response-envelope" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Response Envelope
+        Migration notes
       
     </span>
   </a>
@@ -3865,153 +3711,24 @@
   
 
 
-<h1 id="serialization-graphs-django-developer-reference">Serialization &amp; Graphs — Django Developer Reference<a class="headerlink" href="#serialization-graphs-django-developer-reference" title="Permanent link">&para;</a></h1>
-<h2 id="what-are-graphs">What Are Graphs<a class="headerlink" href="#what-are-graphs" title="Permanent link">&para;</a></h2>
-<p>Graphs are named serialization shapes defined in <code>RestMeta.GRAPHS</code>. They control exactly which fields are returned and how related objects are nested. The client selects a graph via <code>?graph=&lt;name&gt;</code>.</p>
-<h2 id="defining-graphs">Defining Graphs<a class="headerlink" href="#defining-graphs" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">RestMeta</span><span class="p">:</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n">GRAPHS</span> <span class="o">=</span> <span class="p">{</span>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>        <span class="s2">&quot;list&quot;</span><span class="p">:</span> <span class="p">{</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>            <span class="s2">&quot;fields&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;id&quot;</span><span class="p">,</span> <span class="s2">&quot;title&quot;</span><span class="p">,</span> <span class="s2">&quot;created&quot;</span><span class="p">]</span>
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>        <span class="p">},</span>
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>        <span class="s2">&quot;default&quot;</span><span class="p">:</span> <span class="p">{</span>
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>            <span class="s2">&quot;fields&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;id&quot;</span><span class="p">,</span> <span class="s2">&quot;title&quot;</span><span class="p">,</span> <span class="s2">&quot;body&quot;</span><span class="p">,</span> <span class="s2">&quot;created&quot;</span><span class="p">,</span> <span class="s2">&quot;modified&quot;</span><span class="p">],</span>
-<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>            <span class="s2">&quot;graphs&quot;</span><span class="p">:</span> <span class="p">{</span>
-<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>                <span class="s2">&quot;author&quot;</span><span class="p">:</span> <span class="s2">&quot;basic&quot;</span>  <span class="c1"># nest User.GRAPHS[&quot;basic&quot;] under &quot;author&quot; key</span>
-<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>            <span class="p">}</span>
-<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>        <span class="p">},</span>
-<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>        <span class="s2">&quot;full&quot;</span><span class="p">:</span> <span class="p">{</span>
-<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>            <span class="c1"># empty dict = all model fields</span>
-<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>        <span class="p">}</span>
-<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>    <span class="p">}</span>
+<h1 id="django-cache-backend-redis">Django Cache Backend (Redis)<a class="headerlink" href="#django-cache-backend-redis" title="Permanent link">&para;</a></h1>
+<p>Use the Mojo Redis-backed Django cache backend to replace <code>redis_cache.RedisCache</code>.</p>
+<h2 id="recommended-settings">Recommended settings<a class="headerlink" href="#recommended-settings" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">CACHES</span> <span class="o">=</span> <span class="p">{</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="s2">&quot;default&quot;</span><span class="p">:</span> <span class="p">{</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>        <span class="s2">&quot;BACKEND&quot;</span><span class="p">:</span> <span class="s2">&quot;mojo.cache.MojoRedisCache&quot;</span><span class="p">,</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>        <span class="s2">&quot;TIMEOUT&quot;</span><span class="p">:</span> <span class="mi">300</span><span class="p">,</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>        <span class="s2">&quot;KEY_PREFIX&quot;</span><span class="p">:</span> <span class="s2">&quot;mojoc&quot;</span><span class="p">,</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="p">}</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="p">}</span>
 </code></pre></div>
-<h2 id="graph-definition-keys">Graph Definition Keys<a class="headerlink" href="#graph-definition-keys" title="Permanent link">&para;</a></h2>
-<table>
-<thead>
-<tr>
-<th>Key</th>
-<th>Type</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>fields</code></td>
-<td>list</td>
-<td>Fields to include. Omit for all fields.</td>
-</tr>
-<tr>
-<td><code>exclude</code></td>
-<td>list</td>
-<td>Fields to always exclude (useful in full graphs)</td>
-</tr>
-<tr>
-<td><code>graphs</code></td>
-<td>dict</td>
-<td>Nested graphs: <code>{"field_name": "graph_name"}</code></td>
-</tr>
-<tr>
-<td><code>localize</code></td>
-<td>dict</td>
-<td>Timezone localization config for datetime fields</td>
-</tr>
-</tbody>
-</table>
-<h2 id="standard-graph-names">Standard Graph Names<a class="headerlink" href="#standard-graph-names" title="Permanent link">&para;</a></h2>
-<p>Use these names consistently across models:</p>
-<table>
-<thead>
-<tr>
-<th>Name</th>
-<th>Purpose</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>list</code></td>
-<td>Minimal fields for list responses</td>
-</tr>
-<tr>
-<td><code>default</code></td>
-<td>Standard single-instance response</td>
-</tr>
-<tr>
-<td><code>basic</code></td>
-<td>Minimal for use as a nested graph in other models</td>
-</tr>
-<tr>
-<td><code>full</code></td>
-<td>All fields (use <code>exclude</code> to protect sensitive fields)</td>
-</tr>
-</tbody>
-</table>
-<h2 id="nested-graphs">Nested Graphs<a class="headerlink" href="#nested-graphs" title="Permanent link">&para;</a></h2>
-<p>Reference another model's graph by name using the <code>graphs</code> key:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">GRAPHS</span> <span class="o">=</span> <span class="p">{</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>    <span class="s2">&quot;default&quot;</span><span class="p">:</span> <span class="p">{</span>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>        <span class="s2">&quot;fields&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;id&quot;</span><span class="p">,</span> <span class="s2">&quot;title&quot;</span><span class="p">,</span> <span class="s2">&quot;author_id&quot;</span><span class="p">],</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>        <span class="s2">&quot;graphs&quot;</span><span class="p">:</span> <span class="p">{</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>            <span class="s2">&quot;author&quot;</span><span class="p">:</span> <span class="s2">&quot;basic&quot;</span>   <span class="c1"># serializes self.author using User.GRAPHS[&quot;basic&quot;]</span>
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>        <span class="p">}</span>
-<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>    <span class="p">}</span>
-<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="p">}</span>
-</code></pre></div>
-<p>The related model must also define a <code>GRAPHS["basic"]</code> (or whatever name you reference).</p>
-<h2 id="protecting-sensitive-fields">Protecting Sensitive Fields<a class="headerlink" href="#protecting-sensitive-fields" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">GRAPHS</span> <span class="o">=</span> <span class="p">{</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>    <span class="s2">&quot;default&quot;</span><span class="p">:</span> <span class="p">{</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>        <span class="s2">&quot;fields&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;id&quot;</span><span class="p">,</span> <span class="s2">&quot;name&quot;</span><span class="p">,</span> <span class="s2">&quot;created&quot;</span><span class="p">],</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>        <span class="s2">&quot;exclude&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;mojo_secrets&quot;</span><span class="p">,</span> <span class="s2">&quot;password_hash&quot;</span><span class="p">,</span> <span class="s2">&quot;api_key&quot;</span><span class="p">]</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>    <span class="p">},</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>    <span class="s2">&quot;full&quot;</span><span class="p">:</span> <span class="p">{</span>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>        <span class="s2">&quot;exclude&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;mojo_secrets&quot;</span><span class="p">,</span> <span class="s2">&quot;password_hash&quot;</span><span class="p">]</span>
-<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>    <span class="p">}</span>
-<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="p">}</span>
-</code></pre></div>
-<p>Also use <code>NO_SHOW_FIELDS</code> in RestMeta to globally exclude fields from all graphs:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">RestMeta</span><span class="p">:</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>    <span class="n">NO_SHOW_FIELDS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;mojo_secrets&quot;</span><span class="p">,</span> <span class="s2">&quot;internal_notes&quot;</span><span class="p">]</span>
-</code></pre></div>
-<h2 id="programmatic-serialization">Programmatic Serialization<a class="headerlink" href="#programmatic-serialization" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># Single instance</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="n">data</span> <span class="o">=</span> <span class="n">book</span><span class="o">.</span><span class="n">to_dict</span><span class="p">(</span><span class="n">graph</span><span class="o">=</span><span class="s2">&quot;default&quot;</span><span class="p">)</span>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="c1"># Queryset</span>
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="n">data_list</span> <span class="o">=</span> <span class="n">Book</span><span class="o">.</span><span class="n">queryset_to_dict</span><span class="p">(</span><span class="n">Book</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">all</span><span class="p">(),</span> <span class="n">graph</span><span class="o">=</span><span class="s2">&quot;list&quot;</span><span class="p">)</span>
-</code></pre></div>
-<h2 id="download-formats">Download Formats<a class="headerlink" href="#download-formats" title="Permanent link">&para;</a></h2>
-<p>For CSV/Excel exports, define <code>FORMATS</code> in RestMeta:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">RestMeta</span><span class="p">:</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>    <span class="n">FORMATS</span> <span class="o">=</span> <span class="p">{</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>        <span class="s2">&quot;csv&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;id&quot;</span><span class="p">,</span> <span class="s2">&quot;title&quot;</span><span class="p">,</span> <span class="s2">&quot;created&quot;</span><span class="p">],</span>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>        <span class="s2">&quot;csv_detailed&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;id&quot;</span><span class="p">,</span> <span class="s2">&quot;title&quot;</span><span class="p">,</span> <span class="s2">&quot;body&quot;</span><span class="p">,</span> <span class="s2">&quot;author&quot;</span><span class="p">,</span> <span class="s2">&quot;created&quot;</span><span class="p">],</span>
-<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>    <span class="p">}</span>
-</code></pre></div>
-<p>Request via <code>?download_format=csv</code> or <code>?download_format=csv_detailed</code>. The response will be a file download rather than JSON.</p>
-<h2 id="response-envelope">Response Envelope<a class="headerlink" href="#response-envelope" title="Permanent link">&para;</a></h2>
-<p>All list responses are wrapped in:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="nt">&quot;count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">42</span><span class="p">,</span>
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span><span class="nt">&quot;start&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
-<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span><span class="nt">&quot;size&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">10</span><span class="p">,</span>
-<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="err">...</span><span class="p">]</span>
-<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="p">}</span>
-</code></pre></div>
-<p>Single-instance responses:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span>
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="err">...</span><span class="w"> </span><span class="p">}</span>
-<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="p">}</span>
-</code></pre></div>
-<p>Error responses:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p">{</span>
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
-<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">403</span><span class="p">,</span>
-<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">  </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;GET permission denied: Book&quot;</span><span class="p">,</span>
-<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">  </span><span class="nt">&quot;is_authenticated&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
-<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="p">}</span>
-</code></pre></div>
+<h2 id="migration-notes">Migration notes<a class="headerlink" href="#migration-notes" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Remove <code>redis_cache</code> from your project dependencies.</li>
+<li>Existing usage of <code>from django.core.cache import cache</code> stays the same.</li>
+<li><code>LOCATION</code> is accepted for migration compatibility but ignored by <code>MojoRedisCache</code>.</li>
+<li>Redis connection settings come from Mojo Redis helpers (<code>mojo.helpers.redis.get_connection</code>) and your framework Redis settings.</li>
+</ul>
 
 
 
