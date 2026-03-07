@@ -173,7 +173,7 @@ class FileSystemStorageBackend(StorageBackend):
             # Return upload information
             # The upload_url would point to a custom Django view that handles the upload
             return {
-                'upload_url': f'/fileman/upload/{upload_token}/',
+                'upload_url': f'/api/fileman/upload/{upload_token}',
                 'method': 'POST',
                 'fields': {
                     'upload_token': upload_token,

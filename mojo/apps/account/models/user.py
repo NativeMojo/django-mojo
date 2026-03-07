@@ -115,7 +115,9 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
                     'username',
                     'last_login',
                     'last_activity',
-                    'is_active'
+                    'is_active',
+                    "is_email_verified",
+                    "is_phone_verified"
                 ],
                 "graphs": {
                     "avatar": "basic"
@@ -132,7 +134,9 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
                     'last_activity',
                     'permissions',
                     'metadata',
-                    'is_active'
+                    'is_active',
+                    "is_email_verified",
+                    "is_phone_verified"
                 ],
                 "graphs": {
                     "avatar": "basic",
@@ -148,6 +152,16 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
 
     def __str__(self):
         return self.email
+
+    @property
+    def full_name(self):
+        """Return full name from first/last, falling back to display_name or generated display name."""
+        name = " ".join(filter(None, [self.first_name, self.last_name])).strip()
+        if name:
+            return name
+        if self.display_name:
+            return self.display_name
+        return self.generate_display_name()
 
     def is_request_user(self, request=None):
         if request is None:
@@ -302,6 +316,16 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             raise ValueError("Username must be a string")
         self.username = value
 
+    def set_is_superuser(self, value):
+        if not self.active_user.is_superuser:
+            raise merrors.PermissionDeniedException("Only a superuser can grant superuser status")
+        self.is_superuser = bool(value)
+
+    def set_is_staff(self, value):
+        if not self.active_user.is_superuser:
+            raise merrors.PermissionDeniedException("Only a superuser can grant staff status")
+        self.is_staff = bool(value)
+
     def set_permissions(self, value):
         if not isinstance(value, dict):
             return
@@ -392,9 +416,31 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             raise merrors.ValueException("Invalid email format")
         return True
 
+    def validate_name_fields(self, changed_fields, created):
+        """Check display_name, first_name, and last_name for inappropriate content."""
+        if self.active_request and self.active_request.user.is_superuser:
+            return
+        from mojo.helpers import content_guard
+        fields = {
+            "display_name": self.display_name,
+            "first_name": self.first_name,
+            "last_name": self.last_name,
+        }
+        for field, value in fields.items():
+            if not value:
+                continue
+            if not created and field not in changed_fields:
+                continue
+            result = content_guard.check_text(value, surface="name", policy={"text_block_threshold": 50})
+            if result.decision == "block":
+                label = field.replace("_", " ")
+                raise merrors.ValueException(f"Invalid {label}: contains inappropriate content")
+
     def validate_username(self):
         if not self.username:
             raise merrors.ValueException("Username is required")
+        if self.active_request and self.active_request.user.is_superuser:
+            return True
         if len(str(self.username)) <= 2:
             raise merrors.ValueException("Username must be more than 2 characters")
         # Check for special characters (only allow alphanumeric, underscore, dot, and @)
@@ -404,6 +450,12 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         # If username contains @, it must match the email field
         if '@' in str(self.username) and str(self.username) != str(self.email):
             raise merrors.ValueException("Username containing @ must match the email address")
+        # Only run content guard on non-email usernames (email usernames are validated above)
+        if '@' not in str(self.username):
+            from mojo.helpers import content_guard
+            result = content_guard.check_username(self.username, policy={"allow_dot_in_username": True})
+            if result.decision == "block":
+                raise merrors.ValueException("Username is not allowed")
         return True
 
     def set_new_password(self, new_password, old_password = None):
@@ -483,7 +535,40 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         # Replace underscores and dots with spaces, then title case
         return base_username.replace("_", " ").replace(".", " ").title()
 
+    def infer_names_from_email(self):
+        """
+        Best-effort attempt to extract first/last name from a business email like john.smith@company.com.
+        Only runs if:
+          - first_name and last_name are both currently empty
+          - the local part contains exactly one dot (two parts)
+          - the domain is not a known consumer provider
+        """
+        CONSUMER_DOMAINS = {
+            "gmail.com", "yahoo.com", "hotmail.com", "outlook.com",
+            "icloud.com", "me.com", "mac.com", "live.com", "msn.com",
+            "aol.com", "protonmail.com", "pm.me"
+        }
+        if self.first_name or self.last_name:
+            return
+        if not self.email or "@" not in self.email:
+            return
+        local, domain = self.email.lower().split("@", 1)
+        if domain in CONSUMER_DOMAINS:
+            return
+        parts = local.split(".")
+        if len(parts) != 2:
+            return
+        first, last = parts
+        # Sanity check — skip single-char or obviously non-name parts
+        if len(first) < 2 or len(last) < 2:
+            return
+        self.first_name = first.capitalize()
+        self.last_name = last.capitalize()
+
     def on_rest_created(self):
+        self.infer_names_from_email()
+        if self.first_name or self.last_name:
+            User.objects.filter(pk=self.pk).update(first_name=self.first_name, last_name=self.last_name)
         metrics.set_value("total_users", User.objects.filter(is_active=True).count(), account="global")
 
     def on_rest_saved(self, changed_fields, created):
@@ -516,6 +601,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
                 raise merrors.ValueException("Username already exists")
         if not self.display_name:
             self.display_name = self.generate_display_name()
+        self.validate_name_fields(changed_fields, created)
         if self.pk is not None:
             self._handle_existing_user_pre_save(creds_changed, changed_fields)
 

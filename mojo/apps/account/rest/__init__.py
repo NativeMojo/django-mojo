@@ -8,3 +8,4 @@ from .api_key import *
 from .totp import *
 from .sms import *
 from .oauth import *
+from .verify import *
