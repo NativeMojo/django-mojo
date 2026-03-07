@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v1.0.25 - March 07, 2026
+
+streamlined response with simile dicts now
+
+
 ## v1.0.24 - March 04, 2026
 
 NEW django cache support to deal with collisions using django-redis-cache
