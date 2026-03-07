@@ -58,7 +58,7 @@ def on_direct_upload(request, upload_token):
             'success': False,
             'error': 'No file provided'
         }, status=400)
-
+    from mojo.apps.fileman.utils.upload import direct_upload
     file_data = request.FILES['file']
     response_data = direct_upload(request, upload_token, file_data)
     status_code = response_data.pop('status_code', 200)

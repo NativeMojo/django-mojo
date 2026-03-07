@@ -184,6 +184,10 @@ def on_user_password_reset_token(request):
     token = request.DATA.get("token")
     user = tokens.verify_password_reset_token(token)
     new_password = request.DATA.get("new_password")
+    # If the user has never logged in, this token was consumed via an invite link —
+    # the fact they received and clicked it proves email ownership.
+    if user.last_login is None:
+        user.is_email_verified = True
     user.set_password(new_password)
     user.save()
     return jwt_login(request, user)
@@ -216,6 +220,10 @@ def on_magic_login_complete(request):
     """Exchange a magic login token for a JWT — logs the user in."""
     token = request.DATA.get("token")
     user = tokens.verify_magic_login_token(token)
+    # Magic login always proves email ownership — mark verified on first use too.
+    if not user.is_email_verified:
+        user.is_email_verified = True
+        user.save(update_fields=["is_email_verified", "modified"])
     return jwt_login(request, user)
 
 

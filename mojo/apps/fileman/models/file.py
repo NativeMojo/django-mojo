@@ -234,7 +234,7 @@ class File(models.Model, MojoModel):
 
     def request_upload_url(self):
         """Request a pre-signed URL for direct upload"""
-        if not self.file_manager.backend.supports_direct_upload:
+        if not self.file_manager.backend.supports_direct_upload():
             self.generate_upload_token(True)
             self.upload_url = f"/api/fileman/upload/{self.upload_token}"
         else:

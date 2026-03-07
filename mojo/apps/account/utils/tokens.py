@@ -6,23 +6,29 @@ from mojo.apps.account.models.user import User
 PASSWORD_RESET_TOKEN_TTL = settings.get("PASSWORD_RESET_TOKEN_TTL", 3600)
 PASSWORD_RESET_CODE_TTL = settings.get("PASSWORD_RESET_CODE_TTL", 600)
 MAGIC_LOGIN_TOKEN_TTL = settings.get("MAGIC_LOGIN_TOKEN_TTL", 3600)
+EMAIL_VERIFY_TOKEN_TTL = settings.get("EMAIL_VERIFY_TOKEN_TTL", 86400)
+PHONE_VERIFY_CODE_TTL = settings.get("PHONE_VERIFY_CODE_TTL", 600)
 
 # Token kind prefixes — visible to the webapp before any decoding
 KIND_PASSWORD_RESET = "pr"
 KIND_MAGIC_LOGIN = "ml"
+KIND_EMAIL_VERIFY = "ev"
 
 # Secrets keys per kind — kept separate so they don't invalidate each other
 _JTI_KEYS = {
     KIND_PASSWORD_RESET: "password_reset_jti",
     KIND_MAGIC_LOGIN: "magic_login_jti",
+    KIND_EMAIL_VERIFY: "email_verify_jti",
 }
 _TS_KEYS = {
     KIND_PASSWORD_RESET: "password_reset_ts",
     KIND_MAGIC_LOGIN: "magic_login_ts",
+    KIND_EMAIL_VERIFY: "email_verify_ts",
 }
 _TTL = {
     KIND_PASSWORD_RESET: PASSWORD_RESET_TOKEN_TTL,
     KIND_MAGIC_LOGIN: MAGIC_LOGIN_TOKEN_TTL,
+    KIND_EMAIL_VERIFY: EMAIL_VERIFY_TOKEN_TTL,
 }
 
 
@@ -144,6 +150,53 @@ def generate_magic_login_token(user):
 def verify_magic_login_token(token):
     """Verify a magic-login token and return the User."""
     return _verify(token, expected_kind=KIND_MAGIC_LOGIN)
+
+
+def generate_email_verify_token(user):
+    """Generate an email verification token (kind=ev). TTL defaults to 24h."""
+    return _generate(user, KIND_EMAIL_VERIFY)
+
+
+def verify_email_verify_token(token):
+    """Verify an email verification token and return the User."""
+    return _verify(token, expected_kind=KIND_EMAIL_VERIFY)
+
+
+def generate_phone_verify_code(user):
+    """
+    Generate a 6-digit SMS verification code and store it in user secrets.
+    Returns the code string so the caller can pass it to phonehub.send_sms().
+    """
+    code = crypto.random_string(6, True, False, False)
+    user.set_secret("phone_verify_code", code)
+    user.set_secret("phone_verify_ts", int(dates.utcnow().timestamp()))
+    user.save(update_fields=["mojo_secrets", "modified"])
+    return code
+
+
+def verify_phone_verify_code(user, code):
+    """
+    Verify the 6-digit code for a user.
+    Raises ValueException on mismatch or expiry.
+    Consumes the code on success (single-use).
+    """
+    stored = user.get_secret("phone_verify_code")
+    stored_ts = int(user.get_secret("phone_verify_ts") or 0)
+    now_ts = int(dates.utcnow().timestamp())
+    if not stored or code != stored:
+        user.report_incident(
+            details=f"{user.username} invalid phone verify code",
+            event_type="phone_verify:invalid")
+        raise merrors.ValueException("Invalid code")
+    if now_ts - stored_ts > int(PHONE_VERIFY_CODE_TTL):
+        user.report_incident(
+            details=f"{user.username} expired phone verify code",
+            event_type="phone_verify:expired")
+        raise merrors.ValueException("Expired code")
+    # Consume — single use
+    user.set_secret("phone_verify_code", None)
+    user.set_secret("phone_verify_ts", None)
+    user.save(update_fields=["mojo_secrets", "modified"])
 
 
 # Legacy aliases — kept so existing call sites don't break
