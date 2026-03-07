@@ -71,10 +71,16 @@ def dispatch_error_handler(func):
             if API_METRICS:
                 metrics.record("api_calls", category="mojo_api", min_granularity=API_METRICS_GRANULARITY)
             resp = func(request, *args, **kwargs)
-            if not isinstance(resp, HttpResponse) and isinstance(resp, dict):
-                return JsonResponse(resp)
-            elif resp is None:
+            if isinstance(resp, HttpResponse):
+                return resp
+            if resp is None:
                 return JsonResponse({"error": "No response", "code": 500}, status=500)
+            if isinstance(resp, (list, tuple)):
+                return JsonResponse({"status": True, "code": 200, "data": resp, "size": len(resp)})
+            if isinstance(resp, dict):
+                if isinstance(resp.get("status"), bool) and ("data" in resp or "error" in resp or "message" in resp):
+                    return JsonResponse(resp, status=resp.get("code", 200))
+                return JsonResponse({"status": True, "code": 200, "data": resp})
             return resp
         except mojo.errors.MojoException as err:
             if API_METRICS:

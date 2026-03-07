@@ -527,7 +527,7 @@ def on_rest_request(request):
     text = _data_get(data, "text")
 
     if not username and not text:
-        return {"error": "Provide 'username' and/or 'text' to check", "code": 400}
+        return {"error": "Provide 'username' and/or 'text' to check", "code": 400, "status": False}
 
     # build policy from recognized keys in request data
     policy = {}

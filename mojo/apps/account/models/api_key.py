@@ -116,6 +116,52 @@ class ApiKey(MojoSecrets, MojoModel):
             return True
         return group.is_child_of(self.group)
 
+    def get_groups(self, is_active=True, include_children=True):
+        """
+        Returns a QuerySet of groups accessible to this API key.
+
+        An API key is scoped to its own group and, when include_children is True,
+        all descendant groups. The is_active argument is accepted for interface
+        compatibility with User.get_groups() but has no effect — API key group
+        access is determined solely by the group hierarchy, not member activity.
+
+        Args:
+            is_active: Accepted for interface compatibility. Not used.
+            include_children: Include descendant groups (default True).
+
+        Returns:
+            QuerySet of Group objects.
+        """
+        from mojo.apps.account.models import Group
+
+        if not include_children:
+            return Group.objects.filter(pk=self.group_id)
+
+        all_ids = set([self.group_id])
+        all_ids.update(self.group._get_all_child_ids())
+        return Group.objects.filter(id__in=all_ids)
+
+    def get_groups_with_permission(self, perms, is_active=True):
+        """
+        Returns a QuerySet of groups accessible to this API key where the key
+        has the specified permission(s).
+
+        If the API key has the permission, returns the same result as get_groups().
+        If not, returns an empty QuerySet.
+
+        Args:
+            perms: Permission key (str) or list of permission keys to check (OR logic).
+            is_active: Accepted for interface compatibility. Not used.
+
+        Returns:
+            QuerySet of Group objects.
+        """
+        from mojo.apps.account.models import Group
+
+        if not self.has_permission(perms):
+            return Group.objects.none()
+        return self.get_groups()
+
     def generate_token(self):
         """
         Generate a new raw token, store its hash, and return the raw token.
