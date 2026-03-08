@@ -135,6 +135,8 @@ class Group(MojoSecrets, MojoModel):
     def user_has_permission(self, user, perms, check_user=True):
         if check_user and user.has_permission(perms):
             return True
+        if not hasattr(user, "is_request_user"):
+            return False
         ms = self.get_member_for_user(user, check_parents=True)
         if ms is not None:
             return ms.has_permission(perms)

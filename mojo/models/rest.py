@@ -261,6 +261,8 @@ class MojoModel:
                     request_path=getattr(request, "path", None),
                 )
             return allowed
+        elif hasattr(request, 'api_key') and request.api_key:
+            return request.api_key.has_permission(perms)
         if request.user is None or not request.user.is_authenticated:
             return False
         allowed = request.user.has_permission(perms)

@@ -393,8 +393,9 @@ def test_rule_matches_metadata_fields(opts):
 @th.django_unit_test()
 def test_rule_should_match_model_fields_after_sync(opts):
     """
-    After sync_metadata(), model fields should be in metadata,
-    but this is fragile and not obvious to users.
+    check_rule() checks metadata first, then falls back to model attributes via getattr.
+    Model fields match without needing sync_metadata().
+    sync_metadata() copies fields into metadata, which also works.
     """
     from mojo.apps.incident.models import Event, Rule
 
@@ -406,7 +407,6 @@ def test_rule_should_match_model_fields_after_sync(opts):
         source_ip="10.0.0.1"
     )
 
-    # BEFORE sync_metadata - fields NOT in metadata
     rule = Rule(
         field_name="level",
         comparator=">=",
@@ -414,14 +414,14 @@ def test_rule_should_match_model_fields_after_sync(opts):
         value_type="int"
     )
 
-    # This will fail because level is not in metadata yet
+    # check_rule falls back to getattr, so model fields match directly
     result_before = rule.check_rule(event)
-    assert result_before is False, "Before sync_metadata(), model fields not in metadata"
+    assert result_before is True, "check_rule should match model fields via getattr fallback"
 
-    # AFTER sync_metadata - fields copied to metadata
+    # AFTER sync_metadata - fields also in metadata, still matches
     event.sync_metadata()
     result_after = rule.check_rule(event)
-    assert result_after is True, "After sync_metadata(), model fields are in metadata"
+    assert result_after is True, "After sync_metadata(), model fields are in metadata and still match"
 
 
 @th.django_unit_test()
