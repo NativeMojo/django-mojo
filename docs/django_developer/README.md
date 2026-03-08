@@ -60,7 +60,8 @@ def on_my_model(request, pk=None):
 
 ## Key Conventions
 
-- Always use `request.DATA` (never `request.POST.get()` or `request.GET.get()`)
+- Always use `request.DATA` (never `request.POST.get()` or `request.GET.get()`) — it is an [`objict`](helpers/objict.md) with attribute access and dot-notation nested keys
+- View functions return **plain dicts** — never construct `JsonResponse` manually (see [Return Values](core/decorators.md#return-values))
 - List endpoints must NOT end with trailing slashes
 - Model inheritance: `models.Model, MojoModel` (or `MojoSecrets, MojoModel`)
 - Always include `created` and `modified` fields

@@ -2,6 +2,7 @@
 
 Helpers live in `mojo/helpers/`. Import directly — no registration required.
 
+- [objict](objict.md) — Attribute-access dict used throughout the framework (`request.DATA`, metadata, etc.)
 - [logit](logit.md) — Structured logging
 - [dates](dates.md) — Timezone-aware datetime utilities
 - [settings](settings.md) — Settings access with defaults
