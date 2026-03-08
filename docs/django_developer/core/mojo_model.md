@@ -62,6 +62,8 @@ class Book(models.Model, MojoModel):
 | `NO_SAVE_FIELDS` | list | `["id","pk","created","uuid"]` | Fields ignored on save |
 | `NO_SHOW_FIELDS` | list | `[]` | Fields never included in responses |
 | `LOG_CHANGES` | bool | `False` | Auto-log field changes via logit |
+| `LOG_META_CHANGES` | bool | `False` | Auto-log key-level changes to all JSONFields via logit |
+| `PROTECTED_JSON_PERMS` | list | `[]` | Permissions required to modify the `"protected"` root key in any JSONField |
 | `OWNER_FIELD` | str | `"user"` | Field name for owner permission check |
 | `GROUP_FIELD` | str | `"group"` | Field name for group scoping |
 | `ALT_PK_FIELD` | str | `"uuid"` | Field used for non-integer PK lookups |
@@ -173,6 +175,48 @@ book.update_from_dict({"title": "Updated Title"})
 data = book.to_dict(graph="default")
 data_list = Book.queryset_to_dict(Book.objects.all(), graph="list")
 ```
+
+## Protected JSON Fields
+
+Any `JSONField` on a MojoModel supports a reserved root key `"protected"`. Writes to `metadata["protected"]` (or any other JSONField's `"protected"` key) are blocked at the framework level unless the requesting user is a superuser or holds a permission listed in `PROTECTED_JSON_PERMS`.
+
+### Setup
+
+```python
+class RestMeta:
+    PROTECTED_JSON_PERMS = ["manage_groups"]  # who can write the "protected" key
+    LOG_META_CHANGES = True                   # optional — audit all JSONField changes
+```
+
+### Behavior
+
+- Any save attempt that includes `"protected"` in a JSONField value will raise a `403 PermissionDeniedException` if the user lacks the required permission.
+- Changes to the `"protected"` key are **always** written to the audit log (`kind="meta:protected_changed"`) regardless of `LOG_CHANGES` or `LOG_META_CHANGES` — it is an unconditional security audit trail.
+- When `LOG_META_CHANGES = True`, all root-level key changes to any JSONField are logged (`kind="meta:changed"`).
+
+### Example — storing protected config
+
+```python
+# Only superusers or users with "manage_groups" can set this via the API
+group.metadata = {
+    "timezone": "America/New_York",      # normal — any editor can change
+    "protected": {
+        "stripe_account_id": "acct_123", # guarded — requires PROTECTED_JSON_PERMS
+        "webhook_secret": "whsec_abc",
+    }
+}
+```
+
+### Audit log entries
+
+| `kind` | When fired | Contents |
+|---|---|---|
+| `meta:protected_changed` | Any successful write to `"protected"` | Username, field name, changed keys, pk |
+| `meta:changed` | Any JSONField key change (requires `LOG_META_CHANGES=True`) | Username, field name, changed keys, pk |
+
+### Programmatic bypass
+
+When calling `on_rest_update_jsonfield` directly outside a request context (e.g. from a management command or service), pass `request=None`. In that case `_can_edit_protected_json` returns `False`, so protected writes will still raise. Pass a `SYSTEM_REQUEST` or a real request with a superuser if the write is intentional.
 
 ## Logging
 

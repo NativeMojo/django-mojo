@@ -1013,7 +1013,7 @@ class MojoModel:
         if field.is_relation:
             self.on_rest_save_related_field(field, value, request)
         elif field.get_internal_type() == "JSONField":
-            self.on_rest_update_jsonfield(key, value)
+            self.on_rest_update_jsonfield(key, value, request)
         else:
             if field.get_internal_type() == "BooleanField":
                 if isinstance(value, str):
@@ -1088,7 +1088,7 @@ class MojoModel:
         elif field_value is None:
             setattr(self, field.name, None)
 
-    def on_rest_update_jsonfield(self, field_name, field_value):
+    def on_rest_update_jsonfield(self, field_name, field_value, request=None):
         """helper to update jsonfield by merge in changes"""
         # parse JSON strings into dicts/lists (e.g. form submissions send strings)
         if isinstance(field_value, str):
@@ -1096,12 +1096,40 @@ class MojoModel:
                 field_value = json.loads(field_value)
             except (json.JSONDecodeError, ValueError):
                 pass
-        existing_value = getattr(self, field_name, {})
+        existing_value = getattr(self, field_name, {}) or {}
         if isinstance(field_value, dict) and isinstance(existing_value, dict):
+            # guard the "protected" root key — only superuser or users with PROTECTED_JSON_PERMS can modify it
+            if "protected" in field_value:
+                if not self._can_edit_protected_json(request):
+                    raise me.PermissionDeniedException("Permission denied: cannot modify protected metadata")
+                # always audit protected metadata changes regardless of LOG_CHANGES/LOG_META_CHANGES
+                username = getattr(getattr(request, "user", None), "username", "unknown")
+                changed_keys = [k for k, v in field_value["protected"].items() if v != existing_value.get("protected", {}).get(k)] if isinstance(field_value["protected"], dict) else ["*"]
+                self.model_logit(request, f"{username} modified {field_name}.protected keys: {', '.join(changed_keys)} on pk={self.pk}", kind="meta:protected_changed")
             merged_value = objict.merge_dicts(existing_value, field_value)
             setattr(self, field_name, merged_value)
+            # log all jsonfield key changes if enabled
+            if self.get_rest_meta_prop("LOG_META_CHANGES", False):
+                changed_keys = [k for k, v in field_value.items() if v != existing_value.get(k)]
+                if changed_keys:
+                    username = getattr(getattr(request, "user", None), "username", "unknown")
+                    self.model_logit(request, f"{username} modified {field_name} keys: {', '.join(changed_keys)} on pk={self.pk}", kind="meta:changed")
         else:
             setattr(self, field_name, field_value)
+
+    def _can_edit_protected_json(self, request):
+        """returns True if the request user can modify the 'protected' key in any JSONField"""
+        if request is None:
+            return False
+        user = getattr(request, "user", None)
+        if user is None or not user.is_authenticated:
+            return False
+        if user.is_superuser:
+            return True
+        perms = self.get_rest_meta_prop("PROTECTED_JSON_PERMS", [])
+        if perms:
+            return user.has_permission(perms)
+        return False
 
     def jsonfield_as_objict(self, field_name):
         existing_value = getattr(self, field_name, {})

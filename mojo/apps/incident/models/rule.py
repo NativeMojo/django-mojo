@@ -337,7 +337,7 @@ class RuleSet(models.Model, MojoModel):
             bool: True if the event matches all rules, False otherwise.
         """
         if not self.rules.exists():
-            return True
+            return False
         return all(rule.check_rule(event) for rule in self.rules.order_by("index"))
 
     def check_any_match(self, event):
@@ -351,7 +351,7 @@ class RuleSet(models.Model, MojoModel):
             bool: True if the event matches any rule, False otherwise.
         """
         if not self.rules.exists():
-            return True
+            return False
         return any(rule.check_rule(event) for rule in self.rules.order_by("index"))
 
     @classmethod
@@ -419,6 +419,8 @@ class Rule(models.Model, MojoModel):
             bool: True if the event field matches the criteria, False otherwise.
         """
         field_value = event.metadata.get(self.field_name, None)
+        if field_value is None:
+            field_value = getattr(event, self.field_name, None)
         if field_value is None:
             return False
 

@@ -69,6 +69,10 @@ class ApiKey(MojoSecrets, MojoModel):
     def email(self):
         return f"{self.name}@apikey"
 
+    @property
+    def org(self):
+        return self.group
+
     def __str__(self):
         return f"{self.name}@{self.group}"
 

@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v1.0.26 - March 08, 2026
+
+bugfix for metrics decorators
+
+
 ## v1.0.25 - March 07, 2026
 
 streamlined response with simile dicts now
