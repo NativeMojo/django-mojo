@@ -152,6 +152,123 @@ def set_status(self, value):
     self.status = value
 ```
 
+## POST_SAVE_ACTIONS
+
+`POST_SAVE_ACTIONS` lets you define request fields that trigger arbitrary methods **after** the model is saved, without being treated as model field updates. This is the standard pattern for operations that act on a saved instance — things like testing a connection, sending a notification, cloning a record, or kicking off a job.
+
+### How it works
+
+1. Any key in `POST_SAVE_ACTIONS` found in `request.DATA` is held aside — it is **never written to the model**.
+2. The model is saved normally with all other fields.
+3. After save, the framework calls `self.on_action_<key>(value)` for each held-aside key.
+4. If the handler returns a non-`None` dict, that dict is used as the API response instead of the normal serialized instance. Return a plain dict — the framework wraps it automatically (see [Return Values](decorators.md#return-values)).
+
+The default value is `["action"]`, meaning a field named `action` in any POST request is automatically treated as a post-save trigger.
+
+### Setup
+
+```python
+class RestMeta:
+    POST_SAVE_ACTIONS = ["action", "test_connection", "clone"]
+```
+
+### Handler signature
+
+```python
+def on_action_<name>(self, value):
+    # value = whatever the client sent for that field
+    # return None              → normal response (serialized instance)
+    # return {"key": "val"}   → wrapped as {"status": True, "data": {"key": "val"}}
+    # return {"status": False, "error": "..."} → passed through as error response
+```
+
+### Accessing the request inside a handler
+
+Use `self.active_request` to get the current HTTP request and `self.active_request.DATA` to read any additional params the client sent:
+
+```python
+def on_action_send_report(self, value):
+    request = self.active_request
+    email = request.DATA.get("email")
+    fmt = request.DATA.get("format", "pdf")
+    send_report(self, email=email, format=fmt)
+    return {"sent_to": email}
+    # → {"status": True, "data": {"sent_to": "user@example.com"}}
+```
+
+### Examples
+
+**Simple action flag** — client POSTs `{"action": "archive"}` to update and archive in one request:
+
+```python
+class RestMeta:
+    POST_SAVE_ACTIONS = ["action"]
+
+def on_action_action(self, value):
+    if value == "archive":
+        self.status = "archived"
+        self.save()
+        return {"archived": True}
+        # → {"status": True, "data": {"archived": True}}
+    if value == "publish":
+        self.published = True
+        self.save()
+        return {"status": True}
+        # → passed through as-is
+```
+
+**Named action** — test a connection after saving credentials:
+
+```python
+class RestMeta:
+    POST_SAVE_ACTIONS = ["action", "test_connection"]
+
+def on_action_test_connection(self, value):
+    try:
+        self.backend.test_connection()
+        return {"status": True}
+    except Exception as e:
+        return {"status": False, "error": str(e)}
+```
+
+**Clone** — create a copy of the current record:
+
+```python
+def on_action_clone(self, value):
+    new = MyModel(user=self.user, group=self.group, name=f"Copy of {self.name}")
+    new.save()
+    return {"id": new.id}
+    # → {"status": True, "data": {"id": 42}}
+```
+
+**Using extra request params** — read additional data beyond the action field:
+
+```python
+def on_action_invite(self, value):
+    request = self.active_request
+    email = request.DATA.get("email")
+    role = request.DATA.get("role", "member")
+    if not email:
+        return {"status": False, "error": "email required"}
+    send_invite(self, email=email, role=role)
+    return {"invited": email}
+```
+
+### Client usage
+
+```
+POST /api/myapp/integration/42
+{"test_connection": true}
+
+POST /api/myapp/integration/42
+{"name": "Updated Name", "action": "archive"}
+
+POST /api/myapp/integration/42
+{"action": "invite", "email": "user@example.com", "role": "admin"}
+```
+
+Actions can be combined with normal field updates in a single POST — the model fields are saved first, then the action handler runs.
+
 ## Batch Operations
 
 Enable with `CAN_BATCH = True` in RestMeta. POST to the list endpoint with a `batched` array:
@@ -270,8 +387,23 @@ Encryption is AES-based, keyed per-instance using the record's `created` timesta
 
 | Property | Description |
 |---|---|
-| `self.active_request` | Current HTTP request (via ContextVar) |
-| `self.active_user` | Current authenticated user |
+| `self.active_request` | Current HTTP request (via ContextVar) — available in any model method called during a request |
+| `self.active_request.DATA` | Unified dict of all request data (POST body + GET params) |
+| `self.active_user` | Current authenticated user (`self.active_request.user`) |
+
+`self.active_request` is set automatically by the framework at the start of every REST request and is accessible from any model method — lifecycle hooks, `set_<field>` methods, `on_action_<name>` handlers, etc. Use it instead of threading request through every method call:
+
+```python
+def on_rest_saved(self, changed_fields, created):
+    request = self.active_request
+    if request and "status" in changed_fields:
+        notify_status_change(self, user=request.user)
+
+def on_action_resend(self, value):
+    lang = self.active_request.DATA.get("lang", "en")
+    send_notification(self, lang=lang)
+    return {"status": True}
+```
 
 ## Settings
 

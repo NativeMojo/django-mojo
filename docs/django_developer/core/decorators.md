@@ -82,7 +82,7 @@ These decorators do not enforce access — they annotate the function in the sec
 @md.GET('status')
 @md.public_endpoint()
 def on_status(request):
-    return JsonResponse({"status": "ok"})
+    return {"status": True, "version": "1.0"}
 ```
 
 ## Validation Decorators
@@ -107,6 +107,50 @@ Registers a function as a cron task.
 @md.cron("0 * * * *")  # every hour
 def hourly_cleanup():
     ...
+```
+
+## Return Values
+
+All routed view functions should return plain dicts — never construct `JsonResponse` manually. The framework wraps them automatically:
+
+| Return value | Response sent to client |
+|---|---|
+| `{"name": "Joe"}` | `{"status": True, "code": 200, "data": {"name": "Joe"}}` |
+| `[item1, item2]` | `{"status": True, "code": 200, "data": [...], "size": 2}` |
+| `{"status": False, "error": "not found"}` | passed through as-is |
+| `{"status": True, "data": {...}}` | passed through as-is |
+| raise `ValueError("bad input")` | `{"status": False, "error": "bad input", "code": 400}` |
+| raise `PermissionError("denied")` | `{"status": False, "error": "denied", "code": 403}` |
+
+**Always return raw dicts. Never import or use `JsonResponse` in view functions.**
+
+```python
+# Good — return plain data
+@md.GET('book/stats')
+@md.requires_auth
+def on_book_stats(request):
+    return {"total": Book.objects.count(), "active": Book.objects.filter(status="active").count()}
+
+# Good — explicit error envelope
+@md.POST('book/publish')
+@md.requires_params("book_id")
+def on_publish(request):
+    book = Book.objects.filter(pk=request.DATA.book_id).first()
+    if not book:
+        return {"status": False, "error": "Book not found"}
+    book.publish()
+    return {"status": True, "id": book.id}
+
+# Good — raise for error conditions (auto-converted to 400/403/500)
+@md.POST('book/approve')
+@md.requires_auth
+def on_approve(request):
+    book = Book.objects.get(pk=request.DATA.book_id)
+    if not request.user.has_permission("approve_books"):
+        raise PermissionError("Approval permission required")
+    book.status = "approved"
+    book.save()
+    return {"status": True}
 ```
 
 ## Error Handling

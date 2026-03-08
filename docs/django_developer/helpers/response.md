@@ -1,25 +1,44 @@
 # response — Django Developer Reference
 
-## Import
+## View Functions: Return Raw Dicts
+
+In view functions (decorated with `@md.URL`, `@md.GET`, etc.), always return plain dicts. The framework wraps them automatically — no `JsonResponse` needed.
+
+```python
+# Success — data gets wrapped as {"status": True, "data": {...}}
+return {"id": book.id, "title": book.title}
+
+# Explicit success envelope — passed through as-is
+return {"status": True, "id": book.id}
+
+# Error envelope — passed through as-is
+return {"status": False, "error": "Book not found"}
+
+# Raise instead — auto-converted to 400/403
+raise ValueError("Invalid input")
+raise PermissionError("Access denied")
+```
+
+See [decorators.md — Return Values](../core/decorators.md#return-values) for the full wrapping rules.
+
+## JsonResponse (low-level)
+
+`JsonResponse` is mojo's drop-in replacement for Django's `JsonResponse`. It auto-adds `code` and `server` fields to every response.
 
 ```python
 from mojo.helpers.response import JsonResponse
 ```
 
-## JsonResponse
-
-Drop-in replacement for Django's `JsonResponse` that:
-- Auto-adds `code` and `server` (hostname) fields to every response
-- Ensures data is serialized consistently as `objict`
+Use it only outside of view functions — in middleware, custom decorators, or utility code where you need direct control over the HTTP response:
 
 ```python
-from mojo.helpers.response import JsonResponse
-
-# Success
-return JsonResponse({"status": True, "data": my_data})
-
-# Error
-return JsonResponse({"status": False, "error": "Not found"}, status=404)
+# In a custom decorator
+def requires_player(fn):
+    def wrapper(request, *args, **kwargs):
+        if not getattr(request, "player", None):
+            return JsonResponse({"error": "Player auth required", "status": False}, status=401)
+        return fn(request, *args, **kwargs)
+    return wrapper
 ```
 
 ## Convenience Helpers
@@ -27,22 +46,8 @@ return JsonResponse({"status": False, "error": "Not found"}, status=404)
 ```python
 from mojo.helpers.response import error, success
 
-# Error response
 return error("Invalid input", status=400)
-
-# Success response
 return success({"id": 1, "name": "Test"})
 ```
 
-## Standard Response Pattern in REST Handlers
-
-```python
-@md.GET('book/<int:pk>')
-def on_book_detail(request, pk):
-    book = Book.objects.filter(pk=pk).first()
-    if not book:
-        return error("Book not found", status=404)
-    return book.on_rest_get(request)
-```
-
-For standard CRUD, let `MojoModel.on_rest_request()` handle all responses — only use `JsonResponse` directly for custom endpoints.
+These are also for non-view contexts. In a normal view, just return a dict.

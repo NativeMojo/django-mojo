@@ -60,19 +60,23 @@ from mojo.helpers.request_parser import parse_request_data
 data = parse_request_data(request)  # returns objict
 ```
 
-## objict
+## request.DATA
 
-`request.DATA` is an `objict` instance — a dict subclass with attribute access and dot-notation support.
+`request.DATA` is an [`objict`](objict.md) — a dict subclass with attribute access, dot-notation nested keys, and type-safe getters. Set by `MojoMiddleware` from all request sources (POST body, GET params, JSON body).
 
 ```python
-# These are equivalent:
+# All equivalent
 request.DATA.get("field")
 request.DATA["field"]
 request.DATA.field
 
-# Typed access with default
-request.DATA.get_typed("page_size", 10, int)
+# Type-safe access (converts string query params to the right type)
+page = request.DATA.get_typed("page", 1, int)
+size = request.DATA.get_typed("page_size", 20, int)
 
-# Nested (key "user.name" is auto-expanded)
-request.DATA.user.name
+# Nested dot-notation keys (client sent "address.city=Austin")
+city = request.DATA.get("address.city")
+last = request.DATA.get("metadata.user.last_name")
 ```
+
+See [objict.md](objict.md) for the full reference.
