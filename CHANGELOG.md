@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v1.0.28 - March 08, 2026
+
+don't save when only doing model actions
+
+
 ## v1.0.27 - March 08, 2026
 
 fixing api key permission checks
