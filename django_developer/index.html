@@ -3859,7 +3859,8 @@
 </code></pre></div>
 <h2 id="key-conventions">Key Conventions<a class="headerlink" href="#key-conventions" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Always use <code>request.DATA</code> (never <code>request.POST.get()</code> or <code>request.GET.get()</code>)</li>
+<li>Always use <code>request.DATA</code> (never <code>request.POST.get()</code> or <code>request.GET.get()</code>) — it is an <a href="helpers/objict/"><code>objict</code></a> with attribute access and dot-notation nested keys</li>
+<li>View functions return <strong>plain dicts</strong> — never construct <code>JsonResponse</code> manually (see <a href="core/decorators/#return-values">Return Values</a>)</li>
 <li>List endpoints must NOT end with trailing slashes</li>
 <li>Model inheritance: <code>models.Model, MojoModel</code> (or <code>MojoSecrets, MojoModel</code>)</li>
 <li>Always include <code>created</code> and <code>modified</code> fields</li>
