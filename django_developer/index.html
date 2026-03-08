@@ -3862,6 +3862,9 @@
 <li>Always use <code>request.DATA</code> (never <code>request.POST.get()</code> or <code>request.GET.get()</code>) — it is an <a href="helpers/objict/"><code>objict</code></a> with attribute access and dot-notation nested keys</li>
 <li>View functions return <strong>plain dicts</strong> — never construct <code>JsonResponse</code> manually (see <a href="core/decorators/#return-values">Return Values</a>)</li>
 <li>List endpoints must NOT end with trailing slashes</li>
+<li><strong>URL auto-prefix is the Django app directory name</strong> — <code>@md.URL('session')</code> in app <code>wallet</code> → <code>/api/wallet/session</code>. Never use a parent package name.</li>
+<li><strong>Dynamic URL segments go at the END only</strong> — <code>book/&lt;int:pk&gt;</code> is correct; <code>book/&lt;int:pk&gt;/chapters</code> is never correct. Use query params or POST data for nested lookups.</li>
+<li><strong>Use <code>POST_SAVE_ACTIONS</code> for model operations</strong> — prefer <code>on_action_&lt;name&gt;</code> over dedicated REST endpoints when acting on a specific instance</li>
 <li>Model inheritance: <code>models.Model, MojoModel</code> (or <code>MojoSecrets, MojoModel</code>)</li>
 <li>Always include <code>created</code> and <code>modified</code> fields</li>
 <li>Add <code>user</code> and <code>group</code> FKs when model needs access control</li>
