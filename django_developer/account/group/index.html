@@ -1202,6 +1202,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Metadata &amp; Timezone">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#protected-metadata" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Protected Metadata
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -3832,6 +3849,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Metadata &amp; Timezone">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#protected-metadata" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Protected Metadata
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -3970,9 +4004,11 @@
 <h2 id="restmeta">RestMeta<a class="headerlink" href="#restmeta" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">RestMeta</span><span class="p">:</span>
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>    <span class="n">LOG_CHANGES</span> <span class="o">=</span> <span class="kc">True</span>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    <span class="n">VIEW_PERMS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;view_groups&quot;</span><span class="p">,</span> <span class="s2">&quot;manage_groups&quot;</span><span class="p">,</span> <span class="s2">&quot;manage_group&quot;</span><span class="p">]</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    <span class="n">SAVE_PERMS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;manage_groups&quot;</span><span class="p">,</span> <span class="s2">&quot;manage_group&quot;</span><span class="p">]</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>    <span class="n">SEARCH_FIELDS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;name&quot;</span><span class="p">]</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    <span class="n">LOG_META_CHANGES</span> <span class="o">=</span> <span class="kc">True</span>          <span class="c1"># logs key-level changes to metadata</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    <span class="n">VIEW_PERMS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;view_groups&quot;</span><span class="p">,</span> <span class="s2">&quot;manage_groups&quot;</span><span class="p">,</span> <span class="s2">&quot;manage_group&quot;</span><span class="p">]</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>    <span class="n">SAVE_PERMS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;manage_groups&quot;</span><span class="p">,</span> <span class="s2">&quot;manage_group&quot;</span><span class="p">]</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>    <span class="n">PROTECTED_JSON_PERMS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;manage_groups&quot;</span><span class="p">]</span>  <span class="c1"># required to write metadata[&quot;protected&quot;]</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>    <span class="n">SEARCH_FIELDS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;name&quot;</span><span class="p">]</span>
 </code></pre></div>
 <h2 id="hierarchy">Hierarchy<a class="headerlink" href="#hierarchy" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">group</span><span class="o">.</span><span class="n">parent</span>          <span class="c1"># immediate parent</span>
@@ -3992,38 +4028,54 @@
 <a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="n">group</span><span class="o">.</span><span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;feature_flags&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;new_ui&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">}</span>
 <a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="n">group</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
 </code></pre></div>
+<h3 id="protected-metadata">Protected Metadata<a class="headerlink" href="#protected-metadata" title="Permanent link">&para;</a></h3>
+<p>The reserved root key <code>"protected"</code> in <code>metadata</code> is write-protected at the framework level. Only a superuser or a user with a permission listed in <code>PROTECTED_JSON_PERMS</code> (e.g. <code>"manage_groups"</code>) can set or update it via the REST API. Any attempt by an unprivileged user raises a <code>403 PermissionDeniedException</code>.</p>
+<p>Use it to store config that group editors should be able to read but never overwrite:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">group</span><span class="o">.</span><span class="n">metadata</span> <span class="o">=</span> <span class="p">{</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>    <span class="s2">&quot;timezone&quot;</span><span class="p">:</span> <span class="s2">&quot;America/New_York&quot;</span><span class="p">,</span>       <span class="c1"># any group editor can change</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>    <span class="s2">&quot;theme&quot;</span><span class="p">:</span> <span class="s2">&quot;dark&quot;</span><span class="p">,</span>                       <span class="c1"># any group editor can change</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>    <span class="s2">&quot;protected&quot;</span><span class="p">:</span> <span class="p">{</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>        <span class="s2">&quot;stripe_account_id&quot;</span><span class="p">:</span> <span class="s2">&quot;acct_123&quot;</span><span class="p">,</span>  <span class="c1"># requires manage_groups</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>        <span class="s2">&quot;webhook_secret&quot;</span><span class="p">:</span> <span class="s2">&quot;whsec_abc&quot;</span><span class="p">,</span>    <span class="c1"># requires manage_groups</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>        <span class="s2">&quot;plan&quot;</span><span class="p">:</span> <span class="s2">&quot;enterprise&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>    <span class="p">}</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="p">}</span>
+</code></pre></div>
+<p><strong>Audit trail:</strong> Every successful write to <code>metadata["protected"]</code> is unconditionally logged with <code>kind="meta:protected_changed"</code>, recording the username, changed keys, and instance pk — regardless of the <code>LOG_CHANGES</code> or <code>LOG_META_CHANGES</code> settings.</p>
+<p>When <code>LOG_META_CHANGES = True</code>, all root-level key changes across the entire <code>metadata</code> field are also logged with <code>kind="meta:changed"</code>.</p>
+<p>See <a href="../../core/mojo_model/#protected-json-fields">MojoModel — Protected JSON Fields</a> for full framework details.</p>
 <h2 id="membership">Membership<a class="headerlink" href="#membership" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">GroupMember</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="c1"># Get a user&#39;s membership in a group</span>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="n">member</span> <span class="o">=</span> <span class="n">group</span><span class="o">.</span><span class="n">get_member_for_user</span><span class="p">(</span><span class="n">user</span><span class="p">,</span> <span class="n">check_parents</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>
-<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="c1"># Check permission within group context</span>
-<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="n">has_perm</span> <span class="o">=</span> <span class="n">group</span><span class="o">.</span><span class="n">user_has_permission</span><span class="p">(</span><span class="n">user</span><span class="p">,</span> <span class="p">[</span><span class="s2">&quot;manage_members&quot;</span><span class="p">])</span>
-<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>
-<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="c1"># Invite a user by email</span>
-<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="n">member</span> <span class="o">=</span> <span class="n">group</span><span class="o">.</span><span class="n">invite</span><span class="p">(</span><span class="s2">&quot;alice@example.com&quot;</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">GroupMember</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="c1"># Get a user&#39;s membership in a group</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="n">member</span> <span class="o">=</span> <span class="n">group</span><span class="o">.</span><span class="n">get_member_for_user</span><span class="p">(</span><span class="n">user</span><span class="p">,</span> <span class="n">check_parents</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="c1"># Check permission within group context</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="n">has_perm</span> <span class="o">=</span> <span class="n">group</span><span class="o">.</span><span class="n">user_has_permission</span><span class="p">(</span><span class="n">user</span><span class="p">,</span> <span class="p">[</span><span class="s2">&quot;manage_members&quot;</span><span class="p">])</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="c1"># Invite a user by email</span>
+<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="n">member</span> <span class="o">=</span> <span class="n">group</span><span class="o">.</span><span class="n">invite</span><span class="p">(</span><span class="s2">&quot;alice@example.com&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="groupmember-model">GroupMember Model<a class="headerlink" href="#groupmember-model" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">GroupMember</span><span class="p">(</span><span class="n">models</span><span class="o">.</span><span class="n">Model</span><span class="p">,</span> <span class="n">MojoModel</span><span class="p">):</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>    <span class="n">group</span> <span class="o">=</span> <span class="n">models</span><span class="o">.</span><span class="n">ForeignKey</span><span class="p">(</span><span class="n">Group</span><span class="p">,</span> <span class="n">related_name</span><span class="o">=</span><span class="s2">&quot;members&quot;</span><span class="p">,</span> <span class="o">...</span><span class="p">)</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>    <span class="n">user</span> <span class="o">=</span> <span class="n">models</span><span class="o">.</span><span class="n">ForeignKey</span><span class="p">(</span><span class="n">User</span><span class="p">,</span> <span class="n">related_name</span><span class="o">=</span><span class="s2">&quot;memberships&quot;</span><span class="p">,</span> <span class="o">...</span><span class="p">)</span>
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>    <span class="n">permissions</span> <span class="o">=</span> <span class="n">models</span><span class="o">.</span><span class="n">JSONField</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="nb">dict</span><span class="p">)</span>
-<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>    <span class="n">is_active</span> <span class="o">=</span> <span class="n">models</span><span class="o">.</span><span class="n">BooleanField</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">GroupMember</span><span class="p">(</span><span class="n">models</span><span class="o">.</span><span class="n">Model</span><span class="p">,</span> <span class="n">MojoModel</span><span class="p">):</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>    <span class="n">group</span> <span class="o">=</span> <span class="n">models</span><span class="o">.</span><span class="n">ForeignKey</span><span class="p">(</span><span class="n">Group</span><span class="p">,</span> <span class="n">related_name</span><span class="o">=</span><span class="s2">&quot;members&quot;</span><span class="p">,</span> <span class="o">...</span><span class="p">)</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>    <span class="n">user</span> <span class="o">=</span> <span class="n">models</span><span class="o">.</span><span class="n">ForeignKey</span><span class="p">(</span><span class="n">User</span><span class="p">,</span> <span class="n">related_name</span><span class="o">=</span><span class="s2">&quot;memberships&quot;</span><span class="p">,</span> <span class="o">...</span><span class="p">)</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>    <span class="n">permissions</span> <span class="o">=</span> <span class="n">models</span><span class="o">.</span><span class="n">JSONField</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="nb">dict</span><span class="p">)</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>    <span class="n">is_active</span> <span class="o">=</span> <span class="n">models</span><span class="o">.</span><span class="n">BooleanField</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </code></pre></div>
 <p>Member-level permissions override group-level defaults:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="n">member</span><span class="o">.</span><span class="n">has_permission</span><span class="p">(</span><span class="s2">&quot;manage_content&quot;</span><span class="p">)</span>
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="n">member</span><span class="o">.</span><span class="n">permissions</span><span class="p">[</span><span class="s2">&quot;manage_content&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
-<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="n">member</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="n">member</span><span class="o">.</span><span class="n">has_permission</span><span class="p">(</span><span class="s2">&quot;manage_content&quot;</span><span class="p">)</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="n">member</span><span class="o">.</span><span class="n">permissions</span><span class="p">[</span><span class="s2">&quot;manage_content&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="n">member</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
 </code></pre></div>
 <h2 id="requestgroup">request.group<a class="headerlink" href="#requestgroup" title="Permanent link">&para;</a></h2>
 <p>When a request includes <code>?group=&lt;id&gt;</code>, <code>MojoMiddleware</code> and auth decorators auto-populate <code>request.group</code> with the <code>Group</code> instance if the user is a member. All permission checks and list queries are then scoped to that group.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># In a REST handler</span>
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="k">if</span> <span class="n">request</span><span class="o">.</span><span class="n">group</span><span class="p">:</span>
-<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>    <span class="n">queryset</span> <span class="o">=</span> <span class="n">queryset</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">group</span><span class="o">=</span><span class="n">request</span><span class="o">.</span><span class="n">group</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># In a REST handler</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="k">if</span> <span class="n">request</span><span class="o">.</span><span class="n">group</span><span class="p">:</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>    <span class="n">queryset</span> <span class="o">=</span> <span class="n">queryset</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">group</span><span class="o">=</span><span class="n">request</span><span class="o">.</span><span class="n">group</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="activity-tracking">Activity Tracking<a class="headerlink" href="#activity-tracking" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="n">group</span><span class="o">.</span><span class="n">touch</span><span class="p">()</span>   <span class="c1"># updates last_activity (rate-limited by GROUP_LAST_ACTIVITY_FREQ)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="n">group</span><span class="o">.</span><span class="n">touch</span><span class="p">()</span>   <span class="c1"># updates last_activity (rate-limited by GROUP_LAST_ACTIVITY_FREQ)</span>
 </code></pre></div>
 <h2 id="settings">Settings<a class="headerlink" href="#settings" title="Permanent link">&para;</a></h2>
 <table>

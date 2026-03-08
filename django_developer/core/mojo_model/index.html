@@ -716,6 +716,78 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#protected-json-fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Protected JSON Fields
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Protected JSON Fields">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#behavior" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Behavior
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#example-storing-protected-config" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example — storing protected config
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#audit-log-entries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Audit log entries
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#programmatic-bypass" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Programmatic bypass
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#logging" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3957,6 +4029,78 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#protected-json-fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Protected JSON Fields
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Protected JSON Fields">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#behavior" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Behavior
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#example-storing-protected-config" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example — storing protected config
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#audit-log-entries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Audit log entries
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#programmatic-bypass" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Programmatic bypass
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#logging" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4154,6 +4298,18 @@
 <td>Auto-log field changes via logit</td>
 </tr>
 <tr>
+<td><code>LOG_META_CHANGES</code></td>
+<td>bool</td>
+<td><code>False</code></td>
+<td>Auto-log key-level changes to all JSONFields via logit</td>
+</tr>
+<tr>
+<td><code>PROTECTED_JSON_PERMS</code></td>
+<td>list</td>
+<td><code>[]</code></td>
+<td>Permissions required to modify the <code>"protected"</code> root key in any JSONField</td>
+</tr>
+<tr>
 <td><code>OWNER_FIELD</code></td>
 <td>str</td>
 <td><code>"user"</code></td>
@@ -4296,39 +4452,86 @@
 <a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="n">data</span> <span class="o">=</span> <span class="n">book</span><span class="o">.</span><span class="n">to_dict</span><span class="p">(</span><span class="n">graph</span><span class="o">=</span><span class="s2">&quot;default&quot;</span><span class="p">)</span>
 <a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="n">data_list</span> <span class="o">=</span> <span class="n">Book</span><span class="o">.</span><span class="n">queryset_to_dict</span><span class="p">(</span><span class="n">Book</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">all</span><span class="p">(),</span> <span class="n">graph</span><span class="o">=</span><span class="s2">&quot;list&quot;</span><span class="p">)</span>
 </code></pre></div>
+<h2 id="protected-json-fields">Protected JSON Fields<a class="headerlink" href="#protected-json-fields" title="Permanent link">&para;</a></h2>
+<p>Any <code>JSONField</code> on a MojoModel supports a reserved root key <code>"protected"</code>. Writes to <code>metadata["protected"]</code> (or any other JSONField's <code>"protected"</code> key) are blocked at the framework level unless the requesting user is a superuser or holds a permission listed in <code>PROTECTED_JSON_PERMS</code>.</p>
+<h3 id="setup">Setup<a class="headerlink" href="#setup" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">RestMeta</span><span class="p">:</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>    <span class="n">PROTECTED_JSON_PERMS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;manage_groups&quot;</span><span class="p">]</span>  <span class="c1"># who can write the &quot;protected&quot; key</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>    <span class="n">LOG_META_CHANGES</span> <span class="o">=</span> <span class="kc">True</span>                   <span class="c1"># optional — audit all JSONField changes</span>
+</code></pre></div>
+<h3 id="behavior">Behavior<a class="headerlink" href="#behavior" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Any save attempt that includes <code>"protected"</code> in a JSONField value will raise a <code>403 PermissionDeniedException</code> if the user lacks the required permission.</li>
+<li>Changes to the <code>"protected"</code> key are <strong>always</strong> written to the audit log (<code>kind="meta:protected_changed"</code>) regardless of <code>LOG_CHANGES</code> or <code>LOG_META_CHANGES</code> — it is an unconditional security audit trail.</li>
+<li>When <code>LOG_META_CHANGES = True</code>, all root-level key changes to any JSONField are logged (<code>kind="meta:changed"</code>).</li>
+</ul>
+<h3 id="example-storing-protected-config">Example — storing protected config<a class="headerlink" href="#example-storing-protected-config" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># Only superusers or users with &quot;manage_groups&quot; can set this via the API</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="n">group</span><span class="o">.</span><span class="n">metadata</span> <span class="o">=</span> <span class="p">{</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>    <span class="s2">&quot;timezone&quot;</span><span class="p">:</span> <span class="s2">&quot;America/New_York&quot;</span><span class="p">,</span>      <span class="c1"># normal — any editor can change</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>    <span class="s2">&quot;protected&quot;</span><span class="p">:</span> <span class="p">{</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>        <span class="s2">&quot;stripe_account_id&quot;</span><span class="p">:</span> <span class="s2">&quot;acct_123&quot;</span><span class="p">,</span> <span class="c1"># guarded — requires PROTECTED_JSON_PERMS</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>        <span class="s2">&quot;webhook_secret&quot;</span><span class="p">:</span> <span class="s2">&quot;whsec_abc&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>    <span class="p">}</span>
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="p">}</span>
+</code></pre></div>
+<h3 id="audit-log-entries">Audit log entries<a class="headerlink" href="#audit-log-entries" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th><code>kind</code></th>
+<th>When fired</th>
+<th>Contents</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>meta:protected_changed</code></td>
+<td>Any successful write to <code>"protected"</code></td>
+<td>Username, field name, changed keys, pk</td>
+</tr>
+<tr>
+<td><code>meta:changed</code></td>
+<td>Any JSONField key change (requires <code>LOG_META_CHANGES=True</code>)</td>
+<td>Username, field name, changed keys, pk</td>
+</tr>
+</tbody>
+</table>
+<h3 id="programmatic-bypass">Programmatic bypass<a class="headerlink" href="#programmatic-bypass" title="Permanent link">&para;</a></h3>
+<p>When calling <code>on_rest_update_jsonfield</code> directly outside a request context (e.g. from a management command or service), pass <code>request=None</code>. In that case <code>_can_edit_protected_json</code> returns <code>False</code>, so protected writes will still raise. Pass a <code>SYSTEM_REQUEST</code> or a real request with a superuser if the write is intentional.</p>
 <h2 id="logging">Logging<a class="headerlink" href="#logging" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># Instance-level log (writes to logit.Log model)</span>
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="bp">self</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">log</span><span class="o">=</span><span class="s2">&quot;Something happened&quot;</span><span class="p">,</span> <span class="n">kind</span><span class="o">=</span><span class="s2">&quot;book:event&quot;</span><span class="p">)</span>
-<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>
-<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="c1"># Class-level log</span>
-<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="n">Book</span><span class="o">.</span><span class="n">class_logit</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="s2">&quot;bulk action&quot;</span><span class="p">,</span> <span class="n">kind</span><span class="o">=</span><span class="s2">&quot;book:bulk&quot;</span><span class="p">,</span> <span class="n">model_id</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># Instance-level log (writes to logit.Log model)</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="bp">self</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">log</span><span class="o">=</span><span class="s2">&quot;Something happened&quot;</span><span class="p">,</span> <span class="n">kind</span><span class="o">=</span><span class="s2">&quot;book:event&quot;</span><span class="p">)</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="c1"># Class-level log</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="n">Book</span><span class="o">.</span><span class="n">class_logit</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="s2">&quot;bulk action&quot;</span><span class="p">,</span> <span class="n">kind</span><span class="o">=</span><span class="s2">&quot;book:bulk&quot;</span><span class="p">,</span> <span class="n">model_id</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="incident-reporting">Incident Reporting<a class="headerlink" href="#incident-reporting" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># Instance-level</span>
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="bp">self</span><span class="o">.</span><span class="n">report_incident</span><span class="p">(</span><span class="s2">&quot;Suspicious edit attempt&quot;</span><span class="p">,</span> <span class="n">event_type</span><span class="o">=</span><span class="s2">&quot;security_alert&quot;</span><span class="p">,</span> <span class="n">level</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
-<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>
-<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="c1"># Class-level</span>
-<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="n">Book</span><span class="o">.</span><span class="n">class_report_incident</span><span class="p">(</span><span class="s2">&quot;Unauthorized list attempt&quot;</span><span class="p">,</span> <span class="n">event_type</span><span class="o">=</span><span class="s2">&quot;permission_denied&quot;</span><span class="p">,</span> <span class="n">request</span><span class="o">=</span><span class="n">request</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># Instance-level</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="bp">self</span><span class="o">.</span><span class="n">report_incident</span><span class="p">(</span><span class="s2">&quot;Suspicious edit attempt&quot;</span><span class="p">,</span> <span class="n">event_type</span><span class="o">=</span><span class="s2">&quot;security_alert&quot;</span><span class="p">,</span> <span class="n">level</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="c1"># Class-level</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="n">Book</span><span class="o">.</span><span class="n">class_report_incident</span><span class="p">(</span><span class="s2">&quot;Unauthorized list attempt&quot;</span><span class="p">,</span> <span class="n">event_type</span><span class="o">=</span><span class="s2">&quot;permission_denied&quot;</span><span class="p">,</span> <span class="n">request</span><span class="o">=</span><span class="n">request</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="mojosecrets">MojoSecrets<a class="headerlink" href="#mojosecrets" title="Permanent link">&para;</a></h2>
 <p>For models requiring encrypted storage:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">MojoSecrets</span><span class="p">,</span> <span class="n">MojoModel</span>
-<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>
-<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="k">class</span><span class="w"> </span><span class="nc">Integration</span><span class="p">(</span><span class="n">MojoSecrets</span><span class="p">,</span> <span class="n">MojoModel</span><span class="p">):</span>
-<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>    <span class="n">name</span> <span class="o">=</span> <span class="n">models</span><span class="o">.</span><span class="n">CharField</span><span class="p">(</span><span class="n">max_length</span><span class="o">=</span><span class="mi">255</span><span class="p">)</span>
-<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>    <span class="n">created</span> <span class="o">=</span> <span class="n">models</span><span class="o">.</span><span class="n">DateTimeField</span><span class="p">(</span><span class="n">auto_now_add</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">editable</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">db_index</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>    <span class="n">modified</span> <span class="o">=</span> <span class="n">models</span><span class="o">.</span><span class="n">DateTimeField</span><span class="p">(</span><span class="n">auto_now</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">db_index</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>
-<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a>    <span class="k">class</span><span class="w"> </span><span class="nc">RestMeta</span><span class="p">:</span>
-<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a>        <span class="n">NO_SHOW_FIELDS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;mojo_secrets&quot;</span><span class="p">]</span>  <span class="c1"># never expose in API</span>
-<a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a>        <span class="n">GRAPHS</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;default&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;fields&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;id&quot;</span><span class="p">,</span> <span class="s2">&quot;name&quot;</span><span class="p">]}}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">MojoSecrets</span><span class="p">,</span> <span class="n">MojoModel</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="k">class</span><span class="w"> </span><span class="nc">Integration</span><span class="p">(</span><span class="n">MojoSecrets</span><span class="p">,</span> <span class="n">MojoModel</span><span class="p">):</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>    <span class="n">name</span> <span class="o">=</span> <span class="n">models</span><span class="o">.</span><span class="n">CharField</span><span class="p">(</span><span class="n">max_length</span><span class="o">=</span><span class="mi">255</span><span class="p">)</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>    <span class="n">created</span> <span class="o">=</span> <span class="n">models</span><span class="o">.</span><span class="n">DateTimeField</span><span class="p">(</span><span class="n">auto_now_add</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">editable</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">db_index</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>    <span class="n">modified</span> <span class="o">=</span> <span class="n">models</span><span class="o">.</span><span class="n">DateTimeField</span><span class="p">(</span><span class="n">auto_now</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">db_index</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a>
+<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a>    <span class="k">class</span><span class="w"> </span><span class="nc">RestMeta</span><span class="p">:</span>
+<a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a>        <span class="n">NO_SHOW_FIELDS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;mojo_secrets&quot;</span><span class="p">]</span>  <span class="c1"># never expose in API</span>
+<a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a>        <span class="n">GRAPHS</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;default&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;fields&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;id&quot;</span><span class="p">,</span> <span class="s2">&quot;name&quot;</span><span class="p">]}}</span>
 </code></pre></div>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># Set/get secrets (encrypted in DB as single JSON field)</span>
-<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="n">integration</span><span class="o">.</span><span class="n">set_secret</span><span class="p">(</span><span class="s2">&quot;api_key&quot;</span><span class="p">,</span> <span class="s2">&quot;sk-abc123&quot;</span><span class="p">)</span>
-<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="n">key</span> <span class="o">=</span> <span class="n">integration</span><span class="o">.</span><span class="n">get_secret</span><span class="p">(</span><span class="s2">&quot;api_key&quot;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
-<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>
-<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="c1"># Access all secrets as objict</span>
-<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="n">secrets</span> <span class="o">=</span> <span class="n">integration</span><span class="o">.</span><span class="n">secrets</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="c1"># Set/get secrets (encrypted in DB as single JSON field)</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="n">integration</span><span class="o">.</span><span class="n">set_secret</span><span class="p">(</span><span class="s2">&quot;api_key&quot;</span><span class="p">,</span> <span class="s2">&quot;sk-abc123&quot;</span><span class="p">)</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="n">key</span> <span class="o">=</span> <span class="n">integration</span><span class="o">.</span><span class="n">get_secret</span><span class="p">(</span><span class="s2">&quot;api_key&quot;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="c1"># Access all secrets as objict</span>
+<a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a><span class="n">secrets</span> <span class="o">=</span> <span class="n">integration</span><span class="o">.</span><span class="n">secrets</span>
 </code></pre></div>
 <p>Encryption is AES-based, keyed per-instance using the record's <code>created</code> timestamp and class name. Never create individual encrypted fields — always use the secrets system.</p>
 <h2 id="key-properties">Key Properties<a class="headerlink" href="#key-properties" title="Permanent link">&para;</a></h2>
