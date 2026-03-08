@@ -37,6 +37,7 @@ class Group(MojoSecrets, MojoModel):
         SEARCH_FIELDS = ["name"]
         VIEW_PERMS = ["view_groups", "manage_groups", "manage_group"]
         SAVE_PERMS = ["manage_groups", "manage_group"]
+        PROTECTED_JSON_PERMS = ["admin_compliance", "admin_verify"]
         POST_SAVE_ACTIONS = ['realtime_message']
         LIST_DEFAULT_FILTERS = {
             "is_active": True

@@ -85,7 +85,9 @@ def _get_apikey_limits(request, key, default_limit, default_window):
     Window in request.api_key.limits is in minutes; converted to seconds here.
     """
     api_key = getattr(request, "api_key", None)
-    if not api_key:
+    if not api_key and not request.group:
+        if request.user and request.user.org:
+            return request.user.org.pk, default_limit, default_window
         return None
     group = getattr(api_key, "group", None)
     if not group:
@@ -116,14 +118,15 @@ def _get_dimension(request, dimension):
     if dimension == "api_key":
         api_key = getattr(request, "api_key", None)
         if api_key:
-            group = getattr(api_key, "group", None)
-            return str(group.pk) if group else None
+            return str(api_key.pk)
     if dimension == "user":
         user = getattr(request, "user", None)
         if user and getattr(user, "is_authenticated", False):
             return str(user.id)
     if dimension == "group":
-        group = getattr(request, "group", None)
+        group = request.group
+        if request.group is None and request.user:
+            group = request.user.org
         return str(group.id) if group else None
     return None
 
@@ -274,7 +277,7 @@ def strict_rate_limit(key, ip_limit, duid_limit=None, apikey_limit=None,
     return decorator
 
 
-def endpoint_metrics(slug, by=None, min_granularity="hours"):
+def endpoint_metrics(slug, by=None, min_granularity="hours", category="endpoint_metrics"):
     """
     Decorator to record per-endpoint usage metrics.
 
@@ -292,6 +295,7 @@ def endpoint_metrics(slug, by=None, min_granularity="hours"):
         slug:            Metric name (e.g. "login_attempts", "assess_calls")
         by:              String or list of dimensions: "ip", "duid", "api_key", "user", "group"
         min_granularity: Granularity passed to metrics.record() (default "hours")
+        category:        Category passed to metrics.record() (default "endpoint_metrics")
     """
     def decorator(func):
         if not API_METRICS:
@@ -302,17 +306,27 @@ def endpoint_metrics(slug, by=None, min_granularity="hours"):
         @wraps(func)
         def wrapper(request, *args, **kwargs):
             try:
-                metrics.record(slug, category="endpoint_metrics", min_granularity=min_granularity)
+                logit.info(f"Recording metric {slug}  {category}", by_list)
+                metrics.record(slug, category=category, min_granularity=min_granularity)
+                group = request.group
+                if not group:
+                    group = request.user.org if request.user and request.user.org else None
+                account = f"group-{group.pk}" if group else "global"
                 for dimension in by_list:
                     value = _get_dimension(request, dimension)
                     if value:
+                        if dimension == "group":
+                            dslug = slug
+                        else:
+                            dslug = f"{slug}:{dimension}:{value}"
                         metrics.record(
-                            f"{slug}:{dimension}:{value}",
-                            category="endpoint_metrics",
+                            dslug,
+                            category=f"{category}_{dimension}",
                             min_granularity=min_granularity,
+                            account=account
                         )
             except Exception:
-                pass
+                logit.exception(f"Failed to record metric {slug}")
             return func(request, *args, **kwargs)
         return wrapper
     return decorator

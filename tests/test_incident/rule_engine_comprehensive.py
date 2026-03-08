@@ -96,7 +96,7 @@ def test_bug_default_ossec_rules_never_match(opts):
     # Get the default OSSEC bundle ruleset
     ossec_bundle = RuleSet.objects.get(
         category="ossec",
-        name="OSSEC - Bundle by IP + Type"
+        name="OSSEC - Catch-all Moderate Severity"
     )
 
     # Create an event that SHOULD match all the rules

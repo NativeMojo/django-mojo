@@ -28,8 +28,10 @@ class Group(MojoSecrets, MojoModel):
 ```python
 class RestMeta:
     LOG_CHANGES = True
+    LOG_META_CHANGES = True          # logs key-level changes to metadata
     VIEW_PERMS = ["view_groups", "manage_groups", "manage_group"]
     SAVE_PERMS = ["manage_groups", "manage_group"]
+    PROTECTED_JSON_PERMS = ["manage_groups"]  # required to write metadata["protected"]
     SEARCH_FIELDS = ["name"]
 ```
 
@@ -60,6 +62,30 @@ group.metadata["max_users"] = 50
 group.metadata["feature_flags"] = {"new_ui": True}
 group.save()
 ```
+
+### Protected Metadata
+
+The reserved root key `"protected"` in `metadata` is write-protected at the framework level. Only a superuser or a user with a permission listed in `PROTECTED_JSON_PERMS` (e.g. `"manage_groups"`) can set or update it via the REST API. Any attempt by an unprivileged user raises a `403 PermissionDeniedException`.
+
+Use it to store config that group editors should be able to read but never overwrite:
+
+```python
+group.metadata = {
+    "timezone": "America/New_York",       # any group editor can change
+    "theme": "dark",                       # any group editor can change
+    "protected": {
+        "stripe_account_id": "acct_123",  # requires manage_groups
+        "webhook_secret": "whsec_abc",    # requires manage_groups
+        "plan": "enterprise",
+    }
+}
+```
+
+**Audit trail:** Every successful write to `metadata["protected"]` is unconditionally logged with `kind="meta:protected_changed"`, recording the username, changed keys, and instance pk — regardless of the `LOG_CHANGES` or `LOG_META_CHANGES` settings.
+
+When `LOG_META_CHANGES = True`, all root-level key changes across the entire `metadata` field are also logged with `kind="meta:changed"`.
+
+See [MojoModel — Protected JSON Fields](../core/mojo_model.md#protected-json-fields) for full framework details.
 
 ## Membership
 
