@@ -958,6 +958,7 @@ class MojoModel:
         post_save_actions = self.get_rest_meta_prop("POST_SAVE_ACTIONS", ['action'])
         post_save_data = {}
         action_resp = None  # an action may have a specific response
+        actions_only = True  # track if request contains only post_save_actions (no real field data)
         # Iterate through data_dict keys instead of model fields
         for key, value in data_dict.items():
             # Skip fields that shouldn't be saved
@@ -966,25 +967,27 @@ class MojoModel:
             if key in post_save_actions:
                 post_save_data[key] = value
                 continue
+            actions_only = False
             self.on_rest_save_field(key, value, request)
 
         created = self.pk is None
-        if created:
-            owner_field = self.get_rest_meta_prop("CREATED_BY_OWNER_FIELD", "user")
-            if request.user.is_authenticated and self.get_model_field(owner_field):
-                setattr(self, owner_field, request.user)
-            if request.group and self.get_model_field("group"):
-                if getattr(self, "group", None) is None:
-                    self.group = request.group
-        else:
-            owner_field = self.get_rest_meta_prop("UPDATED_BY_OWNER_FIELD", "modified_by")
-            if request.user.is_authenticated and self.get_model_field(owner_field):
-                setattr(self, owner_field, request.user)
-        self.on_rest_pre_save(self.__changed_fields__, created)
-        if "files" in data_dict:
-            self.on_rest_save_files(data_dict["files"])
-        self.atomic_save()
-        self.on_rest_saved(self.__changed_fields__, created)
+        if not actions_only or created:
+            if created:
+                owner_field = self.get_rest_meta_prop("CREATED_BY_OWNER_FIELD", "user")
+                if request.user.is_authenticated and self.get_model_field(owner_field):
+                    setattr(self, owner_field, request.user)
+                if request.group and self.get_model_field("group"):
+                    if getattr(self, "group", None) is None:
+                        self.group = request.group
+            else:
+                owner_field = self.get_rest_meta_prop("UPDATED_BY_OWNER_FIELD", "modified_by")
+                if request.user.is_authenticated and self.get_model_field(owner_field):
+                    setattr(self, owner_field, request.user)
+            self.on_rest_pre_save(self.__changed_fields__, created)
+            if "files" in data_dict:
+                self.on_rest_save_files(data_dict["files"])
+            self.atomic_save()
+            self.on_rest_saved(self.__changed_fields__, created)
         for key, value in post_save_data.items():
             # post save fields can only be called via on_action_
             handler = getattr(self, f'on_action_{key}', None)

@@ -62,6 +62,9 @@ def on_book(request, pk=None):
 - Prefer data in params/POST body, not URL paths: `@md.POST('devices/push/send')` not `@md.POST('devices/push/send/<param>')`.
 - **Data Access**: Always use `request.DATA` for unified access to both POST data and GET params - never use `request.POST.get()` or `request.GET.get()` directly.
 - **URL Patterns**: List endpoints should NOT end with trailing slashes (e.g., `/api/account/devices/push` not `/api/account/devices/push/`).
+- **CRITICAL — URL auto-prefix is the app directory name**: `@md.URL('session')` in app `wallet` → `/api/wallet/session`. NEVER use a parent package name as the prefix.
+- **CRITICAL — Dynamic URL segments go at the END only**: `book/<int:pk>` is correct; `book/<int:pk>/chapters` is NEVER correct. Use query params or POST data for nested lookups.
+- **CRITICAL — Use POST_SAVE_ACTIONS for model operations**: When an action targets a specific instance (test, clone, approve, send), use `on_action_<name>` instead of a dedicated REST endpoint.
 - Standard handlers point to `Model.on_rest_request(request, pk)` for automatic CRUD logic.
 - Only add custom handlers when necessary (nested, complex, special validation).
 - Support both templated and direct content patterns where applicable (e.g., notifications can use templates OR direct title/body).
