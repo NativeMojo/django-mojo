@@ -33,6 +33,7 @@ def on_user_me(request):
 @md.POST('token/refresh')
 @md.POST("auth/token/refresh")
 @md.POST('account/jwt/refresh')
+@md.rate_limit("refresh_token", ip_limit=30)
 @md.requires_params("refresh_token")
 def on_refresh_token(request):
     user, error = User.validate_jwt(request.DATA.refresh_token)
@@ -48,6 +49,8 @@ def on_refresh_token(request):
 @md.POST("login")
 @md.POST("auth/login")
 @md.POST('account/jwt/login')
+@md.strict_rate_limit("login", ip_limit=10, duid_limit=5, duid_window=300)
+@md.endpoint_metrics("login_attempts", by=["ip", "duid"])
 @md.requires_params("username", "password")
 def on_user_login(request):
     username = request.DATA.username
@@ -127,6 +130,7 @@ def jwt_login(request, user, legacy=False):
 
 
 @md.POST("auth/forgot")
+@md.strict_rate_limit("auth_forgot", ip_limit=5, ip_window=300)
 @md.requires_params("email")
 @md.public_endpoint()
 def on_user_forgot(request):
@@ -154,6 +158,7 @@ def on_user_forgot(request):
 
 
 @md.POST("auth/password/reset/code")
+@md.strict_rate_limit("password_reset_code", ip_limit=5, ip_window=300)
 @md.public_endpoint()
 @md.requires_params("code", "email", "new_password")
 def on_user_password_reset_code(request):
@@ -194,6 +199,7 @@ def on_user_password_reset_token(request):
 
 
 @md.POST("auth/magic/send")
+@md.strict_rate_limit("magic_login_send", ip_limit=5, ip_window=300)
 @md.requires_params("email")
 @md.public_endpoint()
 def on_magic_login_send(request):
@@ -214,6 +220,7 @@ def on_magic_login_send(request):
 
 
 @md.POST("auth/magic/login")
+@md.strict_rate_limit("magic_login", ip_limit=10, ip_window=300)
 @md.custom_security("requires valid magic login token")
 @md.requires_params("token")
 def on_magic_login_complete(request):
