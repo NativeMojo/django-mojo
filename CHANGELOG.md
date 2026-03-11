@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v1.0.31 - March 11, 2026
+
+new rate limiting login
+
+
 ## v1.0.30 - March 11, 2026
 
 proper phone hub endpoints

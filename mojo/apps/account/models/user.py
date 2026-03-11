@@ -135,6 +135,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
                     'permissions',
                     'metadata',
                     'is_active',
+                    "is_superuser",
                     "is_email_verified",
                     "is_phone_verified"
                 ],

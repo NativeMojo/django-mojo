@@ -85,9 +85,9 @@ class SMS(models.Model, MojoModel):
         ]
 
     class RestMeta:
-        VIEW_PERMS = ["view_sms", "manage_sms", "owner"]
-        SAVE_PERMS = ["manage_sms"]  # Creating SMS via API requires manage permission
-        DELETE_PERMS = ["manage_sms"]
+        VIEW_PERMS = ["view_sms", "manage_sms", "owner", "manage_notifications"]
+        SAVE_PERMS = ["manage_sms", "manage_notifications"]  # Creating SMS via API requires manage permission
+        DELETE_PERMS = ["manage_sms", "manage_notifications"]
         SEARCH_FIELDS = ["to_number", "from_number", "body"]
         LIST_DEFAULT_FILTERS = {}
         GRAPHS = {
@@ -163,29 +163,38 @@ class SMS(models.Model, MojoModel):
 
     @classmethod
     def send(cls, body, to_number, metadata=None, group=None, user=None, from_number=None):
-        """Mark message as received."""
+        """Send an outbound SMS and return the saved SMS instance."""
         from mojo.apps.phonehub.services.twilio import send_sms, FROM_NUMBER, PROVIDER
         from .phone import PhoneNumber
         to_number = PhoneNumber.normalize(to_number)
+        resolved_from = from_number or FROM_NUMBER
+        if not resolved_from or not isinstance(resolved_from, str):
+            sms = cls.objects.create(
+                user=user, group=group, direction='outbound',
+                from_number='', to_number=to_number, body=body,
+                status='failed', provider=PROVIDER, metadata=metadata or {},
+            )
+            sms.mark_failed(error_code='config_error', error_message='No from_number configured (set TWILIO_NUMBER in settings)')
+            return sms
         sms = cls.objects.create(
             user=user,
             group=group,
             direction='outbound',
-            from_number=from_number or FROM_NUMBER,
+            from_number=resolved_from,
             to_number=to_number,
             body=body,
             status='queued',
             provider=PROVIDER,
             metadata=metadata or {},
         )
-        # handle fake numbers
+        # handle fake/test numbers
         if to_number.startswith("+1555"):
+            sms.is_test = True
             sms.mark_sent(f"test{to_number}")
             return sms
-        resp = send_sms(body, to_number)
+        resp = send_sms(body, to_number, from_number=resolved_from)
         if resp.sent:
             sms.mark_sent(resp.id)
         else:
             sms.mark_failed(error_code=resp.code, error_message=resp.error)
-        sms.save()
         return sms

@@ -10,6 +10,7 @@ from mojo import errors as merrors
 # ---------------------------------------------------------------------------
 
 @md.POST('auth/verify/email/send')
+@md.strict_rate_limit("email_verify_send", ip_limit=5, ip_window=300)
 @md.requires_auth()
 def on_email_verify_send(request):
     """Send a verification link to the requesting user's email address."""
@@ -39,6 +40,7 @@ def on_email_verify_confirm(request):
 # ---------------------------------------------------------------------------
 
 @md.POST('auth/verify/phone/send')
+@md.strict_rate_limit("phone_verify_send", ip_limit=5, ip_window=300)
 @md.requires_auth()
 def on_phone_verify_send(request):
     """Send a 6-digit SMS code to the requesting user's phone number."""
