@@ -101,6 +101,119 @@ Behavior by HTTP method and pk:
 | POST/PUT | int | Update instance |
 | DELETE | int | Delete instance (requires `CAN_DELETE=True`) |
 
+### List response
+
+`GET /api/myapp/book` returns a paginated envelope:
+
+```json
+{
+  "status": true,
+  "count": 42,
+  "start": 0,
+  "size": 10,
+  "data": [
+    {"id": 1, "title": "Book One", "created": "2024-01-15T10:30:00Z"},
+    {"id": 2, "title": "Book Two", "created": "2024-01-16T08:00:00Z"}
+  ]
+}
+```
+
+Pagination request params (all optional):
+
+| Param | Alias | Default | Description |
+|---|---|---|---|
+| `size` | `limit` | `10` | Number of items per page |
+| `start` | `offset` | `0` | Starting index |
+| `graph` | | `"list"` | Which `GRAPHS` shape to use |
+
+```
+GET /api/myapp/book?start=20&size=10&graph=list
+```
+
+### Single object response
+
+`GET /api/myapp/book/1` returns:
+
+```json
+{
+  "status": true,
+  "data": {
+    "id": 1,
+    "title": "Book One",
+    "created": "2024-01-15T10:30:00Z",
+    "modified": "2024-01-15T10:30:00Z"
+  }
+}
+```
+
+### Create / update response
+
+`POST /api/myapp/book` (create) and `POST /api/myapp/book/1` (update) both return the serialized instance:
+
+```json
+{
+  "status": true,
+  "data": {
+    "id": 1,
+    "title": "Updated Title",
+    "created": "2024-01-15T10:30:00Z",
+    "modified": "2024-01-20T09:00:00Z"
+  }
+}
+```
+
+### Error response
+
+```json
+{
+  "status": false,
+  "code": 403,
+  "error": "GET permission denied: Book"
+}
+```
+
+## Return Values — Always Plain Dicts
+
+**Never import or use `JsonResponse` in a view function.** Return a plain dict or list — the framework wraps it automatically.
+
+| Return value | What the client receives |
+|---|---|
+| `{"id": 1, "name": "Joe"}` | `{"status": true, "code": 200, "data": {"id": 1, "name": "Joe"}}` |
+| `[{"id": 1}, {"id": 2}]` | `{"status": true, "code": 200, "data": [...], "size": 2}` |
+| `{"status": False, "error": "not found"}` | passed through as-is |
+| `{"status": True, "data": {...}}` | passed through as-is |
+| `raise ValueError("bad input")` | `{"status": false, "error": "bad input", "code": 400}` |
+| `raise PermissionError("denied")` | `{"status": false, "error": "denied", "code": 403}` |
+
+```python
+# Return just the data — framework wraps it
+@md.GET('book/stats')
+@md.requires_auth
+def on_book_stats(request):
+    return {"total": Book.objects.count()}
+    # client gets: {"status": true, "data": {"total": 42}}
+
+# Return an explicit error envelope
+@md.GET('book/<int:pk>')
+def on_book(request, pk=None):
+    book = Book.objects.filter(pk=pk).first()
+    if not book:
+        return {"status": False, "error": "Book not found"}
+    return Book.on_rest_request(request, pk)
+
+# Raise for errors — auto-converted to 400/403
+@md.POST('book/publish')
+@md.requires_auth
+def on_publish(request):
+    book = Book.objects.get(pk=request.DATA.book_id)
+    if not request.user.has_permission("publish_books"):
+        raise PermissionError("Publish permission required")
+    book.publish()
+    return {"status": True}
+```
+
+`JsonResponse` is only for middleware and custom decorators — never inside a routed view function.
+
 ## Permission Flow
 
 `rest_check_permission` evaluates in this exact order:
