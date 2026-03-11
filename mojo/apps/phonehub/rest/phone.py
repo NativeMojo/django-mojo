@@ -11,8 +11,16 @@ def on_phone(request, pk=None):
     return PhoneNumber.on_rest_request(request, pk)
 
 
-@md.POST('number/normalize')
-@md.requires_auth()
+@md.GET('number/parse')
+@md.public_endpoint()
+@md.requires_params(['phone_number'])
+def on_phone_info(request):
+    from mojo.apps.phonehub.services.phonenumbers import parse
+    return parse(request.DATA.get('phone_number'))
+
+
+@md.URL('number/normalize')
+@md.public_endpoint()
 @md.requires_params(['phone_number'])
 def on_phone_normalize(request):
     """

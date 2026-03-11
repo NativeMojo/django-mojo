@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v1.0.29 - March 11, 2026
+
+making some common phone apis publlic
+
+
 ## v1.0.28 - March 08, 2026
 
 don't save when only doing model actions

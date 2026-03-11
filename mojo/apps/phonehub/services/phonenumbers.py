@@ -1,6 +1,25 @@
 import re
+import unicodedata
 from objict import objict
 from . import international_codes
+
+
+def _clean_input(phone_number):
+    """
+    Strip invisible Unicode control/format characters from phone number input.
+    Handles characters like U+202A (left-to-right embedding) and U+202C (pop
+    directional formatting) that appear when copying numbers from browsers or apps.
+    """
+    if not phone_number:
+        return ''
+    return ''.join(c for c in str(phone_number) if not unicodedata.category(c).startswith('C')).strip()
+
+
+def _extract_digits(phone_number):
+    """Extract only digit characters from a phone number string."""
+    if not phone_number:
+        return ''
+    return re.sub(r'\D', '', str(phone_number))
 
 
 def detect_country(phone_number):
@@ -22,10 +41,9 @@ def detect_country(phone_number):
     if not phone_number:
         return None
 
-    # Try to normalize to get clean E.164 format
-    phone_str = str(phone_number)
+    phone_str = _clean_input(phone_number)
     has_plus = phone_str.startswith('+')
-    digits = re.sub(r'\D', '', phone_str)
+    digits = _extract_digits(phone_str)
 
     if not digits:
         return None
@@ -62,13 +80,9 @@ def normalize(phone_number, country_code=None):
     if not phone_number:
         return None
 
-    phone_str = str(phone_number)
-
-    # Check if it starts with + (E.164 format indicator)
+    phone_str = _clean_input(phone_number)
     has_plus = phone_str.startswith('+')
-
-    # Remove all non-digit characters
-    digits = re.sub(r'\D', '', phone_str)
+    digits = _extract_digits(phone_str)
 
     # Handle different cases
     if not digits:
@@ -297,3 +311,103 @@ def _validate(phone_number, country_code=None):
         'area_code_info': area_codes.get_area_code_info(npa),
         'error': None
     }
+
+
+def parse(phone_number, country_code=None):
+    """
+    Parse a phone number and return all available information without a carrier lookup.
+
+    Uses only local data — no network call. To get carrier, line type, and registered
+    owner, use PhoneNumber.lookup() which queries the provider.
+
+    Args:
+        phone_number: Phone number string (any common format)
+        country_code: Optional ISO country code hint (e.g. 'US', 'CA')
+
+    Returns:
+        objict with:
+            original        - raw input string
+            normalized      - E.164 format (e.g. "+14155551234"), or None if invalid
+            valid           - bool
+            error           - error message if invalid, else None
+            country_code    - e.g. "1", "44"
+            country         - e.g. "USA/Canada/Caribbean (NANP)", "United Kingdom"
+            region          - e.g. "North America/Caribbean", "Europe"
+            is_nanp         - True for US/CA/Caribbean numbers
+            area_code       - 3-digit area code string (NANP only), else None
+            valid_area_code - bool (NANP only)
+            type            - "geographic", "toll_free", "premium", "invalid", "international"
+            description     - human-readable area code description, or None
+            location        - {state, region, country} for geographic NANP, else None
+    """
+    result = objict(
+        original=phone_number,
+        normalized=None,
+        valid=False,
+        error=None,
+        country_code=None,
+        country=None,
+        region=None,
+        is_nanp=False,
+        area_code=None,
+        valid_area_code=False,
+        type=None,
+        description=None,
+        location=None,
+    )
+
+    # _validate does normalize + NANP area code checks in one pass
+    validation = _validate(phone_number, country_code)
+    result.valid = validation['valid']
+    result.error = validation.get('error')
+    result.normalized = validation.get('normalized')
+
+    if not result.normalized:
+        return result
+
+    # Country detection
+    country_info = detect_country(result.normalized)
+    if country_info:
+        result.country_code = country_info.country_code
+        result.country = country_info.country
+        result.region = country_info.region
+        result.is_nanp = country_info.is_nanp
+    elif validation.get('country_info'):
+        ci = validation['country_info']
+        result.country_code = ci.get('country_code')
+        result.country = ci.get('country')
+        result.region = ci.get('region')
+        result.is_nanp = ci.get('is_nanp', False)
+
+    # Area code enrichment — use what _validate already computed when available
+    area_info = validation.get('area_code_info')
+    if area_info:
+        result.area_code = validation.get('area_code') or area_info.get('area_code')
+        result.valid_area_code = area_info.get('valid', False)
+        result.type = area_info.get('type')
+        result.description = area_info.get('description')
+        result.location = area_info.get('location')
+    elif result.is_nanp:
+        # Validation may have failed before reaching area_code_info (e.g. bad NXX)
+        # Still surface the area code info
+        from . import area_codes as ac
+        digits = _extract_digits(result.normalized)
+        if len(digits) == 11:
+            npa = digits[1:4]
+            ai = ac.get_area_code_info(npa)
+            result.area_code = npa
+            result.valid_area_code = ai.get('valid', False)
+            result.type = ai.get('type')
+            result.description = ai.get('description')
+            result.location = ai.get('location')
+    elif result.country_code:
+        # International number — detect line type from national number prefix
+        from . import international_info
+        digits = _extract_digits(result.normalized)
+        national = digits[len(result.country_code):]
+        line_type = international_info.get_international_type(result.country_code, national)
+        if line_type:
+            result.type = line_type
+            result.description = f"{result.country} {line_type} number"
+
+    return result
