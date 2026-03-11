@@ -10,31 +10,27 @@
       
       
       
-        <link rel="canonical" href="https://NativeMojo.github.io/django-mojo/web_developer/phonehub/">
+        <link rel="canonical" href="https://NativeMojo.github.io/django-mojo/django_developer/phonehub/rest/">
       
       
-        <link rel="prev" href="../realtime/websocket/">
-      
-      
-        <link rel="next" href="../filevault/">
       
       
         
       
       
-      <link rel="icon" href="../../assets/images/favicon.png">
+      <link rel="icon" href="../../../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.5">
     
     
       
-        <title>PhoneHub - Django-MOJO</title>
+        <title>PhoneHub REST Endpoints — Django Developer Reference - Django-MOJO</title>
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
       
         
-        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
       
       
 
@@ -53,7 +49,7 @@
       
     
     
-    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -78,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#phonehub-rest-api-reference" class="md-skip">
+        <a href="#phonehub-rest-endpoints-django-developer-reference" class="md-skip">
           Skip to content
         </a>
       
@@ -92,7 +88,7 @@
 
 <header class="md-header" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../.." title="Django-MOJO" class="md-header__button md-logo" aria-label="Django-MOJO" data-md-component="logo">
+    <a href="../../.." title="Django-MOJO" class="md-header__button md-logo" aria-label="Django-MOJO" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -112,7 +108,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              PhoneHub
+              PhoneHub REST Endpoints — Django Developer Reference
             
           </span>
         </div>
@@ -225,7 +221,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../.." class="md-tabs__link">
+      <a href="../../.." class="md-tabs__link">
         
   
   
@@ -246,7 +242,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../django_developer/" class="md-tabs__link">
+        <a href="../../" class="md-tabs__link">
           
   
   
@@ -262,13 +258,11 @@
   
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
-        <a href="../" class="md-tabs__link">
+      <li class="md-tabs__item">
+        <a href="../../../web_developer/" class="md-tabs__link">
           
   
   
@@ -302,7 +296,7 @@
 
 <nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../.." title="Django-MOJO" class="md-nav__button md-logo" aria-label="Django-MOJO" data-md-component="logo">
+    <a href="../../.." title="Django-MOJO" class="md-nav__button md-logo" aria-label="Django-MOJO" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -332,7 +326,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../.." class="md-nav__link">
+      <a href="../../.." class="md-nav__link">
         
   
   
@@ -413,7 +407,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/" class="md-nav__link">
+      <a href="../../" class="md-nav__link">
         
   
   
@@ -495,7 +489,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/core/" class="md-nav__link">
+      <a href="../../core/" class="md-nav__link">
         
   
   
@@ -523,7 +517,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/core/mojo_model/" class="md-nav__link">
+      <a href="../../core/mojo_model/" class="md-nav__link">
         
   
   
@@ -551,7 +545,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/core/decorators/" class="md-nav__link">
+      <a href="../../core/decorators/" class="md-nav__link">
         
   
   
@@ -579,7 +573,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/core/middleware/" class="md-nav__link">
+      <a href="../../core/middleware/" class="md-nav__link">
         
   
   
@@ -607,7 +601,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/core/graphs/" class="md-nav__link">
+      <a href="../../core/graphs/" class="md-nav__link">
         
   
   
@@ -635,7 +629,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/core/cache/" class="md-nav__link">
+      <a href="../../core/cache/" class="md-nav__link">
         
   
   
@@ -725,7 +719,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/helpers/" class="md-nav__link">
+      <a href="../../helpers/" class="md-nav__link">
         
   
   
@@ -753,7 +747,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/helpers/logit/" class="md-nav__link">
+      <a href="../../helpers/logit/" class="md-nav__link">
         
   
   
@@ -781,7 +775,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/helpers/dates/" class="md-nav__link">
+      <a href="../../helpers/dates/" class="md-nav__link">
         
   
   
@@ -809,7 +803,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/helpers/settings/" class="md-nav__link">
+      <a href="../../helpers/settings/" class="md-nav__link">
         
   
   
@@ -837,7 +831,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/helpers/crypto/" class="md-nav__link">
+      <a href="../../helpers/crypto/" class="md-nav__link">
         
   
   
@@ -865,7 +859,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/helpers/request/" class="md-nav__link">
+      <a href="../../helpers/request/" class="md-nav__link">
         
   
   
@@ -893,7 +887,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/helpers/response/" class="md-nav__link">
+      <a href="../../helpers/response/" class="md-nav__link">
         
   
   
@@ -921,7 +915,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/helpers/other/" class="md-nav__link">
+      <a href="../../helpers/other/" class="md-nav__link">
         
   
   
@@ -1011,7 +1005,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/account/" class="md-nav__link">
+      <a href="../../account/" class="md-nav__link">
         
   
   
@@ -1039,7 +1033,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/account/user/" class="md-nav__link">
+      <a href="../../account/user/" class="md-nav__link">
         
   
   
@@ -1067,7 +1061,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/account/group/" class="md-nav__link">
+      <a href="../../account/group/" class="md-nav__link">
         
   
   
@@ -1095,7 +1089,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/account/auth/" class="md-nav__link">
+      <a href="../../account/auth/" class="md-nav__link">
         
   
   
@@ -1185,7 +1179,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/logging/" class="md-nav__link">
+      <a href="../../logging/" class="md-nav__link">
         
   
   
@@ -1213,7 +1207,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/logging/logit/" class="md-nav__link">
+      <a href="../../logging/logit/" class="md-nav__link">
         
   
   
@@ -1241,7 +1235,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/logging/incidents/" class="md-nav__link">
+      <a href="../../logging/incidents/" class="md-nav__link">
         
   
   
@@ -1331,7 +1325,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/files/" class="md-nav__link">
+      <a href="../../files/" class="md-nav__link">
         
   
   
@@ -1359,7 +1353,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/files/file/" class="md-nav__link">
+      <a href="../../files/file/" class="md-nav__link">
         
   
   
@@ -1387,7 +1381,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/files/file_manager/" class="md-nav__link">
+      <a href="../../files/file_manager/" class="md-nav__link">
         
   
   
@@ -1477,7 +1471,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/email/" class="md-nav__link">
+      <a href="../../email/" class="md-nav__link">
         
   
   
@@ -1505,7 +1499,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/email/architecture/" class="md-nav__link">
+      <a href="../../email/architecture/" class="md-nav__link">
         
   
   
@@ -1533,7 +1527,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/email/sending/" class="md-nav__link">
+      <a href="../../email/sending/" class="md-nav__link">
         
   
   
@@ -1561,7 +1555,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/email/receiving/" class="md-nav__link">
+      <a href="../../email/receiving/" class="md-nav__link">
         
   
   
@@ -1651,7 +1645,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/jobs/" class="md-nav__link">
+      <a href="../../jobs/" class="md-nav__link">
         
   
   
@@ -1679,7 +1673,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/jobs/publishing/" class="md-nav__link">
+      <a href="../../jobs/publishing/" class="md-nav__link">
         
   
   
@@ -1707,7 +1701,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/jobs/writing_jobs/" class="md-nav__link">
+      <a href="../../jobs/writing_jobs/" class="md-nav__link">
         
   
   
@@ -1735,7 +1729,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/jobs/job_model/" class="md-nav__link">
+      <a href="../../jobs/job_model/" class="md-nav__link">
         
   
   
@@ -1825,7 +1819,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/metrics/" class="md-nav__link">
+      <a href="../../metrics/" class="md-nav__link">
         
   
   
@@ -1853,7 +1847,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/metrics/recording/" class="md-nav__link">
+      <a href="../../metrics/recording/" class="md-nav__link">
         
   
   
@@ -1881,7 +1875,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/metrics/fetching/" class="md-nav__link">
+      <a href="../../metrics/fetching/" class="md-nav__link">
         
   
   
@@ -1971,7 +1965,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/realtime/" class="md-nav__link">
+      <a href="../../realtime/" class="md-nav__link">
         
   
   
@@ -1999,7 +1993,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/realtime/architecture/" class="md-nav__link">
+      <a href="../../realtime/architecture/" class="md-nav__link">
         
   
   
@@ -2027,7 +2021,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/realtime/publishing/" class="md-nav__link">
+      <a href="../../realtime/publishing/" class="md-nav__link">
         
   
   
@@ -2055,7 +2049,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/realtime/hooks/" class="md-nav__link">
+      <a href="../../realtime/hooks/" class="md-nav__link">
         
   
   
@@ -2091,7 +2085,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/phonehub/" class="md-nav__link">
+      <a href="../" class="md-nav__link">
         
   
   
@@ -2119,7 +2113,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/filevault/" class="md-nav__link">
+      <a href="../../filevault/" class="md-nav__link">
         
   
   
@@ -2147,7 +2141,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/docit/" class="md-nav__link">
+      <a href="../../docit/" class="md-nav__link">
         
   
   
@@ -2179,31 +2173,28 @@
       
   
   
-    
   
   
-  
     
     
     
     
-      
-        
-        
       
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
         
           
-          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
             
   
   
@@ -2221,7 +2212,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             
@@ -2239,7 +2230,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../" class="md-nav__link">
+      <a href="../../../web_developer/" class="md-nav__link">
         
   
   
@@ -2273,13 +2264,10 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
@@ -2288,7 +2276,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_2" >
         
           
-          <label class="md-nav__link" for="__nav_3_2" id="__nav_3_2_label" tabindex="">
+          <label class="md-nav__link" for="__nav_3_2" id="__nav_3_2_label" tabindex="0">
             
   
   
@@ -2324,7 +2312,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../core/" class="md-nav__link">
+      <a href="../../../web_developer/core/" class="md-nav__link">
         
   
   
@@ -2352,7 +2340,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../core/authentication/" class="md-nav__link">
+      <a href="../../../web_developer/core/authentication/" class="md-nav__link">
         
   
   
@@ -2380,7 +2368,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../core/request_response/" class="md-nav__link">
+      <a href="../../../web_developer/core/request_response/" class="md-nav__link">
         
   
   
@@ -2408,7 +2396,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../core/filtering/" class="md-nav__link">
+      <a href="../../../web_developer/core/filtering/" class="md-nav__link">
         
   
   
@@ -2436,7 +2424,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../core/pagination/" class="md-nav__link">
+      <a href="../../../web_developer/core/pagination/" class="md-nav__link">
         
   
   
@@ -2464,7 +2452,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../core/graphs/" class="md-nav__link">
+      <a href="../../../web_developer/core/graphs/" class="md-nav__link">
         
   
   
@@ -2506,13 +2494,10 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
@@ -2521,7 +2506,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_3" >
         
           
-          <label class="md-nav__link" for="__nav_3_3" id="__nav_3_3_label" tabindex="">
+          <label class="md-nav__link" for="__nav_3_3" id="__nav_3_3_label" tabindex="0">
             
   
   
@@ -2557,7 +2542,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../account/" class="md-nav__link">
+      <a href="../../../web_developer/account/" class="md-nav__link">
         
   
   
@@ -2585,7 +2570,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../account/authentication/" class="md-nav__link">
+      <a href="../../../web_developer/account/authentication/" class="md-nav__link">
         
   
   
@@ -2613,7 +2598,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../account/user/" class="md-nav__link">
+      <a href="../../../web_developer/account/user/" class="md-nav__link">
         
   
   
@@ -2641,7 +2626,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../account/group/" class="md-nav__link">
+      <a href="../../../web_developer/account/group/" class="md-nav__link">
         
   
   
@@ -2669,7 +2654,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../account/api_keys/" class="md-nav__link">
+      <a href="../../../web_developer/account/api_keys/" class="md-nav__link">
         
   
   
@@ -2711,13 +2696,10 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
@@ -2726,7 +2708,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_4" >
         
           
-          <label class="md-nav__link" for="__nav_3_4" id="__nav_3_4_label" tabindex="">
+          <label class="md-nav__link" for="__nav_3_4" id="__nav_3_4_label" tabindex="0">
             
   
   
@@ -2762,7 +2744,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../logging/" class="md-nav__link">
+      <a href="../../../web_developer/logging/" class="md-nav__link">
         
   
   
@@ -2790,7 +2772,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../logging/logs/" class="md-nav__link">
+      <a href="../../../web_developer/logging/logs/" class="md-nav__link">
         
   
   
@@ -2818,7 +2800,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../logging/incidents/" class="md-nav__link">
+      <a href="../../../web_developer/logging/incidents/" class="md-nav__link">
         
   
   
@@ -2860,13 +2842,10 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
@@ -2875,7 +2854,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_5" >
         
           
-          <label class="md-nav__link" for="__nav_3_5" id="__nav_3_5_label" tabindex="">
+          <label class="md-nav__link" for="__nav_3_5" id="__nav_3_5_label" tabindex="0">
             
   
   
@@ -2911,7 +2890,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../files/" class="md-nav__link">
+      <a href="../../../web_developer/files/" class="md-nav__link">
         
   
   
@@ -2939,7 +2918,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../files/upload/" class="md-nav__link">
+      <a href="../../../web_developer/files/upload/" class="md-nav__link">
         
   
   
@@ -2967,7 +2946,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../files/files/" class="md-nav__link">
+      <a href="../../../web_developer/files/files/" class="md-nav__link">
         
   
   
@@ -3009,13 +2988,10 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
@@ -3024,7 +3000,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_6" >
         
           
-          <label class="md-nav__link" for="__nav_3_6" id="__nav_3_6_label" tabindex="">
+          <label class="md-nav__link" for="__nav_3_6" id="__nav_3_6_label" tabindex="0">
             
   
   
@@ -3060,7 +3036,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../email/" class="md-nav__link">
+      <a href="../../../web_developer/email/" class="md-nav__link">
         
   
   
@@ -3088,7 +3064,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../email/email/" class="md-nav__link">
+      <a href="../../../web_developer/email/email/" class="md-nav__link">
         
   
   
@@ -3130,13 +3106,10 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
@@ -3145,7 +3118,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_7" >
         
           
-          <label class="md-nav__link" for="__nav_3_7" id="__nav_3_7_label" tabindex="">
+          <label class="md-nav__link" for="__nav_3_7" id="__nav_3_7_label" tabindex="0">
             
   
   
@@ -3181,7 +3154,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../jobs/" class="md-nav__link">
+      <a href="../../../web_developer/jobs/" class="md-nav__link">
         
   
   
@@ -3209,7 +3182,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../jobs/jobs/" class="md-nav__link">
+      <a href="../../../web_developer/jobs/jobs/" class="md-nav__link">
         
   
   
@@ -3251,13 +3224,10 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
@@ -3266,7 +3236,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_8" >
         
           
-          <label class="md-nav__link" for="__nav_3_8" id="__nav_3_8_label" tabindex="">
+          <label class="md-nav__link" for="__nav_3_8" id="__nav_3_8_label" tabindex="0">
             
   
   
@@ -3302,7 +3272,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../metrics/" class="md-nav__link">
+      <a href="../../../web_developer/metrics/" class="md-nav__link">
         
   
   
@@ -3330,7 +3300,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../metrics/metrics/" class="md-nav__link">
+      <a href="../../../web_developer/metrics/metrics/" class="md-nav__link">
         
   
   
@@ -3372,13 +3342,10 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
@@ -3387,7 +3354,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_9" >
         
           
-          <label class="md-nav__link" for="__nav_3_9" id="__nav_3_9_label" tabindex="">
+          <label class="md-nav__link" for="__nav_3_9" id="__nav_3_9_label" tabindex="0">
             
   
   
@@ -3423,7 +3390,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../realtime/" class="md-nav__link">
+      <a href="../../../web_developer/realtime/" class="md-nav__link">
         
   
   
@@ -3451,7 +3418,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../realtime/websocket/" class="md-nav__link">
+      <a href="../../../web_developer/realtime/websocket/" class="md-nav__link">
         
   
   
@@ -3484,37 +3451,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    PhoneHub
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../../web_developer/phonehub/" class="md-nav__link">
         
   
   
@@ -3530,109 +3470,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#endpoints" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Endpoints
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#normalize-a-phone-number" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Normalize a Phone Number
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#look-up-phone-info" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Look Up Phone Info
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#send-an-sms" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Send an SMS
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#list-sms-records" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        List SMS Records
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="List SMS Records">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#sms-status-values" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        SMS status values
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#permissions" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Permissions
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -3645,7 +3482,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../filevault/" class="md-nav__link">
+      <a href="../../../web_developer/filevault/" class="md-nav__link">
         
   
   
@@ -3673,7 +3510,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../docit/" class="md-nav__link">
+      <a href="../../../web_developer/docit/" class="md-nav__link">
         
   
   
@@ -3728,66 +3565,44 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#endpoints" class="md-nav__link">
+  <a href="#phone-number-endpoints" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Endpoints
+        Phone Number Endpoints
       
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#normalize-a-phone-number" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Normalize a Phone Number
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#look-up-phone-info" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Look Up Phone Info
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#send-an-sms" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Send an SMS
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#list-sms-records" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        List SMS Records
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="List SMS Records">
+    <nav class="md-nav" aria-label="Phone Number Endpoints">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#sms-status-values" class="md-nav__link">
+  <a href="#crud-phonenumber" class="md-nav__link">
     <span class="md-ellipsis">
       
-        SMS status values
+        CRUD — PhoneNumber
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#normalize-post-apiphonehubnumbernormalize" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Normalize — POST /api/phonehub/number/normalize
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#lookup-post-apiphonehubnumberlookup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Lookup — POST /api/phonehub/number/lookup
       
     </span>
   </a>
@@ -3800,13 +3615,91 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#permissions" class="md-nav__link">
+  <a href="#sms-endpoints" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Permissions
+        SMS Endpoints
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="SMS Endpoints">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#crud-sms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CRUD — SMS
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#send-post-apiphonehubsmssend" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Send — POST /api/phonehub/sms/send
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#twilio-inbound-webhook-post-apiphonehubsmswebhooktwilio" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Twilio Inbound Webhook — POST /api/phonehub/sms/webhook/twilio
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#twilio-status-webhook-post-apiphonehubsmswebhooktwiliostatus" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Twilio Status Webhook — POST /api/phonehub/sms/webhook/twilio/status
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#config-endpoints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Config Endpoints
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Config Endpoints">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#crud-phoneconfig" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CRUD — PhoneConfig
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -3830,99 +3723,83 @@
   
 
 
-<h1 id="phonehub-rest-api-reference">PhoneHub — REST API Reference<a class="headerlink" href="#phonehub-rest-api-reference" title="Permanent link">&para;</a></h1>
-<p>PhoneHub provides phone number normalization, carrier lookup, SMS sending, and delivery status tracking.</p>
-<h2 id="endpoints">Endpoints<a class="headerlink" href="#endpoints" title="Permanent link">&para;</a></h2>
+<h1 id="phonehub-rest-endpoints-django-developer-reference">PhoneHub REST Endpoints — Django Developer Reference<a class="headerlink" href="#phonehub-rest-endpoints-django-developer-reference" title="Permanent link">&para;</a></h1>
+<p>All endpoints are registered under the <code>/api/phonehub/</code> prefix.</p>
+<h2 id="phone-number-endpoints">Phone Number Endpoints<a class="headerlink" href="#phone-number-endpoints" title="Permanent link">&para;</a></h2>
+<h3 id="crud-phonenumber">CRUD — PhoneNumber<a class="headerlink" href="#crud-phonenumber" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;number&#39;</span><span class="p">)</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;number/&lt;int:pk&gt;&#39;</span><span class="p">)</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_phone_number</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">pk</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="k">return</span> <span class="n">PhoneNumber</span><span class="o">.</span><span class="n">on_rest_request</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">pk</span><span class="p">)</span>
+</code></pre></div>
 <table>
 <thead>
 <tr>
 <th>Method</th>
 <th>Path</th>
-<th>Description</th>
+<th>Action</th>
 </tr>
 </thead>
 <tbody>
 <tr>
 <td>GET</td>
 <td><code>/api/phonehub/number</code></td>
-<td>List phone numbers</td>
+<td>List phone numbers (filtered to <code>is_valid=True</code> by default)</td>
 </tr>
 <tr>
 <td>GET</td>
 <td><code>/api/phonehub/number/&lt;id&gt;</code></td>
-<td>Get a phone number</td>
+<td>Get a single phone number</td>
 </tr>
 <tr>
 <td>POST</td>
-<td><code>/api/phonehub/number/normalize</code></td>
-<td>Normalize to E.164 format</td>
+<td><code>/api/phonehub/number</code></td>
+<td>Create a phone number record</td>
 </tr>
 <tr>
-<td>POST</td>
-<td><code>/api/phonehub/number/lookup</code></td>
-<td>Look up carrier and line type</td>
+<td>POST/PUT</td>
+<td><code>/api/phonehub/number/&lt;id&gt;</code></td>
+<td>Update a phone number record</td>
 </tr>
 <tr>
-<td>GET</td>
-<td><code>/api/phonehub/sms</code></td>
-<td>List SMS records</td>
-</tr>
-<tr>
-<td>GET</td>
-<td><code>/api/phonehub/sms/&lt;id&gt;</code></td>
-<td>Get a single SMS</td>
-</tr>
-<tr>
-<td>POST</td>
-<td><code>/api/phonehub/sms/send</code></td>
-<td>Send an SMS</td>
-</tr>
-<tr>
-<td>GET</td>
-<td><code>/api/phonehub/config</code></td>
-<td>List phone configs</td>
-</tr>
-<tr>
-<td>GET</td>
-<td><code>/api/phonehub/config/&lt;id&gt;</code></td>
-<td>Get a phone config</td>
+<td>DELETE</td>
+<td><code>/api/phonehub/number/&lt;id&gt;</code></td>
+<td>Delete a phone number record</td>
 </tr>
 </tbody>
 </table>
+<p><strong>Permissions:</strong> <code>view_phone_numbers</code>, <code>manage_phone_numbers</code>, or <code>manage_users</code></p>
 <hr />
-<h2 id="normalize-a-phone-number">Normalize a Phone Number<a class="headerlink" href="#normalize-a-phone-number" title="Permanent link">&para;</a></h2>
-<p>Converts any phone number format to E.164. No carrier lookup — pure normalization.</p>
-<p><strong>POST</strong> <code>/api/phonehub/number/normalize</code></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="p">{</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">&quot;phone_number&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;415-555-1234&quot;</span><span class="p">,</span>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span><span class="nt">&quot;country_code&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;US&quot;</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="p">}</span>
-</code></pre></div>
-<p><code>country_code</code> is optional. 10-digit numbers without a country code are assumed US/CA.</p>
-<p><strong>Response:</strong>
+<h3 id="normalize-post-apiphonehubnumbernormalize">Normalize — <code>POST /api/phonehub/number/normalize</code><a class="headerlink" href="#normalize-post-apiphonehubnumbernormalize" title="Permanent link">&para;</a></h3>
+<p>Normalize any phone number input to E.164 format. Does not hit the carrier — pure string normalization.</p>
+<p><strong>Requires:</strong> <code>view_phone_numbers</code> or <code>manage_phone_numbers</code></p>
+<p><strong>Request:</strong>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">    </span><span class="nt">&quot;phone_number&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;+14155551234&quot;</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span><span class="p">}</span>
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="p">}</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">&quot;phone_number&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;415-555-1234&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span><span class="nt">&quot;country_code&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;US&quot;</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="p">}</span>
 </code></pre></div></p>
-<p><strong>On invalid input:</strong>
+<p><code>country_code</code> is optional. Without it, 10-digit numbers are assumed NANP (US/CA).</p>
+<p><strong>Response:</strong>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Could not normalize phone number&quot;</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="p">}</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span><span class="nt">&quot;phone_number&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;+14155551234&quot;</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="p">}</span>
 </code></pre></div></p>
+<p>Returns <code>{"status": false, "error": "..."}</code> if the number cannot be normalized.</p>
 <hr />
-<h2 id="look-up-phone-info">Look Up Phone Info<a class="headerlink" href="#look-up-phone-info" title="Permanent link">&para;</a></h2>
-<p>Returns carrier, line type, and owner data for a phone number. Results are cached on the server — re-fetched automatically when the cache expires (default 90 days).</p>
-<p><strong>POST</strong> <code>/api/phonehub/number/lookup</code></p>
+<h3 id="lookup-post-apiphonehubnumberlookup">Lookup — <code>POST /api/phonehub/number/lookup</code><a class="headerlink" href="#lookup-post-apiphonehubnumberlookup" title="Permanent link">&para;</a></h3>
+<p>Look up carrier and line type data for a phone number. Results are cached; re-fetches automatically when expired.</p>
+<p><strong>Requires:</strong> <code>view_phone_numbers</code> or <code>manage_phone_numbers</code></p>
+<p><strong>Request:</strong>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span>
 <a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">&quot;phone_number&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;+14155551234&quot;</span><span class="p">,</span>
 <a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="nt">&quot;force_refresh&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
 <a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="p">}</span>
-</code></pre></div>
-<p>Pass <code>force_refresh: true</code> to bypass the cache and fetch fresh data from the carrier.</p>
+</code></pre></div></p>
+<p>Pass <code>force_refresh: true</code> to bypass the cache and re-query the provider.</p>
 <p><strong>Response:</strong>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span>
 <a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
@@ -3938,200 +3815,138 @@
 <a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a><span class="w">    </span><span class="nt">&quot;is_valid&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
 <a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="w">    </span><span class="nt">&quot;registered_owner&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;John Smith&quot;</span><span class="p">,</span>
 <a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a><span class="w">    </span><span class="nt">&quot;owner_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;CONSUMER&quot;</span><span class="p">,</span>
-<a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a><span class="w">    </span><span class="nt">&quot;created&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2024-01-15T10:30:00Z&quot;</span><span class="p">,</span>
-<a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a><span class="w">    </span><span class="nt">&quot;modified&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2024-01-15T10:30:00Z&quot;</span>
-<a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a><span class="w">  </span><span class="p">}</span>
-<a id="__codelineno-4-18" name="__codelineno-4-18" href="#__codelineno-4-18"></a><span class="p">}</span>
+<a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a><span class="w">    </span><span class="nt">&quot;lookup_provider&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;twilio&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a><span class="w">    </span><span class="nt">&quot;created&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2024-01-15T10:30:00Z&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a><span class="w">    </span><span class="nt">&quot;modified&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2024-01-15T10:30:00Z&quot;</span>
+<a id="__codelineno-4-18" name="__codelineno-4-18" href="#__codelineno-4-18"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-4-19" name="__codelineno-4-19" href="#__codelineno-4-19"></a><span class="p">}</span>
 </code></pre></div></p>
+<hr />
+<h2 id="sms-endpoints">SMS Endpoints<a class="headerlink" href="#sms-endpoints" title="Permanent link">&para;</a></h2>
+<h3 id="crud-sms">CRUD — SMS<a class="headerlink" href="#crud-sms" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;sms&#39;</span><span class="p">)</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;sms/&lt;int:pk&gt;&#39;</span><span class="p">)</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_sms</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">pk</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>    <span class="k">return</span> <span class="n">SMS</span><span class="o">.</span><span class="n">on_rest_request</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">pk</span><span class="p">)</span>
+</code></pre></div>
 <table>
 <thead>
 <tr>
-<th>Field</th>
-<th>Values</th>
-<th>Description</th>
+<th>Method</th>
+<th>Path</th>
+<th>Action</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>line_type</code></td>
-<td><code>mobile</code>, <code>landline</code>, <code>voip</code></td>
-<td>Type of phone line</td>
+<td>GET</td>
+<td><code>/api/phonehub/sms</code></td>
+<td>List SMS records</td>
 </tr>
 <tr>
-<td><code>is_mobile</code></td>
-<td>bool</td>
-<td>True for mobile numbers</td>
+<td>GET</td>
+<td><code>/api/phonehub/sms/&lt;id&gt;</code></td>
+<td>Get a single SMS</td>
 </tr>
 <tr>
-<td><code>is_voip</code></td>
-<td>bool</td>
-<td>True for VoIP numbers</td>
+<td>POST/PUT</td>
+<td><code>/api/phonehub/sms/&lt;id&gt;</code></td>
+<td>Update an SMS record</td>
 </tr>
 <tr>
-<td><code>is_valid</code></td>
-<td>bool</td>
-<td>Whether the number passed validation</td>
-</tr>
-<tr>
-<td><code>registered_owner</code></td>
-<td>string or null</td>
-<td>CNAM registered name, if available</td>
-</tr>
-<tr>
-<td><code>owner_type</code></td>
-<td><code>CONSUMER</code>, <code>BUSINESS</code>, or null</td>
-<td>Registered owner type</td>
+<td>DELETE</td>
+<td><code>/api/phonehub/sms/&lt;id&gt;</code></td>
+<td>Delete an SMS record</td>
 </tr>
 </tbody>
 </table>
+<p><strong>Permissions:</strong> <code>view_sms</code>, <code>manage_sms</code>, or <code>owner</code> (users can view their own)</p>
 <hr />
-<h2 id="send-an-sms">Send an SMS<a class="headerlink" href="#send-an-sms" title="Permanent link">&para;</a></h2>
-<p><strong>POST</strong> <code>/api/phonehub/sms/send</code></p>
+<h3 id="send-post-apiphonehubsmssend">Send — <code>POST /api/phonehub/sms/send</code><a class="headerlink" href="#send-post-apiphonehubsmssend" title="Permanent link">&para;</a></h3>
+<p>Send an SMS message.</p>
 <p><strong>Requires:</strong> <code>send_sms</code> permission</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">&quot;to_number&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;+14155551234&quot;</span><span class="p">,</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="nt">&quot;body&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Your verification code is 483921&quot;</span><span class="p">,</span>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span><span class="nt">&quot;from_number&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;+18005551234&quot;</span><span class="p">,</span>
-<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">  </span><span class="nt">&quot;group&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span>
-<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">  </span><span class="nt">&quot;metadata&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;purpose&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;verification&quot;</span><span class="p">}</span>
-<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="p">}</span>
-</code></pre></div>
+<p><strong>Request:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">&quot;to_number&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;+14155551234&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="nt">&quot;body&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Your verification code is 483921&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span><span class="nt">&quot;from_number&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;+18005551234&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span><span class="nt">&quot;group&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">  </span><span class="nt">&quot;metadata&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;purpose&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;verification&quot;</span><span class="p">}</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="p">}</span>
+</code></pre></div></p>
 <p><code>from_number</code>, <code>group</code>, and <code>metadata</code> are optional.</p>
 <p><strong>Response:</strong>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">    </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">42</span><span class="p">,</span>
-<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">    </span><span class="nt">&quot;direction&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;outbound&quot;</span><span class="p">,</span>
-<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">    </span><span class="nt">&quot;to_number&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;+14155551234&quot;</span><span class="p">,</span>
-<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">    </span><span class="nt">&quot;from_number&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;+18005551234&quot;</span><span class="p">,</span>
-<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">    </span><span class="nt">&quot;body&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Your verification code is 483921&quot;</span><span class="p">,</span>
-<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="w">    </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;sent&quot;</span><span class="p">,</span>
-<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="w">    </span><span class="nt">&quot;provider&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;twilio&quot;</span><span class="p">,</span>
-<a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="w">    </span><span class="nt">&quot;provider_message_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;SMxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx&quot;</span><span class="p">,</span>
-<a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a><span class="w">    </span><span class="nt">&quot;sent_at&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2024-01-15T10:30:00Z&quot;</span><span class="p">,</span>
-<a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a><span class="w">    </span><span class="nt">&quot;created&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2024-01-15T10:30:00Z&quot;</span>
-<a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a><span class="w">  </span><span class="p">}</span>
-<a id="__codelineno-6-15" name="__codelineno-6-15" href="#__codelineno-6-15"></a><span class="p">}</span>
-</code></pre></div></p>
-<p><strong>On delivery failure:</strong>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span>
 <a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
 <a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">    </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">43</span><span class="p">,</span>
-<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">    </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;failed&quot;</span><span class="p">,</span>
-<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">    </span><span class="nt">&quot;error_code&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;30006&quot;</span><span class="p">,</span>
-<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="w">    </span><span class="nt">&quot;error_message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Landline or unreachable carrier&quot;</span>
-<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="w">  </span><span class="p">}</span>
-<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="p">}</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">    </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">42</span><span class="p">,</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">    </span><span class="nt">&quot;direction&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;outbound&quot;</span><span class="p">,</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">    </span><span class="nt">&quot;to_number&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;+14155551234&quot;</span><span class="p">,</span>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="w">    </span><span class="nt">&quot;from_number&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;+18005551234&quot;</span><span class="p">,</span>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="w">    </span><span class="nt">&quot;body&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Your verification code is 483921&quot;</span><span class="p">,</span>
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="w">    </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;sent&quot;</span><span class="p">,</span>
+<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="w">    </span><span class="nt">&quot;provider&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;twilio&quot;</span><span class="p">,</span>
+<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a><span class="w">    </span><span class="nt">&quot;provider_message_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;SMxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx&quot;</span><span class="p">,</span>
+<a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a><span class="w">    </span><span class="nt">&quot;sent_at&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2024-01-15T10:30:00Z&quot;</span><span class="p">,</span>
+<a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a><span class="w">    </span><span class="nt">&quot;created&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2024-01-15T10:30:00Z&quot;</span>
+<a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a><span class="p">}</span>
 </code></pre></div></p>
-<p>Note: The outer <code>status</code> is <code>true</code> (the request succeeded); check <code>data.status</code> for the delivery result.</p>
+<p>On failure: <code>status</code> will be <code>"failed"</code> and <code>error_message</code> will contain the provider error.</p>
 <hr />
-<h2 id="list-sms-records">List SMS Records<a class="headerlink" href="#list-sms-records" title="Permanent link">&para;</a></h2>
-<p><strong>GET</strong> <code>/api/phonehub/sms</code></p>
-<p>Supports standard filtering, search, and pagination.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>GET /api/phonehub/sms?direction=outbound&amp;status=delivered
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>GET /api/phonehub/sms?search=+14155551234
-<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>GET /api/phonehub/sms?start=0&amp;size=20&amp;graph=default
+<h3 id="twilio-inbound-webhook-post-apiphonehubsmswebhooktwilio">Twilio Inbound Webhook — <code>POST /api/phonehub/sms/webhook/twilio</code><a class="headerlink" href="#twilio-inbound-webhook-post-apiphonehubsmswebhooktwilio" title="Permanent link">&para;</a></h3>
+<p>Public endpoint. Receives inbound SMS from Twilio. Validates the Twilio webhook signature before processing.</p>
+<p>Saves the inbound message as an <code>SMS</code> record with <code>direction="inbound"</code>, then calls <code>SMS_INBOUND_HANDLER</code> if configured. Returns a TwiML response (may include a reply if the handler returns a string).</p>
+<p><strong>This endpoint is public (no auth).</strong> Twilio signature validation is the security mechanism.</p>
+<hr />
+<h3 id="twilio-status-webhook-post-apiphonehubsmswebhooktwiliostatus">Twilio Status Webhook — <code>POST /api/phonehub/sms/webhook/twilio/status</code><a class="headerlink" href="#twilio-status-webhook-post-apiphonehubsmswebhooktwiliostatus" title="Permanent link">&para;</a></h3>
+<p>Public endpoint. Receives SMS delivery status updates from Twilio. Updates the corresponding <code>SMS</code> record's <code>status</code> and <code>delivered_at</code> fields.</p>
+<hr />
+<h2 id="config-endpoints">Config Endpoints<a class="headerlink" href="#config-endpoints" title="Permanent link">&para;</a></h2>
+<h3 id="crud-phoneconfig">CRUD — PhoneConfig<a class="headerlink" href="#crud-phoneconfig" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;config&#39;</span><span class="p">)</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;config/&lt;int:pk&gt;&#39;</span><span class="p">)</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_phone_config</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">pk</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>    <span class="k">return</span> <span class="n">PhoneConfig</span><span class="o">.</span><span class="n">on_rest_request</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">pk</span><span class="p">)</span>
 </code></pre></div>
-<p><strong>Response:</strong>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="p">{</span>
-<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">  </span><span class="nt">&quot;count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">150</span><span class="p">,</span>
-<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">  </span><span class="nt">&quot;start&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
-<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="w">  </span><span class="nt">&quot;size&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">20</span><span class="p">,</span>
-<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="w">    </span><span class="p">{</span>
-<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="w">      </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">42</span><span class="p">,</span>
-<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="w">      </span><span class="nt">&quot;direction&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;outbound&quot;</span><span class="p">,</span>
-<a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a><span class="w">      </span><span class="nt">&quot;from_number&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;+18005551234&quot;</span><span class="p">,</span>
-<a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a><span class="w">      </span><span class="nt">&quot;to_number&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;+14155551234&quot;</span><span class="p">,</span>
-<a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a><span class="w">      </span><span class="nt">&quot;body&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Your verification code is 483921&quot;</span><span class="p">,</span>
-<a id="__codelineno-9-13" name="__codelineno-9-13" href="#__codelineno-9-13"></a><span class="w">      </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;delivered&quot;</span><span class="p">,</span>
-<a id="__codelineno-9-14" name="__codelineno-9-14" href="#__codelineno-9-14"></a><span class="w">      </span><span class="nt">&quot;created&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2024-01-15T10:30:00Z&quot;</span>
-<a id="__codelineno-9-15" name="__codelineno-9-15" href="#__codelineno-9-15"></a><span class="w">    </span><span class="p">}</span>
-<a id="__codelineno-9-16" name="__codelineno-9-16" href="#__codelineno-9-16"></a><span class="w">  </span><span class="p">]</span>
-<a id="__codelineno-9-17" name="__codelineno-9-17" href="#__codelineno-9-17"></a><span class="p">}</span>
-</code></pre></div></p>
-<h3 id="sms-status-values">SMS status values<a class="headerlink" href="#sms-status-values" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
 <tr>
-<th>Status</th>
-<th>Description</th>
+<th>Method</th>
+<th>Path</th>
+<th>Action</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>queued</code></td>
-<td>Queued for sending</td>
+<td>GET</td>
+<td><code>/api/phonehub/config</code></td>
+<td>List configs (filtered to <code>is_active=True</code> by default)</td>
 </tr>
 <tr>
-<td><code>sending</code></td>
-<td>In progress</td>
+<td>GET</td>
+<td><code>/api/phonehub/config/&lt;id&gt;</code></td>
+<td>Get a single config</td>
 </tr>
 <tr>
-<td><code>sent</code></td>
-<td>Accepted by provider</td>
+<td>POST</td>
+<td><code>/api/phonehub/config</code></td>
+<td>Create a config</td>
 </tr>
 <tr>
-<td><code>delivered</code></td>
-<td>Confirmed delivered</td>
+<td>POST/PUT</td>
+<td><code>/api/phonehub/config/&lt;id&gt;</code></td>
+<td>Update a config</td>
 </tr>
 <tr>
-<td><code>failed</code></td>
-<td>Send failed</td>
-</tr>
-<tr>
-<td><code>undelivered</code></td>
-<td>Provider could not deliver</td>
-</tr>
-<tr>
-<td><code>received</code></td>
-<td>Inbound message received</td>
+<td>DELETE</td>
+<td><code>/api/phonehub/config/&lt;id&gt;</code></td>
+<td>Delete a config</td>
 </tr>
 </tbody>
 </table>
-<hr />
-<h2 id="permissions">Permissions<a class="headerlink" href="#permissions" title="Permanent link">&para;</a></h2>
-<table>
-<thead>
-<tr>
-<th>Permission</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>view_phone_numbers</code></td>
-<td>Read phone number records</td>
-</tr>
-<tr>
-<td><code>manage_phone_numbers</code></td>
-<td>Create, update, delete phone number records</td>
-</tr>
-<tr>
-<td><code>view_sms</code></td>
-<td>Read SMS records</td>
-</tr>
-<tr>
-<td><code>manage_sms</code></td>
-<td>Update and delete SMS records</td>
-</tr>
-<tr>
-<td><code>send_sms</code></td>
-<td>Send SMS messages</td>
-</tr>
-<tr>
-<td><code>manage_phone_config</code></td>
-<td>Manage provider configuration</td>
-</tr>
-<tr>
-<td><code>owner</code></td>
-<td>Users can view their own SMS records</td>
-</tr>
-</tbody>
-</table>
+<p><strong>Permissions:</strong> <code>manage_phone_config</code> or <code>manage_groups</code></p>
+<p><code>mojo_secrets</code> (encrypted credentials) is never returned in any response.</p>
 
 
 
@@ -4187,10 +4002,10 @@
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.suggest", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.suggest", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
       
     
   </body>
