@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v1.0.32 - March 11, 2026
+
+ability to login with phonenumber
+
+
 ## v1.0.31 - March 11, 2026
 
 new rate limiting login

@@ -416,3 +416,102 @@ def test_user_without_parent_membership_cannot_access_child(opts):
         print(f"Client authenticated: {opts.client.is_authenticated}")
     assert resp.status_code == 200, f"Expected status_code is 200 but got {resp.status_code}"
     assert resp.response.count == 0, f"Should not see any groups, got {resp.response.count}"
+
+
+# ---------------------------------------------------------------------------
+# Phone number login tests
+# ---------------------------------------------------------------------------
+
+TEST_PHONE = "+14155550199"
+TEST_PHONE_USER = "phone_test_user"
+TEST_PHONE_PWORD = "testit##mojo"
+
+
+@th.unit_test("phone_number_set_normalizes")
+def test_phone_number_set_normalizes(opts):
+    from mojo.apps.account.models import User
+    # Clear any stale phone_number from previous runs (migration may not be applied yet)
+    User.objects.filter(phone_number=TEST_PHONE).exclude(username=TEST_PHONE_USER).update(phone_number=None)
+    user = User.objects.filter(username=TEST_PHONE_USER).last()
+    if user is None:
+        user = User(username=TEST_PHONE_USER, email=f"{TEST_PHONE_USER}@example.com", display_name=TEST_PHONE_USER)
+        user.save()
+    user.save_password(TEST_PHONE_PWORD)
+    # Set via the set_phone_number method directly
+    user.set_phone_number("415-555-0199")
+    user.save()
+    assert user.phone_number == TEST_PHONE, f"Expected {TEST_PHONE} but got {user.phone_number}"
+
+
+@th.unit_test("phone_number_set_via_rest")
+def test_phone_number_set_via_rest(opts):
+    resp = opts.client.login(TEST_PHONE_USER, TEST_PHONE_PWORD)
+    assert opts.client.is_authenticated, "authentication failed"
+    uid = opts.client.jwt_data.uid
+    # Update phone via REST — framework calls set_phone_number automatically
+    resp = opts.client.post(f"/api/user/{uid}", {"phone_number": "1 (415) 555-0199"})
+    assert resp.status_code == 200, f"Expected 200 but got {resp.status_code}"
+    assert resp.response.data.phone_number == TEST_PHONE, f"Expected normalized {TEST_PHONE} but got {resp.response.data.phone_number}"
+    opts.phone_user_id = uid
+
+
+@th.unit_test("login_with_phone_e164")
+def test_login_with_phone_e164(opts):
+    resp = opts.client.login(TEST_PHONE, TEST_PHONE_PWORD)
+    assert opts.client.is_authenticated, "login with E.164 phone number failed"
+    assert opts.client.jwt_data.uid == opts.phone_user_id, "logged in as wrong user"
+
+
+@th.unit_test("login_with_phone_unformatted")
+def test_login_with_phone_unformatted(opts):
+    # Login with raw 10-digit number — should normalize to +14155550199 and match
+    resp = opts.client.login("4155550199", TEST_PHONE_PWORD)
+    assert opts.client.is_authenticated, "login with unformatted phone number failed"
+    assert opts.client.jwt_data.uid == opts.phone_user_id, "logged in as wrong user"
+
+
+@th.unit_test("login_with_phone_wrong_password")
+def test_login_with_phone_wrong_password(opts):
+    resp = opts.client.login(TEST_PHONE, "wrongpassword")
+    assert not opts.client.is_authenticated, "login should have failed with wrong password"
+
+
+@th.unit_test("phone_number_invalid_rejected")
+def test_phone_number_invalid_rejected(opts):
+    resp = opts.client.login(TEST_PHONE_USER, TEST_PHONE_PWORD)
+    assert opts.client.is_authenticated, "authentication failed"
+    uid = opts.client.jwt_data.uid
+    resp = opts.client.post(f"/api/user/{uid}", {"phone_number": "not-a-phone"})
+    assert resp.status_code == 400, f"Expected 400 for invalid phone but got {resp.status_code}"
+
+
+@th.unit_test("phone_number_cleared")
+def test_phone_number_cleared(opts):
+    resp = opts.client.login(TEST_PHONE_USER, TEST_PHONE_PWORD)
+    assert opts.client.is_authenticated, "authentication failed"
+    uid = opts.client.jwt_data.uid
+    resp = opts.client.post(f"/api/user/{uid}", {"phone_number": ""})
+    assert resp.status_code == 200, f"Expected 200 but got {resp.status_code}"
+    assert resp.response.data.phone_number is None, f"Expected None after clearing but got {resp.response.data.phone_number}"
+
+
+@th.unit_test("phone_number_duplicate_rejected")
+def test_phone_number_duplicate_rejected(opts):
+    from mojo.apps.account.models import User
+    # Re-claim the phone on the original user (phone_number_cleared may have wiped it)
+    original = User.objects.filter(username=TEST_PHONE_USER).last()
+    assert original is not None, f"Expected {TEST_PHONE_USER} to exist"
+    original.phone_number = TEST_PHONE
+    original.save()
+    # Create a second user and try to claim the same phone number
+    other = User.objects.filter(username="phone_test_other").last()
+    if other is None:
+        other = User(username="phone_test_other", email="phone_test_other@example.com", display_name="phone_test_other")
+        other.save()
+    other.save_password(TEST_PHONE_PWORD)
+    resp = opts.client.login("phone_test_other", TEST_PHONE_PWORD)
+    assert opts.client.is_authenticated, "authentication failed"
+    uid = opts.client.jwt_data.uid
+    # Try to set the same phone number already owned by TEST_PHONE_USER
+    resp = opts.client.post(f"/api/user/{uid}", {"phone_number": TEST_PHONE})
+    assert resp.status_code != 200, f"Duplicate phone number should have been rejected"
