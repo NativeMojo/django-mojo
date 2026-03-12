@@ -358,7 +358,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
                 if self.has_permission(pk):
                     return True
             return False
-        if perm_key == "all":
+        if perm_key in ["all", "authenticated"]:
             return True
         return self.permissions.get(perm_key, False)
 
