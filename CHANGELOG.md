@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v1.0.36 - March 12, 2026
+
+typo fix
+
+
 ## v1.0.35 - March 12, 2026
 
 support username in sms login
