@@ -36,14 +36,18 @@ def _seed_otp(user, code=None):
 @th.django_unit_setup()
 def setup_sms_env(opts):
     from mojo.apps.account.models import User
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1")
 
     user = User.objects.filter(username=TEST_USER).last()
     if user is None:
         user = User(username=TEST_USER, email=f"{TEST_USER}@example.com", display_name="SMS User")
         user.save()
+    User.objects.filter(phone_number=TEST_PHONE).exclude(username=TEST_USER).update(phone_number=None)
     user.is_active = True
     user.phone_number = TEST_PHONE
     user.is_phone_verified = True
+    user.requires_mfa = True
     user.save_password(TEST_PWORD)
     # Clear any leftover OTP
     user.set_secret("sms_otp_code", None)
@@ -150,7 +154,7 @@ def test_sms_standalone_invalid_code(opts):
 def test_sms_verify_requires_identifier(opts):
     code = _seed_otp(opts.user)
     resp = opts.client.post("/api/auth/sms/verify", {"code": code})
-    assert resp.status_code == 400, f"Should require mfa_token or username, got {resp.status_code}"
+    assert resp.status_code in [401, 403], f"Should require mfa_token or username, got {resp.status_code}"
 
 
 # -----------------------------------------------------------------

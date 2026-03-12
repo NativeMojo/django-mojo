@@ -20,6 +20,37 @@ token_package = JWToken(user.get_auth_key()).create(uid=user.id, ip=request.ip)
 
 Returns `access_token`, `refresh_token`, `expires_in`, and `user` dict.
 
+## MFA Challenge (Login with MFA enabled)
+
+MFA is opt-in per user via the `requires_mfa` boolean field (default `False`). Your app sets this when creating or updating users — the framework never forces it automatically. When `requires_mfa=True`, the login endpoint does **not** return a JWT. Instead it returns an MFA challenge:
+
+```json
+{
+  "status": true,
+  "data": {
+    "mfa_required": true,
+    "mfa_token": "<short-lived token>",
+    "mfa_methods": ["sms"],
+    "expires_in": 300
+  }
+}
+```
+
+The client must detect `mfa_required: true` and route the user to the appropriate second factor.
+
+**MFA methods:**
+- `"sms"` — user has a verified `phone_number`; use the SMS OTP flow
+- `"totp"` — user has an active TOTP device; use the TOTP flow (enrolling TOTP auto-sets `requires_mfa=True`)
+- `"passkey"` — user has a registered passkey; can be used as second factor
+
+**Completing MFA:**
+- SMS: `POST /api/auth/sms/verify` with `mfa_token` + `code`
+- TOTP: `POST /api/auth/totp/verify` with `mfa_token` + `code`
+
+Both return the standard JWT response (`access_token`, `refresh_token`, `expires_in`, `user`) on success.
+
+The `mfa_token` is single-use and expires in `expires_in` seconds (default 300).
+
 ## Token Refresh
 
 **Endpoint:** `POST /api/refresh_token` (also: `/api/token/refresh`)

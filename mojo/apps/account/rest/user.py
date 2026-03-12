@@ -29,6 +29,18 @@ def on_user_me(request):
     return User.on_rest_request(request, request.user.pk)
 
 
+@md.POST('auth/manage/clear_rate_limit')
+@md.requires_perms("manage_users")
+def on_clear_rate_limit(request):
+    """Clear rate limit counters for an IP or device. Requires manage_users permission."""
+    from mojo.decorators.limits import clear_rate_limits
+    ip = request.DATA.get("ip")
+    key = request.DATA.get("key")
+    duid = request.DATA.get("duid")
+    deleted = clear_rate_limits(ip=ip, key=key, duid=duid)
+    return JsonResponse({"status": True, "data": {"deleted": deleted}})
+
+
 @md.POST('refresh_token')
 @md.POST('token/refresh')
 @md.POST("auth/token/refresh")
@@ -51,27 +63,19 @@ def on_refresh_token(request):
 @md.POST('account/jwt/login')
 @md.strict_rate_limit("login", ip_limit=100, duid_limit=10, duid_window=300)
 @md.endpoint_metrics("login_attempts", by=["ip", "duid"])
-@md.requires_params("username", "password")
+@md.requires_params("password")
 def on_user_login(request):
     username = request.DATA.username
     password = request.DATA.password
-    from django.db.models import Q
 
-    lookup = username.lower().strip()
-    q = Q(username=lookup) | Q(email=lookup)
-    if ALLOW_PHONE_LOGIN:
-        from mojo.apps.phonehub.services.phonenumbers import normalize as normalize_phone
-        normalized_phone = normalize_phone(username)
-        if normalized_phone:
-            q |= Q(phone_number=normalized_phone)
-    user = User.objects.filter(q).last()
+    user = User.lookup_from_request(request, phone_as_username=ALLOW_PHONE_LOGIN)
     if user is None:
         User.class_report_incident(
             f"login attempt with unknown username {username}",
             event_type="login:unknown",
             level=8,
             request=request)
-        raise merrors.PermissionDeniedException()
+        raise merrors.PermissionDeniedException("Invalid username or password", 401, 401)
     if not user.check_password(password):
         user.report_incident(f"{user.username} enter an invalid password", "invalid_password")
         raise merrors.PermissionDeniedException("Invalid username or password", 401, 401)
@@ -82,13 +86,18 @@ def on_user_login(request):
 
 
 def get_mfa_methods(user):
-    """Return list of enabled MFA methods for a user."""
+    """Return list of enabled MFA methods for a user, or empty if MFA not required."""
+    if not user.requires_mfa:
+        return []
     methods = []
     from mojo.apps.account.models.totp import UserTOTP
     if UserTOTP.objects.filter(user=user, is_enabled=True).exists():
         methods.append("totp")
     if user.phone_number and user.is_phone_verified:
         methods.append("sms")
+    from mojo.apps.account.models.pkey import Passkey
+    if Passkey.objects.filter(user=user, is_enabled=True).exists():
+        methods.append("passkey")
     return methods
 
 
@@ -139,14 +148,12 @@ def jwt_login(request, user, legacy=False):
 
 @md.POST("auth/forgot")
 @md.strict_rate_limit("auth_forgot", ip_limit=5, ip_window=300)
-@md.requires_params("email")
 @md.public_endpoint()
 def on_user_forgot(request):
-    email = request.DATA.email
-    user = User.objects.filter(email=email.lower().strip()).last()
+    user = User.lookup_from_request(request, phone_as_username=True)
     if user is None:
         User.class_report_incident(
-            f"reset password with unknown email {email}",
+            f"reset password with details {request.DATA.username} - {request.DATA.email} - {request.DATA.phone_number}",
             event_type="reset:unknown",
             level=8,
             request=request)
@@ -168,12 +175,19 @@ def on_user_forgot(request):
 @md.POST("auth/password/reset/code")
 @md.strict_rate_limit("password_reset_code", ip_limit=5, ip_window=300)
 @md.public_endpoint()
-@md.requires_params("code", "email", "new_password")
+@md.requires_params("code", "new_password")
 def on_user_password_reset_code(request):
     code = request.DATA.get("code")
-    email = request.DATA.get("email")
     new_password = request.DATA.get("new_password")
-    user = User.objects.get(email=email)
+    user = User.lookup_from_request(request, phone_as_username=True)
+    if user is None:
+        User.class_report_incident(
+            f"invalid reset password code with details {request.DATA.username} - {request.DATA.email} - {request.DATA.phone_number}",
+            event_type="reset:unknown",
+            level=8,
+            request=request)
+        raise merrors.ValueException("Invalid code")
+
     sec_code = user.get_secret("password_reset_code")
     code_ts = int(user.get_secret("password_reset_code_ts") or 0)
     now_ts = int(dates.utcnow().timestamp())
@@ -208,15 +222,14 @@ def on_user_password_reset_token(request):
 
 @md.POST("auth/magic/send")
 @md.strict_rate_limit("magic_login_send", ip_limit=5, ip_window=300)
-@md.requires_params("email")
 @md.public_endpoint()
 def on_magic_login_send(request):
     """Send a magic login link to the user's email address."""
-    email = request.DATA.email.lower().strip()
-    user = User.objects.filter(email=email).last()
+    user = User.lookup_from_request(request, phone_as_username=True)
+
     if user is None:
         User.class_report_incident(
-            f"magic login attempt with unknown email {email}",
+            f"magic login attempt with unknown email {request.DATA.username} - {request.DATA.email} - {request.DATA.phone_number}",
             event_type="magic:unknown",
             level=8,
             request=request)

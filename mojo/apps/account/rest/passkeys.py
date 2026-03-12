@@ -153,15 +153,10 @@ def on_passkeys_register_complete(request):
 @md.public_endpoint()
 def on_passkeys_login_begin(request):
     """Begin passkey authentication (passwordless login)."""
-    username = request.DATA.get("username", "").lower().strip()
-    if not username:
-        raise merrors.ValueException("Username is required")
-
-    # Find user
-    user = User.objects.filter(Q(username=username) | Q(email=username)).first()
+    user = User.lookup_from_request(request, phone_as_username=True)
     if not user:
         User.class_report_incident(
-            f"Passkey login attempt with unknown username: {username}",
+            f"Passkey login attempt with unknown username: {request.DATA.username} - {request.DATA.email} - {request.DATA.phone_number}",
             event_type="login:unknown",
             level=8,
             request=request,
