@@ -165,6 +165,10 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             return self.display_name
         return self.generate_display_name()
 
+    def init_metadata(self):
+        # this will init metadata to an objict
+        return self.jsonfield_as_objict("metadata")
+
     def is_request_user(self, request=None):
         if request is None:
             request = self.active_request

@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v1.0.35 - March 12, 2026
+
+support username in sms login
+
+
 ## v1.0.34 - March 12, 2026
 
 bug fixes, more security patches
