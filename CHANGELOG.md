@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v1.0.33 - March 12, 2026
+
+improve MFA support
+
+
 ## v1.0.32 - March 11, 2026
 
 ability to login with phonenumber

@@ -11,7 +11,7 @@ logger = logit.get_logger("error", "error.log")
 
 API_METRICS = settings.get("API_METRICS", False)
 
-__all__ = ["rate_limit", "strict_rate_limit", "endpoint_metrics"]
+__all__ = ["rate_limit", "strict_rate_limit", "endpoint_metrics", "clear_rate_limits"]
 
 
 def _hash_key(value):
@@ -275,6 +275,35 @@ def strict_rate_limit(key, ip_limit, duid_limit=None, apikey_limit=None,
             return func(request, *args, **kwargs)
         return wrapper
     return decorator
+
+
+def clear_rate_limits(ip=None, key=None, duid=None):
+    """
+    Clear rate limit counters from Redis.
+
+    Args:
+        ip:   Clear all srl keys for this IP (optionally scoped to key)
+        key:  Limit bucket name (e.g. "login") — required when clearing by duid
+        duid: Clear the duid counter for this device UUID (requires key)
+
+    Examples:
+        clear_rate_limits(ip="1.2.3.4")           # clear all limits for an IP
+        clear_rate_limits(ip="1.2.3.4", key="login")  # clear login limit for an IP
+        clear_rate_limits(key="login", duid="abc123")  # clear login limit for a device
+    """
+    r = get_connection()
+    if not r:
+        return 0
+    deleted = 0
+    if ip:
+        pattern = f"srl:{key}:ip:{ip}" if key else f"srl:*:ip:{ip}"
+        for k in r.scan_iter(pattern):
+            r.delete(k)
+            deleted += 1
+    if duid and key:
+        r.delete(f"srl:{key}:duid:{duid}")
+        deleted += 1
+    return deleted
 
 
 def endpoint_metrics(slug, by=None, min_granularity="hours", category="endpoint_metrics"):

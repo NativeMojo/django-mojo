@@ -193,6 +193,7 @@ def run_test(opts, module, func_name, module_name, test_name):
     except Exception as err:
         if opts.verbose:
             print(f"⚠️ Test Error: {err}")
+            traceback.print_exc()
         if opts.stop:
             sys.exit(1)
 

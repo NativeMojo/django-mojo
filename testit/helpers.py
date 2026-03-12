@@ -13,7 +13,7 @@ TEST_RUN = objict(
     failed=0,
     skipped=0,
     tests=objict(active_test=None),
-    results=objict(),
+    results={},
     records=[],
     started_at=None,
     finished_at=None,
@@ -160,11 +160,11 @@ def _record_result(test_name, *, status, detail=None):
     context = _active_context()
     key = _result_key(test_name)
     if status == "passed":
-        TEST_RUN.results[key] = True
+        dict.__setitem__(TEST_RUN.results, key, True)
     elif status in {"failed", "error"}:
-        TEST_RUN.results[key] = False
+        dict.__setitem__(TEST_RUN.results, key, False)
     else:
-        TEST_RUN.results[key] = None
+        dict.__setitem__(TEST_RUN.results, key, None)
 
     record = {
         "module": context.module,

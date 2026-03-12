@@ -10,6 +10,8 @@ ADMIN_PWORD = "testit##mojo"
 @th.django_unit_setup()
 def setup_users(opts):
     from mojo.apps.account.models import User
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1")
     user = User.objects.filter(username=TEST_USER).last()
     if user is None:
         user = User(username=TEST_USER, display_name=TEST_USER, email=f"{TEST_USER}@example.com")
@@ -493,6 +495,44 @@ def test_phone_number_cleared(opts):
     resp = opts.client.post(f"/api/user/{uid}", {"phone_number": ""})
     assert resp.status_code == 200, f"Expected 200 but got {resp.status_code}"
     assert resp.response.data.phone_number is None, f"Expected None after clearing but got {resp.response.data.phone_number}"
+
+
+@th.unit_test("mfa_login_returns_challenge_not_jwt")
+def test_mfa_login_returns_challenge(opts):
+    from mojo.apps.account.models import User
+
+    mfa_user = User.objects.filter(username="mfa_test_user").last()
+    if mfa_user is None:
+        mfa_user = User(username="mfa_test_user", email="mfa_test_user@example.com", display_name="MFA Test")
+        mfa_user.save()
+    User.objects.filter(phone_number="+15550009999").exclude(username="mfa_test_user").update(phone_number=None)
+    mfa_user.phone_number = "+15550009999"
+    mfa_user.is_phone_verified = True
+    mfa_user.requires_mfa = True
+    mfa_user.save_password(TEST_PWORD)
+    mfa_user.save()
+
+    resp = opts.client.post("/api/login", {"username": "mfa_test_user", "password": TEST_PWORD})
+    assert resp.status_code == 200, f"Expected 200 but got {resp.status_code}"
+    data = resp.response.data
+    assert data.mfa_required is True, "mfa_required should be True"
+    assert data.mfa_token, "mfa_token should be present"
+    assert "sms" in data.mfa_methods, "sms should be in mfa_methods"
+    assert data.expires_in > 0, "expires_in should be positive"
+    assert not getattr(data, "access_token", None), "access_token should NOT be present in MFA challenge"
+    opts.mfa_token = data.mfa_token
+    opts.mfa_user = mfa_user
+
+
+@th.unit_test("mfa_challenge_no_jwt_until_verified")
+def test_mfa_no_jwt_until_verified(opts):
+    assert opts.mfa_token, "No mfa_token from previous test"
+    # Confirm the mfa_token cannot be used as a Bearer token
+    original_token = opts.client.access_token
+    opts.client.access_token = opts.mfa_token
+    resp = opts.client.get("/api/user/me")
+    opts.client.access_token = original_token
+    assert resp.status_code in [401, 403], f"mfa_token should not grant access, got {resp.status_code}"
 
 
 @th.unit_test("phone_number_duplicate_rejected")

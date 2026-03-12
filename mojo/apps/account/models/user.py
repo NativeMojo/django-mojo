@@ -88,6 +88,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
 
     is_email_verified = models.BooleanField(default=False)
     is_phone_verified = models.BooleanField(default=False)
+    requires_mfa = models.BooleanField(default=False)
 
     avatar = models.ForeignKey('fileman.File', on_delete=models.SET_NULL,
         null=True, blank=True, related_name='+')
@@ -413,8 +414,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         if not value:
             self.phone_number = None
             return
-        from mojo.apps.phonehub.services.phonenumbers import normalize
-        normalized = normalize(value)
+        normalized = self.normalize_phone(value)
         if not normalized:
             from mojo import errors as merrors
             raise merrors.ValueException(f"Invalid phone number: {value}")
@@ -933,9 +933,50 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             token=package.access_token)
 
     @classmethod
+    def normalize_phone(cls, phone_number):
+        from mojo.apps.phonehub.services.phonenumbers import normalize
+        return normalize(phone_number)
+
+    @classmethod
+    def lookup_from_request(cls, request, phone_as_username=False):
+        username = request.DATA.get("username", "").lower().strip()
+        email = request.DATA.get("email", "").lower().strip()
+        if not email and username and "@" in username:
+            email = username
+        phone_number = request.DATA.get("phone_number")
+        if not phone_number and phone_as_username:
+            phone_number = username
+        return cls.lookup(username=username, email=email, phone_number=phone_number)
+
+    @classmethod
+    def lookup(cls, username=None, email=None, phone_number=None):
+        from django.db.models import Q
+        if not username and not email and not phone_number:
+            return None
+        q = None
+        if username:
+            q = Q(username=username)
+        if email:
+            if q is None:
+                q = Q(email=email)
+            else:
+                q |= Q(email=email)
+        if phone_number:
+            phone_number = cls.normalize_phone(phone_number)
+        if phone_number:
+            if q is None:
+                q = Q(phone_number=phone_number)
+            else:
+                q |= Q(phone_number=phone_number)
+        return User.objects.filter(q).first()
+
+    @classmethod
     def validate_jwt(cls, token, request=None):
         token_manager = JWToken()
-        jwt_data = token_manager.decode(token, validate=False)
+        try:
+            jwt_data = token_manager.decode(token, validate=False)
+        except Exception:
+            return None, "Invalid token"
         if jwt_data.uid is None:
             return None, "Invalid token data"
         user = User.objects.filter(id=jwt_data.uid).last()

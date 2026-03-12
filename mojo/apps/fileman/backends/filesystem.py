@@ -34,6 +34,9 @@ class FileSystemStorageBackend(StorageBackend):
             os.makedirs(self.base_path, mode=self.directory_permissions, exist_ok=True)
             os.makedirs(self.temp_upload_path, mode=self.directory_permissions, exist_ok=True)
 
+    def generate_file_path(self, filename, group_id=None):
+        return filename
+
     def _get_full_path(self, file_path: str) -> str:
         """Get the full file system path for a file"""
         # Normalize the path to prevent directory traversal

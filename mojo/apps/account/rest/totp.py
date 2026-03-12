@@ -75,6 +75,8 @@ def on_totp_confirm(request):
 
     totp.is_enabled = True
     totp.save()
+    request.user.requires_mfa = True
+    request.user.save()
     logit.info("account.totp", f"TOTP enabled for user {request.user.username}")
     return JsonResponse({"status": True, "data": {"is_enabled": True}})
 

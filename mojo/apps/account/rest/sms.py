@@ -109,7 +109,6 @@ def on_sms_verify(request):
       - username + code   (standalone login)
     """
     mfa_token = request.DATA.get("mfa_token")
-    username = request.DATA.get("username", "").lower().strip()
     code = request.DATA.get("code", "").strip()
 
     if mfa_token:
@@ -117,15 +116,8 @@ def on_sms_verify(request):
         if not token_data:
             raise merrors.PermissionDeniedException("Invalid or expired MFA token", 401, 401)
         user = User.objects.filter(pk=token_data["uid"]).first()
-    elif username:
-        q = Q(username=username) | Q(email=username)
-        normalized = normalize_phone(username)
-        if normalized:
-            q |= Q(phone_number=normalized)
-        user = User.objects.filter(q).first()
     else:
-        raise merrors.ValueException("Provide either mfa_token or username")
-
+        user = User.lookup_from_request(request, phone_as_username=True)
     if not user:
         raise merrors.PermissionDeniedException()
 
@@ -146,23 +138,10 @@ def on_sms_verify(request):
 @md.public_endpoint()
 def on_sms_login(request):
     """Send an SMS OTP to start a passwordless login."""
-    username = request.DATA.get("username", "")
-    q = None
-    if username:
-        username = username.lower().strip()
-        q = Q(username=username) | Q(email=username)
-    else:
-        phone_number = request.DATA.get("phone_number", "")
-        if phone_number:
-            phone_number = normalize_phone(phone_number)
-            q = Q(phone_number=phone_number)
-    if q is None:
-        return JsonResponse({"status": False, "message": "Provide either username or phone_number"})
-    user = User.objects.filter(q).first()
-
+    user = User.lookup_from_request(request)
     if not user:
         User.class_report_incident(
-            f"SMS login attempt with unknown username: {username}",
+            "SMS login attempt with unknown account",
             event_type="sms:login_unknown",
             level=8,
             request=request,

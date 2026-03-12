@@ -47,7 +47,7 @@ def _find_or_create_user(provider_name, profile):
         return conn.user, conn
 
     # 2. Existing user by email
-    user = User.objects.filter(email=email).first() if email else None
+    user = User.lookup(email=email)
 
     # 3. Create new user
     if not user:
