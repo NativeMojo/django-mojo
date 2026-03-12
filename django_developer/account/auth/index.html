@@ -1189,6 +1189,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#mfa-challenge-login-with-mfa-enabled" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MFA Challenge (Login with MFA enabled)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#token-refresh" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3808,6 +3819,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#mfa-challenge-login-with-mfa-enabled" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MFA Challenge (Login with MFA enabled)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#token-refresh" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3956,6 +3978,28 @@
 <a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="n">token_package</span> <span class="o">=</span> <span class="n">JWToken</span><span class="p">(</span><span class="n">user</span><span class="o">.</span><span class="n">get_auth_key</span><span class="p">())</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="n">uid</span><span class="o">=</span><span class="n">user</span><span class="o">.</span><span class="n">id</span><span class="p">,</span> <span class="n">ip</span><span class="o">=</span><span class="n">request</span><span class="o">.</span><span class="n">ip</span><span class="p">)</span>
 </code></pre></div>
 <p>Returns <code>access_token</code>, <code>refresh_token</code>, <code>expires_in</code>, and <code>user</code> dict.</p>
+<h2 id="mfa-challenge-login-with-mfa-enabled">MFA Challenge (Login with MFA enabled)<a class="headerlink" href="#mfa-challenge-login-with-mfa-enabled" title="Permanent link">&para;</a></h2>
+<p>MFA is opt-in per user via the <code>requires_mfa</code> boolean field (default <code>False</code>). Your app sets this when creating or updating users — the framework never forces it automatically. When <code>requires_mfa=True</code>, the login endpoint does <strong>not</strong> return a JWT. Instead it returns an MFA challenge:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">    </span><span class="nt">&quot;mfa_required&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">    </span><span class="nt">&quot;mfa_token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;short-lived token&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">    </span><span class="nt">&quot;mfa_methods&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;sms&quot;</span><span class="p">],</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">    </span><span class="nt">&quot;expires_in&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">300</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="p">}</span>
+</code></pre></div>
+<p>The client must detect <code>mfa_required: true</code> and route the user to the appropriate second factor.</p>
+<p><strong>MFA methods:</strong>
+- <code>"sms"</code> — user has a verified <code>phone_number</code>; use the SMS OTP flow
+- <code>"totp"</code> — user has an active TOTP device; use the TOTP flow (enrolling TOTP auto-sets <code>requires_mfa=True</code>)
+- <code>"passkey"</code> — user has a registered passkey; can be used as second factor</p>
+<p><strong>Completing MFA:</strong>
+- SMS: <code>POST /api/auth/sms/verify</code> with <code>mfa_token</code> + <code>code</code>
+- TOTP: <code>POST /api/auth/totp/verify</code> with <code>mfa_token</code> + <code>code</code></p>
+<p>Both return the standard JWT response (<code>access_token</code>, <code>refresh_token</code>, <code>expires_in</code>, <code>user</code>) on success.</p>
+<p>The <code>mfa_token</code> is single-use and expires in <code>expires_in</code> seconds (default 300).</p>
 <h2 id="token-refresh">Token Refresh<a class="headerlink" href="#token-refresh" title="Permanent link">&para;</a></h2>
 <p><strong>Endpoint:</strong> <code>POST /api/refresh_token</code> (also: <code>/api/token/refresh</code>)</p>
 <p>Required param: <code>refresh_token</code></p>
@@ -3996,17 +4040,17 @@
 </ol>
 <h2 id="custom-bearer-handlers">Custom Bearer Handlers<a class="headerlink" href="#custom-bearer-handlers" title="Permanent link">&para;</a></h2>
 <p>Register additional token types via settings:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># settings.py</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="n">MOJO_BEARER_HANDLERS</span> <span class="o">=</span> <span class="p">{</span>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    <span class="s2">&quot;ApiKey&quot;</span><span class="p">:</span> <span class="s2">&quot;myapp.auth.validate_api_key&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># settings.py</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">MOJO_BEARER_HANDLERS</span> <span class="o">=</span> <span class="p">{</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    <span class="s2">&quot;ApiKey&quot;</span><span class="p">:</span> <span class="s2">&quot;myapp.auth.validate_api_key&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="p">}</span>
 </code></pre></div>
 <p>The handler receives the raw token string and must return <code>(user_or_None, error_or_None)</code>.</p>
 <h2 id="user-crud-endpoint">User CRUD Endpoint<a class="headerlink" href="#user-crud-endpoint" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;user&#39;</span><span class="p">)</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;user/&lt;int:pk&gt;&#39;</span><span class="p">)</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_user</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">pk</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>    <span class="k">return</span> <span class="n">User</span><span class="o">.</span><span class="n">on_rest_request</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">pk</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;user&#39;</span><span class="p">)</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;user/&lt;int:pk&gt;&#39;</span><span class="p">)</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_user</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">pk</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>    <span class="k">return</span> <span class="n">User</span><span class="o">.</span><span class="n">on_rest_request</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">pk</span><span class="p">)</span>
 </code></pre></div>
 <ul>
 <li><strong>List:</strong> requires <code>view_users</code> or <code>manage_users</code></li>
