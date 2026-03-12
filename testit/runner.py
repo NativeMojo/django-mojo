@@ -207,6 +207,7 @@ def run_setup(opts, module, func_name, module_name, test_name):
     except Exception as err:
         if opts.verbose:
             print(f"⚠️ Setup Error: {err}")
+            traceback.print_exc()
         if opts.stop:
             sys.exit(1)
 

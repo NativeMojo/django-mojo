@@ -116,7 +116,8 @@ def on_sms_verify(request):
         if not token_data:
             raise merrors.PermissionDeniedException("Invalid or expired MFA token", 401, 401)
         user = User.objects.filter(pk=token_data["uid"]).first()
-    user = User.lookup_from_request(request, phone_as_username=True)
+    else:
+        user = User.lookup_from_request(request, phone_as_username=True)
     if not user:
         raise merrors.PermissionDeniedException()
 

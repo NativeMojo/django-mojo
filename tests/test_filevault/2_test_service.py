@@ -39,8 +39,11 @@ def setup_vault_service(opts):
     group, _ = Group.objects.get_or_create(name="test_vault_group", defaults={"kind": "organization"})
     opts.group = group
 
-    # clean up any leftover test data
+    # clean up any leftover test data — VaultAttachmentTest FK refs must go first
     from mojo.apps.filevault.models import VaultFile, VaultData
+    with connection.cursor() as c:
+        if "filevault_vaultattachmenttest" in connection.introspection.table_names():
+            c.execute("DELETE FROM filevault_vaultattachmenttest")
     VaultFile.objects.filter(group=group).delete()
     VaultData.objects.filter(group=group).delete()
 
