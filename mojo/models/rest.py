@@ -147,6 +147,7 @@ class MojoModel:
             The requested instance or raises ValueException for 404 error.
         """
         alt_pk_field = cls.get_rest_meta_prop("ALT_PK_FIELD", "uuid")
+        obj = None
         if isinstance(pk, int):
             obj = cls.objects.filter(pk=pk).first()
         elif isinstance(pk, str) and pk.isdigit():
@@ -155,6 +156,9 @@ class MojoModel:
         elif isinstance(pk, str) and cls.has_field(alt_pk_field):
             # Non-numeric string - use alt_pk_field (UUID, slug, etc.)
             obj = cls.objects.filter(**{alt_pk_field: pk}).first()
+        else:
+            # Fallback: try pk directly (e.g. models with string primary keys)
+            obj = cls.objects.filter(pk=pk).first()
         if obj is None:
             raise me.ValueException(f"{cls.__name__} not found", code=404, status=404)
         return obj
@@ -199,6 +203,9 @@ class MojoModel:
                     request_path=getattr(request, "path", None),
                 )
                 return False
+
+        if "authenticated" in perms:
+            return True
 
         if instance is not None:
             is_view = isinstance(permission_keys, list) and "VIEW_PERMS" in permission_keys

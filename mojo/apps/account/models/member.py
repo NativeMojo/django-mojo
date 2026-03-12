@@ -110,7 +110,7 @@ class GroupMember(models.Model, MojoModel):
             bare_perm = perm_key[len(SYS_PREFIX):]
             return self.user.has_permission(bare_perm)
 
-        if perm_key == "all":
+        if perm_key in ["all", "authenticated", "member"]:
             return True
         return self.permissions.get(perm_key, False)
 

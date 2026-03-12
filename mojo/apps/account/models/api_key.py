@@ -105,7 +105,7 @@ class ApiKey(MojoSecrets, MojoModel):
             return any(self.has_permission(p) for p in perm_key)
         if isinstance(perm_key, str) and perm_key.startswith("sys."):
             return False
-        if perm_key == "all":
+        if perm_key in ["all", "authenticated", "member"]:
             return True
         return bool(self._get_permissions_dict().get(perm_key, False))
 
