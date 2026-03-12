@@ -49,14 +49,20 @@ def on_refresh_token(request):
 @md.POST("login")
 @md.POST("auth/login")
 @md.POST('account/jwt/login')
-@md.strict_rate_limit("login", ip_limit=10, duid_limit=5, duid_window=300)
+@md.strict_rate_limit("login", ip_limit=100, duid_limit=10, duid_window=300)
 @md.endpoint_metrics("login_attempts", by=["ip", "duid"])
 @md.requires_params("username", "password")
 def on_user_login(request):
     username = request.DATA.username
     password = request.DATA.password
     from django.db.models import Q
-    user = User.objects.filter(Q(username=username.lower().strip()) | Q(email=username.lower().strip())).last()
+    from mojo.apps.phonehub.services.phonenumbers import normalize as normalize_phone
+    lookup = username.lower().strip()
+    q = Q(username=lookup) | Q(email=lookup)
+    normalized_phone = normalize_phone(username)
+    if normalized_phone:
+        q |= Q(phone_number=normalized_phone)
+    user = User.objects.filter(q).last()
     if user is None:
         User.class_report_incident(
             f"login attempt with unknown username {username}",

@@ -62,7 +62,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
     uuid = models.UUIDField(default=uuid.uuid4, editable=False, db_index=True)
     username = models.TextField(unique=True)
     email = models.EmailField(unique=True)
-    phone_number = models.CharField(max_length=32, blank=True, null=True, default=None)
+    phone_number = models.CharField(max_length=32, blank=True, null=True, default=None, unique=True)
     is_active = models.BooleanField(default=True, db_index=True)
     display_name = models.CharField(max_length=80, blank=True, null=True, default=None)
 
@@ -99,7 +99,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         LOG_CHANGES = True
         POST_SAVE_ACTIONS = ['send_invite']
         NO_SHOW_FIELDS = ["password", "auth_key", "onetime_code"]
-        SEARCH_FIELDS = ["username", "email", "display_name"]
+        SEARCH_FIELDS = ["username", "email", "display_name", "phone_number"]
         VIEW_PERMS = ["view_users", "manage_users", "owner"]
         SAVE_PERMS = ["manage_users", "owner"]
         OWNER_FIELD = "self"
@@ -408,6 +408,17 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
     def save_password(self, value):
         self.set_password(value)
         self.save()
+
+    def set_phone_number(self, value):
+        if not value:
+            self.phone_number = None
+            return
+        from mojo.apps.phonehub.services.phonenumbers import normalize
+        normalized = normalize(value)
+        if not normalized:
+            from mojo import errors as merrors
+            raise merrors.ValueException(f"Invalid phone number: {value}")
+        self.phone_number = normalized
 
     def validate_email(self):
         import re

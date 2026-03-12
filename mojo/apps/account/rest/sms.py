@@ -20,6 +20,7 @@ from mojo.apps.account.models import User
 from mojo.apps.account.rest.user import jwt_login
 from mojo.apps.account.services import mfa as mfa_service
 from mojo.apps import phonehub
+from mojo.apps.phonehub.services.phonenumbers import normalize as normalize_phone
 from mojo.helpers import crypto, dates, logit
 from mojo.helpers.response import JsonResponse
 from mojo.helpers.settings import settings
@@ -70,6 +71,7 @@ def _clear_otp(user):
 
 @md.POST("auth/sms/send")
 @md.requires_params("mfa_token")
+@md.strict_rate_limit(10, 60)
 @md.public_endpoint()
 def on_sms_send(request):
     """Send an SMS OTP code to the user identified by mfa_token."""
@@ -96,6 +98,7 @@ def on_sms_send(request):
 
 @md.POST("auth/sms/verify")
 @md.requires_params("code")
+@md.strict_rate_limit(10, 60)
 @md.public_endpoint()
 def on_sms_verify(request):
     """
@@ -115,7 +118,11 @@ def on_sms_verify(request):
             raise merrors.PermissionDeniedException("Invalid or expired MFA token", 401, 401)
         user = User.objects.filter(pk=token_data["uid"]).first()
     elif username:
-        user = User.objects.filter(Q(username=username) | Q(email=username)).first()
+        q = Q(username=username) | Q(email=username)
+        normalized = normalize_phone(username)
+        if normalized:
+            q |= Q(phone_number=normalized)
+        user = User.objects.filter(q).first()
     else:
         raise merrors.ValueException("Provide either mfa_token or username")
 
@@ -136,11 +143,16 @@ def on_sms_verify(request):
 
 @md.POST("auth/sms/login")
 @md.requires_params("username")
+@md.strict_rate_limit(10, 60)
 @md.public_endpoint()
 def on_sms_login(request):
     """Send an SMS OTP to start a passwordless login."""
     username = request.DATA.get("username", "").lower().strip()
-    user = User.objects.filter(Q(username=username) | Q(email=username)).first()
+    q = Q(username=username) | Q(email=username)
+    normalized = normalize_phone(username)
+    if normalized:
+        q |= Q(phone_number=normalized)
+    user = User.objects.filter(q).first()
 
     if not user:
         User.class_report_incident(
