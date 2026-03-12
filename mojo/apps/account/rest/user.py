@@ -12,7 +12,7 @@ JWT_TOKEN_EXPIRY = settings.get("JWT_TOKEN_EXPIRY", 21600)
 JWT_REFRESH_TOKEN_EXPIRY = settings.get("JWT_REFRESH_TOKEN_EXPIRY", 604800)
 PASSWORD_RESET_TOKEN_TTL = settings.get("PASSWORD_RESET_TOKEN_TTL", 3600)
 PASSWORD_RESET_CODE_TTL = settings.get("PASSWORD_RESET_CODE_TTL", 600)
-
+ALLOW_PHONE_LOGIN = settings.get("ALLOW_PHONE_LOGIN", False)
 
 @md.URL('user')
 @md.URL('user/<int:pk>')
@@ -56,12 +56,14 @@ def on_user_login(request):
     username = request.DATA.username
     password = request.DATA.password
     from django.db.models import Q
-    from mojo.apps.phonehub.services.phonenumbers import normalize as normalize_phone
+
     lookup = username.lower().strip()
     q = Q(username=lookup) | Q(email=lookup)
-    normalized_phone = normalize_phone(username)
-    if normalized_phone:
-        q |= Q(phone_number=normalized_phone)
+    if ALLOW_PHONE_LOGIN:
+        from mojo.apps.phonehub.services.phonenumbers import normalize as normalize_phone
+        normalized_phone = normalize_phone(username)
+        if normalized_phone:
+            q |= Q(phone_number=normalized_phone)
     user = User.objects.filter(q).last()
     if user is None:
         User.class_report_incident(

@@ -142,16 +142,22 @@ def on_sms_verify(request):
 # -----------------------------------------------------------------
 
 @md.POST("auth/sms/login")
-@md.requires_params("username")
 @md.strict_rate_limit(10, 60)
 @md.public_endpoint()
 def on_sms_login(request):
     """Send an SMS OTP to start a passwordless login."""
-    username = request.DATA.get("username", "").lower().strip()
-    q = Q(username=username) | Q(email=username)
-    normalized = normalize_phone(username)
-    if normalized:
-        q |= Q(phone_number=normalized)
+    username = request.DATA.get("username", "")
+    q = None
+    if username:
+        username = username.lower().strip()
+        q = Q(username=username) | Q(email=username)
+    else:
+        phone_number = request.DATA.get("phone_number", "")
+        if phone_number:
+            phone_number = normalize_phone(phone_number)
+            q = Q(phone_number=phone_number)
+    if q is None:
+        return JsonResponse({"status": False, "message": "Provide either username or phone_number"})
     user = User.objects.filter(q).first()
 
     if not user:

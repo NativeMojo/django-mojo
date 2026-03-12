@@ -100,7 +100,7 @@ The SMS code expires after 10 minutes. The `mfa_token` expires after 5 minutes.
 
 ```json
 {
-  "username": "alice"
+  "username": "alice" or "phone_number": "555 123-4321"
 }
 ```
 
