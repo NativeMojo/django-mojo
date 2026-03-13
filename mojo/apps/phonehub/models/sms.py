@@ -192,7 +192,7 @@ class SMS(models.Model, MojoModel):
         )
         # handle fake/test numbers
         if to_number.startswith("+1555"):
-            fake_mapping = SMS_FAKE_MAPPINGS.get(to_number)
+            fake_mapping = SMS_FAKE_MAPPINGS.get(to_number[:8])
             if not fake_mapping:
                 sms.is_test = True
                 sms.mark_sent(f"test{to_number}")
