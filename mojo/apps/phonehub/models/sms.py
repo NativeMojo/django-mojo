@@ -1,5 +1,8 @@
 from django.db import models
 from mojo.models import MojoModel
+from mojo.helpers.settings import settings
+
+SMS_FAKE_MAPPINGS = settings.get("SMS_FAKE_MAPPINGS", {})
 
 
 class SMS(models.Model, MojoModel):
@@ -189,9 +192,12 @@ class SMS(models.Model, MojoModel):
         )
         # handle fake/test numbers
         if to_number.startswith("+1555"):
-            sms.is_test = True
-            sms.mark_sent(f"test{to_number}")
-            return sms
+            fake_mapping = SMS_FAKE_MAPPINGS.get(to_number)
+            if not fake_mapping:
+                sms.is_test = True
+                sms.mark_sent(f"test{to_number}")
+                return sms
+            to_number = fake_mapping
         resp = send_sms(body, to_number, from_number=resolved_from)
         if resp.sent:
             sms.mark_sent(resp.id)
