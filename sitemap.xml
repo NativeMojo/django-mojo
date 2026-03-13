@@ -25,6 +25,10 @@
          <lastmod>2026-03-13</lastmod>
     </url>
     <url>
+         <loc>https://NativeMojo.github.io/django-mojo/django_developer/account/notifications/</loc>
+         <lastmod>2026-03-13</lastmod>
+    </url>
+    <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/account/user/</loc>
          <lastmod>2026-03-13</lastmod>
     </url>
@@ -245,6 +249,10 @@
          <lastmod>2026-03-13</lastmod>
     </url>
     <url>
+         <loc>https://NativeMojo.github.io/django-mojo/web_developer/account/notifications/</loc>
+         <lastmod>2026-03-13</lastmod>
+    </url>
+    <url>
          <loc>https://NativeMojo.github.io/django-mojo/web_developer/account/oauth/</loc>
          <lastmod>2026-03-13</lastmod>
     </url>
@@ -298,6 +306,10 @@
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/web_developer/files/files/</loc>
+         <lastmod>2026-03-13</lastmod>
+    </url>
+    <url>
+         <loc>https://NativeMojo.github.io/django-mojo/web_developer/files/qrcode/</loc>
          <lastmod>2026-03-13</lastmod>
     </url>
     <url>
