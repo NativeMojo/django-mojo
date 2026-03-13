@@ -173,7 +173,7 @@ def test_apikey_rest_create(opts):
 
     resp = opts.client.post(
         "/api/group/apikey",
-        {"name": "test_rest_key", "group": opts.parent_id, "permissions": {"view_data": True}},
+        {"name": "test_rest_key", "group": opts.parent_id, "permissions": {"view_data": True, "manage_group": True}},
     )
     assert resp.status_code == 200, f"create failed: {resp.status_code} {resp.response}"
     data = resp.response.data
