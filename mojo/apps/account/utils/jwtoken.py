@@ -35,7 +35,7 @@ class JWToken:
     def create(self, **kwargs):
         package = objict()
         package.access_token = self.create_access_token(**kwargs)
-        package.refresh_token = self.create_access_token(**kwargs)
+        package.refresh_token = self.create_refresh_token(**kwargs)
         return package
 
     def create_access_token(self, **kwargs):

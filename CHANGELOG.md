@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v1.0.38 - March 12, 2026
+
+bug fix in refresh token not have correct expiry
+
+
 ## v1.0.37 - March 12, 2026
 
 fixing bug in sms login, fixing bug in tests
