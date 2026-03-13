@@ -648,6 +648,18 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
     def on_action_send_invite(self, value):
         self.send_invite()
 
+    def notify(self, title, body="", kind="general", data=None,
+               action_url=None, expires_in=3600, push=True, ws=True):
+        """
+        Create an inbox notification and deliver via WebSocket + device push.
+        Use this as the standard way to notify a user.
+        """
+        from mojo.apps.account.models.notification import Notification
+        return Notification.send(
+            title, body, user=self, kind=kind, data=data,
+            action_url=action_url, expires_in=expires_in, push=push, ws=ws,
+        )
+
     def push_notification(self, title=None, body=None, data=None,
                           category="general", action_url=None):
         """

@@ -4,3 +4,4 @@
 - [Group Model](group.md) — Group/organization model, membership, hierarchy
 - [Authentication Flow](auth.md) — JWT tokens, login, password reset
 - [API Keys](api_keys.md) — Group-scoped programmatic access, permissions, token lifecycle
+- [Notifications](notifications.md) — User inbox, WebSocket + push delivery, expiry

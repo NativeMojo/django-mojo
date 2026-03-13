@@ -10,3 +10,4 @@
 - [Group API](group.md) — Groups, membership, permissions
 - [API Keys](api_keys.md) — Long-lived tokens for programmatic access
 - [Custom Auth Models](custom_auth_models.md) — JWT, OAuth, and passkeys for non-User models (e.g. game.Player)
+- [Notifications](notifications.md) — Inbox, mark read, WebSocket delivery

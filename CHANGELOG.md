@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v1.0.39 - March 12, 2026
+
+new notification system made easy
+
+
 ## v1.0.38 - March 12, 2026
 
 bug fix in refresh token not have correct expiry
