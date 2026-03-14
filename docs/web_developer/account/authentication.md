@@ -31,6 +31,22 @@
 
 Store both tokens. Use `access_token` in subsequent requests.
 
+## Token Storage (UI Guidance)
+
+For this Bearer-token API, a practical default is:
+
+- Store `access_token` in `localStorage`
+- Store `refresh_token` in `localStorage`
+
+Example keys:
+
+```text
+mojo_access_token
+mojo_refresh_token
+```
+
+Recommended for higher-security deployments: move refresh token handling to secure `HttpOnly` cookies. That requires backend/session design changes; the flow below assumes token storage in `localStorage`.
+
 ## Authenticating Requests
 
 Include the access token in every authenticated request:
@@ -63,6 +79,67 @@ Authorization: Bearer <access_token>
 ```
 
 Refresh before the access token expires. The refresh token itself has a longer TTL (typically 7 days).
+
+## App Boot / Page Reload Session Check
+
+On every app load:
+
+1. Read `mojo_access_token` and `mojo_refresh_token` from `localStorage`.
+2. If no access token exists, treat as logged out.
+3. If access token exists, call `GET /api/user/me` with `Authorization: Bearer <access_token>`.
+4. If `/api/user/me` succeeds, user session is active.
+5. If `/api/user/me` fails with auth error and refresh token exists, call `POST /api/refresh_token`.
+6. If refresh succeeds, save new tokens and retry `/api/user/me`.
+7. If refresh fails, clear stored tokens and send user to login.
+
+Pseudo-flow:
+
+```javascript
+const access = localStorage.getItem("mojo_access_token");
+const refresh = localStorage.getItem("mojo_refresh_token");
+
+if (!access) return loggedOut();
+
+let me = await api.get("/api/user/me", access);
+if (me.ok) return loggedIn(me.data);
+
+if (!refresh) {
+  clearTokens();
+  return loggedOut();
+}
+
+const refreshed = await api.post("/api/refresh_token", { refresh_token: refresh });
+if (!refreshed.ok) {
+  clearTokens();
+  return loggedOut();
+}
+
+localStorage.setItem("mojo_access_token", refreshed.data.access_token);
+localStorage.setItem("mojo_refresh_token", refreshed.data.refresh_token);
+me = await api.get("/api/user/me", refreshed.data.access_token);
+if (!me.ok) {
+  clearTokens();
+  return loggedOut();
+}
+return loggedIn(me.data);
+```
+
+## Logout
+
+On logout, always remove both tokens:
+
+```javascript
+localStorage.removeItem("mojo_access_token");
+localStorage.removeItem("mojo_refresh_token");
+```
+
+## Security Notes
+
+- Do not store `mfa_token` long-term; it is short-lived and only for MFA completion.
+- Any XSS issue can expose tokens in `localStorage`, so enforce strong frontend security:
+  - strict CSP
+  - output escaping/sanitization
+  - dependency hygiene
 
 ## Get Current User
 

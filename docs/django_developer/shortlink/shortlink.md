@@ -77,6 +77,13 @@ shorten(url="", file=None, source="", expire_days=3, expire_hours=0,
 
 The core model. Located at `mojo/apps/shortlink/models/shortlink.py`.
 
+`RestMeta` permissions:
+
+- `VIEW_PERMS = ["manage_shortlinks", "owner"]`
+- `SAVE_PERMS = ["manage_shortlinks", "owner"]`
+
+This means users with owner access can operate on their own `ShortLink` records (where `shortlink.user == request.user`) without global `manage_shortlinks`.
+
 | Field | Type | Description |
 |---|---|---|
 | `code` | CharField(10) | Unique 7-char alphanumeric code. Auto-generated. |
@@ -126,6 +133,8 @@ Per-click record. Only created when `track_clicks=True`. Located at `mojo/apps/s
 | `created` | DateTimeField | Click timestamp. |
 
 Read-only via REST (`CAN_SAVE = CAN_CREATE = False`).
+
+Note: click-history REST access remains admin-scoped (`manage_shortlinks`) rather than owner-scoped.
 
 ---
 
@@ -303,7 +312,9 @@ The cleanup job is defined in `mojo/apps/shortlink/cronjobs.py` and the worker l
 
 ## Permissions
 
-- `manage_shortlinks` — required to view/manage shortlinks via REST API
+- `manage_shortlinks` — full access to shortlinks and click-history REST endpoints
+- `owner` — access to own shortlinks on `/api/shortlink/link*` (when `shortlink.user == request.user`)
+- `shortlink` click-history endpoints remain `manage_shortlinks` scoped
 - The redirect endpoint (`/s/<code>`) is public — no authentication required
 
 ---
