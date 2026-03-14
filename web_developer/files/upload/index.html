@@ -2999,10 +2999,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#upload-methods" class="md-nav__link">
+  <a href="#recommended-approach-initiated-upload" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Upload Methods
+        Recommended Approach: Initiated Upload
       
     </span>
   </a>
@@ -3010,26 +3010,15 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#method-1-multipart-form-upload" class="md-nav__link">
+  <a href="#method-1-primary-initiated-upload" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Method 1: Multipart Form Upload
+        Method 1 (Primary): Initiated Upload
       
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#method-2-initiated-upload-s3-presigned-or-direct-token" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Method 2: Initiated Upload (S3 presigned or direct token)
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Method 2: Initiated Upload (S3 presigned or direct token)">
+    <nav class="md-nav" aria-label="Method 1 (Primary): Initiated Upload">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -3076,16 +3065,27 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#step-4-associate-with-a-model-optional" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 4: Associate with a Model (optional)
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#step-4-update-your-model-optional" class="md-nav__link">
+  <a href="#method-2-fallback-multipart-form-upload" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Step 4: Update your Model (optional)
+        Method 2 (Fallback): Multipart Form Upload
       
     </span>
   </a>
@@ -3093,10 +3093,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#method-3-base64-inline" class="md-nav__link">
+  <a href="#method-3-fallback-base64-inline" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Method 3: Base64 Inline
+        Method 3 (Fallback): Base64 Inline
       
     </span>
   </a>
@@ -3783,10 +3783,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#upload-methods" class="md-nav__link">
+  <a href="#recommended-approach-initiated-upload" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Upload Methods
+        Recommended Approach: Initiated Upload
       
     </span>
   </a>
@@ -3794,26 +3794,15 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#method-1-multipart-form-upload" class="md-nav__link">
+  <a href="#method-1-primary-initiated-upload" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Method 1: Multipart Form Upload
+        Method 1 (Primary): Initiated Upload
       
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#method-2-initiated-upload-s3-presigned-or-direct-token" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Method 2: Initiated Upload (S3 presigned or direct token)
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Method 2: Initiated Upload (S3 presigned or direct token)">
+    <nav class="md-nav" aria-label="Method 1 (Primary): Initiated Upload">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -3860,16 +3849,27 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#step-4-associate-with-a-model-optional" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 4: Associate with a Model (optional)
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#step-4-update-your-model-optional" class="md-nav__link">
+  <a href="#method-2-fallback-multipart-form-upload" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Step 4: Update your Model (optional)
+        Method 2 (Fallback): Multipart Form Upload
       
     </span>
   </a>
@@ -3877,10 +3877,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#method-3-base64-inline" class="md-nav__link">
+  <a href="#method-3-fallback-base64-inline" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Method 3: Base64 Inline
+        Method 3 (Fallback): Base64 Inline
       
     </span>
   </a>
@@ -3941,87 +3941,95 @@
 
 
 <h1 id="file-upload-rest-api-reference">File Upload — REST API Reference<a class="headerlink" href="#file-upload-rest-api-reference" title="Permanent link">&para;</a></h1>
-<h2 id="upload-methods">Upload Methods<a class="headerlink" href="#upload-methods" title="Permanent link">&para;</a></h2>
-<p>Three methods are supported depending on file size and storage backend.</p>
+<h2 id="recommended-approach-initiated-upload">Recommended Approach: Initiated Upload<a class="headerlink" href="#recommended-approach-initiated-upload" title="Permanent link">&para;</a></h2>
+<p><strong>Always use the Initiated Upload flow unless you have a specific reason not to.</strong></p>
+<p>When a client uploads a file directly via multipart POST, the file must travel through the API server — which holds open a long-lived HTTP connection for the entire transfer duration. For large files or high concurrency, this exhausts server resources quickly and adds unnecessary latency.</p>
+<p>The Initiated Upload flow avoids this entirely:</p>
+<ul>
+<li>On <strong>S3/cloud backends</strong>, the client uploads directly to cloud storage via a presigned URL. The file never passes through the API server.</li>
+<li>On <strong>local/other backends</strong>, a short-lived token URL is issued and the upload goes to a dedicated endpoint, keeping the main API unblocked.</li>
+</ul>
 <hr />
-<h2 id="method-1-multipart-form-upload">Method 1: Multipart Form Upload<a class="headerlink" href="#method-1-multipart-form-upload" title="Permanent link">&para;</a></h2>
-<p>Best for small/medium files via a single request.</p>
-<p><strong>POST</strong> <code>/api/fileman/file</code> (multipart/form-data)</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer &lt;token&gt;&quot;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span>-F<span class="w"> </span><span class="s2">&quot;file=@/path/to/document.pdf&quot;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span>https://api.example.com/api/fileman/file
+<h2 id="method-1-primary-initiated-upload">Method 1 (Primary): Initiated Upload<a class="headerlink" href="#method-1-primary-initiated-upload" title="Permanent link">&para;</a></h2>
+<p>Use this for all uploads. It works for any file size, keeps the API server free, and gives you explicit upload tracking.</p>
+<h3 id="step-1-initiate-upload">Step 1: Initiate Upload<a class="headerlink" href="#step-1-initiate-upload" title="Permanent link">&para;</a></h3>
+<p><strong>POST</strong> <code>/api/fileman/upload/initiate</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="p">{</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">&quot;filename&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;large-video.mp4&quot;</span><span class="p">,</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span><span class="nt">&quot;content_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;video/mp4&quot;</span><span class="p">,</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="nt">&quot;file_size&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">524288000</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="p">}</span>
 </code></pre></div>
+<p>Optional params: <code>file_manager</code> (id), <code>group</code> (id), <code>metadata</code> (object).</p>
 <p><strong>Response:</strong></p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span>
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
 <a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">    </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">123</span><span class="p">,</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">    </span><span class="nt">&quot;filename&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;document.pdf&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">    </span><span class="nt">&quot;content_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;application/pdf&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">    </span><span class="nt">&quot;file_size&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">102400</span><span class="p">,</span>
-<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">    </span><span class="nt">&quot;upload_status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;completed&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">    </span><span class="nt">&quot;url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://storage.example.com/files/document_a1b2c3d4.pdf&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">    </span><span class="nt">&quot;category&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;document&quot;</span>
-<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">  </span><span class="p">}</span>
-<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="p">}</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">    </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">124</span><span class="p">,</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">    </span><span class="nt">&quot;filename&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;large-video.mp4&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">    </span><span class="nt">&quot;content_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;video/mp4&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">    </span><span class="nt">&quot;file_size&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">524288000</span><span class="p">,</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">    </span><span class="nt">&quot;upload_url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://s3.amazonaws.com/bucket/file_xyz?X-Amz-Signature=...&quot;</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="p">}</span>
 </code></pre></div>
-<hr />
-<h2 id="method-2-initiated-upload-s3-presigned-or-direct-token">Method 2: Initiated Upload (S3 presigned or direct token)<a class="headerlink" href="#method-2-initiated-upload-s3-presigned-or-direct-token" title="Permanent link">&para;</a></h2>
-<p>Best for large files or when you need explicit upload tracking. Initiate first to get an <code>upload_url</code>, then upload, then confirm.</p>
 <p>The <code>upload_url</code> returned depends on the storage backend:
-- <strong>S3/cloud backends</strong> — returns a presigned PUT URL. Client uploads directly to cloud storage; the file never passes through the API server.
-- <strong>Local/other backends</strong> — returns <code>/api/fileman/upload/&lt;token&gt;</code>. Client POSTs the file to that URL.</p>
-<h3 id="step-1-initiate-upload">Step 1: Initiate Upload<a class="headerlink" href="#step-1-initiate-upload" title="Permanent link">&para;</a></h3>
-<p><strong>POST</strong> <code>/api/fileman/upload/initiate</code></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">&quot;filename&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;large-video.mp4&quot;</span><span class="p">,</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nt">&quot;content_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;video/mp4&quot;</span><span class="p">,</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span><span class="nt">&quot;file_size&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">524288000</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="p">}</span>
-</code></pre></div>
-<p>Optional params: <code>file_manager</code> (id), <code>group</code> (id), <code>metadata</code> (object).</p>
-<p><strong>Response:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">    </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">124</span><span class="p">,</span>
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">    </span><span class="nt">&quot;filename&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;large-video.mp4&quot;</span><span class="p">,</span>
-<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">    </span><span class="nt">&quot;content_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;video/mp4&quot;</span><span class="p">,</span>
-<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">    </span><span class="nt">&quot;file_size&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">524288000</span><span class="p">,</span>
-<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">    </span><span class="nt">&quot;upload_url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://s3.amazonaws.com/bucket/file_xyz?X-Amz-Signature=...&quot;</span>
-<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">  </span><span class="p">}</span>
-<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="p">}</span>
-</code></pre></div>
+- <strong>S3/cloud backends</strong> — a presigned PUT URL. Upload directly to cloud storage; the file never passes through the API server.
+- <strong>Local/other backends</strong> — <code>/api/fileman/upload/&lt;token&gt;</code>. POST the file to that URL.</p>
 <h3 id="step-2a-upload-to-presigned-url-s3cloud-backends">Step 2a: Upload to Presigned URL (S3/cloud backends)<a class="headerlink" href="#step-2a-upload-to-presigned-url-s3cloud-backends" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>curl<span class="w"> </span>-X<span class="w"> </span>PUT<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: video/mp4&quot;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span>--data-binary<span class="w"> </span>@large-video.mp4<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span><span class="s2">&quot;https://s3.amazonaws.com/bucket/file_xyz?X-Amz-Signature=...&quot;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>curl<span class="w"> </span>-X<span class="w"> </span>PUT<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: video/mp4&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span>--data-binary<span class="w"> </span>@large-video.mp4<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span><span class="s2">&quot;https://s3.amazonaws.com/bucket/file_xyz?X-Amz-Signature=...&quot;</span>
 </code></pre></div>
 <h3 id="step-2b-upload-to-direct-token-url-localother-backends">Step 2b: Upload to Direct Token URL (local/other backends)<a class="headerlink" href="#step-2b-upload-to-direct-token-url-localother-backends" title="Permanent link">&para;</a></h3>
 <p>When <code>upload_url</code> starts with <code>/api/fileman/upload/</code>, POST the file directly:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer &lt;token&gt;&quot;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span>-F<span class="w"> </span><span class="s2">&quot;file=@large-video.mp4&quot;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span><span class="s2">&quot;https://api.example.com/api/fileman/upload/&lt;token&gt;&quot;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer &lt;token&gt;&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span>-F<span class="w"> </span><span class="s2">&quot;file=@large-video.mp4&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span><span class="s2">&quot;https://api.example.com/api/fileman/upload/&lt;token&gt;&quot;</span>
 </code></pre></div>
 <h3 id="step-3-confirm-upload">Step 3: Confirm Upload<a class="headerlink" href="#step-3-confirm-upload" title="Permanent link">&para;</a></h3>
 <p><strong>POST</strong> <code>/api/fileman/file/124</code></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">&quot;action&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;mark_as_completed&quot;</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">&quot;action&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;mark_as_completed&quot;</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="p">}</span>
 </code></pre></div>
-<h2 id="step-4-update-your-model-optional">Step 4: Update your Model (optional)<a class="headerlink" href="#step-4-update-your-model-optional" title="Permanent link">&para;</a></h2>
-<p>If you want to associate the uploaded file with a model instance, update your model to include a <code>ForeignKey</code> to <code>fileman.File</code>. Then, when creating or updating the model instance, set the <code>file</code> field to the <code>fileman.File</code> instance returned by the upload endpoint.</p>
+<h3 id="step-4-associate-with-a-model-optional">Step 4: Associate with a Model (optional)<a class="headerlink" href="#step-4-associate-with-a-model-optional" title="Permanent link">&para;</a></h3>
+<p>If you want to associate the uploaded file with a model instance, set the relevant field to the returned file id after upload completes.</p>
 <p><strong>POST</strong> <code>/api/user/1</code></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span>
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="nt">&quot;avatar&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">124</span>
-<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">&quot;avatar&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">124</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="p">}</span>
 </code></pre></div>
 <hr />
-<h2 id="method-3-base64-inline">Method 3: Base64 Inline<a class="headerlink" href="#method-3-base64-inline" title="Permanent link">&para;</a></h2>
-<p>Include a file as base64 data within a JSON POST to a related resource. The file is automatically decoded and stored.</p>
+<h2 id="method-2-fallback-multipart-form-upload">Method 2 (Fallback): Multipart Form Upload<a class="headerlink" href="#method-2-fallback-multipart-form-upload" title="Permanent link">&para;</a></h2>
+<p><strong>Use this only for small, one-off files where the initiated flow would be disproportionate overhead</strong> — for example, a simple avatar upload in a low-traffic context.</p>
+<p>The file travels through the API server on every request. At scale or with large files this will block server workers and degrade performance for all other clients.</p>
+<p><strong>POST</strong> <code>/api/fileman/file</code> (multipart/form-data)</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer &lt;token&gt;&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span>-F<span class="w"> </span><span class="s2">&quot;file=@/path/to/document.pdf&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span>https://api.example.com/api/fileman/file
+</code></pre></div>
+<p><strong>Response:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">    </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">123</span><span class="p">,</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">    </span><span class="nt">&quot;filename&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;document.pdf&quot;</span><span class="p">,</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">    </span><span class="nt">&quot;content_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;application/pdf&quot;</span><span class="p">,</span>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="w">    </span><span class="nt">&quot;file_size&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">102400</span><span class="p">,</span>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="w">    </span><span class="nt">&quot;upload_status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;completed&quot;</span><span class="p">,</span>
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="w">    </span><span class="nt">&quot;url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://storage.example.com/files/document_a1b2c3d4.pdf&quot;</span><span class="p">,</span>
+<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="w">    </span><span class="nt">&quot;category&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;document&quot;</span>
+<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a><span class="p">}</span>
+</code></pre></div>
+<hr />
+<h2 id="method-3-fallback-base64-inline">Method 3 (Fallback): Base64 Inline<a class="headerlink" href="#method-3-fallback-base64-inline" title="Permanent link">&para;</a></h2>
+<p><strong>Use this only when embedding a small file inline with a resource creation request is genuinely simpler</strong> — for example, uploading a tiny thumbnail alongside a form POST where a separate upload round-trip would be awkward.</p>
+<p>Do not use this for anything large or frequently uploaded. Base64 encoding inflates file size by ~33% and the full payload passes through the API server.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p">{</span>
 <a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Alice Smith&quot;</span><span class="p">,</span>
 <a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span><span class="nt">&quot;avatar&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;data:image/jpeg;base64,/9j/4AAQSkZJRgAB...&quot;</span>
@@ -4060,8 +4068,9 @@
 </tr>
 </tbody>
 </table>
+<hr />
 <h2 id="selecting-a-filemanager">Selecting a FileManager<a class="headerlink" href="#selecting-a-filemanager" title="Permanent link">&para;</a></h2>
-<p>If multiple storage backends exist (e.g., separate bucket for avatars vs. documents), pass the FileManager id in the initiate body:</p>
+<p>If multiple storage backends exist (e.g., a separate bucket for avatars vs. documents), pass the FileManager id in the initiate body:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="p">{</span>
 <a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span><span class="nt">&quot;filename&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;avatar.jpg&quot;</span><span class="p">,</span>
 <a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">  </span><span class="nt">&quot;content_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;image/jpeg&quot;</span><span class="p">,</span>
@@ -4070,6 +4079,7 @@
 <a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="p">}</span>
 </code></pre></div>
 <p>If omitted, the default FileManager for the user/group is resolved automatically.</p>
+<hr />
 <h2 id="group-scoped-uploads">Group-Scoped Uploads<a class="headerlink" href="#group-scoped-uploads" title="Permanent link">&para;</a></h2>
 <p>To associate a file with a group, pass <code>group</code> in the initiate body:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="p">{</span>

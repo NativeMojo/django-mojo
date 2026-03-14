@@ -3631,6 +3631,67 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#7-client-error-event-reporting-incidents" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Client Error + Event Reporting (Incidents)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="7. Client Error + Event Reporting (Incidents)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#report-uncaught-javascript-errors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Report uncaught JavaScript errors
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#report-unhandled-promise-rejections" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Report unhandled promise rejections
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#report-authsession-anomalies" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Report auth/session anomalies
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#guidelines" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Guidelines
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#related-docs" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3749,11 +3810,83 @@
 <li>Never store <code>mfa_token</code> long-term.</li>
 <li>For stricter security, use <code>HttpOnly</code> cookie-based refresh design.</li>
 </ul>
+<h2 id="7-client-error-event-reporting-incidents">7. Client Error + Event Reporting (Incidents)<a class="headerlink" href="#7-client-error-event-reporting-incidents" title="Permanent link">&para;</a></h2>
+<p>Frontend apps should report uncaught errors and important security/application events to:</p>
+<ul>
+<li><code>POST /api/incident/event</code></li>
+</ul>
+<p>This feeds the incident pipeline and can trigger alerts/rules.</p>
+<h3 id="report-uncaught-javascript-errors">Report uncaught JavaScript errors<a class="headerlink" href="#report-uncaught-javascript-errors" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nb">window</span><span class="p">.</span><span class="nx">addEventListener</span><span class="p">(</span><span class="s2">&quot;error&quot;</span><span class="p">,</span><span class="w"> </span><span class="k">async</span><span class="w"> </span><span class="p">(</span><span class="nx">event</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="k">await</span><span class="w"> </span><span class="nx">fetch</span><span class="p">(</span><span class="s2">&quot;/api/incident/event&quot;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">    </span><span class="nx">method</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;POST&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">    </span><span class="nx">headers</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="s2">&quot;Content-Type&quot;</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;application/json&quot;</span><span class="w"> </span><span class="p">},</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">    </span><span class="nx">body</span><span class="o">:</span><span class="w"> </span><span class="nb">JSON</span><span class="p">.</span><span class="nx">stringify</span><span class="p">({</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">      </span><span class="nx">category</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;frontend:error&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">      </span><span class="nx">level</span><span class="o">:</span><span class="w"> </span><span class="mf">7</span><span class="p">,</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">      </span><span class="nx">scope</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;web&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">      </span><span class="nx">title</span><span class="o">:</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">message</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="s2">&quot;Uncaught JS error&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">      </span><span class="nx">details</span><span class="o">:</span><span class="w"> </span><span class="sb">`</span><span class="si">${</span><span class="nx">event</span><span class="p">.</span><span class="nx">filename</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="s2">&quot;unknown&quot;</span><span class="si">}</span><span class="sb">:</span><span class="si">${</span><span class="nx">event</span><span class="p">.</span><span class="nx">lineno</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="mf">0</span><span class="si">}</span><span class="sb">:</span><span class="si">${</span><span class="nx">event</span><span class="p">.</span><span class="nx">colno</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="mf">0</span><span class="si">}</span><span class="sb">`</span><span class="p">,</span>
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="w">      </span><span class="nx">metadata</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a><span class="w">        </span><span class="nx">href</span><span class="o">:</span><span class="w"> </span><span class="nx">location</span><span class="p">.</span><span class="nx">href</span><span class="p">,</span>
+<a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a><span class="w">        </span><span class="nx">user_agent</span><span class="o">:</span><span class="w"> </span><span class="nx">navigator</span><span class="p">.</span><span class="nx">userAgent</span><span class="p">,</span>
+<a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a><span class="w">      </span><span class="p">},</span>
+<a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a><span class="w">    </span><span class="p">}),</span>
+<a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a><span class="w">  </span><span class="p">});</span>
+<a id="__codelineno-5-17" name="__codelineno-5-17" href="#__codelineno-5-17"></a><span class="p">});</span>
+</code></pre></div>
+<h3 id="report-unhandled-promise-rejections">Report unhandled promise rejections<a class="headerlink" href="#report-unhandled-promise-rejections" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nb">window</span><span class="p">.</span><span class="nx">addEventListener</span><span class="p">(</span><span class="s2">&quot;unhandledrejection&quot;</span><span class="p">,</span><span class="w"> </span><span class="k">async</span><span class="w"> </span><span class="p">(</span><span class="nx">event</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">reason</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="nx">event</span><span class="p">.</span><span class="nx">reason</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="p">(</span><span class="nx">event</span><span class="p">.</span><span class="nx">reason</span><span class="p">.</span><span class="nx">stack</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">reason</span><span class="p">.</span><span class="nx">message</span><span class="p">))</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">String</span><span class="p">(</span><span class="nx">event</span><span class="p">.</span><span class="nx">reason</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="s2">&quot;unknown&quot;</span><span class="p">);</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="k">await</span><span class="w"> </span><span class="nx">fetch</span><span class="p">(</span><span class="s2">&quot;/api/incident/event&quot;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">    </span><span class="nx">method</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;POST&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">    </span><span class="nx">headers</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="s2">&quot;Content-Type&quot;</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;application/json&quot;</span><span class="w"> </span><span class="p">},</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">    </span><span class="nx">body</span><span class="o">:</span><span class="w"> </span><span class="nb">JSON</span><span class="p">.</span><span class="nx">stringify</span><span class="p">({</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">      </span><span class="nx">category</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;frontend:unhandled_rejection&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">      </span><span class="nx">level</span><span class="o">:</span><span class="w"> </span><span class="mf">7</span><span class="p">,</span>
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="w">      </span><span class="nx">scope</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;web&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="w">      </span><span class="nx">title</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;Unhandled promise rejection&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="w">      </span><span class="nx">details</span><span class="o">:</span><span class="w"> </span><span class="nx">reason</span><span class="p">.</span><span class="nx">slice</span><span class="p">(</span><span class="mf">0</span><span class="p">,</span><span class="w"> </span><span class="mf">5000</span><span class="p">),</span>
+<a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a><span class="w">      </span><span class="nx">metadata</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a><span class="w">        </span><span class="nx">href</span><span class="o">:</span><span class="w"> </span><span class="nx">location</span><span class="p">.</span><span class="nx">href</span><span class="p">,</span>
+<a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a><span class="w">        </span><span class="nx">user_agent</span><span class="o">:</span><span class="w"> </span><span class="nx">navigator</span><span class="p">.</span><span class="nx">userAgent</span><span class="p">,</span>
+<a id="__codelineno-6-15" name="__codelineno-6-15" href="#__codelineno-6-15"></a><span class="w">      </span><span class="p">},</span>
+<a id="__codelineno-6-16" name="__codelineno-6-16" href="#__codelineno-6-16"></a><span class="w">    </span><span class="p">}),</span>
+<a id="__codelineno-6-17" name="__codelineno-6-17" href="#__codelineno-6-17"></a><span class="w">  </span><span class="p">});</span>
+<a id="__codelineno-6-18" name="__codelineno-6-18" href="#__codelineno-6-18"></a><span class="p">});</span>
+</code></pre></div>
+<h3 id="report-authsession-anomalies">Report auth/session anomalies<a class="headerlink" href="#report-authsession-anomalies" title="Permanent link">&para;</a></h3>
+<p>Examples:
+- refresh token failures
+- repeated <code>401/403</code> on protected endpoints
+- suspicious client behavior</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="k">await</span><span class="w"> </span><span class="nx">fetch</span><span class="p">(</span><span class="s2">&quot;/api/incident/event&quot;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="nx">method</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;POST&quot;</span><span class="p">,</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span><span class="nx">headers</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="s2">&quot;Content-Type&quot;</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;application/json&quot;</span><span class="w"> </span><span class="p">},</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">  </span><span class="nx">body</span><span class="o">:</span><span class="w"> </span><span class="nb">JSON</span><span class="p">.</span><span class="nx">stringify</span><span class="p">({</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">    </span><span class="nx">category</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;auth:token_refresh_failed&quot;</span><span class="p">,</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">    </span><span class="nx">level</span><span class="o">:</span><span class="w"> </span><span class="mf">5</span><span class="p">,</span>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="w">    </span><span class="nx">scope</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;account&quot;</span><span class="p">,</span>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="w">    </span><span class="nx">title</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;Token refresh failed&quot;</span><span class="p">,</span>
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="w">    </span><span class="nx">details</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;Client refresh attempt returned unauthorized&quot;</span><span class="p">,</span>
+<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="w">    </span><span class="nx">metadata</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">href</span><span class="o">:</span><span class="w"> </span><span class="nx">location</span><span class="p">.</span><span class="nx">href</span><span class="w"> </span><span class="p">},</span>
+<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a><span class="w">  </span><span class="p">}),</span>
+<a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a><span class="p">});</span>
+</code></pre></div>
+<h3 id="guidelines">Guidelines<a class="headerlink" href="#guidelines" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Use stable category names (<code>frontend:error</code>, <code>auth:token_refresh_failed</code>, etc.).</li>
+<li>Keep <code>level</code> proportional to severity.</li>
+<li>Include contextual metadata (<code>href</code>, action name, browser info).</li>
+<li>Avoid sending sensitive payloads (passwords, raw tokens, PII).</li>
+</ul>
 <h2 id="related-docs">Related Docs<a class="headerlink" href="#related-docs" title="Permanent link">&para;</a></h2>
 <ul>
 <li><a href="../account/authentication/">Authentication</a></li>
 <li><a href="../core/authentication/">Core Authentication</a></li>
 <li><a href="../core/request_response/">Request/Response Format</a></li>
+<li><a href="../logging/reporting_events/">Reporting Events</a></li>
+<li><a href="../logging/incidents/">Incident API</a></li>
 </ul>
 
 
