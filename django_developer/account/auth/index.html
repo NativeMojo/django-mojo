@@ -1250,6 +1250,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#magic-login" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Magic Login
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#api-keys" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3880,6 +3891,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#magic-login" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Magic Login
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#api-keys" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4020,6 +4042,21 @@
 <li><code>POST /api/auth/password/reset/token</code> with <code>token</code>, <code>new_password</code></li>
 <li>Returns new JWT on success</li>
 </ol>
+<h2 id="magic-login">Magic Login<a class="headerlink" href="#magic-login" title="Permanent link">&para;</a></h2>
+<p>Passwordless login via a signed single-use <code>ml:</code> token, delivered by email or SMS.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.utils.tokens</span><span class="w"> </span><span class="kn">import</span> <span class="n">generate_magic_login_token</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="c1"># Email (default)</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="n">token</span> <span class="o">=</span> <span class="n">generate_magic_login_token</span><span class="p">(</span><span class="n">user</span><span class="p">)</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="n">user</span><span class="o">.</span><span class="n">send_template_email</span><span class="p">(</span><span class="s2">&quot;magic_login_link&quot;</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;token&quot;</span><span class="p">:</span> <span class="n">token</span><span class="p">})</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="c1"># SMS</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="n">token</span> <span class="o">=</span> <span class="n">generate_magic_login_token</span><span class="p">(</span><span class="n">user</span><span class="p">,</span> <span class="n">channel</span><span class="o">=</span><span class="s2">&quot;sms&quot;</span><span class="p">)</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="n">phonehub</span><span class="o">.</span><span class="n">send_sms</span><span class="p">(</span><span class="n">user</span><span class="o">.</span><span class="n">phone_number</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;Your login token: </span><span class="si">{</span><span class="n">token</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</code></pre></div>
+<p><code>verify_magic_login_token(token)</code> returns <code>(user, channel)</code> — the channel is whichever was passed to <code>generate_magic_login_token</code>. On success the framework automatically marks <code>is_email_verified</code> or <code>is_phone_verified</code> depending on the channel.</p>
+<p>Tokens are single-use and expire after <code>MAGIC_LOGIN_TOKEN_TTL</code> seconds (default 3600). The channel is stored encrypted in <code>mojo_secrets</code> and cleared on consume.</p>
+<p>See the <a href="../../../web_developer/account/magic_login.md">Magic Login REST API</a> for the full client-facing flow.</p>
 <h2 id="api-keys">API Keys<a class="headerlink" href="#api-keys" title="Permanent link">&para;</a></h2>
 <p>Long-lived JWTs restricted by IP allowlist.</p>
 <p><strong>Generate own key:</strong> <code>POST /api/auth/generate_api_key</code>
@@ -4040,17 +4077,17 @@
 </ol>
 <h2 id="custom-bearer-handlers">Custom Bearer Handlers<a class="headerlink" href="#custom-bearer-handlers" title="Permanent link">&para;</a></h2>
 <p>Register additional token types via settings:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># settings.py</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">MOJO_BEARER_HANDLERS</span> <span class="o">=</span> <span class="p">{</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    <span class="s2">&quot;ApiKey&quot;</span><span class="p">:</span> <span class="s2">&quot;myapp.auth.validate_api_key&quot;</span><span class="p">,</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># settings.py</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">MOJO_BEARER_HANDLERS</span> <span class="o">=</span> <span class="p">{</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>    <span class="s2">&quot;ApiKey&quot;</span><span class="p">:</span> <span class="s2">&quot;myapp.auth.validate_api_key&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="p">}</span>
 </code></pre></div>
 <p>The handler receives the raw token string and must return <code>(user_or_None, error_or_None)</code>.</p>
 <h2 id="user-crud-endpoint">User CRUD Endpoint<a class="headerlink" href="#user-crud-endpoint" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;user&#39;</span><span class="p">)</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;user/&lt;int:pk&gt;&#39;</span><span class="p">)</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_user</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">pk</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>    <span class="k">return</span> <span class="n">User</span><span class="o">.</span><span class="n">on_rest_request</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">pk</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;user&#39;</span><span class="p">)</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;user/&lt;int:pk&gt;&#39;</span><span class="p">)</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_user</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">pk</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>    <span class="k">return</span> <span class="n">User</span><span class="o">.</span><span class="n">on_rest_request</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">pk</span><span class="p">)</span>
 </code></pre></div>
 <ul>
 <li><strong>List:</strong> requires <code>view_users</code> or <code>manage_users</code></li>
