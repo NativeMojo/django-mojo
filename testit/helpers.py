@@ -33,7 +33,7 @@ class TestitSkip(Exception):
 
 def _run_setup(func, *args, **kwargs):
     name = kwargs.get("name", func.__name__)
-    logit.color_print(f"{INDENT}{name.ljust(60, '.')}", logit.ConsoleLogger.PINK, end="")
+    logit.color_print(f"{INDENT}{name.ljust(80, '.')}", logit.ConsoleLogger.PINK, end="")
     res = func(*args, **kwargs)
     logit.color_print("DONE", logit.ConsoleLogger.PINK, end="\n")
     return res
@@ -95,7 +95,7 @@ def _run_unit(func, name, *args, **kwargs):
             test_name = test_name[5:]
 
     # Print test start message
-    name_line = f"{INDENT}{test_name.ljust(60, '.')}"
+    name_line = f"{INDENT}{test_name.ljust(80, '.')}"
 
     try:
         result = func(*args, **kwargs)

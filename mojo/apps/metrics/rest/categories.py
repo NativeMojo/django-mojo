@@ -14,7 +14,7 @@ CATEGORIES_LIST_DOCS = {
             "name": "account",
             "in": "query",
             "schema": {"type": "string", "default": "public"},
-            "description": "Account identifier (e.g., 'public', 'global', or 'group_<id>')."
+            "description": "Account identifier (e.g., 'public', 'global', 'group-<id>', or 'user-<id>')."
         }
     ],
     "responses": {
@@ -51,7 +51,7 @@ CATEGORY_SLUGS_DOCS = {
             "name": "account",
             "in": "query",
             "schema": {"type": "string", "default": "public"},
-            "description": "Account identifier (e.g., 'public', 'global', or 'group_<id>')."
+            "description": "Account identifier (e.g., 'public', 'global', 'group-<id>', or 'user-<id>')."
         }
     ],
     "responses": {
@@ -101,7 +101,7 @@ CATEGORY_FETCH_DOCS = {
             "name": "account",
             "in": "query",
             "schema": {"type": "string", "default": "public"},
-            "description": "Account identifier (e.g., 'public', 'global', or 'group_<id>')."
+            "description": "Account identifier (e.g., 'public', 'global', 'group-<id>', or 'user-<id>')."
         },
         {
             "name": "granularity",
@@ -154,7 +154,7 @@ CATEGORY_DELETE_DOCS = {
             "name": "account",
             "in": "body",
             "schema": {"type": "string", "default": "public"},
-            "description": "Account identifier (e.g., 'public', 'global', or 'group_<id>')."
+            "description": "Account identifier (e.g., 'public', 'global', 'group-<id>', or 'user-<id>')."
         }
     ],
     "responses": {

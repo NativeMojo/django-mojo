@@ -68,7 +68,8 @@ def mget_any(r, keys):
 # =========
 
 def record(slug, when=None, count=1, category=None, account="global",
-           min_granularity="hours", max_granularity="years", timezone=None):
+           min_granularity="hours", max_granularity="years", timezone=None,
+           expires_at=None, disable_expiry=False):
     """
     Records metrics by incrementing counters for various time granularities.
     Keys are hash-tagged per account to keep them in a single cluster slot.
@@ -87,8 +88,8 @@ def record(slug, when=None, count=1, category=None, account="global",
         base_key = utils.generate_slug(slug, when, granularity, account)
         k = tkey(account, base_key)
         p.incr(k, count)
-        exp_at = utils.get_expires_at(granularity, slug, category)
-        if exp_at:
+        exp_at = expires_at if expires_at is not None else utils.get_expires_at(granularity, slug, category)
+        if not disable_expiry and exp_at:
             p.expireat(k, exp_at)
     p.execute()
 

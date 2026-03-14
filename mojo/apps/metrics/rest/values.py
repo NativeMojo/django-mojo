@@ -34,7 +34,7 @@ SERIES_GET_DOCS = {
             "name": "account",
             "in": "query",
             "schema": {"type": "string", "default": "public"},
-            "description": "Account identifier (e.g., 'public', 'global', or 'group_<id>')."
+            "description": "Account identifier (e.g., 'public', 'global', 'group-<id>', or 'user-<id>')."
         }
     ],
     "responses": {
@@ -90,7 +90,7 @@ SERIES_POST_DOCS = {
             "name": "account",
             "in": "body",
             "schema": {"type": "string", "default": "public"},
-            "description": "Account identifier (e.g., 'public', 'global', or 'group_<id>')."
+            "description": "Account identifier (e.g., 'public', 'global', 'group-<id>', or 'user-<id>')."
         }
     ]
 }
@@ -118,7 +118,7 @@ SET_VALUE_DOCS = {
             "name": "account",
             "in": "body",
             "schema": {"type": "string", "default": "public"},
-            "description": "Account identifier (e.g., 'public', 'global', or 'group_<id>')."
+            "description": "Account identifier (e.g., 'public', 'global', 'group-<id>', or 'user-<id>')."
         }
     ],
     "responses": {
@@ -156,7 +156,7 @@ VALUE_GET_DOCS = {
             "name": "account",
             "in": "query",
             "schema": {"type": "string", "default": "public"},
-            "description": "Account identifier (e.g., 'public', 'global', or 'group_<id>')."
+            "description": "Account identifier (e.g., 'public', 'global', 'group-<id>', or 'user-<id>')."
         },
         {
             "name": "default",

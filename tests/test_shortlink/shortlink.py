@@ -2,6 +2,7 @@
 Tests for the shortlink app — URL shortening, resolution, OG preview, click tracking.
 """
 from datetime import timedelta
+from unittest.mock import patch
 from testit import helpers as th
 from testit.helpers import assert_true, assert_eq
 
@@ -132,6 +133,70 @@ def test_resolve_increments(opts):
     assert_eq(link.hit_count, 3, f"hit_count should be 3, got {link.hit_count}")
 
 
+@th.django_unit_test("ShortLink: resolve records global metric always and no source metric")
+def test_resolve_metrics_global_only(opts):
+    from mojo.apps.shortlink.models import ShortLink
+
+    link = ShortLink.create(url="https://example.com/global-metric", source="test")
+    with patch("mojo.apps.metrics.record") as record_mock:
+        link.resolve()
+        assert_eq(record_mock.call_count, 1, f"expected one metrics call, got {record_mock.call_count}")
+        kwargs = record_mock.call_args.kwargs
+        assert_eq(record_mock.call_args.args[0], "shortlink:click", "should record global shortlink click")
+        assert_eq(kwargs.get("category"), "shortlinks", "category should be shortlinks")
+        assert_eq(kwargs.get("account"), "global", "account should be global")
+
+
+@th.django_unit_test("ShortLink: resolve records user metric when track_clicks=True and user exists")
+def test_resolve_metrics_user_track_clicks(opts):
+    from mojo.apps.shortlink.models import ShortLink
+
+    link = ShortLink.create(
+        url="https://example.com/user-metric",
+        source="test",
+        track_clicks=True,
+        user=opts.user,
+        expire_days=1,
+        expire_hours=0,
+    )
+    with patch("mojo.apps.metrics.record") as record_mock:
+        link.resolve()
+        assert_eq(record_mock.call_count, 2, f"expected global + user metrics calls, got {record_mock.call_count}")
+
+        first = record_mock.call_args_list[0]
+        assert_eq(first.args[0], "shortlink:click", "first metric should be global click")
+        assert_eq(first.kwargs.get("account"), "global", "first metric should be global account")
+
+        second = record_mock.call_args_list[1]
+        assert_eq(second.args[0], f"sl:click:{link.code}", "second metric should be per-link slug")
+        assert_eq(second.kwargs.get("category"), "shortlinks", "user metric category should be shortlinks")
+        assert_eq(second.kwargs.get("account"), f"user-{opts.user.pk}", "user metric should be account scoped")
+        assert_true(isinstance(second.kwargs.get("expires_at"), int), "user metric should set expires_at when link expires")
+        assert_true(not second.kwargs.get("disable_expiry", False), "user metric should not disable expiry for expiring links")
+
+
+@th.django_unit_test("ShortLink: user metric never expires when shortlink never expires")
+def test_resolve_metrics_user_never_expire(opts):
+    from mojo.apps.shortlink.models import ShortLink
+
+    link = ShortLink.create(
+        url="https://example.com/user-metric-forever",
+        source="test",
+        track_clicks=True,
+        user=opts.user,
+        expire_days=0,
+        expire_hours=0,
+    )
+    with patch("mojo.apps.metrics.record") as record_mock:
+        link.resolve()
+        assert_eq(record_mock.call_count, 2, f"expected global + user metrics calls, got {record_mock.call_count}")
+        second = record_mock.call_args_list[1]
+        assert_eq(second.args[0], f"sl:click:{link.code}", "second metric should be per-link slug")
+        assert_eq(second.kwargs.get("account"), f"user-{opts.user.pk}", "user metric should be account scoped")
+        assert_true(second.kwargs.get("disable_expiry") is True, "never-expiring links should disable metric expiry")
+        assert_true(second.kwargs.get("expires_at") is None, "never-expiring links should not set expires_at")
+
+
 @th.django_unit_test("ShortLink: resolve missing code returns None")
 def test_resolve_missing(opts):
     from mojo.apps.shortlink.models import ShortLink
@@ -187,7 +252,22 @@ def test_bot_detection(opts):
     assert_true(is_bot_user_agent("Slackbot-LinkExpanding 1.0"), "Slackbot should be detected")
     assert_true(is_bot_user_agent("facebookexternalhit/1.1"), "Facebook bot should be detected")
     assert_true(is_bot_user_agent("WhatsApp/2.23"), "WhatsApp should be detected")
+    assert_true(is_bot_user_agent("iMessage"), "iMessage should be detected")
+    assert_true(is_bot_user_agent("iMessageFetchAgent"), "iMessageFetchAgent should be detected")
+    assert_true(is_bot_user_agent("MessagesURLPreview/1.0"), "MessagesURLPreview should be detected")
+    assert_true(is_bot_user_agent("Signal/7.0"), "Signal should be detected")
+    assert_true(is_bot_user_agent("SkypeUriPreview"), "SkypeUriPreview should be detected")
+    assert_true(is_bot_user_agent("GoogleImageProxy"), "GoogleImageProxy should be detected")
+    assert_true(is_bot_user_agent("Google-HTTP-Java-Client"), "Google-HTTP-Java-Client should be detected")
+    assert_true(is_bot_user_agent("Microsoft Teams"), "Microsoft Teams should be detected")
+    assert_true(is_bot_user_agent("YahooMailProxy"), "YahooMailProxy should be detected")
+    assert_true(is_bot_user_agent("Thunderbird"), "Thunderbird should be detected")
+    assert_true(is_bot_user_agent("Spark"), "Spark should be detected")
+    assert_true(is_bot_user_agent("notion.so"), "notion.so should be detected")
+    assert_true(is_bot_user_agent("linear.app"), "linear.app should be detected")
+    assert_true(is_bot_user_agent("ZoomWebhook"), "ZoomWebhook should be detected")
     assert_true(is_bot_user_agent("com.google.android.apps.messaging"), "Android Messages should be detected")
+    assert_true(is_bot_user_agent("IMESSAGE"), "matching should be case-insensitive")
     assert_true(not is_bot_user_agent("Mozilla/5.0 (iPhone; CPU iPhone OS)"), "normal browser should not be bot")
     assert_true(not is_bot_user_agent(""), "empty UA should not be bot")
 
@@ -337,12 +417,18 @@ def test_rest_bot_og(opts):
     bot_agents = [
         "Slackbot-LinkExpanding 1.0",
         "Twitterbot/1.0",
+        "iMessage",
         "WhatsApp/2.23",
+        "Signal/7.0",
+        "SkypeUriPreview",
+        "GoogleImageProxy",
     ]
     for user_agent in bot_agents:
         opts.client.headers["User-Agent"] = user_agent
+        opts.client.headers["HTTP_USER_AGENT"] = user_agent
         resp = opts.client.get(f"/s/{link.code}", allow_redirects=False)
         opts.client.headers.pop("User-Agent", None)
+        opts.client.headers.pop("HTTP_USER_AGENT", None)
         assert_eq(resp.status_code, 200, f"bot user-agent should receive OG HTML, got {resp.status_code}")
         body = resp.response if isinstance(resp.response, str) else str(resp.response)
         assert_true("<meta property=\"og:title\" content=\"OpenAI on GitHub\">" in body, "missing og:title meta")
@@ -362,8 +448,10 @@ def test_rest_bot_passthrough(opts):
         metadata={"og:title": "Should Not Appear"},
     )
     opts.client.headers["User-Agent"] = "Slackbot-LinkExpanding 1.0"
+    opts.client.headers["HTTP_USER_AGENT"] = "Slackbot-LinkExpanding 1.0"
     resp = opts.client.get(f"/s/{link.code}", allow_redirects=False)
     opts.client.headers.pop("User-Agent", None)
+    opts.client.headers.pop("HTTP_USER_AGENT", None)
     assert_eq(resp.status_code, 302, f"bot_passthrough should always 302, got {resp.status_code}")
 
 

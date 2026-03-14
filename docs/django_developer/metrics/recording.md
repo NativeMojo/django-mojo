@@ -17,7 +17,9 @@ metrics.record(
     account="global",           # str — namespace/tenant
     min_granularity="hours",    # finest time bucket to record
     max_granularity="years",    # coarsest time bucket to record
-    timezone=None               # str — e.g., "America/Los_Angeles"
+    timezone=None,              # str — e.g., "America/Los_Angeles"
+    expires_at=None,            # int unix ts — override key expiry time
+    disable_expiry=False        # bool — keep generated keys without TTL
 )
 ```
 
@@ -63,8 +65,26 @@ metrics.record("user_signup", category="auth")
 Use `account` to namespace metrics by tenant/group:
 
 ```python
-metrics.record("page_views", account="group_123")
-metrics.record("page_views", account="group_456")
+metrics.record("page_views", account="group-123")
+metrics.record("page_views", account="group-456")
+```
+
+User-level namespaces follow the same pattern:
+
+```python
+metrics.record("sl:click:ABC123", account="user-42", category="shortlinks")
+```
+
+## Expiry Controls
+
+By default, retention is based on granularity settings. You can override:
+
+```python
+# Force all recorded buckets for this call to expire at a specific unix timestamp
+metrics.record("temp_metric", expires_at=1735689600)
+
+# Disable expiry for this call (keys persist until manually deleted)
+metrics.record("permanent_metric", disable_expiry=True)
 ```
 
 ## Simple Key/Value (Non-Time-Series)
@@ -100,7 +120,7 @@ def process_payment(order):
 metrics.set_view_perms("public", "public")
 
 # Restrict write access
-metrics.set_write_perms("group_123", "manage_metrics")
+metrics.set_write_perms("group-123", "manage_metrics")
 ```
 
 

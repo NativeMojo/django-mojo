@@ -61,7 +61,7 @@ This allows messaging platforms to show rich link previews with custom titles, d
 
 ### Detected Bot User-Agents
 
-Slackbot, Twitterbot, facebookexternalhit, LinkedInBot, Discordbot, TelegramBot, WhatsApp, Applebot, Googlebot, Instagram, Android Messages (`com.google.android.apps.messaging`).
+Slackbot, Twitterbot, facebookexternalhit, LinkedInBot, Discordbot, TelegramBot, WhatsApp, Applebot, Googlebot, Instagram, Android Messages (`com.google.android.apps.messaging`), Apple Messages (`iMessage`, `iMessageFetchAgent`, `MessagesURLPreview`), Signal, Google Chat (`Google-HTTP-Java-Client`, `GoogleChat`), Microsoft Teams / Outlook preview (`SkypeUriPreview`, `Microsoft Teams`, `ms-office`), Gmail preview (`GoogleImageProxy`, `Gmail`), Yahoo Mail (`YahooMailProxy`), Thunderbird, Spark, Notion (`notion.so`), Linear (`linear.app`), Zoom chat (`ZoomWebhook`).
 
 ---
 
@@ -215,6 +215,54 @@ Requires the `manage_shortlinks` permission. Only available for links created wi
 ```
 
 Click records are read-only — they cannot be created, updated, or deleted via the API.
+
+---
+
+## ShortLink Metrics API
+
+Use the metrics API for time-series analytics on shortlinks.
+
+### What is recorded
+
+- Global clicks (always): slug `shortlink:click` in account `global`
+- Per-link user analytics (only when `track_clicks=true` and link has a `user`):
+  - slug `sl:click:<code>`
+  - account `user-<user_id>`
+
+### Fetch global shortlink clicks
+
+Requires `view_metrics`.
+
+```http
+GET /api/metrics/fetch?slugs=shortlink:click&account=global&granularity=days&with_labels=true
+```
+
+### Fetch metrics for one shortlink code
+
+For a shortlink code `Xk9mR2p`, query:
+
+```http
+GET /api/metrics/fetch?slugs=sl:click:Xk9mR2p&account=user-42&granularity=days&with_labels=true
+```
+
+### Fetch metrics for multiple shortlinks
+
+```http
+GET /api/metrics/fetch?slugs=sl:click:Xk9mR2p,sl:click:AbC1234&account=user-42&granularity=days&with_labels=true
+```
+
+### Permissions and account scope
+
+- `account=global`:
+  - read requires `view_metrics`
+- `account=user-<id>`:
+  - authenticated user can read their own account (`user-<request.user.id>`)
+  - reading another user's account requires system-level metrics permission
+
+### Notes
+
+- Per-link user metrics exist only for links that had `track_clicks=true` and an owning `user`.
+- Metrics are best for trend analytics; use `/api/shortlink/history` for individual click records.
 
 ---
 
