@@ -105,6 +105,18 @@ curl -X POST \
 }
 ```
 
+## Step 4: Update your Model (optional)
+
+If you want to associate the uploaded file with a model instance, update your model to include a `ForeignKey` to `fileman.File`. Then, when creating or updating the model instance, set the `file` field to the `fileman.File` instance returned by the upload endpoint.
+
+**POST** `/api/user/1`
+
+```json
+{
+  "avatar": 124
+}
+```
+
 ---
 
 ## Method 3: Base64 Inline
