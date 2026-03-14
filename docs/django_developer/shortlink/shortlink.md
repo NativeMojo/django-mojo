@@ -186,6 +186,13 @@ The redirect endpoint checks the `User-Agent` header against known bot signature
 - Slackbot, Twitterbot, facebookexternalhit, LinkedInBot, Discordbot
 - TelegramBot, WhatsApp, Applebot, Googlebot, Instagram
 - `com.google.android.apps.messaging` (Android Messages)
+- Apple Messages: `iMessage`, `iMessageFetchAgent`, `MessagesURLPreview`
+- Signal
+- Google Chat: `Google-HTTP-Java-Client`, `GoogleChat`
+- Teams/Outlook preview: `SkypeUriPreview`, `Microsoft Teams`, `ms-office`
+- Gmail preview: `GoogleImageProxy`, `Gmail`
+- Yahoo Mail: `YahooMailProxy`
+- Thunderbird, Spark, `notion.so`, `linear.app`, `ZoomWebhook`
 
 When a bot is detected and `bot_passthrough=False`, the endpoint returns an HTML page with OG meta tags and a `<meta http-equiv="refresh">` fallback redirect.
 
@@ -247,13 +254,16 @@ bot_clicks = link.clicks.filter(is_bot=True).count()
 Every `resolve()` call records Redis time-series metrics via `mojo.apps.metrics`:
 
 - `shortlink:click` — global click counter
-- `shortlink:click:<source>` — per-source counter (e.g. `shortlink:click:sms`)
+- If `track_clicks=True` and `link.user` exists:
+  - `sl:click:<code>` in account `user-<user.pk>` (per-link user analytics)
+  - Retention: expires 7 days after link expiry
+  - If link never expires, this per-link metric is stored without TTL
 
 Every `shorten()` call records:
 
 - `shortlink:created` — global creation counter
 
-All metrics use `category="shortlinks"` and `account="global"`.
+Shortlink metrics use `category="shortlinks"`. Global counters use `account="global"`.
 
 ---
 

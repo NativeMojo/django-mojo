@@ -1,5 +1,11 @@
 
 ## v1.0.45 - March 14, 2026
+## v1.0.46 - March 14, 2026
+
+user level security for metrics
+improved shorten for bots
+
+
 ## v1.0.45 - March 14, 2026
 
 fixing shortlink permissions
@@ -17,6 +23,15 @@ fixing shortlink permissions
 - docs/auth: added explicit frontend token storage guidance (`localStorage`) and page-reload session validation/refresh flow to web authentication docs
 - docs/web: added `frontend_starter.md` and linked it from web root/core docs for a single frontend bootstrap guide
 - docs/shortlink: clarified owner permissions for shortlink CRUD endpoints and documented that click-history remains `manage_shortlinks` scoped
+- shortlink: expanded bot user-agent detection to cover Apple Messages and major chat/mail preview clients (Signal, Teams/Outlook preview, Google Chat/Gmail preview, Yahoo Mail, Thunderbird, Spark, Notion, Linear, Zoom)
+- tests: expanded shortlink bot detection/OG preview tests to cover new user-agent signatures and preserve browser redirect behavior
+- shortlink/metrics: resolve now records global click metric only (removed per-source metric) and optionally records user-scoped per-link metrics when `track_clicks=True` and `user` is set
+- metrics: `metrics.record()` now supports `expires_at` override and `disable_expiry` for per-call retention control
+- tests/docs: added shortlink metric behavior tests and updated metrics/shortlink developer docs for new retention/account behavior
+- metrics/security: unified account permission checks across metrics endpoints and added `user-<id>` account enforcement (self-access by default, deny other-user access)
+- tests: added metrics API coverage for `user-<id>` account read/write permissions
+- docs/web-shortlink: added explicit metrics retrieval guide for global and user-scoped shortlink analytics (`shortlink:click` and `sl:click:<code>`)
+- tests: added metrics API coverage confirming `group-<id>` account permissions still work (authorized member allowed, outsider denied)
 
 ## v0.1.3 - May 29, 2025
 ## v1.0.44 - March 14, 2026

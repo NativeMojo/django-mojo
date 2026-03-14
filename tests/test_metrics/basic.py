@@ -293,3 +293,94 @@ def test_metrics_api(opts):
     assert isinstance(data["data"]["c3"], list), "data.data.values is not list"
     assert data["data"]["c3"][-1] >= 0, "values exist"
     assert len(data["data"]["c3"]) == len(data["labels"]), "number of labels vs values is wrong"
+
+
+@th.unit_test()
+def test_metrics_user_account_permissions(opts):
+    from mojo.apps.account.models import User
+
+    user1_name = "metrics_user_a"
+    user2_name = "metrics_user_b"
+    pword = "metrics##mojo99"
+
+    user1 = User.objects.filter(username=user1_name).last()
+    if user1 is None:
+        user1 = User(username=user1_name, email=f"{user1_name}@example.com")
+        user1.save()
+    user1.save_password(pword)
+    user1.remove_all_permissions()
+
+    user2 = User.objects.filter(username=user2_name).last()
+    if user2 is None:
+        user2 = User(username=user2_name, email=f"{user2_name}@example.com")
+        user2.save()
+    user2.save_password(pword)
+    user2.remove_all_permissions()
+
+    assert opts.client.login(user1_name, pword), "user1 login failed"
+
+    own_account = f"user-{user1.pk}"
+    other_account = f"user-{user2.pk}"
+
+    # user can write to own account
+    resp = opts.client.post("/api/metrics/record", dict(slug="u_clicks", account=own_account))
+    assert resp.status_code == 200, f"expected 200 for own user account write, got {resp.status_code}"
+
+    # user cannot write to another user's account
+    resp = opts.client.post("/api/metrics/record", dict(slug="u_clicks", account=other_account))
+    assert resp.status_code == 403, f"expected 403 for other user account write, got {resp.status_code}"
+
+    # user can read own account
+    resp = opts.client.get("/api/metrics/fetch", params=dict(slugs="u_clicks", account=own_account, with_labels=True))
+    assert resp.status_code == 200, f"expected 200 for own user account read, got {resp.status_code}"
+
+    # user cannot read another user's account
+    resp = opts.client.get("/api/metrics/fetch", params=dict(slugs="u_clicks", account=other_account, with_labels=True))
+    assert resp.status_code == 403, f"expected 403 for other user account read, got {resp.status_code}"
+
+
+@th.unit_test()
+def test_metrics_group_account_permissions(opts):
+    from mojo.apps.account.models import User, Group
+    from mojo.apps.account.models.member import GroupMember
+
+    member_name = "metrics_group_member"
+    outsider_name = "metrics_group_outsider"
+    pword = "metrics##mojo99"
+
+    member_user = User.objects.filter(username=member_name).last()
+    if member_user is None:
+        member_user = User(username=member_name, email=f"{member_name}@example.com")
+        member_user.save()
+    member_user.save_password(pword)
+    member_user.remove_all_permissions()
+
+    outsider_user = User.objects.filter(username=outsider_name).last()
+    if outsider_user is None:
+        outsider_user = User(username=outsider_name, email=f"{outsider_name}@example.com")
+        outsider_user.save()
+    outsider_user.save_password(pword)
+    outsider_user.remove_all_permissions()
+
+    group = Group(name="Metrics Group Perm Test")
+    group.save()
+
+    GroupMember.objects.filter(user=member_user, group=group).delete()
+    ms = GroupMember(user=member_user, group=group, is_active=True)
+    ms.save()
+    ms.add_permission("view_metrics")
+    ms.add_permission("write_metrics")
+
+    account = f"group-{group.pk}"
+
+    assert opts.client.login(member_name, pword), "group member login failed"
+    resp = opts.client.post("/api/metrics/record", dict(slug="g_clicks", account=account))
+    assert resp.status_code == 200, f"expected 200 for group member write, got {resp.status_code}"
+    resp = opts.client.get("/api/metrics/fetch", params=dict(slugs="g_clicks", account=account, with_labels=True))
+    assert resp.status_code == 200, f"expected 200 for group member read, got {resp.status_code}"
+
+    assert opts.client.login(outsider_name, pword), "outsider login failed"
+    resp = opts.client.post("/api/metrics/record", dict(slug="g_clicks", account=account))
+    assert resp.status_code == 403, f"expected 403 for outsider write, got {resp.status_code}"
+    resp = opts.client.get("/api/metrics/fetch", params=dict(slugs="g_clicks", account=account, with_labels=True))
+    assert resp.status_code == 403, f"expected 403 for outsider read, got {resp.status_code}"

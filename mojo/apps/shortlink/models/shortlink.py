@@ -199,8 +199,18 @@ class ShortLink(models.Model, MojoModel):
         try:
             from mojo.apps import metrics
             metrics.record("shortlink:click", category="shortlinks", account="global")
-            if self.source:
-                metrics.record(f"shortlink:click:{self.source}", category="shortlinks", account="global")
+            if self.track_clicks and self.user:
+                metric_kwargs = {}
+                if self.expires_at is None:
+                    metric_kwargs["disable_expiry"] = True
+                else:
+                    metric_kwargs["expires_at"] = int((self.expires_at + timedelta(days=7)).timestamp())
+                metrics.record(
+                    f"sl:click:{self.code}",
+                    category="shortlinks",
+                    account=f"user-{self.user.pk}",
+                    **metric_kwargs,
+                )
         except Exception:
             pass  # metrics are best-effort
 
@@ -243,6 +253,13 @@ BOT_SIGNATURES = [
     "WhatsApp", "Applebot", "Googlebot",
     "com.google.android.apps.messaging",
     "Instagram",
+    "iMessage", "iMessageFetchAgent", "MessagesURLPreview",
+    "Signal",
+    "Google-HTTP-Java-Client", "GoogleChat",
+    "SkypeUriPreview", "Microsoft Teams", "ms-office",
+    "GoogleImageProxy", "Gmail",
+    "YahooMailProxy", "Thunderbird", "Spark",
+    "notion.so", "linear.app", "ZoomWebhook",
 ]
 
 

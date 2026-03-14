@@ -82,13 +82,13 @@ metrics.delete_category("old_category")          # remove category (not the data
 
 ```python
 accounts = metrics.list_accounts()
-metrics.add_account("group_123")
+metrics.add_account("group-123")
 metrics.delete_account("old_group")             # removes from index, not time-series keys
 
 # Permissions
 perms = metrics.get_accounts_with_permissions()
-metrics.set_view_perms("group_123", "view_metrics")
-metrics.set_write_perms("group_123", "record_metrics")
+metrics.set_view_perms("group-123", "view_metrics")
+metrics.set_write_perms("group-123", "record_metrics")
 ```
 
 ## Settings
