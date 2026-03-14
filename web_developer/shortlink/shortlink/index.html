@@ -3884,31 +3884,31 @@
 <tr>
 <td>GET</td>
 <td><code>/api/shortlink/link</code></td>
-<td><code>manage_shortlinks</code></td>
+<td><code>manage_shortlinks</code> or owner</td>
 <td>List short links</td>
 </tr>
 <tr>
 <td>POST</td>
 <td><code>/api/shortlink/link</code></td>
-<td><code>manage_shortlinks</code></td>
+<td><code>manage_shortlinks</code> or owner</td>
 <td>Create short link via REST model endpoint</td>
 </tr>
 <tr>
 <td>GET</td>
 <td><code>/api/shortlink/link/&lt;id&gt;</code></td>
-<td><code>manage_shortlinks</code></td>
+<td><code>manage_shortlinks</code> or owner</td>
 <td>Get short link details</td>
 </tr>
 <tr>
 <td>POST/PUT</td>
 <td><code>/api/shortlink/link/&lt;id&gt;</code></td>
-<td><code>manage_shortlinks</code></td>
+<td><code>manage_shortlinks</code> or owner</td>
 <td>Update short link</td>
 </tr>
 <tr>
 <td>DELETE</td>
 <td><code>/api/shortlink/link/&lt;id&gt;</code></td>
-<td><code>manage_shortlinks</code></td>
+<td><code>manage_shortlinks</code> or owner</td>
 <td>Delete short link</td>
 </tr>
 <tr>
@@ -3985,7 +3985,10 @@
 <p>Slackbot, Twitterbot, facebookexternalhit, LinkedInBot, Discordbot, TelegramBot, WhatsApp, Applebot, Googlebot, Instagram, Android Messages (<code>com.google.android.apps.messaging</code>).</p>
 <hr />
 <h2 id="managing-shortlinks-rest-crud">Managing ShortLinks (REST CRUD)<a class="headerlink" href="#managing-shortlinks-rest-crud" title="Permanent link">&para;</a></h2>
-<p>Requires the <code>manage_shortlinks</code> permission.</p>
+<p>Requires <code>manage_shortlinks</code> <strong>or</strong> owner access.</p>
+<p>Owner behavior:
+- If authenticated and using owner access, users can view/update/delete only shortlinks where <code>shortlink.user == request.user</code>.
+- List responses are automatically scoped to the caller's own records when owner access is used.</p>
 <h3 id="list-shortlinks">List ShortLinks<a class="headerlink" href="#list-shortlinks" title="Permanent link">&para;</a></h3>
 <p><strong>GET</strong> <code>/api/shortlink/link</code></p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span>
@@ -4231,7 +4234,11 @@
 <tbody>
 <tr>
 <td><code>manage_shortlinks</code></td>
-<td>Viewing, creating, updating, deleting shortlinks and viewing click history</td>
+<td>Viewing/managing all shortlinks and viewing click history</td>
+</tr>
+<tr>
+<td><code>owner</code></td>
+<td>Viewing/managing only your own shortlinks (<code>/api/shortlink/link*</code>)</td>
 </tr>
 <tr>
 <td>authenticated user</td>

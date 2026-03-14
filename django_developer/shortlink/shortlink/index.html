@@ -3926,6 +3926,12 @@
 <h2 id="models">Models<a class="headerlink" href="#models" title="Permanent link">&para;</a></h2>
 <h3 id="shortlink">ShortLink<a class="headerlink" href="#shortlink" title="Permanent link">&para;</a></h3>
 <p>The core model. Located at <code>mojo/apps/shortlink/models/shortlink.py</code>.</p>
+<p><code>RestMeta</code> permissions:</p>
+<ul>
+<li><code>VIEW_PERMS = ["manage_shortlinks", "owner"]</code></li>
+<li><code>SAVE_PERMS = ["manage_shortlinks", "owner"]</code></li>
+</ul>
+<p>This means users with owner access can operate on their own <code>ShortLink</code> records (where <code>shortlink.user == request.user</code>) without global <code>manage_shortlinks</code>.</p>
 <table>
 <thead>
 <tr>
@@ -4066,6 +4072,7 @@
 </tbody>
 </table>
 <p>Read-only via REST (<code>CAN_SAVE = CAN_CREATE = False</code>).</p>
+<p>Note: click-history REST access remains admin-scoped (<code>manage_shortlinks</code>) rather than owner-scoped.</p>
 <hr />
 <h2 id="og-metadata">OG Metadata<a class="headerlink" href="#og-metadata" title="Permanent link">&para;</a></h2>
 <p>Metadata is stored in a flat JSONField. Any key starting with <code>og:</code> or <code>twitter:</code> is rendered as a <code>&lt;meta&gt;</code> tag for bot user-agents.</p>
@@ -4210,7 +4217,9 @@
 <hr />
 <h2 id="permissions">Permissions<a class="headerlink" href="#permissions" title="Permanent link">&para;</a></h2>
 <ul>
-<li><code>manage_shortlinks</code> — required to view/manage shortlinks via REST API</li>
+<li><code>manage_shortlinks</code> — full access to shortlinks and click-history REST endpoints</li>
+<li><code>owner</code> — access to own shortlinks on <code>/api/shortlink/link*</code> (when <code>shortlink.user == request.user</code>)</li>
+<li><code>shortlink</code> click-history endpoints remain <code>manage_shortlinks</code> scoped</li>
 <li>The redirect endpoint (<code>/s/&lt;code&gt;</code>) is public — no authentication required</li>
 </ul>
 <hr />
