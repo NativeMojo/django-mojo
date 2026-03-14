@@ -20,8 +20,8 @@ def on_user(request, pk=None):
     return User.on_rest_request(request, pk)
 
 
-@md.GET('user/me')
-@md.GET('account/user/me')
+@md.URL('user/me')
+@md.URL('account/user/me')
 @md.requires_auth()
 def on_user_me(request):
     if not hasattr(request.user, "is_request_user"):
