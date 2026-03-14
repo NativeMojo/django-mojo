@@ -1,5 +1,20 @@
 
 ## v0.1.3 - May 29, 2025
+## v1.0.43 - March 13, 2026
+
+new shortlink app for url shortening
+
+
+## v1.0.43 - March 13, 2026
+
+- NEW: shortlink app — URL shortener with OG previews, file linking, metrics, and opt-in click tracking
+- shortlink: bot detection for rich link previews (Slack, Twitter, Facebook, WhatsApp, Android/iOS Messages)
+- shortlink: async OG metadata scraping via jobs system
+- shortlink: bot_passthrough flag to skip preview rendering for transactional links
+- shortlink: is_protected flag to prevent auto-deletion by cleanup job
+- shortlink: cron job to prune expired links after 7-day grace period
+
+
 ## v1.0.42 - March 13, 2026
 
 fileman cleanup, bug fixes
