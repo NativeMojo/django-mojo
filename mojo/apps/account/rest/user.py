@@ -224,20 +224,29 @@ def on_user_password_reset_token(request):
 @md.strict_rate_limit("magic_login_send", ip_limit=5, ip_window=300)
 @md.public_endpoint()
 def on_magic_login_send(request):
-    """Send a magic login link to the user's email address."""
+    """Send a magic login link via email (default) or SMS (method=sms)."""
+    channel = request.DATA.get("method", "email")
+    if channel not in ("email", "sms"):
+        channel = "email"
+
     user = User.lookup_from_request(request, phone_as_username=True)
 
     if user is None:
         User.class_report_incident(
-            f"magic login attempt with unknown email {request.DATA.username} - {request.DATA.email} - {request.DATA.phone_number}",
+            f"magic login attempt with unknown identifier {request.DATA.username} - {request.DATA.email} - {request.DATA.phone_number}",
             event_type="magic:unknown",
             level=8,
             request=request)
     else:
-        user.report_incident(f"{user.username} requested a magic login link", "magic_login")
-        user.send_template_email("magic_login_link", dict(token=tokens.generate_magic_login_token(user)))
-    # Always return success to prevent email enumeration
-    return JsonResponse(dict(status=True, message="If email is in our system a login link was sent."))
+        user.report_incident(f"{user.username} requested a magic login link via {channel}", "magic_login")
+        magic_token = tokens.generate_magic_login_token(user, channel=channel)
+        if channel == "sms":
+            from mojo.apps import phonehub
+            if user.phone_number:
+                phonehub.send_sms(user.phone_number, f"Your login link token: {magic_token}")
+        else:
+            user.send_template_email("magic_login_link", dict(token=magic_token))
+    return JsonResponse(dict(status=True, message="If account is in our system a login link was sent."))
 
 
 @md.POST("auth/magic/login")
@@ -247,9 +256,11 @@ def on_magic_login_send(request):
 def on_magic_login_complete(request):
     """Exchange a magic login token for a JWT — logs the user in."""
     token = request.DATA.get("token")
-    user = tokens.verify_magic_login_token(token)
-    # Magic login always proves email ownership — mark verified on first use too.
-    if not user.is_email_verified:
+    user, channel = tokens.verify_magic_login_token(token)
+    if channel == "sms" and not user.is_phone_verified:
+        user.is_phone_verified = True
+        user.save(update_fields=["is_phone_verified", "modified"])
+    elif channel == "email" and not user.is_email_verified:
         user.is_email_verified = True
         user.save(update_fields=["is_email_verified", "modified"])
     return jwt_login(request, user)

@@ -282,13 +282,6 @@ class File(models.Model, MojoModel):
         return self.upload_status == self.EXPIRED
 
     @property
-    def is_upload_expired(self):
-        """Check if the upload URL has expired"""
-        if not self.upload_expires_at:
-            return False
-        return datetime.now() > self.upload_expires_at
-
-    @property
     def url(self):
         return self.generate_download_url()
 

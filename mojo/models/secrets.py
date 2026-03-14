@@ -60,6 +60,11 @@ class MojoSecrets(models.Model):
                 self.mojo_secrets = None
             self._secrets_changed = False
 
+    def refresh_from_db(self, *args, **kwargs):
+        self._exposed_secrets = None
+        self._secrets_changed = False
+        super().refresh_from_db(*args, **kwargs)
+
     def save(self, *args, **kwargs):
         if self.pk is not None:
             self.save_secrets()

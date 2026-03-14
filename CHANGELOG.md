@@ -1,5 +1,18 @@
 
 ## v0.1.3 - May 29, 2025
+## v1.0.42 - March 13, 2026
+
+fileman cleanup, bug fixes
+
+
+## v1.0.42 - March 13, 2026
+
+- fileman: full audit of REST API, docs, and tests; fixed backend path handling, rendition.get_setting, missing import, removed nonexistent is_upload_expired property
+- account: add user.pii_anonymize() for GDPR right-to-erasure compliance
+- magic login: SMS channel support via method=sms on /api/auth/magic/send; channel tracked in mojo_secrets and cleared after verify
+- bugfix: MojoSecrets.refresh_from_db now clears _exposed_secrets cache to prevent stale reads after DB reload
+
+
 ## v1.0.41 - March 12, 2026
 
 sms mappings

@@ -75,6 +75,28 @@ Two flows supported:
 3. `POST /api/auth/password/reset/token` with `token`, `new_password`
 4. Returns new JWT on success
 
+## Magic Login
+
+Passwordless login via a signed single-use `ml:` token, delivered by email or SMS.
+
+```python
+from mojo.apps.account.utils.tokens import generate_magic_login_token
+
+# Email (default)
+token = generate_magic_login_token(user)
+user.send_template_email("magic_login_link", {"token": token})
+
+# SMS
+token = generate_magic_login_token(user, channel="sms")
+phonehub.send_sms(user.phone_number, f"Your login token: {token}")
+```
+
+`verify_magic_login_token(token)` returns `(user, channel)` — the channel is whichever was passed to `generate_magic_login_token`. On success the framework automatically marks `is_email_verified` or `is_phone_verified` depending on the channel.
+
+Tokens are single-use and expire after `MAGIC_LOGIN_TOKEN_TTL` seconds (default 3600). The channel is stored encrypted in `mojo_secrets` and cleared on consume.
+
+See the [Magic Login REST API](../../../web_developer/account/magic_login.md) for the full client-facing flow.
+
 ## API Keys
 
 Long-lived JWTs restricted by IP allowlist.

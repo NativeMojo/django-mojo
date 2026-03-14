@@ -472,15 +472,6 @@ def direct_upload(request, upload_token, file_data) -> Dict[str, Any]:
             'status_code': 404
         }
     
-    # Check if upload has expired
-    if file_obj.is_upload_expired:
-        file_obj.mark_as_expired()
-        return {
-            'success': False,
-            'error': 'Upload has expired',
-            'status_code': 410
-        }
-    
     # Get uploaded file
     uploaded_file = file_data
     if not uploaded_file:
@@ -505,16 +496,7 @@ def direct_upload(request, upload_token, file_data) -> Dict[str, Any]:
         file_obj.mark_as_uploading()
         
         # Save file using backend
-        file_path = backend.save(
-            uploaded_file,
-            file_obj.filename,
-            content_type=file_obj.content_type,
-            group_id=file_obj.group.id if file_obj.group else None,
-            metadata=file_obj.metadata
-        )
-        
-        # Update file record with actual path
-        file_obj.file_path = file_path
+        backend.save(uploaded_file, file_obj.storage_file_path, file_obj.content_type)
         file_obj.file_size = uploaded_file.size
         
         # Calculate checksum
@@ -592,17 +574,16 @@ def get_download_url(request, upload_token) -> Dict[str, Any]:
     # Generate download URL
     try:
         download_url = backend.get_url(
-            file_obj.file_path,
+            file_obj.storage_file_path,
             expires_in=3600  # 1 hour
         )
-        
+
         return {
             'success': True,
             'download_url': download_url,
             'file': {
                 'id': file_obj.id,
                 'filename': file_obj.filename,
-                'original_filename': file_obj.original_filename,
                 'content_type': file_obj.content_type
             },
             'status_code': 200

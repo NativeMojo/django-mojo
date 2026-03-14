@@ -142,14 +142,21 @@ def verify_password_reset_token(token):
     return _verify(token, expected_kind=KIND_PASSWORD_RESET)
 
 
-def generate_magic_login_token(user):
-    """Generate a magic-login token (kind=ml)."""
-    return _generate(user, KIND_MAGIC_LOGIN)
+def generate_magic_login_token(user, channel="email"):
+    """Generate a magic-login token (kind=ml). channel: 'email' or 'sms'."""
+    token = _generate(user, KIND_MAGIC_LOGIN)
+    user.set_secret("magic_login_channel", channel)
+    user.save(update_fields=["mojo_secrets", "modified"])
+    return token
 
 
 def verify_magic_login_token(token):
-    """Verify a magic-login token and return the User."""
-    return _verify(token, expected_kind=KIND_MAGIC_LOGIN)
+    """Verify a magic-login token and return (user, channel)."""
+    user = _verify(token, expected_kind=KIND_MAGIC_LOGIN)
+    channel = user.get_secret("magic_login_channel") or "email"
+    user.set_secret("magic_login_channel", None)
+    user.save(update_fields=["mojo_secrets", "modified"])
+    return user, channel
 
 
 def generate_email_verify_token(user):
