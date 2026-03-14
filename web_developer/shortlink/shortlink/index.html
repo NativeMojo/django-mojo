@@ -3576,6 +3576,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#endpoints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Endpoints
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#redirect-endpoint" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3683,6 +3694,17 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#quick-create-endpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick Create Endpoint
+      
+    </span>
+  </a>
   
 </li>
       
@@ -3842,6 +3864,73 @@
 <h1 id="shortlink-rest-api-reference">ShortLink — REST API Reference<a class="headerlink" href="#shortlink-rest-api-reference" title="Permanent link">&para;</a></h1>
 <h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
 <p>The shortlink app provides URL shortening with automatic rich previews for messaging platforms (Slack, iMessage, WhatsApp, etc.), optional click analytics, and configurable expiry.</p>
+<h2 id="endpoints">Endpoints<a class="headerlink" href="#endpoints" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>Auth</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GET</td>
+<td><code>/s/&lt;code&gt;</code></td>
+<td>public</td>
+<td>Resolve short code and redirect (or OG preview for bots)</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/api/shortlink/link</code></td>
+<td><code>manage_shortlinks</code></td>
+<td>List short links</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/api/shortlink/link</code></td>
+<td><code>manage_shortlinks</code></td>
+<td>Create short link via REST model endpoint</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/api/shortlink/link/&lt;id&gt;</code></td>
+<td><code>manage_shortlinks</code></td>
+<td>Get short link details</td>
+</tr>
+<tr>
+<td>POST/PUT</td>
+<td><code>/api/shortlink/link/&lt;id&gt;</code></td>
+<td><code>manage_shortlinks</code></td>
+<td>Update short link</td>
+</tr>
+<tr>
+<td>DELETE</td>
+<td><code>/api/shortlink/link/&lt;id&gt;</code></td>
+<td><code>manage_shortlinks</code></td>
+<td>Delete short link</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/api/shortlink/link/create</code></td>
+<td>authenticated</td>
+<td>Create a short URL string via helper endpoint</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/api/shortlink/history</code></td>
+<td><code>manage_shortlinks</code></td>
+<td>List click history</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/api/shortlink/history/&lt;id&gt;</code></td>
+<td><code>manage_shortlinks</code></td>
+<td>Get click history record</td>
+</tr>
+</tbody>
+</table>
 <hr />
 <h2 id="redirect-endpoint">Redirect Endpoint<a class="headerlink" href="#redirect-endpoint" title="Permanent link">&para;</a></h2>
 <p><strong>GET</strong> <code>/s/&lt;code&gt;</code></p>
@@ -3898,7 +3987,7 @@
 <h2 id="managing-shortlinks-rest-crud">Managing ShortLinks (REST CRUD)<a class="headerlink" href="#managing-shortlinks-rest-crud" title="Permanent link">&para;</a></h2>
 <p>Requires the <code>manage_shortlinks</code> permission.</p>
 <h3 id="list-shortlinks">List ShortLinks<a class="headerlink" href="#list-shortlinks" title="Permanent link">&para;</a></h3>
-<p><strong>GET</strong> <code>/api/shortlink/shortlink</code></p>
+<p><strong>GET</strong> <code>/api/shortlink/link</code></p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span>
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
 <a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
@@ -3918,9 +4007,9 @@
 <p>Supports filtering: <code>?source=sms</code>, <code>?is_active=true</code>, <code>?search=example.com</code></p>
 <p>Use <code>?graph=default</code> for full details including metadata, user, and group.</p>
 <h3 id="get-shortlink-detail">Get ShortLink Detail<a class="headerlink" href="#get-shortlink-detail" title="Permanent link">&para;</a></h3>
-<p><strong>GET</strong> <code>/api/shortlink/shortlink/&lt;id&gt;</code></p>
+<p><strong>GET</strong> <code>/api/shortlink/link/&lt;id&gt;</code></p>
 <h3 id="create-shortlink">Create ShortLink<a class="headerlink" href="#create-shortlink" title="Permanent link">&para;</a></h3>
-<p><strong>POST</strong> <code>/api/shortlink/shortlink</code></p>
+<p><strong>POST</strong> <code>/api/shortlink/link</code></p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span>
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">&quot;url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://example.com/page&quot;</span><span class="p">,</span>
 <a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nt">&quot;source&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;email&quot;</span><span class="p">,</span>
@@ -3932,38 +4021,74 @@
 <a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="p">}</span>
 </code></pre></div>
 <h3 id="update-shortlink">Update ShortLink<a class="headerlink" href="#update-shortlink" title="Permanent link">&para;</a></h3>
-<p><strong>POST</strong> <code>/api/shortlink/shortlink/&lt;id&gt;</code></p>
+<p><strong>POST</strong> <code>/api/shortlink/link/&lt;id&gt;</code></p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span>
 <a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">&quot;is_active&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
 <a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="p">}</span>
 </code></pre></div>
 <h3 id="delete-shortlink">Delete ShortLink<a class="headerlink" href="#delete-shortlink" title="Permanent link">&para;</a></h3>
-<p><strong>DELETE</strong> <code>/api/shortlink/shortlink/&lt;id&gt;</code></p>
+<p><strong>DELETE</strong> <code>/api/shortlink/link/&lt;id&gt;</code></p>
+<hr />
+<h2 id="quick-create-endpoint">Quick Create Endpoint<a class="headerlink" href="#quick-create-endpoint" title="Permanent link">&para;</a></h2>
+<p><strong>POST</strong> <code>/api/shortlink/link/create</code></p>
+<p>Requires authentication (<code>@requires_auth</code>) and reads input from <code>request.DATA</code>.</p>
+<p>Use this endpoint when you want a ready-to-use short URL string in one call.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">&quot;url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://example.com/page&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span><span class="nt">&quot;source&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;email&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span><span class="nt">&quot;expire_days&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">  </span><span class="nt">&quot;expire_hours&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">  </span><span class="nt">&quot;metadata&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">    </span><span class="nt">&quot;og:title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;My Page&quot;</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">  </span><span class="p">},</span>
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">  </span><span class="nt">&quot;track_clicks&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="w">  </span><span class="nt">&quot;resolve_file&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="w">  </span><span class="nt">&quot;bot_passthrough&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a><span class="w">  </span><span class="nt">&quot;is_protected&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="w">  </span><span class="nt">&quot;base_url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://itf.io&quot;</span>
+<a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a><span class="p">}</span>
+</code></pre></div>
+<p>You can create file-based shortlinks by passing a <code>file</code> id:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">&quot;file&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">124</span><span class="p">,</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="nt">&quot;source&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;fileman&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span><span class="nt">&quot;resolve_file&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="p">}</span>
+</code></pre></div>
+<p><strong>Response</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">    </span><span class="nt">&quot;short_link&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://itf.io/s/Xk9mR2p&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">    </span><span class="nt">&quot;original_url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://example.com/page&quot;</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="p">}</span>
+</code></pre></div>
 <hr />
 <h2 id="view-click-history">View Click History<a class="headerlink" href="#view-click-history" title="Permanent link">&para;</a></h2>
 <p>Requires the <code>manage_shortlinks</code> permission. Only available for links created with <code>track_clicks=True</code>.</p>
-<p><strong>GET</strong> <code>/api/shortlink/shortlinkclick?shortlink=&lt;id&gt;</code></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">    </span><span class="p">{</span>
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">      </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
-<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">      </span><span class="nt">&quot;ip&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;203.0.113.45&quot;</span><span class="p">,</span>
-<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">      </span><span class="nt">&quot;user_agent&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)&quot;</span><span class="p">,</span>
-<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">      </span><span class="nt">&quot;referer&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://mail.google.com/&quot;</span><span class="p">,</span>
-<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">      </span><span class="nt">&quot;is_bot&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
-<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="w">      </span><span class="nt">&quot;created&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-03-13T14:30:00Z&quot;</span><span class="p">,</span>
-<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="w">      </span><span class="nt">&quot;shortlink&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a><span class="w">        </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span>
-<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="w">        </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Xk9mR2p&quot;</span><span class="p">,</span>
-<a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a><span class="w">        </span><span class="nt">&quot;url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://example.com/page&quot;</span><span class="p">,</span>
-<a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a><span class="w">        </span><span class="nt">&quot;source&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;email&quot;</span><span class="p">,</span>
-<a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a><span class="w">        </span><span class="nt">&quot;hit_count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">42</span><span class="p">,</span>
-<a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a><span class="w">        </span><span class="nt">&quot;is_active&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
-<a id="__codelineno-4-18" name="__codelineno-4-18" href="#__codelineno-4-18"></a><span class="w">      </span><span class="p">}</span>
-<a id="__codelineno-4-19" name="__codelineno-4-19" href="#__codelineno-4-19"></a><span class="w">    </span><span class="p">}</span>
-<a id="__codelineno-4-20" name="__codelineno-4-20" href="#__codelineno-4-20"></a><span class="w">  </span><span class="p">]</span>
-<a id="__codelineno-4-21" name="__codelineno-4-21" href="#__codelineno-4-21"></a><span class="p">}</span>
+<p><strong>GET</strong> <code>/api/shortlink/history?shortlink=&lt;id&gt;</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">    </span><span class="p">{</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">      </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">      </span><span class="nt">&quot;ip&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;203.0.113.45&quot;</span><span class="p">,</span>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="w">      </span><span class="nt">&quot;user_agent&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)&quot;</span><span class="p">,</span>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="w">      </span><span class="nt">&quot;referer&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://mail.google.com/&quot;</span><span class="p">,</span>
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="w">      </span><span class="nt">&quot;is_bot&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="w">      </span><span class="nt">&quot;created&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-03-13T14:30:00Z&quot;</span><span class="p">,</span>
+<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a><span class="w">      </span><span class="nt">&quot;shortlink&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a><span class="w">        </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span>
+<a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a><span class="w">        </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Xk9mR2p&quot;</span><span class="p">,</span>
+<a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a><span class="w">        </span><span class="nt">&quot;url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://example.com/page&quot;</span><span class="p">,</span>
+<a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a><span class="w">        </span><span class="nt">&quot;source&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;email&quot;</span><span class="p">,</span>
+<a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a><span class="w">        </span><span class="nt">&quot;hit_count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">42</span><span class="p">,</span>
+<a id="__codelineno-7-17" name="__codelineno-7-17" href="#__codelineno-7-17"></a><span class="w">        </span><span class="nt">&quot;is_active&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-7-18" name="__codelineno-7-18" href="#__codelineno-7-18"></a><span class="w">      </span><span class="p">}</span>
+<a id="__codelineno-7-19" name="__codelineno-7-19" href="#__codelineno-7-19"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-7-20" name="__codelineno-7-20" href="#__codelineno-7-20"></a><span class="w">  </span><span class="p">]</span>
+<a id="__codelineno-7-21" name="__codelineno-7-21" href="#__codelineno-7-21"></a><span class="p">}</span>
 </code></pre></div>
 <p>Click records are read-only — they cannot be created, updated, or deleted via the API.</p>
 <hr />
@@ -4012,18 +4137,18 @@
 <p>The <code>metadata</code> field is a flat JSON object. Any key starting with <code>og:</code> or <code>twitter:</code> is rendered as a meta tag for bot previews.</p>
 <h3 id="supported-tags">Supported Tags<a class="headerlink" href="#supported-tags" title="Permanent link">&para;</a></h3>
 <p>Standard OpenGraph and Twitter Card tags:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">&quot;og:title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Page Title&quot;</span><span class="p">,</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="nt">&quot;og:description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;A description of the page&quot;</span><span class="p">,</span>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span><span class="nt">&quot;og:image&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://example.com/image.jpg&quot;</span><span class="p">,</span>
-<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">  </span><span class="nt">&quot;og:url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://example.com/page&quot;</span><span class="p">,</span>
-<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">  </span><span class="nt">&quot;og:type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;website&quot;</span><span class="p">,</span>
-<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">  </span><span class="nt">&quot;og:site_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Example&quot;</span><span class="p">,</span>
-<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">  </span><span class="nt">&quot;twitter:card&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;summary_large_image&quot;</span><span class="p">,</span>
-<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">  </span><span class="nt">&quot;twitter:title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Page Title&quot;</span><span class="p">,</span>
-<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">  </span><span class="nt">&quot;twitter:description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;A description&quot;</span><span class="p">,</span>
-<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="w">  </span><span class="nt">&quot;twitter:image&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://example.com/image.jpg&quot;</span>
-<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p">{</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span><span class="nt">&quot;og:title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Page Title&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span><span class="nt">&quot;og:description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;A description of the page&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">  </span><span class="nt">&quot;og:image&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://example.com/image.jpg&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">  </span><span class="nt">&quot;og:url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://example.com/page&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="w">  </span><span class="nt">&quot;og:type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;website&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="w">  </span><span class="nt">&quot;og:site_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Example&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="w">  </span><span class="nt">&quot;twitter:card&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;summary_large_image&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="w">  </span><span class="nt">&quot;twitter:title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Page Title&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="w">  </span><span class="nt">&quot;twitter:description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;A description&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="w">  </span><span class="nt">&quot;twitter:image&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://example.com/image.jpg&quot;</span>
+<a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a><span class="p">}</span>
 </code></pre></div>
 <h3 id="auto-scraping">Auto-Scraping<a class="headerlink" href="#auto-scraping" title="Permanent link">&para;</a></h3>
 <p>If no custom <code>og:*</code> tags are provided when the link is created, the system automatically scrapes OG tags from the destination URL in the background. Scraped tags are stored internally and served to bots.</p>
@@ -4107,6 +4232,10 @@
 <tr>
 <td><code>manage_shortlinks</code></td>
 <td>Viewing, creating, updating, deleting shortlinks and viewing click history</td>
+</tr>
+<tr>
+<td>authenticated user</td>
+<td>Creating helper links via <code>/api/shortlink/link/create</code></td>
 </tr>
 <tr>
 <td><em>(none)</em></td>
