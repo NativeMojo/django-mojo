@@ -3720,6 +3720,89 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#shortlink-metrics-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ShortLink Metrics API
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="ShortLink Metrics API">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-is-recorded" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What is recorded
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fetch-global-shortlink-clicks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fetch global shortlink clicks
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fetch-metrics-for-one-shortlink-code" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fetch metrics for one shortlink code
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fetch-metrics-for-multiple-shortlinks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fetch metrics for multiple shortlinks
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#permissions-and-account-scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Permissions and account scope
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Notes
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#response-graphs" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3982,7 +4065,7 @@
 </code></pre></div>
 <p>This allows messaging platforms to show rich link previews with custom titles, descriptions, and images, while the user still ends up at the destination URL.</p>
 <h3 id="detected-bot-user-agents">Detected Bot User-Agents<a class="headerlink" href="#detected-bot-user-agents" title="Permanent link">&para;</a></h3>
-<p>Slackbot, Twitterbot, facebookexternalhit, LinkedInBot, Discordbot, TelegramBot, WhatsApp, Applebot, Googlebot, Instagram, Android Messages (<code>com.google.android.apps.messaging</code>).</p>
+<p>Slackbot, Twitterbot, facebookexternalhit, LinkedInBot, Discordbot, TelegramBot, WhatsApp, Applebot, Googlebot, Instagram, Android Messages (<code>com.google.android.apps.messaging</code>), Apple Messages (<code>iMessage</code>, <code>iMessageFetchAgent</code>, <code>MessagesURLPreview</code>), Signal, Google Chat (<code>Google-HTTP-Java-Client</code>, <code>GoogleChat</code>), Microsoft Teams / Outlook preview (<code>SkypeUriPreview</code>, <code>Microsoft Teams</code>, <code>ms-office</code>), Gmail preview (<code>GoogleImageProxy</code>, <code>Gmail</code>), Yahoo Mail (<code>YahooMailProxy</code>), Thunderbird, Spark, Notion (<code>notion.so</code>), Linear (<code>linear.app</code>), Zoom chat (<code>ZoomWebhook</code>).</p>
 <hr />
 <h2 id="managing-shortlinks-rest-crud">Managing ShortLinks (REST CRUD)<a class="headerlink" href="#managing-shortlinks-rest-crud" title="Permanent link">&para;</a></h2>
 <p>Requires <code>manage_shortlinks</code> <strong>or</strong> owner access.</p>
@@ -4095,6 +4178,40 @@
 </code></pre></div>
 <p>Click records are read-only — they cannot be created, updated, or deleted via the API.</p>
 <hr />
+<h2 id="shortlink-metrics-api">ShortLink Metrics API<a class="headerlink" href="#shortlink-metrics-api" title="Permanent link">&para;</a></h2>
+<p>Use the metrics API for time-series analytics on shortlinks.</p>
+<h3 id="what-is-recorded">What is recorded<a class="headerlink" href="#what-is-recorded" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Global clicks (always): slug <code>shortlink:click</code> in account <code>global</code></li>
+<li>Per-link user analytics (only when <code>track_clicks=true</code> and link has a <code>user</code>):</li>
+<li>slug <code>sl:click:&lt;code&gt;</code></li>
+<li>account <code>user-&lt;user_id&gt;</code></li>
+</ul>
+<h3 id="fetch-global-shortlink-clicks">Fetch global shortlink clicks<a class="headerlink" href="#fetch-global-shortlink-clicks" title="Permanent link">&para;</a></h3>
+<p>Requires <code>view_metrics</code>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="err">GET /api/metrics/fetch?slugs=shortlink:click&amp;account=global&amp;granularity=days&amp;with_labels=true</span>
+</code></pre></div>
+<h3 id="fetch-metrics-for-one-shortlink-code">Fetch metrics for one shortlink code<a class="headerlink" href="#fetch-metrics-for-one-shortlink-code" title="Permanent link">&para;</a></h3>
+<p>For a shortlink code <code>Xk9mR2p</code>, query:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="err">GET /api/metrics/fetch?slugs=sl:click:Xk9mR2p&amp;account=user-42&amp;granularity=days&amp;with_labels=true</span>
+</code></pre></div>
+<h3 id="fetch-metrics-for-multiple-shortlinks">Fetch metrics for multiple shortlinks<a class="headerlink" href="#fetch-metrics-for-multiple-shortlinks" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="err">GET /api/metrics/fetch?slugs=sl:click:Xk9mR2p,sl:click:AbC1234&amp;account=user-42&amp;granularity=days&amp;with_labels=true</span>
+</code></pre></div>
+<h3 id="permissions-and-account-scope">Permissions and account scope<a class="headerlink" href="#permissions-and-account-scope" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>account=global</code>:</li>
+<li>read requires <code>view_metrics</code></li>
+<li><code>account=user-&lt;id&gt;</code>:</li>
+<li>authenticated user can read their own account (<code>user-&lt;request.user.id&gt;</code>)</li>
+<li>reading another user's account requires system-level metrics permission</li>
+</ul>
+<h3 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Per-link user metrics exist only for links that had <code>track_clicks=true</code> and an owning <code>user</code>.</li>
+<li>Metrics are best for trend analytics; use <code>/api/shortlink/history</code> for individual click records.</li>
+</ul>
+<hr />
 <h2 id="response-graphs">Response Graphs<a class="headerlink" href="#response-graphs" title="Permanent link">&para;</a></h2>
 <h3 id="shortlink-graphs">ShortLink Graphs<a class="headerlink" href="#shortlink-graphs" title="Permanent link">&para;</a></h3>
 <table>
@@ -4140,18 +4257,18 @@
 <p>The <code>metadata</code> field is a flat JSON object. Any key starting with <code>og:</code> or <code>twitter:</code> is rendered as a meta tag for bot previews.</p>
 <h3 id="supported-tags">Supported Tags<a class="headerlink" href="#supported-tags" title="Permanent link">&para;</a></h3>
 <p>Standard OpenGraph and Twitter Card tags:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p">{</span>
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span><span class="nt">&quot;og:title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Page Title&quot;</span><span class="p">,</span>
-<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span><span class="nt">&quot;og:description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;A description of the page&quot;</span><span class="p">,</span>
-<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">  </span><span class="nt">&quot;og:image&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://example.com/image.jpg&quot;</span><span class="p">,</span>
-<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">  </span><span class="nt">&quot;og:url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://example.com/page&quot;</span><span class="p">,</span>
-<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="w">  </span><span class="nt">&quot;og:type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;website&quot;</span><span class="p">,</span>
-<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="w">  </span><span class="nt">&quot;og:site_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Example&quot;</span><span class="p">,</span>
-<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="w">  </span><span class="nt">&quot;twitter:card&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;summary_large_image&quot;</span><span class="p">,</span>
-<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="w">  </span><span class="nt">&quot;twitter:title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Page Title&quot;</span><span class="p">,</span>
-<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="w">  </span><span class="nt">&quot;twitter:description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;A description&quot;</span><span class="p">,</span>
-<a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="w">  </span><span class="nt">&quot;twitter:image&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://example.com/image.jpg&quot;</span>
-<a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="p">{</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">  </span><span class="nt">&quot;og:title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Page Title&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">  </span><span class="nt">&quot;og:description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;A description of the page&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="w">  </span><span class="nt">&quot;og:image&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://example.com/image.jpg&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="w">  </span><span class="nt">&quot;og:url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://example.com/page&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="w">  </span><span class="nt">&quot;og:type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;website&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="w">  </span><span class="nt">&quot;og:site_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Example&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a><span class="w">  </span><span class="nt">&quot;twitter:card&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;summary_large_image&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a><span class="w">  </span><span class="nt">&quot;twitter:title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Page Title&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a><span class="w">  </span><span class="nt">&quot;twitter:description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;A description&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a><span class="w">  </span><span class="nt">&quot;twitter:image&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://example.com/image.jpg&quot;</span>
+<a id="__codelineno-11-12" name="__codelineno-11-12" href="#__codelineno-11-12"></a><span class="p">}</span>
 </code></pre></div>
 <h3 id="auto-scraping">Auto-Scraping<a class="headerlink" href="#auto-scraping" title="Permanent link">&para;</a></h3>
 <p>If no custom <code>og:*</code> tags are provided when the link is created, the system automatically scrapes OG tags from the destination URL in the background. Scraped tags are stored internally and served to bots.</p>

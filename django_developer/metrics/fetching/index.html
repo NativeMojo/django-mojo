@@ -3904,13 +3904,13 @@
 </code></pre></div>
 <h2 id="account-management">Account Management<a class="headerlink" href="#account-management" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="n">accounts</span> <span class="o">=</span> <span class="n">metrics</span><span class="o">.</span><span class="n">list_accounts</span><span class="p">()</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="n">metrics</span><span class="o">.</span><span class="n">add_account</span><span class="p">(</span><span class="s2">&quot;group_123&quot;</span><span class="p">)</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="n">metrics</span><span class="o">.</span><span class="n">add_account</span><span class="p">(</span><span class="s2">&quot;group-123&quot;</span><span class="p">)</span>
 <a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="n">metrics</span><span class="o">.</span><span class="n">delete_account</span><span class="p">(</span><span class="s2">&quot;old_group&quot;</span><span class="p">)</span>             <span class="c1"># removes from index, not time-series keys</span>
 <a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>
 <a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="c1"># Permissions</span>
 <a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="n">perms</span> <span class="o">=</span> <span class="n">metrics</span><span class="o">.</span><span class="n">get_accounts_with_permissions</span><span class="p">()</span>
-<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="n">metrics</span><span class="o">.</span><span class="n">set_view_perms</span><span class="p">(</span><span class="s2">&quot;group_123&quot;</span><span class="p">,</span> <span class="s2">&quot;view_metrics&quot;</span><span class="p">)</span>
-<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="n">metrics</span><span class="o">.</span><span class="n">set_write_perms</span><span class="p">(</span><span class="s2">&quot;group_123&quot;</span><span class="p">,</span> <span class="s2">&quot;record_metrics&quot;</span><span class="p">)</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="n">metrics</span><span class="o">.</span><span class="n">set_view_perms</span><span class="p">(</span><span class="s2">&quot;group-123&quot;</span><span class="p">,</span> <span class="s2">&quot;view_metrics&quot;</span><span class="p">)</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="n">metrics</span><span class="o">.</span><span class="n">set_write_perms</span><span class="p">(</span><span class="s2">&quot;group-123&quot;</span><span class="p">,</span> <span class="s2">&quot;record_metrics&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="settings">Settings<a class="headerlink" href="#settings" title="Permanent link">&para;</a></h2>
 <table>

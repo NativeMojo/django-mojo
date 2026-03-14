@@ -2006,6 +2006,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#expiry-controls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Expiry Controls
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#simple-keyvalue-non-time-series" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3863,6 +3874,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#expiry-controls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Expiry Controls
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#simple-keyvalue-non-time-series" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3978,8 +4000,10 @@
 <a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>    <span class="n">account</span><span class="o">=</span><span class="s2">&quot;global&quot;</span><span class="p">,</span>           <span class="c1"># str — namespace/tenant</span>
 <a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>    <span class="n">min_granularity</span><span class="o">=</span><span class="s2">&quot;hours&quot;</span><span class="p">,</span>    <span class="c1"># finest time bucket to record</span>
 <a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>    <span class="n">max_granularity</span><span class="o">=</span><span class="s2">&quot;years&quot;</span><span class="p">,</span>    <span class="c1"># coarsest time bucket to record</span>
-<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>    <span class="n">timezone</span><span class="o">=</span><span class="kc">None</span>               <span class="c1"># str — e.g., &quot;America/Los_Angeles&quot;</span>
-<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="p">)</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>    <span class="n">timezone</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>              <span class="c1"># str — e.g., &quot;America/Los_Angeles&quot;</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>    <span class="n">expires_at</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>            <span class="c1"># int unix ts — override key expiry time</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>    <span class="n">disable_expiry</span><span class="o">=</span><span class="kc">False</span>        <span class="c1"># bool — keep generated keys without TTL</span>
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="p">)</span>
 </code></pre></div>
 <h2 id="basic-usage">Basic Usage<a class="headerlink" href="#basic-usage" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Increment &quot;page_views&quot; by 1 now</span>
@@ -4008,38 +4032,49 @@
 </code></pre></div>
 <h2 id="multi-tenant-accounts">Multi-Tenant Accounts<a class="headerlink" href="#multi-tenant-accounts" title="Permanent link">&para;</a></h2>
 <p>Use <code>account</code> to namespace metrics by tenant/group:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">metrics</span><span class="o">.</span><span class="n">record</span><span class="p">(</span><span class="s2">&quot;page_views&quot;</span><span class="p">,</span> <span class="n">account</span><span class="o">=</span><span class="s2">&quot;group_123&quot;</span><span class="p">)</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="n">metrics</span><span class="o">.</span><span class="n">record</span><span class="p">(</span><span class="s2">&quot;page_views&quot;</span><span class="p">,</span> <span class="n">account</span><span class="o">=</span><span class="s2">&quot;group_456&quot;</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">metrics</span><span class="o">.</span><span class="n">record</span><span class="p">(</span><span class="s2">&quot;page_views&quot;</span><span class="p">,</span> <span class="n">account</span><span class="o">=</span><span class="s2">&quot;group-123&quot;</span><span class="p">)</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="n">metrics</span><span class="o">.</span><span class="n">record</span><span class="p">(</span><span class="s2">&quot;page_views&quot;</span><span class="p">,</span> <span class="n">account</span><span class="o">=</span><span class="s2">&quot;group-456&quot;</span><span class="p">)</span>
+</code></pre></div>
+<p>User-level namespaces follow the same pattern:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="n">metrics</span><span class="o">.</span><span class="n">record</span><span class="p">(</span><span class="s2">&quot;sl:click:ABC123&quot;</span><span class="p">,</span> <span class="n">account</span><span class="o">=</span><span class="s2">&quot;user-42&quot;</span><span class="p">,</span> <span class="n">category</span><span class="o">=</span><span class="s2">&quot;shortlinks&quot;</span><span class="p">)</span>
+</code></pre></div>
+<h2 id="expiry-controls">Expiry Controls<a class="headerlink" href="#expiry-controls" title="Permanent link">&para;</a></h2>
+<p>By default, retention is based on granularity settings. You can override:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># Force all recorded buckets for this call to expire at a specific unix timestamp</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="n">metrics</span><span class="o">.</span><span class="n">record</span><span class="p">(</span><span class="s2">&quot;temp_metric&quot;</span><span class="p">,</span> <span class="n">expires_at</span><span class="o">=</span><span class="mi">1735689600</span><span class="p">)</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="c1"># Disable expiry for this call (keys persist until manually deleted)</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="n">metrics</span><span class="o">.</span><span class="n">record</span><span class="p">(</span><span class="s2">&quot;permanent_metric&quot;</span><span class="p">,</span> <span class="n">disable_expiry</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="simple-keyvalue-non-time-series">Simple Key/Value (Non-Time-Series)<a class="headerlink" href="#simple-keyvalue-non-time-series" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># Store a simple value (not time-series)</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="n">metrics</span><span class="o">.</span><span class="n">set_value</span><span class="p">(</span><span class="s2">&quot;maintenance_mode&quot;</span><span class="p">,</span> <span class="s2">&quot;off&quot;</span><span class="p">,</span> <span class="n">account</span><span class="o">=</span><span class="s2">&quot;public&quot;</span><span class="p">)</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="n">mode</span> <span class="o">=</span> <span class="n">metrics</span><span class="o">.</span><span class="n">get_value</span><span class="p">(</span><span class="s2">&quot;maintenance_mode&quot;</span><span class="p">,</span> <span class="n">account</span><span class="o">=</span><span class="s2">&quot;public&quot;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="s2">&quot;off&quot;</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># Store a simple value (not time-series)</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="n">metrics</span><span class="o">.</span><span class="n">set_value</span><span class="p">(</span><span class="s2">&quot;maintenance_mode&quot;</span><span class="p">,</span> <span class="s2">&quot;off&quot;</span><span class="p">,</span> <span class="n">account</span><span class="o">=</span><span class="s2">&quot;public&quot;</span><span class="p">)</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="n">mode</span> <span class="o">=</span> <span class="n">metrics</span><span class="o">.</span><span class="n">get_value</span><span class="p">(</span><span class="s2">&quot;maintenance_mode&quot;</span><span class="p">,</span> <span class="n">account</span><span class="o">=</span><span class="s2">&quot;public&quot;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="s2">&quot;off&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="where-to-record">Where to Record<a class="headerlink" href="#where-to-record" title="Permanent link">&para;</a></h2>
 <p>Record metrics close to the event:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># In a model&#39;s on_rest_created</span>
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_rest_created</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>    <span class="n">metrics</span><span class="o">.</span><span class="n">record</span><span class="p">(</span><span class="s2">&quot;orders_created&quot;</span><span class="p">,</span> <span class="n">category</span><span class="o">=</span><span class="s2">&quot;orders&quot;</span><span class="p">)</span>
-<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>
-<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="c1"># In a service</span>
-<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="k">def</span><span class="w"> </span><span class="nf">process_payment</span><span class="p">(</span><span class="n">order</span><span class="p">):</span>
-<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>    <span class="n">result</span> <span class="o">=</span> <span class="n">stripe</span><span class="o">.</span><span class="n">charge</span><span class="p">(</span><span class="o">...</span><span class="p">)</span>
-<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>    <span class="k">if</span> <span class="n">result</span><span class="o">.</span><span class="n">success</span><span class="p">:</span>
-<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>        <span class="n">metrics</span><span class="o">.</span><span class="n">record</span><span class="p">(</span><span class="s2">&quot;payments_succeeded&quot;</span><span class="p">,</span> <span class="n">count</span><span class="o">=</span><span class="n">order</span><span class="o">.</span><span class="n">total_cents</span><span class="p">)</span>
-<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a>    <span class="k">else</span><span class="p">:</span>
-<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a>        <span class="n">metrics</span><span class="o">.</span><span class="n">record</span><span class="p">(</span><span class="s2">&quot;payments_failed&quot;</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># In a model&#39;s on_rest_created</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_rest_created</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>    <span class="n">metrics</span><span class="o">.</span><span class="n">record</span><span class="p">(</span><span class="s2">&quot;orders_created&quot;</span><span class="p">,</span> <span class="n">category</span><span class="o">=</span><span class="s2">&quot;orders&quot;</span><span class="p">)</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="c1"># In a service</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="k">def</span><span class="w"> </span><span class="nf">process_payment</span><span class="p">(</span><span class="n">order</span><span class="p">):</span>
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>    <span class="n">result</span> <span class="o">=</span> <span class="n">stripe</span><span class="o">.</span><span class="n">charge</span><span class="p">(</span><span class="o">...</span><span class="p">)</span>
+<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a>    <span class="k">if</span> <span class="n">result</span><span class="o">.</span><span class="n">success</span><span class="p">:</span>
+<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a>        <span class="n">metrics</span><span class="o">.</span><span class="n">record</span><span class="p">(</span><span class="s2">&quot;payments_succeeded&quot;</span><span class="p">,</span> <span class="n">count</span><span class="o">=</span><span class="n">order</span><span class="o">.</span><span class="n">total_cents</span><span class="p">)</span>
+<a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a>    <span class="k">else</span><span class="p">:</span>
+<a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a>        <span class="n">metrics</span><span class="o">.</span><span class="n">record</span><span class="p">(</span><span class="s2">&quot;payments_failed&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="account-permissions">Account Permissions<a class="headerlink" href="#account-permissions" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># Allow unauthenticated REST reads for public metrics</span>
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="n">metrics</span><span class="o">.</span><span class="n">set_view_perms</span><span class="p">(</span><span class="s2">&quot;public&quot;</span><span class="p">,</span> <span class="s2">&quot;public&quot;</span><span class="p">)</span>
-<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>
-<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="c1"># Restrict write access</span>
-<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="n">metrics</span><span class="o">.</span><span class="n">set_write_perms</span><span class="p">(</span><span class="s2">&quot;group_123&quot;</span><span class="p">,</span> <span class="s2">&quot;manage_metrics&quot;</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># Allow unauthenticated REST reads for public metrics</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="n">metrics</span><span class="o">.</span><span class="n">set_view_perms</span><span class="p">(</span><span class="s2">&quot;public&quot;</span><span class="p">,</span> <span class="s2">&quot;public&quot;</span><span class="p">)</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="c1"># Restrict write access</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="n">metrics</span><span class="o">.</span><span class="n">set_write_perms</span><span class="p">(</span><span class="s2">&quot;group-123&quot;</span><span class="p">,</span> <span class="s2">&quot;manage_metrics&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="mdendpoint_metrics-usage-tracking"><code>@md.endpoint_metrics</code> — Usage Tracking<a class="headerlink" href="#mdendpoint_metrics-usage-tracking" title="Permanent link">&para;</a></h2>
 <p>Records per-endpoint metrics to the time-series metrics system. <strong>Disabled entirely (zero overhead) when <code>API_METRICS=False</code>.</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">endpoint_metrics</span><span class="p">(</span><span class="n">slug</span><span class="p">,</span> <span class="n">by</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">min_granularity</span><span class="o">=</span><span class="s2">&quot;hours&quot;</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">endpoint_metrics</span><span class="p">(</span><span class="n">slug</span><span class="p">,</span> <span class="n">by</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">min_granularity</span><span class="o">=</span><span class="s2">&quot;hours&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="parameters">Parameters<a class="headerlink" href="#parameters" title="Permanent link">&para;</a></h3>
 <table>
@@ -4096,34 +4131,34 @@
 </tbody>
 </table>
 <h3 id="examples">Examples<a class="headerlink" href="#examples" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># Global count only</span>
-<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="nd">@md</span><span class="o">.</span><span class="n">POST</span><span class="p">(</span><span class="s2">&quot;signup&quot;</span><span class="p">)</span>
-<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="nd">@md</span><span class="o">.</span><span class="n">endpoint_metrics</span><span class="p">(</span><span class="s2">&quot;signup_total&quot;</span><span class="p">)</span>
-<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_signup</span><span class="p">(</span><span class="n">request</span><span class="p">):</span>
-<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>    <span class="o">...</span>
-<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>
-<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="c1"># Global + IP breakdown</span>
-<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="nd">@md</span><span class="o">.</span><span class="n">POST</span><span class="p">(</span><span class="s2">&quot;search&quot;</span><span class="p">)</span>
-<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="nd">@md</span><span class="o">.</span><span class="n">endpoint_metrics</span><span class="p">(</span><span class="s2">&quot;search_calls&quot;</span><span class="p">,</span> <span class="n">by</span><span class="o">=</span><span class="s2">&quot;ip&quot;</span><span class="p">)</span>
-<a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_search</span><span class="p">(</span><span class="n">request</span><span class="p">):</span>
-<a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a>    <span class="o">...</span>
-<a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a>
-<a id="__codelineno-10-13" name="__codelineno-10-13" href="#__codelineno-10-13"></a><span class="c1"># Global + multiple breakdowns</span>
-<a id="__codelineno-10-14" name="__codelineno-10-14" href="#__codelineno-10-14"></a><span class="nd">@md</span><span class="o">.</span><span class="n">POST</span><span class="p">(</span><span class="s2">&quot;login&quot;</span><span class="p">)</span>
-<a id="__codelineno-10-15" name="__codelineno-10-15" href="#__codelineno-10-15"></a><span class="nd">@md</span><span class="o">.</span><span class="n">endpoint_metrics</span><span class="p">(</span><span class="s2">&quot;login_attempts&quot;</span><span class="p">,</span> <span class="n">by</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;ip&quot;</span><span class="p">,</span> <span class="s2">&quot;duid&quot;</span><span class="p">])</span>
-<a id="__codelineno-10-16" name="__codelineno-10-16" href="#__codelineno-10-16"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_login</span><span class="p">(</span><span class="n">request</span><span class="p">):</span>
-<a id="__codelineno-10-17" name="__codelineno-10-17" href="#__codelineno-10-17"></a>    <span class="o">...</span>
-<a id="__codelineno-10-18" name="__codelineno-10-18" href="#__codelineno-10-18"></a>
-<a id="__codelineno-10-19" name="__codelineno-10-19" href="#__codelineno-10-19"></a><span class="c1"># API key usage tracking, daily granularity</span>
-<a id="__codelineno-10-20" name="__codelineno-10-20" href="#__codelineno-10-20"></a><span class="nd">@md</span><span class="o">.</span><span class="n">POST</span><span class="p">(</span><span class="s2">&quot;assess&quot;</span><span class="p">)</span>
-<a id="__codelineno-10-21" name="__codelineno-10-21" href="#__codelineno-10-21"></a><span class="nd">@md</span><span class="o">.</span><span class="n">endpoint_metrics</span><span class="p">(</span><span class="s2">&quot;assess_calls&quot;</span><span class="p">,</span> <span class="n">by</span><span class="o">=</span><span class="s2">&quot;api_key&quot;</span><span class="p">,</span> <span class="n">min_granularity</span><span class="o">=</span><span class="s2">&quot;days&quot;</span><span class="p">)</span>
-<a id="__codelineno-10-22" name="__codelineno-10-22" href="#__codelineno-10-22"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_assess</span><span class="p">(</span><span class="n">request</span><span class="p">):</span>
-<a id="__codelineno-10-23" name="__codelineno-10-23" href="#__codelineno-10-23"></a>    <span class="o">...</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="c1"># Global count only</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="nd">@md</span><span class="o">.</span><span class="n">POST</span><span class="p">(</span><span class="s2">&quot;signup&quot;</span><span class="p">)</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="nd">@md</span><span class="o">.</span><span class="n">endpoint_metrics</span><span class="p">(</span><span class="s2">&quot;signup_total&quot;</span><span class="p">)</span>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_signup</span><span class="p">(</span><span class="n">request</span><span class="p">):</span>
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>    <span class="o">...</span>
+<a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a>
+<a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a><span class="c1"># Global + IP breakdown</span>
+<a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a><span class="nd">@md</span><span class="o">.</span><span class="n">POST</span><span class="p">(</span><span class="s2">&quot;search&quot;</span><span class="p">)</span>
+<a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a><span class="nd">@md</span><span class="o">.</span><span class="n">endpoint_metrics</span><span class="p">(</span><span class="s2">&quot;search_calls&quot;</span><span class="p">,</span> <span class="n">by</span><span class="o">=</span><span class="s2">&quot;ip&quot;</span><span class="p">)</span>
+<a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_search</span><span class="p">(</span><span class="n">request</span><span class="p">):</span>
+<a id="__codelineno-12-11" name="__codelineno-12-11" href="#__codelineno-12-11"></a>    <span class="o">...</span>
+<a id="__codelineno-12-12" name="__codelineno-12-12" href="#__codelineno-12-12"></a>
+<a id="__codelineno-12-13" name="__codelineno-12-13" href="#__codelineno-12-13"></a><span class="c1"># Global + multiple breakdowns</span>
+<a id="__codelineno-12-14" name="__codelineno-12-14" href="#__codelineno-12-14"></a><span class="nd">@md</span><span class="o">.</span><span class="n">POST</span><span class="p">(</span><span class="s2">&quot;login&quot;</span><span class="p">)</span>
+<a id="__codelineno-12-15" name="__codelineno-12-15" href="#__codelineno-12-15"></a><span class="nd">@md</span><span class="o">.</span><span class="n">endpoint_metrics</span><span class="p">(</span><span class="s2">&quot;login_attempts&quot;</span><span class="p">,</span> <span class="n">by</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;ip&quot;</span><span class="p">,</span> <span class="s2">&quot;duid&quot;</span><span class="p">])</span>
+<a id="__codelineno-12-16" name="__codelineno-12-16" href="#__codelineno-12-16"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_login</span><span class="p">(</span><span class="n">request</span><span class="p">):</span>
+<a id="__codelineno-12-17" name="__codelineno-12-17" href="#__codelineno-12-17"></a>    <span class="o">...</span>
+<a id="__codelineno-12-18" name="__codelineno-12-18" href="#__codelineno-12-18"></a>
+<a id="__codelineno-12-19" name="__codelineno-12-19" href="#__codelineno-12-19"></a><span class="c1"># API key usage tracking, daily granularity</span>
+<a id="__codelineno-12-20" name="__codelineno-12-20" href="#__codelineno-12-20"></a><span class="nd">@md</span><span class="o">.</span><span class="n">POST</span><span class="p">(</span><span class="s2">&quot;assess&quot;</span><span class="p">)</span>
+<a id="__codelineno-12-21" name="__codelineno-12-21" href="#__codelineno-12-21"></a><span class="nd">@md</span><span class="o">.</span><span class="n">endpoint_metrics</span><span class="p">(</span><span class="s2">&quot;assess_calls&quot;</span><span class="p">,</span> <span class="n">by</span><span class="o">=</span><span class="s2">&quot;api_key&quot;</span><span class="p">,</span> <span class="n">min_granularity</span><span class="o">=</span><span class="s2">&quot;days&quot;</span><span class="p">)</span>
+<a id="__codelineno-12-22" name="__codelineno-12-22" href="#__codelineno-12-22"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_assess</span><span class="p">(</span><span class="n">request</span><span class="p">):</span>
+<a id="__codelineno-12-23" name="__codelineno-12-23" href="#__codelineno-12-23"></a>    <span class="o">...</span>
 </code></pre></div>
 <p>Each resolved dimension produces an additional metric slug:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>login_attempts              ← always recorded (global)
-<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>login_attempts:ip:1.2.3.4   ← per IP
-<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>login_attempts:duid:abc123  ← per device
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>login_attempts              ← always recorded (global)
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>login_attempts:ip:1.2.3.4   ← per IP
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>login_attempts:duid:abc123  ← per device
 </code></pre></div>
 <p>Dimensions that are absent on the request (no duid, unauthenticated user, no group, no api_key) are skipped silently.</p>
 

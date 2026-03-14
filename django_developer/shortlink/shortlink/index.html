@@ -4110,6 +4110,13 @@
 <li>Slackbot, Twitterbot, facebookexternalhit, LinkedInBot, Discordbot</li>
 <li>TelegramBot, WhatsApp, Applebot, Googlebot, Instagram</li>
 <li><code>com.google.android.apps.messaging</code> (Android Messages)</li>
+<li>Apple Messages: <code>iMessage</code>, <code>iMessageFetchAgent</code>, <code>MessagesURLPreview</code></li>
+<li>Signal</li>
+<li>Google Chat: <code>Google-HTTP-Java-Client</code>, <code>GoogleChat</code></li>
+<li>Teams/Outlook preview: <code>SkypeUriPreview</code>, <code>Microsoft Teams</code>, <code>ms-office</code></li>
+<li>Gmail preview: <code>GoogleImageProxy</code>, <code>Gmail</code></li>
+<li>Yahoo Mail: <code>YahooMailProxy</code></li>
+<li>Thunderbird, Spark, <code>notion.so</code>, <code>linear.app</code>, <code>ZoomWebhook</code></li>
 </ul>
 <p>When a bot is detected and <code>bot_passthrough=False</code>, the endpoint returns an HTML page with OG meta tags and a <code>&lt;meta http-equiv="refresh"&gt;</code> fallback redirect.</p>
 <p>Use <code>is_bot_user_agent(ua_string)</code> to check manually:</p>
@@ -4150,13 +4157,16 @@
 <p>Every <code>resolve()</code> call records Redis time-series metrics via <code>mojo.apps.metrics</code>:</p>
 <ul>
 <li><code>shortlink:click</code> — global click counter</li>
-<li><code>shortlink:click:&lt;source&gt;</code> — per-source counter (e.g. <code>shortlink:click:sms</code>)</li>
+<li>If <code>track_clicks=True</code> and <code>link.user</code> exists:</li>
+<li><code>sl:click:&lt;code&gt;</code> in account <code>user-&lt;user.pk&gt;</code> (per-link user analytics)</li>
+<li>Retention: expires 7 days after link expiry</li>
+<li>If link never expires, this per-link metric is stored without TTL</li>
 </ul>
 <p>Every <code>shorten()</code> call records:</p>
 <ul>
 <li><code>shortlink:created</code> — global creation counter</li>
 </ul>
-<p>All metrics use <code>category="shortlinks"</code> and <code>account="global"</code>.</p>
+<p>Shortlink metrics use <code>category="shortlinks"</code>. Global counters use <code>account="global"</code>.</p>
 <hr />
 <h2 id="expiry">Expiry<a class="headerlink" href="#expiry" title="Permanent link">&para;</a></h2>
 <p>Expiry is computed from <code>expire_days</code> and <code>expire_hours</code> combined:</p>
