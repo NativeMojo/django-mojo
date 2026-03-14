@@ -209,6 +209,10 @@
          <lastmod>2026-03-14</lastmod>
     </url>
     <url>
+         <loc>https://NativeMojo.github.io/django-mojo/django_developer/shortlink/shortlink/</loc>
+         <lastmod>2026-03-14</lastmod>
+    </url>
+    <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/testit/Overview/</loc>
          <lastmod>2026-03-14</lastmod>
     </url>
@@ -362,6 +366,10 @@
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/web_developer/realtime/websocket/</loc>
+         <lastmod>2026-03-14</lastmod>
+    </url>
+    <url>
+         <loc>https://NativeMojo.github.io/django-mojo/web_developer/shortlink/shortlink/</loc>
          <lastmod>2026-03-14</lastmod>
     </url>
 </urlset>
