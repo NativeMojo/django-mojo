@@ -107,8 +107,92 @@ async function api(path, opts = {}) {
 - Never store `mfa_token` long-term.
 - For stricter security, use `HttpOnly` cookie-based refresh design.
 
+## 7. Client Error + Event Reporting (Incidents)
+
+Frontend apps should report uncaught errors and important security/application events to:
+
+- `POST /api/incident/event`
+
+This feeds the incident pipeline and can trigger alerts/rules.
+
+### Report uncaught JavaScript errors
+
+```javascript
+window.addEventListener("error", async (event) => {
+  await fetch("/api/incident/event", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      category: "frontend:error",
+      level: 7,
+      scope: "web",
+      title: event.message || "Uncaught JS error",
+      details: `${event.filename || "unknown"}:${event.lineno || 0}:${event.colno || 0}`,
+      metadata: {
+        href: location.href,
+        user_agent: navigator.userAgent,
+      },
+    }),
+  });
+});
+```
+
+### Report unhandled promise rejections
+
+```javascript
+window.addEventListener("unhandledrejection", async (event) => {
+  const reason = (event.reason && (event.reason.stack || event.reason.message)) || String(event.reason || "unknown");
+  await fetch("/api/incident/event", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      category: "frontend:unhandled_rejection",
+      level: 7,
+      scope: "web",
+      title: "Unhandled promise rejection",
+      details: reason.slice(0, 5000),
+      metadata: {
+        href: location.href,
+        user_agent: navigator.userAgent,
+      },
+    }),
+  });
+});
+```
+
+### Report auth/session anomalies
+
+Examples:
+- refresh token failures
+- repeated `401/403` on protected endpoints
+- suspicious client behavior
+
+```javascript
+await fetch("/api/incident/event", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    category: "auth:token_refresh_failed",
+    level: 5,
+    scope: "account",
+    title: "Token refresh failed",
+    details: "Client refresh attempt returned unauthorized",
+    metadata: { href: location.href },
+  }),
+});
+```
+
+### Guidelines
+
+- Use stable category names (`frontend:error`, `auth:token_refresh_failed`, etc.).
+- Keep `level` proportional to severity.
+- Include contextual metadata (`href`, action name, browser info).
+- Avoid sending sensitive payloads (passwords, raw tokens, PII).
+
 ## Related Docs
 
 - [Authentication](account/authentication.md)
 - [Core Authentication](core/authentication.md)
 - [Request/Response Format](core/request_response.md)
+- [Reporting Events](logging/reporting_events.md)
+- [Incident API](logging/incidents.md)

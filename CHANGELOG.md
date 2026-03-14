@@ -1,5 +1,10 @@
 
 ## v1.0.45 - March 14, 2026
+## v1.0.47 - March 14, 2026
+
+support for a user saving to /api/user/me
+
+
 ## v1.0.46 - March 14, 2026
 
 user level security for metrics
@@ -32,6 +37,7 @@ fixing shortlink permissions
 - tests: added metrics API coverage for `user-<id>` account read/write permissions
 - docs/web-shortlink: added explicit metrics retrieval guide for global and user-scoped shortlink analytics (`shortlink:click` and `sl:click:<code>`)
 - tests: added metrics API coverage confirming `group-<id>` account permissions still work (authorized member allowed, outsider denied)
+- docs/frontend: added incident/event reporting guidance for uncaught errors, promise rejections, and auth/session anomalies in frontend starter
 
 ## v0.1.3 - May 29, 2025
 ## v1.0.44 - March 14, 2026
