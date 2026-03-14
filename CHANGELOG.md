@@ -1,5 +1,10 @@
 
 ## v1.0.45 - March 14, 2026
+## v1.0.45 - March 14, 2026
+
+fixing shortlink permissions
+
+
 
 - docs/agenting: synchronized `Agent.md` and `CLAUDE.md` with current repo structure and rules
 - prompts: expanded `prompts/planning.md` and `prompts/building.md` with explicit mode routing and preflight steps
@@ -9,6 +14,9 @@
 - process: added memory hygiene rules to keep `memory.md` compact, pruned, and decision-focused
 - process: aligned startup preflight across `Agent.md`, `CLAUDE.md`, and prompt modes to read `memory.md` before planning/building
 - docs: linked root developer documentation tracks to each other for clearer source-of-truth navigation
+- docs/auth: added explicit frontend token storage guidance (`localStorage`) and page-reload session validation/refresh flow to web authentication docs
+- docs/web: added `frontend_starter.md` and linked it from web root/core docs for a single frontend bootstrap guide
+- docs/shortlink: clarified owner permissions for shortlink CRUD endpoints and documented that click-history remains `manage_shortlinks` scoped
 
 ## v0.1.3 - May 29, 2025
 ## v1.0.44 - March 14, 2026

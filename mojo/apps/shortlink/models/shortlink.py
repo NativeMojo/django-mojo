@@ -14,7 +14,8 @@ class ShortLink(models.Model, MojoModel):
         CAN_SAVE = CAN_CREATE = True
         CAN_DELETE = True
         DEFAULT_SORT = "-created"
-        VIEW_PERMS = ["manage_shortlinks"]
+        VIEW_PERMS = ["manage_shortlinks", "owner"]
+        SAVE_PERMS = ["manage_shortlinks", "owner"]
         SEARCH_FIELDS = ["code", "url", "source"]
         SEARCH_TERMS = ["code", "url", "source"]
 

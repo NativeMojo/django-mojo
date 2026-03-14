@@ -9,11 +9,11 @@ The shortlink app provides URL shortening with automatic rich previews for messa
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | GET | `/s/<code>` | public | Resolve short code and redirect (or OG preview for bots) |
-| GET | `/api/shortlink/link` | `manage_shortlinks` | List short links |
-| POST | `/api/shortlink/link` | `manage_shortlinks` | Create short link via REST model endpoint |
-| GET | `/api/shortlink/link/<id>` | `manage_shortlinks` | Get short link details |
-| POST/PUT | `/api/shortlink/link/<id>` | `manage_shortlinks` | Update short link |
-| DELETE | `/api/shortlink/link/<id>` | `manage_shortlinks` | Delete short link |
+| GET | `/api/shortlink/link` | `manage_shortlinks` or owner | List short links |
+| POST | `/api/shortlink/link` | `manage_shortlinks` or owner | Create short link via REST model endpoint |
+| GET | `/api/shortlink/link/<id>` | `manage_shortlinks` or owner | Get short link details |
+| POST/PUT | `/api/shortlink/link/<id>` | `manage_shortlinks` or owner | Update short link |
+| DELETE | `/api/shortlink/link/<id>` | `manage_shortlinks` or owner | Delete short link |
 | POST | `/api/shortlink/link/create` | authenticated | Create a short URL string via helper endpoint |
 | GET | `/api/shortlink/history` | `manage_shortlinks` | List click history |
 | GET | `/api/shortlink/history/<id>` | `manage_shortlinks` | Get click history record |
@@ -67,7 +67,11 @@ Slackbot, Twitterbot, facebookexternalhit, LinkedInBot, Discordbot, TelegramBot,
 
 ## Managing ShortLinks (REST CRUD)
 
-Requires the `manage_shortlinks` permission.
+Requires `manage_shortlinks` **or** owner access.
+
+Owner behavior:
+- If authenticated and using owner access, users can view/update/delete only shortlinks where `shortlink.user == request.user`.
+- List responses are automatically scoped to the caller's own records when owner access is used.
 
 ### List ShortLinks
 
@@ -300,6 +304,7 @@ Configure in your Django settings or via the MOJO settings system:
 
 | Permission | Required For |
 |---|---|
-| `manage_shortlinks` | Viewing, creating, updating, deleting shortlinks and viewing click history |
+| `manage_shortlinks` | Viewing/managing all shortlinks and viewing click history |
+| `owner` | Viewing/managing only your own shortlinks (`/api/shortlink/link*`) |
 | authenticated user | Creating helper links via `/api/shortlink/link/create` |
 | *(none)* | Accessing `/s/<code>` redirect endpoint (public) |

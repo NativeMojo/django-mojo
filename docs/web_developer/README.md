@@ -9,6 +9,7 @@ Companion track for framework developers: [docs/django_developer/README.md](../d
 | Section | Description |
 |---|---|
 | [core/](core/README.md) | Authentication, request format, filtering, pagination, graphs |
+| [frontend_starter.md](frontend_starter.md) | Frontend integration starter (JWT storage, reload checks, refresh flow) |
 
 ## API Reference by App
 
