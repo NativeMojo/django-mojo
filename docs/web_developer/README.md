@@ -2,6 +2,8 @@
 
 Web developer documentation for integrating with django-mojo REST APIs.
 
+Companion track for framework developers: [docs/django_developer/README.md](../django_developer/README.md).
+
 ## Core Concepts
 
 | Section | Description |
@@ -20,6 +22,7 @@ Web developer documentation for integrating with django-mojo REST APIs.
 | [metrics/](metrics/README.md) | Time-series metrics |
 | [realtime/](realtime/README.md) | WebSocket protocol |
 | [phonehub/](phonehub/README.md) | Phone and device management |
+| [shortlink/](shortlink/README.md) | Short URL creation, redirect behavior, OG previews |
 | [filevault/](filevault/README.md) | Encrypted file vault |
 | [docit/](docit/README.md) | Documentation system |
 
