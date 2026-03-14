@@ -7,6 +7,8 @@ from testit.helpers import assert_true, assert_eq
 
 TEST_USER = "shortlink_test_user"
 TEST_PWORD = "shortlink##mojo99"
+REAL_URL_A = "https://github.com/openai"
+REAL_URL_B = "https://openai.com/research"
 
 
 @th.django_unit_setup()
@@ -314,7 +316,7 @@ def test_scraper_fetch_non_html(opts):
 def test_rest_redirect(opts):
     from mojo.apps.shortlink.models import ShortLink
 
-    link = ShortLink.create(url="https://example.com/destination", source="test")
+    link = ShortLink.create(url=REAL_URL_A, source="test")
     resp = opts.client.get(f"/s/{link.code}", allow_redirects=False)
     assert_eq(resp.status_code, 302, f"should return 302, got {resp.status_code}")
 
@@ -324,20 +326,29 @@ def test_rest_bot_og(opts):
     from mojo.apps.shortlink.models import ShortLink
 
     link = ShortLink.create(
-        url="https://example.com/bot-dest",
+        url=REAL_URL_A,
         source="test",
-        metadata={"og:title": "Bot Preview Title", "og:description": "Preview desc"},
+        metadata={
+            "og:title": "OpenAI on GitHub",
+            "og:description": "Browse public repositories.",
+            "og:image": "https://opengraph.githubassets.com/1/openai/openai-python",
+        },
     )
-    # Set bot UA on client headers, then restore
-    opts.client.headers["User-Agent"] = "Slackbot-LinkExpanding 1.0"
-    resp = opts.client.get(f"/s/{link.code}", allow_redirects=False)
-    opts.client.headers.pop("User-Agent", None)
-    if resp.status_code == 200:
+    bot_agents = [
+        "Slackbot-LinkExpanding 1.0",
+        "Twitterbot/1.0",
+        "WhatsApp/2.23",
+    ]
+    for user_agent in bot_agents:
+        opts.client.headers["User-Agent"] = user_agent
+        resp = opts.client.get(f"/s/{link.code}", allow_redirects=False)
+        opts.client.headers.pop("User-Agent", None)
+        assert_eq(resp.status_code, 200, f"bot user-agent should receive OG HTML, got {resp.status_code}")
         body = resp.response if isinstance(resp.response, str) else str(resp.response)
-        assert_true("Bot Preview Title" in body, "OG HTML should contain the custom title")
-    else:
-        # Some test clients may not pass custom headers — 302 is acceptable
-        assert_eq(resp.status_code, 302, f"expected 200 or 302, got {resp.status_code}")
+        assert_true("<meta property=\"og:title\" content=\"OpenAI on GitHub\">" in body, "missing og:title meta")
+        assert_true("<meta property=\"og:description\" content=\"Browse public repositories.\">" in body, "missing og:description meta")
+        assert_true("<meta property=\"og:image\" content=\"https://opengraph.githubassets.com/1/openai/openai-python\">" in body, "missing og:image meta")
+        assert_true("<meta http-equiv=\"refresh\"" in body, "missing meta refresh redirect")
 
 
 @th.django_unit_test("REST: /s/<code> with bot_passthrough=True always redirects bots")
@@ -345,7 +356,7 @@ def test_rest_bot_passthrough(opts):
     from mojo.apps.shortlink.models import ShortLink
 
     link = ShortLink.create(
-        url="https://example.com/passthrough-dest",
+        url=REAL_URL_B,
         source="test",
         bot_passthrough=True,
         metadata={"og:title": "Should Not Appear"},
@@ -367,10 +378,84 @@ def test_rest_redirect_expired(opts):
     from mojo.apps.shortlink.models import ShortLink
     from mojo.helpers import dates
 
-    link = ShortLink.create(url="https://example.com/expired-dest", source="test")
+    link = ShortLink.create(url=REAL_URL_B, source="test")
     ShortLink.objects.filter(pk=link.pk).update(expires_at=dates.utcnow() - timedelta(hours=1))
     resp = opts.client.get(f"/s/{link.code}", allow_redirects=False)
     assert_eq(resp.status_code, 302, f"expired should return 302, got {resp.status_code}")
+
+
+@th.django_unit_test("REST: /api/shortlink/link/create creates a short URL from request.DATA")
+def test_rest_link_create_endpoint(opts):
+    from mojo.apps.shortlink.models import ShortLink
+
+    opts.client.login(TEST_USER, TEST_PWORD)
+    assert_true(opts.client.is_authenticated, "authentication failed")
+
+    payload = {
+        "url": REAL_URL_A,
+        "source": "test",
+        "expire_days": 1,
+        "expire_hours": 0,
+        "metadata": {
+            "og:title": "OpenAI GitHub",
+            "og:description": "Open source repositories",
+        },
+        "track_clicks": True,
+        "bot_passthrough": False,
+        "is_protected": True,
+        "base_url": "https://itf.io",
+    }
+    resp = opts.client.post("/api/shortlink/link/create", payload)
+    assert_eq(resp.status_code, 200, f"expected 200 from /api/shortlink/link/create, got {resp.status_code}")
+    assert_true(resp.response.status, "link/create response status should be true")
+    assert_true(resp.response.data.short_link.startswith("https://itf.io/s/"), "short_link should use provided base_url")
+    assert_eq(resp.response.data.original_url, REAL_URL_A, "original_url should match request url")
+
+    link = ShortLink.objects.filter(url=REAL_URL_A, source="test").order_by("-id").first()
+    assert_true(link is not None, "link/create should persist a shortlink row")
+    assert_eq(link.track_clicks, True, "track_clicks should be saved")
+    assert_eq(link.is_protected, True, "is_protected should be saved")
+
+
+@th.django_unit_test("REST: /api/shortlink/link list endpoint returns items")
+def test_rest_link_list_endpoint(opts):
+    from mojo.apps.shortlink.models import ShortLink
+
+    opts.client.login(TEST_USER, TEST_PWORD)
+    assert_true(opts.client.is_authenticated, "authentication failed")
+
+    ShortLink.create(url=REAL_URL_A, source="test", user=opts.user)
+    ShortLink.create(url=REAL_URL_B, source="test", user=opts.user)
+
+    resp = opts.client.get("/api/shortlink/link")
+    assert_eq(resp.status_code, 200, f"expected 200 from /api/shortlink/link, got {resp.status_code}")
+    assert_true(resp.response.status, "list response status should be true")
+    assert_true(isinstance(resp.response.data, list), "list endpoint should return list data")
+    assert_true(len(resp.response.data) > 0, "list endpoint should return at least one row")
+
+
+@th.django_unit_test("REST: /api/shortlink/history and /history/<id> return click records")
+def test_rest_history_endpoints(opts):
+    from mojo.apps.shortlink.models import ShortLink
+
+    opts.client.login(TEST_USER, TEST_PWORD)
+    assert_true(opts.client.is_authenticated, "authentication failed")
+
+    link = ShortLink.create(url=REAL_URL_A, source="test", track_clicks=True, user=opts.user)
+    redirect = opts.client.get(f"/s/{link.code}", allow_redirects=False)
+    assert_eq(redirect.status_code, 302, f"expected 302 redirect for click generation, got {redirect.status_code}")
+
+    resp = opts.client.get("/api/shortlink/history", params={"shortlink": link.pk})
+    assert_eq(resp.status_code, 200, f"expected 200 from /api/shortlink/history, got {resp.status_code}")
+    assert_true(resp.response.status, "history list response status should be true")
+    assert_true(isinstance(resp.response.data, list), "history list should return list data")
+    assert_true(len(resp.response.data) > 0, "history list should include at least one click")
+
+    click_id = resp.response.data[0].id
+    detail = opts.client.get(f"/api/shortlink/history/{click_id}")
+    assert_eq(detail.status_code, 200, f"expected 200 from /api/shortlink/history/<id>, got {detail.status_code}")
+    assert_true(detail.response.status, "history detail response status should be true")
+    assert_eq(detail.response.data.id, click_id, "history detail should return requested record")
 
 
 # ---------------------------------------------------------------------------

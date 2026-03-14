@@ -4,6 +4,20 @@
 
 The shortlink app provides URL shortening with automatic rich previews for messaging platforms (Slack, iMessage, WhatsApp, etc.), optional click analytics, and configurable expiry.
 
+## Endpoints
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `/s/<code>` | public | Resolve short code and redirect (or OG preview for bots) |
+| GET | `/api/shortlink/link` | `manage_shortlinks` | List short links |
+| POST | `/api/shortlink/link` | `manage_shortlinks` | Create short link via REST model endpoint |
+| GET | `/api/shortlink/link/<id>` | `manage_shortlinks` | Get short link details |
+| POST/PUT | `/api/shortlink/link/<id>` | `manage_shortlinks` | Update short link |
+| DELETE | `/api/shortlink/link/<id>` | `manage_shortlinks` | Delete short link |
+| POST | `/api/shortlink/link/create` | authenticated | Create a short URL string via helper endpoint |
+| GET | `/api/shortlink/history` | `manage_shortlinks` | List click history |
+| GET | `/api/shortlink/history/<id>` | `manage_shortlinks` | Get click history record |
+
 ---
 
 ## Redirect Endpoint
@@ -57,7 +71,7 @@ Requires the `manage_shortlinks` permission.
 
 ### List ShortLinks
 
-**GET** `/api/shortlink/shortlink`
+**GET** `/api/shortlink/link`
 
 ```json
 {
@@ -83,11 +97,11 @@ Use `?graph=default` for full details including metadata, user, and group.
 
 ### Get ShortLink Detail
 
-**GET** `/api/shortlink/shortlink/<id>`
+**GET** `/api/shortlink/link/<id>`
 
 ### Create ShortLink
 
-**POST** `/api/shortlink/shortlink`
+**POST** `/api/shortlink/link`
 
 ```json
 {
@@ -103,7 +117,7 @@ Use `?graph=default` for full details including metadata, user, and group.
 
 ### Update ShortLink
 
-**POST** `/api/shortlink/shortlink/<id>`
+**POST** `/api/shortlink/link/<id>`
 
 ```json
 {
@@ -113,7 +127,56 @@ Use `?graph=default` for full details including metadata, user, and group.
 
 ### Delete ShortLink
 
-**DELETE** `/api/shortlink/shortlink/<id>`
+**DELETE** `/api/shortlink/link/<id>`
+
+---
+
+## Quick Create Endpoint
+
+**POST** `/api/shortlink/link/create`
+
+Requires authentication (`@requires_auth`) and reads input from `request.DATA`.
+
+Use this endpoint when you want a ready-to-use short URL string in one call.
+
+```json
+{
+  "url": "https://example.com/page",
+  "source": "email",
+  "expire_days": 3,
+  "expire_hours": 0,
+  "metadata": {
+    "og:title": "My Page"
+  },
+  "track_clicks": true,
+  "resolve_file": true,
+  "bot_passthrough": false,
+  "is_protected": false,
+  "base_url": "https://itf.io"
+}
+```
+
+You can create file-based shortlinks by passing a `file` id:
+
+```json
+{
+  "file": 124,
+  "source": "fileman",
+  "resolve_file": true
+}
+```
+
+**Response**
+
+```json
+{
+  "status": true,
+  "data": {
+    "short_link": "https://itf.io/s/Xk9mR2p",
+    "original_url": "https://example.com/page"
+  }
+}
+```
 
 ---
 
@@ -121,7 +184,7 @@ Use `?graph=default` for full details including metadata, user, and group.
 
 Requires the `manage_shortlinks` permission. Only available for links created with `track_clicks=True`.
 
-**GET** `/api/shortlink/shortlinkclick?shortlink=<id>`
+**GET** `/api/shortlink/history?shortlink=<id>`
 
 ```json
 {
@@ -238,4 +301,5 @@ Configure in your Django settings or via the MOJO settings system:
 | Permission | Required For |
 |---|---|
 | `manage_shortlinks` | Viewing, creating, updating, deleting shortlinks and viewing click history |
+| authenticated user | Creating helper links via `/api/shortlink/link/create` |
 | *(none)* | Accessing `/s/<code>` redirect endpoint (public) |

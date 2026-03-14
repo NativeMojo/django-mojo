@@ -1,5 +1,10 @@
 
 ## v0.1.3 - May 29, 2025
+## v1.0.44 - March 14, 2026
+
+new shortlink management
+
+
 ## v1.0.43 - March 13, 2026
 
 new shortlink app for url shortening
