@@ -2,6 +2,8 @@
 
 LLM-optimized reference documentation for building Django applications with the django-mojo framework.
 
+Companion track for REST integrators: [docs/web_developer/README.md](../web_developer/README.md).
+
 ## Framework Core
 
 | Section | Description |
@@ -21,8 +23,10 @@ LLM-optimized reference documentation for building Django applications with the 
 | [metrics/](metrics/README.md) | Redis-backed time-series metrics |
 | [realtime/](realtime/README.md) | WebSocket pub/sub via Django Channels |
 | [phonehub/](phonehub/README.md) | Phone and device management |
+| [shortlink/](shortlink/README.md) | URL shortener with OG previews, file links, and click tracking |
 | [filevault/](filevault/README.md) | Encrypted file vault |
 | [docit/](docit/README.md) | Documentation system |
+| [testit/](testit/Overview.md) | Testing framework and patterns for django-mojo projects |
 
 ## Quick Start Pattern
 

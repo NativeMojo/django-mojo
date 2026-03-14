@@ -1,4 +1,15 @@
 
+## v1.0.45 - March 14, 2026
+
+- docs/agenting: synchronized `Agent.md` and `CLAUDE.md` with current repo structure and rules
+- prompts: expanded `prompts/planning.md` and `prompts/building.md` with explicit mode routing and preflight steps
+- process: added mandatory new-thread startup protocol (read `Agent.md` + `CLAUDE.md`, then choose planning vs building mode)
+- conventions: removed stale doc-path references and reinforced framework constraints (no migrations, no project-level test execution in this repo)
+- process: restored `memory.md` as an explicit source of thread-to-thread context and added a repository memory template
+- process: added memory hygiene rules to keep `memory.md` compact, pruned, and decision-focused
+- process: aligned startup preflight across `Agent.md`, `CLAUDE.md`, and prompt modes to read `memory.md` before planning/building
+- docs: linked root developer documentation tracks to each other for clearer source-of-truth navigation
+
 ## v0.1.3 - May 29, 2025
 ## v1.0.44 - March 14, 2026
 
