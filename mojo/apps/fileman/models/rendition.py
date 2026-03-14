@@ -115,4 +115,4 @@ class FileRendition(models.Model, MojoModel):
         if self.file_manager.is_public:
             self.download_url = self.file_manager.backend.get_url(self.storage_path)
             return self.download_url
-        return self.file_manager.backend.get_url(self.storage_path, self.get_setting("urls_expire_in", 3600))
+        return self.file_manager.backend.get_url(self.storage_path, self.file_manager.get_setting("urls_expire_in", 3600))

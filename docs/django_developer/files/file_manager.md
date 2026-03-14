@@ -84,4 +84,4 @@ REST clients pass `?use=avatars` to select a specific manager.
 
 ## Auto-Provisioning
 
-If no `FileManager` exists for a group, the system-wide default is used automatically. Set `is_system_default=True` on one FileManager to designate it.
+If no `FileManager` exists for a group, the system-wide default is used automatically. Set `is_default=True` on one FileManager to designate it.

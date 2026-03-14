@@ -2,6 +2,7 @@ from mojo import decorators as md
 from mojo import JsonResponse
 import mojo.errors
 from mojo.apps.fileman.models import File, FileManager
+from mojo.apps.fileman.utils.upload import get_download_url
 
 
 @md.POST('upload/initiate')

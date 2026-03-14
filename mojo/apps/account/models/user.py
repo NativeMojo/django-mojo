@@ -648,6 +648,95 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
     def on_action_send_invite(self, value):
         self.send_invite()
 
+    def pii_anonymize(self):
+        """
+        Anonymize all personally identifiable information on this user row.
+
+        Satisfies GDPR Article 17 (right to erasure) while preserving the row
+        for FK integrity and audit trail. After this call the user is
+        permanently deactivated and cannot log in.
+
+        Returns a summary dict of what was deleted/cleared.
+        """
+        token = uuid.uuid4().hex[:12]
+        summary = {"user_id": self.pk, "token": token}
+
+        # ── 1. Anonymize core PII fields ─────────────────────────────────────
+        self.username = f"deleted-{token}"
+        self.email = f"deleted-{token}@deleted.local"
+        self.phone_number = None
+        self.display_name = None
+        self.first_name = ""
+        self.last_name = ""
+        self.metadata = {}
+        self.onetime_code = None
+        self.avatar = None
+        self.org = None
+        # ── 2. Revoke access ──────────────────────────────────────────────────
+        self.auth_key = uuid.uuid4().hex        # invalidates all active JWTs
+        self.is_active = False
+        self.is_staff = False
+        self.is_superuser = False
+        self.permissions = {}
+        self.is_email_verified = False
+        self.is_phone_verified = False
+        self.save(update_fields=[
+            "username", "email", "phone_number", "display_name",
+            "first_name", "last_name", "metadata", "onetime_code",
+            "avatar", "org", "auth_key", "is_active", "is_staff",
+            "is_superuser", "permissions", "is_email_verified",
+            "is_phone_verified", "modified",
+        ])
+
+        # ── 3. Wipe secrets (MojoSecrets encrypted JSON field) ────────────────
+        try:
+            self.mojo_secrets = {}
+            self.save(update_fields=["mojo_secrets"])
+        except Exception:
+            pass
+
+        # ── 4. Delete passkeys ────────────────────────────────────────────────
+        try:
+            from mojo.apps.account.models.passkey import PassKey
+            n, _ = PassKey.objects.filter(user=self).delete()
+            summary["deleted_passkeys"] = n
+        except Exception:
+            summary["deleted_passkeys"] = 0
+
+        # ── 5. Delete push/notification devices ───────────────────────────────
+        try:
+            from mojo.apps.account.models.push.device import Device
+            n, _ = Device.objects.filter(user=self).delete()
+            summary["deleted_devices"] = n
+        except Exception:
+            summary["deleted_devices"] = 0
+
+        # ── 6. Delete TOTP devices ────────────────────────────────────────────
+        try:
+            from mojo.apps.account.models.totp import TOTPDevice
+            n, _ = TOTPDevice.objects.filter(user=self).delete()
+            summary["deleted_totp"] = n
+        except Exception:
+            summary["deleted_totp"] = 0
+
+        # ── 7. Delete inbox notifications (may contain PII in title/body) ─────
+        try:
+            from mojo.apps.account.models.notification import Notification
+            n, _ = Notification.objects.filter(user=self).delete()
+            summary["deleted_notifications"] = n
+        except Exception:
+            summary["deleted_notifications"] = 0
+
+        # ── 8. Remove group memberships ───────────────────────────────────────
+        try:
+            from mojo.apps.account.models.member import GroupMember
+            n, _ = GroupMember.objects.filter(user=self).delete()
+            summary["deleted_memberships"] = n
+        except Exception:
+            summary["deleted_memberships"] = 0
+
+        return summary
+
     def notify(self, title, body="", kind="general", data=None,
                action_url=None, expires_in=3600, push=True, ws=True):
         """
