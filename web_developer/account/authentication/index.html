@@ -2776,6 +2776,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#email-verification-gate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Email Verification Gate
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -3908,6 +3919,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#email-verification-gate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Email Verification Gate
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -4119,6 +4141,18 @@
 <a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="w">  </span><span class="nt">&quot;is_authenticated&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
 <a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a><span class="p">}</span>
 </code></pre></div>
+<h2 id="email-verification-gate">Email Verification Gate<a class="headerlink" href="#email-verification-gate" title="Permanent link">&para;</a></h2>
+<p>When the server has <code>REQUIRE_VERIFIED_EMAIL</code> or <code>REQUIRE_VERIFIED_PHONE</code> enabled, a login attempt by an unverified user returns a structured 403 with a machine-readable <code>error</code> field instead of a generic failure.</p>
+<p><strong>Important:</strong> <code>REQUIRE_VERIFIED_EMAIL</code> only gates logins where the identifier submitted is an <strong>email address</strong> (i.e. the user typed their email into the username field, or used the <code>email</code> parameter). Logging in with a plain username is never blocked by this gate, regardless of the user's email verification status.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="p">{</span>
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a><span class="w">  </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">403</span><span class="p">,</span>
+<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="w">  </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;email_not_verified&quot;</span><span class="p">,</span>
+<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a><span class="w">  </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Please verify your email before logging in.&quot;</span>
+<a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a><span class="p">}</span>
+</code></pre></div>
+<p>Detect this error and show a <strong>Resend verification email</strong> prompt rather than a generic error message. The user does not need to re-enter their password — they only need to click the link.</p>
+<p>See <a href="../email_verification/">Email &amp; Phone Verification</a> for the full send/verify flow, invite link handling, phone verification, and settings reference.</p>
 
 
 

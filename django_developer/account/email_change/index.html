@@ -10,7 +10,7 @@
       
       
       
-        <link rel="canonical" href="https://NativeMojo.github.io/django-mojo/django_developer/testit/Overview/">
+        <link rel="canonical" href="https://NativeMojo.github.io/django-mojo/django_developer/account/email_change/">
       
       
       
@@ -23,7 +23,7 @@
     
     
       
-        <title>TestIt Framework - Django-MOJO</title>
+        <title>Email Change — Django Developer Reference - Django-MOJO</title>
       
     
     
@@ -74,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#testit-framework" class="md-skip">
+        <a href="#email-change-django-developer-reference" class="md-skip">
           Skip to content
         </a>
       
@@ -108,7 +108,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              TestIt Framework
+              Email Change — Django Developer Reference
             
           </span>
         </div>
@@ -1005,7 +1005,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../account/" class="md-nav__link">
+      <a href="../" class="md-nav__link">
         
   
   
@@ -1033,7 +1033,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../account/user/" class="md-nav__link">
+      <a href="../user/" class="md-nav__link">
         
   
   
@@ -1061,7 +1061,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../account/group/" class="md-nav__link">
+      <a href="../group/" class="md-nav__link">
         
   
   
@@ -1089,7 +1089,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../account/auth/" class="md-nav__link">
+      <a href="../auth/" class="md-nav__link">
         
   
   
@@ -3565,10 +3565,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#core-ideas" class="md-nav__link">
+  <a href="#overview" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Core Ideas
+        Overview
       
     </span>
   </a>
@@ -3576,10 +3576,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#project-layout" class="md-nav__link">
+  <a href="#token-infrastructure" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Project Layout
+        Token Infrastructure
       
     </span>
   </a>
@@ -3587,22 +3587,44 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#running-testit" class="md-nav__link">
+  <a href="#rest-endpoints" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Running TestIt
+        REST Endpoints
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Running TestIt">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#email-templates-required" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Email Templates Required
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Email Templates Required">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#json-config" class="md-nav__link">
+  <a href="#email_change_confirm" class="md-nav__link">
     <span class="md-ellipsis">
       
-        JSON Config
+        email_change_confirm
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#email_change_notify" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        email_change_notify
       
     </span>
   </a>
@@ -3615,10 +3637,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#decorators-shared-state" class="md-nav__link">
+  <a href="#what-happens-on-confirm" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Decorators &amp; Shared State
+        What Happens on Confirm
       
     </span>
   </a>
@@ -3626,10 +3648,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#gating-expensive-or-destructive-tests" class="md-nav__link">
+  <a href="#allow_email_change-setting" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Gating Expensive or Destructive Tests
+        ALLOW_EMAIL_CHANGE Setting
       
     </span>
   </a>
@@ -3637,54 +3659,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#expectations-for-every-test" class="md-nav__link">
+  <a href="#security-design-notes" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Expectations for Every Test
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#accessing-response-data-objict-key-collision" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Accessing Response Data — objict Key Collision
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#frequent-mistakes-llm-watchlist" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Frequent Mistakes (LLM Watchlist)
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#outputs-tooling" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Outputs &amp; Tooling
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#prompting-pairing-checklist" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Prompting / Pairing Checklist
+        Security Design Notes
       
     </span>
   </a>
@@ -3711,205 +3689,147 @@
   
 
 
-<h1 id="testit-framework">TestIt Framework<a class="headerlink" href="#testit-framework" title="Permanent link">&para;</a></h1>
-<p>TestIt is the Django-MOJO test harness for API, unit, and integration coverage.<br />
-It is intentionally lightweight so both humans and LLM agents can reason about a suite, spot design issues early, and iterate fast.</p>
-<hr />
-<h2 id="core-ideas">Core Ideas<a class="headerlink" href="#core-ideas" title="Permanent link">&para;</a></h2>
-<ul>
-<li>Keep the filesystem predictable: numbered filenames (<code>1_test_models.py</code>, <code>3_test_flows.py</code>) control execution order because TestIt sorts alphabetically.</li>
-<li>Prefer reusing state instead of recreating fixtures. Store shared objects on <code>opts</code> during setup and tear them down only when reuse is impossible.</li>
-<li>Tests are documentation. If an API feels awkward, pause and call it out rather than embedding new logic in the test.</li>
-<li>Expensive or destructive flows must opt-in via <code>--extra</code> or the <code>@requires_extra</code> decorator.</li>
-<li>Name test packages <code>test_&lt;app&gt;</code> (for example <code>test_accounts</code>) to avoid module collisions with real Django apps.</li>
-</ul>
-<hr />
-<h2 id="project-layout">Project Layout<a class="headerlink" href="#project-layout" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>apps/
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>  tests/
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    test_accounts/
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>      __init__.py
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>      1_test_models.py
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>      2_test_views.py
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>      3_test_flows.py
-<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>docs/
-<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>  testit/
-<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    index.md
-<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    examples/
-<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>      1_test_models.py
-<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>      3_test_flows.py
-<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>      testit.config.json
-</code></pre></div>
-<ul>
-<li>Sorting comes from prefixes. Adjust numbers (or add <code>_suffix</code>) to control module order.</li>
-<li><strong>Do not name test packages identically to the Django app.</strong> Use <code>tests/test_accounts/</code> instead of <code>tests/accounts/</code> so imports never collide when the runner appends the folder to <code>sys.path</code>.</li>
-<li>Each file keeps decorators at the top, followed by related tests in definition order.</li>
-<li>Example files live in <code>docs/testit/examples/</code> for quick copy/paste or prompting.</li>
-</ul>
-<hr />
-<h2 id="running-testit">Running TestIt<a class="headerlink" href="#running-testit" title="Permanent link">&para;</a></h2>
-<ul>
-<li>Run everything (Mojo apps + local project):<br />
-<code>./bin/testit.py</code></li>
-<li>Target a module or a specific file:<br />
-<code>./bin/testit.py -m test_accounts</code><br />
-<code>./bin/testit.py -m test_accounts.1_test_models</code></li>
-<li>Append multiple modules:<br />
-<code>./bin/testit.py -t test_accounts.1_test_models -t test_billing.3_test_flows</code></li>
-<li>Verbose output and early exit:<br />
-<code>./bin/testit.py -v -s</code></li>
-<li>Show tracebacks without verbosity:<br />
-<code>./bin/testit.py -e</code></li>
-<li>Toggle app scopes:<br />
-<code>./bin/testit.py --onlymojo</code> · <code>./bin/testit.py --nomojo</code></li>
-<li>See every declared <code>@requires_extra</code> flag (respects filters like <code>-m</code> and <code>-t</code>; static scan only, no tests executed):<br />
-<code>./bin/testit.py --list-extras</code></li>
-</ul>
-<h3 id="json-config">JSON Config<a class="headerlink" href="#json-config" title="Permanent link">&para;</a></h3>
-<p>CLI flags always win, but you can seed defaults through a JSON file:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>./bin/testit.py<span class="w"> </span>--config<span class="w"> </span>docs/testit/examples/testit.config.json<span class="w"> </span>--extra<span class="w"> </span>run-backfill
-</code></pre></div>
-<p>Supported keys:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">&quot;tests&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;test_accounts&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;test_helpers.cron&quot;</span><span class="p">],</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nt">&quot;ignore&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;test_aws&quot;</span><span class="p">],</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span><span class="nt">&quot;stop_on_fail&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span><span class="nt">&quot;show_errors&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span><span class="nt">&quot;verbose&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">  </span><span class="nt">&quot;nomojo&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">  </span><span class="nt">&quot;module&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;test_accounts&quot;</span><span class="p">,</span>
-<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">  </span><span class="nt">&quot;extra&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;run-backfill,cleanup&quot;</span>
-<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="p">}</span>
-</code></pre></div>
-<ul>
-<li><code>tests</code> and <code>ignore</code> accept strings or lists.</li>
-<li><code>show_errors</code> is equivalent to <code>-e</code>.  </li>
-<li><code>extra</code> accepts either a comma-separated string or a JSON list; at runtime it is exposed as <code>opts.extra_list</code> (and <code>opts.extra</code> remains a comma-joined string for legacy helpers).</li>
-<li>Supply fewer flags in automation scripts; let interactive runs override what is needed.</li>
-</ul>
-<hr />
-<h2 id="decorators-shared-state">Decorators &amp; Shared State<a class="headerlink" href="#decorators-shared-state" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">testit</span><span class="w"> </span><span class="kn">import</span> <span class="n">helpers</span> <span class="k">as</span> <span class="n">th</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="nd">@th</span><span class="o">.</span><span class="n">unit_setup</span><span class="p">()</span>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="k">def</span><span class="w"> </span><span class="nf">setup_shared</span><span class="p">(</span><span class="n">opts</span><span class="p">):</span>
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Runs once before every test in this file (no Django ORM).&quot;&quot;&quot;</span>
-<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>    <span class="n">opts</span><span class="o">.</span><span class="n">base_payload</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;Acme Co&quot;</span><span class="p">}</span>
-<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>    <span class="n">opts</span><span class="o">.</span><span class="n">expected_slug</span> <span class="o">=</span> <span class="s2">&quot;acme-co&quot;</span>
-<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>
-<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="nd">@th</span><span class="o">.</span><span class="n">django_unit_setup</span><span class="p">()</span>
-<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="k">def</span><span class="w"> </span><span class="nf">setup_django_records</span><span class="p">(</span><span class="n">opts</span><span class="p">):</span>
-<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Runs with Django configured; keep imports inside the function.&quot;&quot;&quot;</span>
-<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>    <span class="kn">from</span><span class="w"> </span><span class="nn">django.contrib.auth</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_user_model</span>
-<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a>    <span class="n">User</span> <span class="o">=</span> <span class="n">get_user_model</span><span class="p">()</span>
-<a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a>    <span class="n">opts</span><span class="o">.</span><span class="n">admin</span> <span class="o">=</span> <span class="n">User</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">create_superuser</span><span class="p">(</span><span class="s2">&quot;admin&quot;</span><span class="p">,</span> <span class="s2">&quot;admin@example.com&quot;</span><span class="p">,</span> <span class="s2">&quot;secret&quot;</span><span class="p">)</span>
-<a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a>
-<a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a><span class="nd">@th</span><span class="o">.</span><span class="n">unit_test</span><span class="p">(</span><span class="s2">&quot;slug is normalized&quot;</span><span class="p">)</span>
-<a id="__codelineno-3-17" name="__codelineno-3-17" href="#__codelineno-3-17"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_slugify</span><span class="p">(</span><span class="n">opts</span><span class="p">):</span>
-<a id="__codelineno-3-18" name="__codelineno-3-18" href="#__codelineno-3-18"></a>    <span class="n">result</span> <span class="o">=</span> <span class="n">slugify</span><span class="p">(</span><span class="n">opts</span><span class="o">.</span><span class="n">base_payload</span><span class="p">[</span><span class="s2">&quot;name&quot;</span><span class="p">])</span>
-<a id="__codelineno-3-19" name="__codelineno-3-19" href="#__codelineno-3-19"></a>    <span class="k">assert</span> <span class="n">result</span> <span class="o">==</span> <span class="n">opts</span><span class="o">.</span><span class="n">expected_slug</span><span class="p">,</span> <span class="s2">&quot;slugify should normalize company names&quot;</span>
-<a id="__codelineno-3-20" name="__codelineno-3-20" href="#__codelineno-3-20"></a>
-<a id="__codelineno-3-21" name="__codelineno-3-21" href="#__codelineno-3-21"></a><span class="nd">@th</span><span class="o">.</span><span class="n">django_unit_test</span><span class="p">()</span>
-<a id="__codelineno-3-22" name="__codelineno-3-22" href="#__codelineno-3-22"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_admin_can_login</span><span class="p">(</span><span class="n">opts</span><span class="p">):</span>
-<a id="__codelineno-3-23" name="__codelineno-3-23" href="#__codelineno-3-23"></a>    <span class="n">response</span> <span class="o">=</span> <span class="n">opts</span><span class="o">.</span><span class="n">client</span><span class="o">.</span><span class="n">post</span><span class="p">(</span><span class="s2">&quot;/api/login&quot;</span><span class="p">,</span> <span class="n">json</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;username&quot;</span><span class="p">:</span> <span class="s2">&quot;admin&quot;</span><span class="p">,</span> <span class="s2">&quot;password&quot;</span><span class="p">:</span> <span class="s2">&quot;secret&quot;</span><span class="p">})</span>
-<a id="__codelineno-3-24" name="__codelineno-3-24" href="#__codelineno-3-24"></a>    <span class="k">assert</span> <span class="n">response</span><span class="o">.</span><span class="n">status_code</span> <span class="o">==</span> <span class="mi">200</span><span class="p">,</span> <span class="s2">&quot;admin login must succeed&quot;</span>
-</code></pre></div>
-<ul>
-<li><code>opts</code> persists for the module. Store objects, IDs, and flags for reuse.</li>
-<li>Import Django models inside <code>@django_unit_setup</code> / <code>@django_unit_test</code> only.</li>
-<li>Tests run in definition order; keep related assertions grouped.</li>
-</ul>
-<p>See <code>docs/testit/examples/1_test_models.py</code> for a full reference module.</p>
-<hr />
-<h2 id="gating-expensive-or-destructive-tests">Gating Expensive or Destructive Tests<a class="headerlink" href="#gating-expensive-or-destructive-tests" title="Permanent link">&para;</a></h2>
-<p>Use <code>--extra</code> for operator intent and <code>@requires_extra</code> for explicit guards:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">testit</span><span class="w"> </span><span class="kn">import</span> <span class="n">helpers</span> <span class="k">as</span> <span class="n">th</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="nd">@th</span><span class="o">.</span><span class="n">requires_extra</span><span class="p">(</span><span class="s2">&quot;run-backfill&quot;</span><span class="p">)</span>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="nd">@th</span><span class="o">.</span><span class="n">django_unit_test</span><span class="p">()</span>
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_backfill_job</span><span class="p">(</span><span class="n">opts</span><span class="p">):</span>
-<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Do not enqueue expensive work unless --extra run-backfill is present.&quot;&quot;&quot;</span>
-<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>    <span class="n">response</span> <span class="o">=</span> <span class="n">opts</span><span class="o">.</span><span class="n">client</span><span class="o">.</span><span class="n">post</span><span class="p">(</span><span class="s2">&quot;/api/jobs/backfill&quot;</span><span class="p">,</span> <span class="n">json</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;account_id&quot;</span><span class="p">:</span> <span class="n">opts</span><span class="o">.</span><span class="n">account_id</span><span class="p">})</span>
-<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>    <span class="k">assert</span> <span class="n">response</span><span class="o">.</span><span class="n">status_code</span> <span class="o">==</span> <span class="mi">202</span><span class="p">,</span> <span class="s2">&quot;Backfill should enqueue when requested&quot;</span>
-</code></pre></div>
-<ul>
-<li>Without the matching flag the test is logged as <code>SKIPPED</code> and not counted.</li>
-<li>Pass multiple extras via comma-separated values (<code>--extra run-backfill,notify</code>).</li>
-<li>For tests that just need <em>any</em> extra, call <code>@th.requires_extra()</code> with no flag.</li>
-<li>Use <code>opts.extra_list</code> when you need to iterate over extras; it is always a list even if the value came from CLI. Example flow: <code>docs/testit/examples/3_test_flows.py</code>.</li>
-<li>Discover tags up front with <code>./bin/testit.py --list-extras</code> before deciding which extras to pass.</li>
-</ul>
-<hr />
-<h2 id="expectations-for-every-test">Expectations for Every Test<a class="headerlink" href="#expectations-for-every-test" title="Permanent link">&para;</a></h2>
-<ul>
-<li><strong>Every assert must include a failure message.</strong> No bare <code>assert x</code> — always <code>assert x, "reason"</code>. The message must state what was expected, what the inputs were, or why the assertion matters. Silent failures waste debugging time for both humans and agents.</li>
-</ul>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># Bad — silent on failure</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="k">assert</span> <span class="n">resp</span><span class="o">.</span><span class="n">status_code</span> <span class="o">==</span> <span class="mi">200</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="k">assert</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="nb">list</span><span class="p">)</span>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>
-<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="c1"># Good — tells you exactly what went wrong</span>
-<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="k">assert</span> <span class="n">resp</span><span class="o">.</span><span class="n">status_code</span> <span class="o">==</span> <span class="mi">200</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;Expected 200, got </span><span class="si">{</span><span class="n">resp</span><span class="o">.</span><span class="n">status_code</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">resp</span><span class="o">.</span><span class="n">json</span><span class="si">}</span><span class="s2">&quot;</span>
-<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="k">assert</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="nb">list</span><span class="p">),</span> <span class="sa">f</span><span class="s2">&quot;Expected list, got </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">data</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">data</span><span class="si">!r}</span><span class="s2">&quot;</span>
-</code></pre></div>
-<ul>
-<li><strong>No <code>print()</code> debugging.</strong> Use <code>-v</code> or <code>-e</code> for deeper logs.</li>
-<li><strong>Stay inside the framework.</strong> If behaviour is missing, file a TODO or note it in review instead of patching logic into the test.</li>
-<li><strong>Call out design friction.</strong> Tests should highlight confusing APIs; they should not cement workarounds.</li>
-<li><strong>Reuse fixtures.</strong> Prefer creating entities in setup once, mutate through <code>opts</code>, and tear down only when required for repeat runs.</li>
-</ul>
-<hr />
-<h2 id="accessing-response-data-objict-key-collision">Accessing Response Data — objict Key Collision<a class="headerlink" href="#accessing-response-data-objict-key-collision" title="Permanent link">&para;</a></h2>
-<p>Testit parses all HTTP responses into <code>objict</code>, a <code>dict</code> subclass with attribute access. Because <code>objict</code> inherits from <code>dict</code>, <strong>attribute access for keys that share a name with a built-in dict method will silently return the method instead of the value.</strong></p>
-<p>Affected names: <code>values</code>, <code>keys</code>, <code>items</code>, <code>get</code>, <code>update</code>, <code>pop</code>, <code>clear</code>, <code>copy</code>, <code>setdefault</code>.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># WRONG — data[&quot;values&quot;] is [1, 2, 3] but data.values is dict.values (a method)</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="k">assert</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">resp</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">values</span><span class="p">,</span> <span class="nb">list</span><span class="p">)</span>   <span class="c1"># always False — dict method, not your key</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="c1"># CORRECT — use bracket notation for any key that shadows a dict built-in</span>
-<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="k">assert</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">resp</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">data</span><span class="p">[</span><span class="s2">&quot;values&quot;</span><span class="p">],</span> <span class="nb">list</span><span class="p">),</span> \
-<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>    <span class="sa">f</span><span class="s2">&quot;Expected list, got </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">resp</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">data</span><span class="p">[</span><span class="s1">&#39;values&#39;</span><span class="p">])</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">&quot;</span>
-</code></pre></div>
-<p><strong>Rule:</strong> for any response key named <code>values</code>, <code>keys</code>, <code>items</code>, <code>get</code>, or <code>update</code>, always use <code>obj["key"]</code> bracket access, never <code>obj.key</code> dot access.</p>
-<p>All other keys (e.g. <code>periods</code>, <code>slug</code>, <code>status</code>, <code>data</code>, <code>id</code>) are safe to access with dot notation.</p>
-<hr />
-<h2 id="frequent-mistakes-llm-watchlist">Frequent Mistakes (LLM Watchlist)<a class="headerlink" href="#frequent-mistakes-llm-watchlist" title="Permanent link">&para;</a></h2>
-<ul>
-<li>Forgetting alphabetical filenames (<code>1_</code>, <code>2_</code>, <code>3_</code>) and losing ordering guarantees.</li>
-<li>Naming the test package the same as the Django app and shadowing real modules (prefix with <code>test_</code>).</li>
-<li>Importing Django models at the module top or inside <code>@unit_*</code> functions.</li>
-<li>Creating fresh users/records for every assertion instead of reusing shared state.</li>
-<li><strong>Writing bare <code>assert x</code> with no failure message</strong> — always include a descriptive string.</li>
-<li><strong>Using <code>obj.values</code>, <code>obj.keys</code>, or <code>obj.items</code> on an <code>objict</code></strong> — returns the dict built-in method, not your key. Use <code>obj["values"]</code> instead.</li>
-<li>Skipping the <code>--extra</code> gate on expensive tasks (cron jobs, third-party calls).</li>
-<li>Writing custom business logic in tests instead of exercising the real APIs.</li>
-</ul>
-<hr />
-<h2 id="outputs-tooling">Outputs &amp; Tooling<a class="headerlink" href="#outputs-tooling" title="Permanent link">&para;</a></h2>
-<ul>
-<li>A structured run report is written to <code>var/test_results.json</code>:</li>
-<li><code>total</code>, <code>passed</code>, <code>failed</code></li>
-<li><code>records[]</code> with module, file, function, status (<code>passed</code>, <code>failed</code>, <code>error</code>, <code>skipped</code>)</li>
-<li>timestamps (<code>started_at</code>, <code>finished_at</code>, <code>duration</code>)</li>
-<li>HTTP helper: <code>testit.client.RestClient</code></li>
-<li>Reuses auth tokens, and integrates with <code>opts.client</code>.</li>
-<li>WebSocket helper: <code>testit.ws_client.WsClient</code></li>
-<li>Build URL from the HTTP host and wait for typed messages.</li>
-<li>Faker snippets: <code>testit.faker</code></li>
-<li>Shared generator for generating deterministic-looking fixtures.</li>
-</ul>
-<hr />
-<h2 id="prompting-pairing-checklist">Prompting / Pairing Checklist<a class="headerlink" href="#prompting-pairing-checklist" title="Permanent link">&para;</a></h2>
+<h1 id="email-change-django-developer-reference">Email Change — Django Developer Reference<a class="headerlink" href="#email-change-django-developer-reference" title="Permanent link">&para;</a></h1>
+<h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
+<p>Self-service email change lets an authenticated user replace their email address without admin involvement. The flow has three steps:</p>
 <ol>
-<li>Identify the module and create or update numbered files.</li>
-<li>Draft setups first. Ensure Django imports stay inside decorated functions.</li>
-<li>Reuse <code>opts</code> data; avoid redundant inserts.</li>
-<li>For high-cost paths, add <code>@requires_extra("...")</code> and document the flag.</li>
-<li><strong>Every <code>assert</code> must include a descriptive failure message string.</strong> No bare asserts.</li>
-<li><strong>Use <code>obj["values"]</code> not <code>obj.values</code> for any key that shadows a dict built-in.</strong></li>
-<li>Before implementing workarounds, question the upstream API — document friction for follow-up.</li>
-<li>Run with <code>./bin/testit.py -v -e</code> (or via config) when validating locally.</li>
+<li><strong>Request</strong> — the user submits their new address and current password. A confirmation token is issued and emailed to the new address. A notification email is sent to the old address. Nothing changes yet.</li>
+<li><strong>Confirm</strong> — the user clicks the link in the new inbox. The token is validated, the new email is committed, and all existing sessions are invalidated.</li>
+<li><strong>Done</strong> — the confirm response returns a fresh JWT for the current session. All other sessions are logged out.</li>
 </ol>
-<p>Keeping these habits makes the suite predictable for both humans and models, highlights design gaps early, and keeps TestIt simple.</p>
+<p>The feature is controlled by the <code>ALLOW_EMAIL_CHANGE</code> setting (default <code>True</code>). Set it to <code>False</code> to disable self-service changes entirely — the request endpoint will return 403.</p>
+<p>Code lives in:
+- <code>mojo/apps/account/rest/auth.py</code> — REST endpoints
+- <code>mojo/apps/account/utils/tokens.py</code> — token generation and verification
+- <code>mojo/apps/account/services/email_change.py</code> — commit logic</p>
+<hr />
+<h2 id="token-infrastructure">Token Infrastructure<a class="headerlink" href="#token-infrastructure" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.utils.tokens</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n">generate_email_change_token</span><span class="p">,</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="n">verify_email_change_token</span><span class="p">,</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="p">)</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="c1"># Request step — store pending email and issue ec: token</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="n">token</span> <span class="o">=</span> <span class="n">generate_email_change_token</span><span class="p">(</span><span class="n">user</span><span class="p">,</span> <span class="s2">&quot;newemail@example.com&quot;</span><span class="p">)</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="c1"># Confirm step — verify token, retrieve pending email (clears it)</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="n">user</span><span class="p">,</span> <span class="n">new_email</span> <span class="o">=</span> <span class="n">verify_email_change_token</span><span class="p">(</span><span class="n">token</span><span class="p">)</span>
+</code></pre></div>
+<p>Token details:</p>
+<ul>
+<li><strong>Kind prefix:</strong> <code>ec:</code></li>
+<li><strong>TTL:</strong> controlled by <code>EMAIL_CHANGE_TOKEN_TTL</code> (default <code>3600</code> — 1 hour)</li>
+<li><strong>Single-use:</strong> the JTI is consumed on <code>verify_email_change_token</code>; replaying the token returns an error</li>
+<li><strong>Pending email storage:</strong> the new address is stored encrypted in <code>mojo_secrets</code> and cleared when the token is consumed or cancelled</li>
+</ul>
+<p><code>verify_email_change_token</code> raises <code>InvalidTokenException</code> if the token is expired, already used, or structurally invalid. It raises <code>EmailUnavailableException</code> if another account claimed the address in the window between request and confirm.</p>
+<hr />
+<h2 id="rest-endpoints">REST Endpoints<a class="headerlink" href="#rest-endpoints" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Endpoint</th>
+<th>Auth</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>POST /api/auth/email/change/request</code></td>
+<td>Bearer token required</td>
+<td>Validates password + new email, stores pending change, sends both emails</td>
+</tr>
+<tr>
+<td><code>POST /api/auth/email/change/confirm</code></td>
+<td>None — token is the credential</td>
+<td>Commits the new email, rotates <code>auth_key</code>, returns fresh JWT</td>
+</tr>
+<tr>
+<td><code>POST /api/auth/email/change/cancel</code></td>
+<td>Bearer token required</td>
+<td>Invalidates the outstanding <code>ec:</code> token immediately</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="email-templates-required">Email Templates Required<a class="headerlink" href="#email-templates-required" title="Permanent link">&para;</a></h2>
+<p>Two email templates must be defined in the project's email template system.</p>
+<h3 id="email_change_confirm"><code>email_change_confirm</code><a class="headerlink" href="#email_change_confirm" title="Permanent link">&para;</a></h3>
+<p>Sent to the <strong>new</strong> address. Context variables:</p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>token</code></td>
+<td>The <code>ec:</code> token string to embed in the confirmation link</td>
+</tr>
+<tr>
+<td><code>new_email</code></td>
+<td>The new email address being confirmed</td>
+</tr>
+</tbody>
+</table>
+<p>The template should contain a link such as:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>https://yourapp.com/email-change?token={{ token }}
+</code></pre></div>
+<p>The frontend extracts the token from the URL and calls <code>POST /api/auth/email/change/confirm</code>.</p>
+<h3 id="email_change_notify"><code>email_change_notify</code><a class="headerlink" href="#email_change_notify" title="Permanent link">&para;</a></h3>
+<p>Sent to the <strong>old</strong> address. Context variables:</p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>new_email</code></td>
+<td>The new address that was requested</td>
+</tr>
+</tbody>
+</table>
+<p>The template should tell the account owner what happened and direct them to cancel via <code>POST /api/auth/email/change/cancel</code> if they did not request this change, and to reset their password as a precaution.</p>
+<hr />
+<h2 id="what-happens-on-confirm">What Happens on Confirm<a class="headerlink" href="#what-happens-on-confirm" title="Permanent link">&para;</a></h2>
+<p>When <code>verify_email_change_token</code> succeeds, the service layer performs these steps atomically:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">User</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">pk</span><span class="o">=</span><span class="n">user</span><span class="o">.</span><span class="n">pk</span><span class="p">)</span><span class="o">.</span><span class="n">update</span><span class="p">(</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>    <span class="n">email</span><span class="o">=</span><span class="n">new_email</span><span class="p">,</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    <span class="n">is_email_verified</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>    <span class="n">auth_key</span><span class="o">=</span><span class="n">generate_auth_key</span><span class="p">(),</span>   <span class="c1"># rotates all outstanding JWTs</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>    <span class="n">username</span><span class="o">=</span><span class="n">new_email</span><span class="p">,</span>             <span class="c1"># only if username previously matched old email</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="p">)</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="n">user</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">kind</span><span class="o">=</span><span class="s2">&quot;email:changed&quot;</span><span class="p">,</span> <span class="n">meta</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;new_email&quot;</span><span class="p">:</span> <span class="n">new_email</span><span class="p">})</span>
+</code></pre></div>
+<p>Key points:</p>
+<ul>
+<li><strong><code>User.objects.filter(...).update(...)</code></strong> is used deliberately to bypass the REST field guard that normally makes <code>email</code> and <code>is_email_verified</code> read-only via the API.</li>
+<li><strong><code>auth_key</code> rotation</strong> immediately invalidates every JWT that was signed with the old key — including any attacker session that may have triggered the flow.</li>
+<li><strong><code>username</code> sync</strong> only occurs when <code>user.username</code> was equal to the old <code>user.email</code> at the time of confirm. Accounts that use a separate username are not affected.</li>
+<li><strong><code>user.log</code></strong> writes an audit record. The <code>email:changed</code> kind is queryable via the standard incident/audit log.</li>
+</ul>
+<p>After the update, the confirm endpoint issues a new JWT signed against the rotated <code>auth_key</code> and returns it as a standard login response. The client must replace its stored tokens with the new ones.</p>
+<hr />
+<h2 id="allow_email_change-setting"><code>ALLOW_EMAIL_CHANGE</code> Setting<a class="headerlink" href="#allow_email_change-setting" title="Permanent link">&para;</a></h2>
+<p>Add to <code>settings.py</code> to disable the feature:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">ALLOW_EMAIL_CHANGE</span> <span class="o">=</span> <span class="kc">False</span>
+</code></pre></div>
+<p>When <code>False</code>, <code>POST /api/auth/email/change/request</code> returns a 403 immediately. The confirm and cancel endpoints are unaffected — any token already in flight can still be confirmed or cancelled.</p>
+<hr />
+<h2 id="security-design-notes">Security Design Notes<a class="headerlink" href="#security-design-notes" title="Permanent link">&para;</a></h2>
+<p><strong>Why <code>current_password</code> is required</strong></p>
+<p>A Bearer token alone does not prove the legitimate user is present — it could be a stolen or leaked JWT. Requiring the current password ensures only someone who knows the credential can initiate a change.</p>
+<p><strong>Why confirm rotates <code>auth_key</code></strong></p>
+<p>If an attacker obtained a valid session and somehow bypassed the password check, rotating <code>auth_key</code> on confirm evicts every active session — including the attacker's — the moment the real owner clicks the link. The real owner gets a fresh JWT; everyone else is logged out.</p>
+<p><strong>Why the old address receives a notification</strong></p>
+<p>Email change is a high-value account takeover vector. Sending a notification to the old address gives the real owner an immediate signal and a cancellation path even before the 1-hour token expires.</p>
+<p><strong>Why confirm re-checks email availability</strong></p>
+<p>Between request and confirm there is up to a 1-hour window. Another account may have registered or been assigned the same address in that time. The confirm step re-validates uniqueness and returns an error if the address is no longer available, preventing a silent collision.</p>
 
 
 
