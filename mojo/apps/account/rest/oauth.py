@@ -60,6 +60,7 @@ def _find_or_create_user(provider_name, profile):
         if display_name:
             user.display_name = display_name
         user.is_email_verified = True
+        user.set_unusable_password()
         user.save()
         logit.info("oauth", f"Created new user {user.username} via {provider_name}")
 
@@ -142,3 +143,50 @@ def on_oauth_complete(request, provider):
 
     logit.info("oauth", f"User {user.username} logged in via {provider}")
     return jwt_login(request, user)
+
+
+# -----------------------------------------------------------------
+# OAuth Connection Management
+# -----------------------------------------------------------------
+
+@md.URL("account/oauth_connection")
+@md.URL("account/oauth_connection/<int:pk>")
+@md.requires_auth()
+def on_oauth_connection(request, pk=None):
+    """Standard CRUD for OAuth connections (GET list, GET detail, POST update).
+    DELETE is handled by the custom endpoint below with lockout protection."""
+    if request.method == "DELETE" and pk is not None:
+        return on_oauth_connection_delete(request, pk)
+    return OAuthConnection.on_rest_request(request, pk)
+
+
+def on_oauth_connection_delete(request, pk):
+    """Unlink an OAuth connection with lockout protection."""
+    # Admin bypass — manage_users can delete any connection
+    if request.user.has_permission("manage_users"):
+        conn = OAuthConnection.objects.filter(pk=pk).first()
+        if not conn:
+            raise merrors.PermissionDeniedException("Not found", 404, 404)
+        conn.delete()
+        return JsonResponse({"status": True})
+
+    # Owner path — must be own connection
+    conn = OAuthConnection.objects.filter(pk=pk, user=request.user).first()
+    if not conn:
+        raise merrors.PermissionDeniedException("Not found", 404, 404)
+
+    # Lockout guard: if no usable password and this is the last active connection, block
+    try:
+        has_password = request.user.has_usable_password()
+        active_count = OAuthConnection.objects.filter(user=request.user, is_active=True).count()
+        if not has_password and active_count <= 1:
+            raise merrors.ValueException("Cannot unlink your only login method. Set a password first.")
+    except merrors.ValueException:
+        raise
+    except Exception:
+        # Fail-closed: if guard check itself errors, deny the delete
+        request.user.report_incident("OAuth unlink guard check failed", "oauth:unlink_guard_error")
+        raise merrors.PermissionDeniedException("Unable to process request")
+
+    conn.delete()
+    return JsonResponse({"status": True})

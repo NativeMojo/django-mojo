@@ -6,6 +6,7 @@ from mojo.helpers import logit
 from mojo.helpers.qrcode import QRCodeError, generate_qrcode
 
 
+@md.URL("/api/qrcode")
 @md.URL("qrcode")
 @md.public_endpoint("we allow this to be a public endpoint")
 @md.requires_params(["data"])

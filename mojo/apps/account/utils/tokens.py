@@ -13,6 +13,7 @@ INVITE_TOKEN_TTL = settings.get("INVITE_TOKEN_TTL", 604800)
 EMAIL_CHANGE_TOKEN_TTL = settings.get("EMAIL_CHANGE_TOKEN_TTL", 3600)   # 1 hour
 EMAIL_CHANGE_CODE_TTL = settings.get("EMAIL_CHANGE_CODE_TTL", 600)      # 10 minutes — OTP path
 PHONE_CHANGE_TOKEN_TTL = settings.get("PHONE_CHANGE_TOKEN_TTL", 600)    # 10 minutes — matches OTP lifetime
+DEACTIVATE_TOKEN_TTL = settings.get("DEACTIVATE_TOKEN_TTL", 900)        # 15 minutes
 
 # Token kind prefixes — visible to the webapp before any decoding
 KIND_PASSWORD_RESET = "pr"
@@ -21,6 +22,7 @@ KIND_EMAIL_VERIFY = "ev"
 KIND_INVITE = "iv"
 KIND_EMAIL_CHANGE = "ec"
 KIND_PHONE_CHANGE = "pc"
+KIND_DEACTIVATE = "dv"
 
 # Secrets keys per kind — kept separate so they don't invalidate each other
 _JTI_KEYS = {
@@ -30,6 +32,7 @@ _JTI_KEYS = {
     KIND_INVITE: "invite_jti",
     KIND_EMAIL_CHANGE: "email_change_jti",
     KIND_PHONE_CHANGE: "phone_change_jti",
+    KIND_DEACTIVATE: "deactivate_jti",
 }
 _TS_KEYS = {
     KIND_PASSWORD_RESET: "password_reset_ts",
@@ -38,6 +41,7 @@ _TS_KEYS = {
     KIND_INVITE: "invite_ts",
     KIND_EMAIL_CHANGE: "email_change_ts",
     KIND_PHONE_CHANGE: "phone_change_ts",
+    KIND_DEACTIVATE: "deactivate_ts",
 }
 _TTL = {
     KIND_PASSWORD_RESET: PASSWORD_RESET_TOKEN_TTL,
@@ -46,6 +50,7 @@ _TTL = {
     KIND_INVITE: INVITE_TOKEN_TTL,
     KIND_EMAIL_CHANGE: EMAIL_CHANGE_TOKEN_TTL,
     KIND_PHONE_CHANGE: PHONE_CHANGE_TOKEN_TTL,
+    KIND_DEACTIVATE: DEACTIVATE_TOKEN_TTL,
 }
 
 
@@ -453,6 +458,20 @@ def verify_phone_change_token(token, code):
     user.save(update_fields=["mojo_secrets", "modified"])
 
     return user, new_phone
+
+
+# -----------------------------------------------------------------
+# Deactivation tokens (kind=dv)
+# -----------------------------------------------------------------
+
+def generate_deactivate_token(user):
+    """Generate a deactivation confirmation token (kind=dv). TTL defaults to 15 min."""
+    return _generate(user, KIND_DEACTIVATE)
+
+
+def verify_deactivate_token(token):
+    """Verify a deactivation token and return the User."""
+    return _verify(token, expected_kind=KIND_DEACTIVATE)
 
 
 # Legacy aliases — kept so existing call sites don't break

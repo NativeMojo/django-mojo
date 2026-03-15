@@ -10,3 +10,4 @@ from .sms import *
 from .oauth import *
 from .verify import *
 from .notification import *
+from .notification_prefs import *

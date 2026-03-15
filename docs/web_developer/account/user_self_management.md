@@ -21,10 +21,15 @@ noted otherwise.
 8. [Sessions & Devices](#8-sessions--devices)
 9. [API Keys](#9-api-keys)
 10. [Notifications](#10-notifications)
-11. [Files](#11-files)
-12. [Activity Log](#12-activity-log)
-13. [QR Codes](#13-qr-codes)
-14. [Realtime Events Reference](#14-realtime-events-reference)
+11. [Notification Preferences](#11-notification-preferences)
+12. [Username Change](#12-username-change)
+13. [Linked OAuth Accounts](#13-linked-oauth-accounts)
+14. [Account Deactivation](#14-account-deactivation)
+15. [Security Events](#15-security-events)
+16. [Files](#16-files)
+17. [Activity Log](#17-activity-log)
+18. [QR Codes](#18-qr-codes)
+19. [Realtime Events Reference](#19-realtime-events-reference)
 
 ---
 
@@ -53,6 +58,8 @@ noted otherwise.
     },
     "is_email_verified": true,
     "is_phone_verified": false,
+    "is_dob_verified": false,
+    "dob": "1990-05-15",
     "permissions": {},
     "metadata": {},
     "org": {"id": 5, "name": "Acme Corp"},
@@ -80,6 +87,7 @@ Users can update any of the following fields on their own record:
 | `first_name` | Checked for inappropriate content |
 | `last_name` | Checked for inappropriate content |
 | `phone_number` | First-time set only — see [Phone Number](#5-phone-number) for replacing an existing number |
+| `dob` | Date of birth (`YYYY-MM-DD`). Changing this resets `is_dob_verified` to `false` |
 | `metadata` | Free-form JSON; app-defined |
 | `avatar` | File ID from a completed upload — see [Avatar](#2-avatar) |
 
@@ -88,9 +96,10 @@ Fields **not** writable by the account owner:
 | Field | Requires |
 |---|---|
 | `email` | Use the change flow — `POST /api/auth/email/change/request` |
-| `username` | Superuser only |
+| `username` | Use `POST /api/auth/username/change` — see [Username Change](#12-username-change) |
 | `is_email_verified` | Internal token flows only |
 | `is_phone_verified` | Internal token flows only |
+| `is_dob_verified` | System-only — never REST-writable; reset automatically when `dob` changes |
 | `is_active` | Manager / superuser |
 | `permissions` | Manager with `manage_users` |
 | `requires_mfa` | Manager / superuser |
@@ -588,6 +597,31 @@ Authorization: Bearer <access_token>
 The user enters the 6-digit code from their app. A valid code proves the app
 is correctly linked and activates TOTP on the account. Sets `requires_mfa: true`.
 
+**Response:**
+
+```json
+{
+  "status": true,
+  "data": {
+    "is_enabled": true,
+    "recovery_codes": [
+      "a1b2-c3d4-e5f6",
+      "1122-3344-5566",
+      "dead-beef-cafe",
+      "abcd-ef01-2345",
+      "6789-abcd-ef01",
+      "f0e1-d2c3-b4a5",
+      "9876-5432-1fed",
+      "0a1b-2c3d-4e5f"
+    ]
+  }
+}
+```
+
+> **Important:** Display the recovery codes immediately and instruct the user to
+> store them in a safe place. The plaintext codes are shown **only once** — they
+> are stored as bcrypt hashes on the server and cannot be retrieved again in full.
+
 ---
 
 ### Disable TOTP
@@ -602,6 +636,149 @@ remains valid; the next password login will return a JWT with no MFA challenge.
 
 ---
 
+### View recovery codes (masked)
+
+Show the user which recovery codes they have remaining. Safe to call on a
+settings page — codes are masked so they cannot be stolen from a screenshot.
+
+```
+GET /api/account/totp/recovery-codes
+Authorization: Bearer <access_token>
+```
+
+**Response:**
+
+```json
+{
+  "status": true,
+  "data": {
+    "remaining": 7,
+    "codes": [
+      "a1b2-xxxx-xxxx",
+      "1122-xxxx-xxxx",
+      "dead-xxxx-xxxx",
+      "abcd-xxxx-xxxx",
+      "6789-xxxx-xxxx",
+      "f0e1-xxxx-xxxx",
+      "0a1b-xxxx-xxxx"
+    ]
+  }
+}
+```
+
+`remaining` is the count of unused codes. Only the first 4 hex characters of
+each code are shown — enough for the user to identify which ones they've used.
+
+Returns `400` if TOTP is not enabled on the account.
+
+---
+
+### Regenerate recovery codes
+
+Invalidates all existing recovery codes and generates a fresh set of 8. Requires
+a **live TOTP code** from the authenticator app — this prevents an attacker with
+a stolen session from silently rotating the codes.
+
+```
+POST /api/account/totp/recovery-codes/regenerate
+Authorization: Bearer <access_token>
+```
+
+```json
+{ "code": "482910" }
+```
+
+**Response:**
+
+```json
+{
+  "status": true,
+  "data": {
+    "is_enabled": true,
+    "recovery_codes": [
+      "f6e5-d4c3-b2a1",
+      "6655-4433-2211",
+      "aabb-ccdd-eeff",
+      "1234-5678-9abc",
+      "def0-1234-5678",
+      "9abc-def0-1234",
+      "5678-9abc-def0",
+      "cafe-babe-feed"
+    ]
+  }
+}
+```
+
+Display the new codes and instruct the user to replace any previously saved
+codes. Old codes are permanently invalidated.
+
+| Condition | Status |
+|---|---|
+| Invalid TOTP code | 403 — existing codes unchanged |
+| TOTP not enabled | 400 |
+
+---
+
+### Recovery login (lost authenticator device)
+
+When the user can enter their password but **cannot provide a TOTP code**
+(lost phone, factory reset, etc.), they can use a recovery code instead.
+
+This is a **public endpoint** — no Bearer token required. The user must first
+complete the normal password login to obtain an `mfa_token`.
+
+```
+POST /api/auth/totp/recover
+```
+
+```json
+{
+  "mfa_token": "a3f1c9d2...",
+  "recovery_code": "a1b2-c3d4-e5f6"
+}
+```
+
+**Response (success):**
+
+```json
+{
+  "status": true,
+  "data": {
+    "access_token": "eyJhbGci...",
+    "refresh_token": "eyJhbGci...",
+    "expires_in": 21600,
+    "user": { "id": 42, "username": "alice", "display_name": "Alice" }
+  }
+}
+```
+
+**Behaviour:**
+
+- The recovery code is **consumed on use** — it cannot be used again.
+- An incident is logged (`totp:recovery_used`).
+- If the last remaining code is consumed, a notification warns the user to
+  generate new codes.
+- The `mfa_token` is consumed on use.
+
+**Typical UI flow:**
+
+1. User enters username + password → receives `mfa_token` + `mfa_required: true`
+2. User clicks "Lost your authenticator? Use a recovery code"
+3. User enters one of their saved recovery codes
+4. Frontend calls `POST /api/auth/totp/recover` with `mfa_token` + `recovery_code`
+5. On success, store the JWT and redirect to the app
+
+| Condition | Status |
+|---|---|
+| Invalid `mfa_token` | 401 |
+| Invalid or already-used recovery code | 403 |
+| Account inactive | 403 |
+
+> **Full TOTP reference:** See [TOTP Authentication](mfa_totp.md) for complete
+> endpoint details including standalone TOTP login and all error cases.
+
+---
+
 ## 8. Sessions & Devices
 
 ### List tracked devices
@@ -610,6 +787,7 @@ The framework tracks the devices that have logged into the account.
 
 ```
 GET /api/user/device
+Authorization: Bearer <access_token>
 ```
 
 Returns device records including `user_agent`, `ip`, `created`, and
@@ -618,23 +796,68 @@ security settings page.
 
 ---
 
-### Invalidate all sessions
+### Revoke all sessions (log out everywhere)
 
-Rotating the user's `auth_key` immediately invalidates every outstanding
-JWT signed with the old key. The cleanest way to do this is a password
-change (which rotates `auth_key` automatically) or via a supported
-logout-all endpoint if your deployment implements one.
+Invalidate every active JWT across all devices. The calling session receives a
+fresh token so the user stays logged in — every **other** session is killed.
 
-Email change confirm also rotates `auth_key` as a side effect — so after a
-successful email change the user is effectively logged out everywhere except
-the session that performed the confirm.
+```
+POST /api/auth/sessions/revoke
+Authorization: Bearer <access_token>
+```
+
+```json
+{ "current_password": "mysecretpassword" }
+```
+
+`current_password` is **required** — this prevents an attacker with a stolen
+JWT from locking the real user out of all their sessions.
+
+**Response (success):**
+
+```json
+{
+  "status": true,
+  "data": {
+    "access_token": "eyJhbGci...",
+    "refresh_token": "eyJhbGci...",
+    "expires_in": 21600
+  }
+}
+```
+
+**What happens on the backend:**
+
+1. `auth_key` is rotated — every outstanding JWT signed with the old key is
+   immediately invalid.
+2. A fresh JWT is issued with the new key and returned in the response.
+3. An incident `sessions:revoked` is logged.
+
+**Important:** Replace your stored access and refresh tokens with the ones
+from this response. The old ones are dead.
+
+| Condition | Status |
+|---|---|
+| Wrong password | 401 — no state changed, incident `sessions:revoke_failed` logged |
+| Missing `current_password` | 400 |
+| Unauthenticated | 401/403 |
+
+Rate-limited: 5 requests per IP per 5 minutes.
+
+> **Note:** Per-device revocation is not supported. This endpoint is
+> all-or-nothing. Email change confirm and password change also rotate
+> `auth_key` as a side effect, which has the same "log out everywhere" result.
 
 ---
 
 ### Register device for push notifications
 
-```json
+```
 POST /api/account/devices/push/register
+Authorization: Bearer <access_token>
+```
+
+```json
 {
   "device_token": "...",
   "device_id": "unique-device-id",
@@ -642,8 +865,12 @@ POST /api/account/devices/push/register
 }
 ```
 
-```json
+```
 POST /api/account/devices/push/unregister
+Authorization: Bearer <access_token>
+```
+
+```json
 {
   "device_token": "...",
   "device_id": "unique-device-id",
@@ -742,7 +969,372 @@ in your message handler to show banners without polling.
 
 ---
 
-## 11. Files
+## 11. Notification Preferences
+
+Users can control which notification types they receive and on which channels
+(in-app inbox, email, push). Default is **allow** — only suppress when the
+user explicitly opts out.
+
+### Get preferences
+
+```
+GET /api/account/notification/preferences
+Authorization: Bearer <access_token>
+```
+
+```json
+{
+  "status": true,
+  "data": {
+    "preferences": {
+      "message":   { "in_app": true, "email": true,  "push": true  },
+      "marketing": { "in_app": true, "email": false, "push": false }
+    }
+  }
+}
+```
+
+An empty `preferences` dict means everything is on (default).
+
+### Update preferences
+
+Partial update — only the keys present in the request body are changed.
+
+```
+POST /api/account/notification/preferences
+Authorization: Bearer <access_token>
+```
+
+```json
+{
+  "preferences": {
+    "marketing": { "email": false, "push": false }
+  }
+}
+```
+
+Response returns the full current preferences after merging.
+
+**Validation rules:**
+- `preferences` must be a dict — 400 if not
+- Each kind value must be a dict of channel booleans — 400 if not
+- Valid channels: `in_app`, `email`, `push` — unknown channels are ignored
+- Kind keys are free-form strings (projects define their own kinds, max 64 chars)
+
+### Enforcement
+
+Preferences are enforced in all three delivery paths:
+
+| Channel | Enforcement point |
+|---|---|
+| In-app inbox | `Notification.send()` checks before creating the record |
+| Email | `send_template_email()` checks when caller passes `kind=` |
+| Push | `push_notification()` checks when caller passes `kind=` |
+
+System / transactional emails (password reset, email verification, magic login,
+deactivation confirmation) never pass a `kind` and are therefore **never
+suppressed** by preferences.
+
+---
+
+## 12. Username Change
+
+Change the authenticated user's username. Requires `current_password` as
+proof of ownership.
+
+```
+POST /api/auth/username/change
+Authorization: Bearer <access_token>
+```
+
+```json
+{
+  "username": "new_username",
+  "current_password": "currentpassword"
+}
+```
+
+```json
+{
+  "status": true,
+  "data": { "username": "new_username" }
+}
+```
+
+**Behaviour:**
+- Username is lowercased and trimmed before any check
+- Validates via `content_guard` (blocked content rejected)
+- Uniqueness checked (400 if taken)
+- Same-as-current rejected (400)
+- No `auth_key` rotation — existing session continues
+
+**Error cases:**
+
+| Condition | Status |
+|---|---|
+| Wrong password | 401 |
+| OAuth-only account (no usable password) | 400 |
+| Username taken | 400 |
+| Same as current | 400 |
+| Invalid content (content guard) | 400 |
+| `ALLOW_USERNAME_CHANGE = False` | 403 |
+| Unauthenticated | 401/403 |
+
+---
+
+## 13. Linked OAuth Accounts
+
+View and manage OAuth provider connections linked to the account. Useful for a
+"Connected accounts" section on a settings page.
+
+### List connections
+
+```
+GET /api/account/oauth_connection
+Authorization: Bearer <access_token>
+```
+
+```json
+{
+  "status": true,
+  "count": 2,
+  "results": [
+    {
+      "id": 7,
+      "provider": "google",
+      "email": "alice@gmail.com",
+      "is_active": true,
+      "created": "2026-01-10T09:00:00Z"
+    },
+    {
+      "id": 12,
+      "provider": "github",
+      "email": "alice@users.noreply.github.com",
+      "is_active": true,
+      "created": "2026-02-05T14:30:00Z"
+    }
+  ]
+}
+```
+
+Only the authenticated user's own connections are returned — the `owner` filter
+is enforced server-side.
+
+### Unlink a connection
+
+```
+DELETE /api/account/oauth_connection/<id>
+Authorization: Bearer <access_token>
+```
+
+**Success:**
+
+```json
+{ "status": true }
+```
+
+**Lockout guard:** If the user has no usable password and this is their only
+active OAuth connection, the unlink is blocked — the user would have no way to
+log in:
+
+```json
+{
+  "status": false,
+  "code": 400,
+  "error": "Cannot unlink your only login method. Set a password first."
+}
+```
+
+| Condition | Status |
+|---|---|
+| Success | 200 |
+| Last connection + no password | 400 |
+| Connection not found or not owned | 404 |
+
+`manage_users` admins bypass the lockout guard.
+
+> **Linking a new provider** does not require a separate endpoint — the user
+> goes through the normal OAuth login flow (`GET /api/account/oauth/<provider>/begin`)
+> while already logged in and the connection is created automatically.
+
+---
+
+## 14. Account Deactivation
+
+Self-service account deactivation via a two-step email confirmation flow. Uses
+the existing `pii_anonymize()` method which anonymises all PII (username, email,
+phone, display name, DOB, metadata), rotates `auth_key` (invalidating all JWTs),
+and sets `is_active = False`. The user row is preserved for FK integrity and
+audit trail — this is not a hard delete.
+
+OAuth-only users (no password set) are fully supported — the email confirmation
+link is sufficient proof of ownership.
+
+### Step 1 — Request deactivation
+
+```
+POST /api/account/deactivate
+Authorization: Bearer <access_token>
+```
+
+No request body required. Returns 200 and sends a confirmation email containing
+a `dv:` token (15-minute TTL, single-use).
+
+```json
+{
+  "status": true,
+  "message": "A confirmation email has been sent. Follow the link to complete deactivation."
+}
+```
+
+Rate-limited: 5 requests per IP per 5 minutes.
+
+### Step 2 — Confirm deactivation
+
+```
+POST /api/account/deactivate/confirm
+```
+
+```json
+{ "token": "dv:4e6f..." }
+```
+
+Public endpoint — the token is the credential (no Bearer token required).
+
+```json
+{
+  "status": true,
+  "message": "Your account has been deactivated."
+}
+```
+
+**What happens on the backend:**
+
+1. Token is validated (single-use, expiry, correct kind)
+2. An `account:deactivated` incident is logged while the username is still readable
+3. `pii_anonymize()` runs — all PII cleared, `auth_key` rotated, account disabled
+4. All active JWTs are immediately invalid
+
+**Important:** After a successful confirm, clear all stored tokens on the client.
+Any subsequent API call with the old JWT will return 401.
+
+**Error cases:**
+
+| Condition | Status |
+|---|---|
+| Already inactive | 200 (idempotent, no double-anonymise) |
+| Token expired (>15 min) | 400 |
+| Token already used | 400 |
+| Wrong token kind (e.g. `pr:` or `ml:`) | 400 |
+| Missing token | 400 |
+| `ALLOW_SELF_DEACTIVATION = False` | 403 |
+| Unauthenticated request to Step 1 | 401/403 |
+
+**Settings:**
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `DEACTIVATE_TOKEN_TTL` | `900` | Seconds until confirmation token expires |
+| `ALLOW_SELF_DEACTIVATION` | `True` | Feature flag — set `False` to disable entirely |
+
+**Email template:** The downstream project must provide an
+`account_deactivate_confirm` email template. Context variables: `token` (the
+raw `dv:` string), `user` (the user object).
+
+---
+
+## 15. Security Events
+
+A lightweight, user-scoped feed of auth-relevant audit events. No special
+permission required — a user can only see their own events. Useful for a
+"Recent security activity" card on a settings or dashboard page.
+
+```
+GET /api/account/security-events
+Authorization: Bearer <access_token>
+```
+
+### Query parameters
+
+| Param | Default | Notes |
+|---|---|---|
+| `size` | 25 | Max results; hard cap 100 |
+| `dr_start` | — | ISO date range start (inclusive) |
+| `dr_end` | — | ISO date range end (inclusive) |
+
+### Response
+
+```json
+{
+  "status": true,
+  "count": 4,
+  "results": [
+    {
+      "created": "2026-04-01T10:00:00Z",
+      "kind": "invalid_password",
+      "summary": "Failed login — incorrect password",
+      "ip": "203.0.113.5"
+    },
+    {
+      "created": "2026-04-01T09:55:00Z",
+      "kind": "login",
+      "summary": "Successful login",
+      "ip": "203.0.113.5"
+    }
+  ]
+}
+```
+
+Only `created`, `kind`, `summary`, and `ip` are returned. Internal fields
+(`details`, `title`, `metadata`, `level`, etc.) are **never** exposed.
+
+### Event kind → summary mapping
+
+The `summary` field is a human-readable label derived from `kind`. Use these to
+build icons, colours, or groupings in your UI.
+
+| `kind` | `summary` |
+|---|---|
+| `login` | Successful login |
+| `login:unknown` | Login attempt with unknown account |
+| `invalid_password` | Failed login — incorrect password |
+| `password_reset` | Password reset requested |
+| `totp:confirm_failed` | TOTP setup — invalid confirmation code |
+| `totp:login_failed` | Failed login — incorrect TOTP code |
+| `totp:login_unknown` | TOTP login attempt with unknown account |
+| `totp:recovery_used` | TOTP recovery code used |
+| `email_change:requested` | Email change requested |
+| `email_change:requested_code` | Email change requested (code flow) |
+| `email_change:cancelled` | Email change cancelled |
+| `email_change:invalid` | Email change — invalid token |
+| `email_change:expired` | Email change — expired token |
+| `email_verify:confirmed` | Email address verified |
+| `email_verify:confirmed_code` | Email address verified via code |
+| `phone_change:requested` | Phone number change requested |
+| `phone_change:confirmed` | Phone number changed |
+| `phone_change:cancelled` | Phone number change cancelled |
+| `phone_verify:confirmed` | Phone number verified |
+| `username:changed` | Username changed |
+| `oauth` | Signed in with social account |
+| `passkey:login_failed` | Failed passkey login |
+| `account:deactivated` | Account deactivated |
+| `account:deactivate_requested` | Account deactivation requested |
+| `sessions:revoked` | All sessions revoked |
+| `sessions:revoke_failed` | Session revoke — incorrect password |
+
+Unknown `kind` values fall back to the `kind` string itself as the summary
+(forward-compatible — new event types work without a client update).
+
+### UI tips
+
+- **Red / warning** — `invalid_password`, `totp:login_failed`, `passkey:login_failed`, `sessions:revoke_failed`
+- **Green / success** — `login`, `oauth`, `email_verify:confirmed`, `phone_verify:confirmed`
+- **Neutral / info** — everything else (changes, requests, resets)
+- Show `ip` with a "not you?" prompt linking to the session revoke flow
+
+---
+
+## 16. Files
 
 Users can upload and manage their own files — documents, images, and other
 attachments.
@@ -846,7 +1438,7 @@ See [FileVault docs](../../filevault/README.md) for the full reference.
 
 ---
 
-## 12. Activity Log
+## 17. Activity Log
 
 The framework writes an audit log entry for significant account events.
 These are readable by the user themselves as a "recent activity" feed.
@@ -893,7 +1485,7 @@ GET /api/logit/log?uid=<me>&dr_start=2026-01-01&dr_end=2026-01-31
 
 ---
 
-## 13. QR Codes
+## 18. QR Codes
 
 Generate a QR code for any string — useful for sharing profile links,
 transfer codes, tickets, or MFA setup (see TOTP above).
@@ -945,7 +1537,7 @@ your app icon). `logo_scale` controls how much of the QR the logo covers
 
 ---
 
-## 14. Realtime Events Reference
+## 19. Realtime Events Reference
 
 Subscribe to these WebSocket events to update the UI without polling when
 account state changes — including when the change happens in another tab
@@ -1008,13 +1600,25 @@ Refresh the user profile to pick up the updated `is_email_verified` or
 | Delete passkey | DELETE | `/api/account/passkeys/<id>` | Required |
 | Setup TOTP (get QR code) | POST | `/api/account/totp/setup` | Required |
 | Confirm TOTP (activate) | POST | `/api/account/totp/confirm` | Required |
+| View TOTP recovery codes | GET | `/api/account/totp/recovery-codes` | Required |
+| Regenerate recovery codes | POST | `/api/account/totp/recovery-codes/regenerate` | Required |
+| Recovery login (lost device) | POST | `/api/auth/totp/recover` | Public |
 | Disable TOTP | DELETE | `/api/account/totp` | Required |
+| Revoke all sessions | POST | `/api/auth/sessions/revoke` | Required |
 | List devices | GET | `/api/user/device` | Required |
 | Register push device | POST | `/api/account/devices/push/register` | Required |
 | Unregister push device | POST | `/api/account/devices/push/unregister` | Required |
 | Generate personal API key | POST | `/api/auth/generate_api_key` | Required |
 | List notifications | GET | `/api/account/notification` | Required |
 | Mark notification read | POST | `/api/account/notification/<id>` | Required |
+| Get notification preferences | GET | `/api/account/notification/preferences` | Required |
+| Update notification preferences | POST | `/api/account/notification/preferences` | Required |
+| Change username | POST | `/api/auth/username/change` | Required |
+| List OAuth connections | GET | `/api/account/oauth_connection` | Required |
+| Unlink OAuth connection | DELETE | `/api/account/oauth_connection/<id>` | Required |
+| Request account deactivation | POST | `/api/account/deactivate` | Required |
+| Confirm account deactivation | POST | `/api/account/deactivate/confirm` | Public |
+| View security events | GET | `/api/account/security-events` | Required |
 | List own files | GET | `/api/fileman/file` | Required |
 | Delete own file | DELETE | `/api/fileman/file/<id>` | Required |
 | Upload encrypted file | POST | `/api/filevault/file/upload` | Required |

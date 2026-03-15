@@ -22,6 +22,8 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
 | `is_superuser` | BooleanField | Superuser flag |
 | `is_email_verified` | BooleanField | Email address verified flag |
 | `is_phone_verified` | BooleanField | Phone number verified flag |
+| `is_dob_verified` | BooleanField | DOB verified flag (system-only, never REST-writable) |
+| `dob` | DateField (nullable) | Date of birth — PII, cleared by `pii_anonymize()` |
 | `permissions` | JSONField | Key-based permission dict |
 | `metadata` | JSONField | Arbitrary user metadata |
 | `org` | FK → Group | Primary organization/tenant |
@@ -38,6 +40,7 @@ class RestMeta:
     SAVE_PERMS = ["manage_users", "owner"]
     OWNER_FIELD = "self"           # owner = user is themselves
     NO_SHOW_FIELDS = ["password", "auth_key", "onetime_code"]
+    NO_SAVE_FIELDS = ["auth_key", "last_activity", "is_dob_verified"]
     SEARCH_FIELDS = ["username", "email", "display_name"]
     POST_SAVE_ACTIONS = ["send_invite"]
     GRAPHS = {
@@ -226,3 +229,6 @@ Add `send_invite` to `POST_SAVE_ACTIONS`. When creating a user with `send_invite
 | `PHONE_VERIFY_CODE_TTL` | `600` | Phone verification code TTL (seconds) |
 | `USER_LAST_ACTIVITY_FREQ` | `300` | Min seconds between activity updates |
 | `USER_PERMS_PROTECTION` | (system defaults) | Dict of perm → required perm to grant it |
+| `ALLOW_USERNAME_CHANGE` | `True` | Feature flag — set `False` to disable the self-service username change endpoint |
+| `ALLOW_SELF_DEACTIVATION` | `True` | Feature flag — set `False` to disable self-service account deactivation |
+| `DEACTIVATE_TOKEN_TTL` | `900` | Account deactivation confirmation token TTL (seconds, 15 min default) |

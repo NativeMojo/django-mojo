@@ -103,6 +103,50 @@ Listen for `type === "notification"` in your WebSocket message handler to show r
 
 Filter by kind: `GET /api/account/notification?kind=message`
 
+## Notification Preferences
+
+Users can control which notification kinds they receive on which channels.
+See [User Self-Management § Notification Preferences](user_self_management.md#11-notification-preferences) for full endpoint documentation.
+
+### Quick summary
+
+| Method | URL | Description |
+|---|---|---|
+| `GET` | `/api/account/notification/preferences` | Get current preferences |
+| `POST` | `/api/account/notification/preferences` | Partial-update preferences |
+
+### How it works
+
+- Default is **allow** — notifications are sent unless the user explicitly opts out.
+- Preferences are stored per kind (e.g. `"marketing"`, `"message"`) and per channel (`in_app`, `email`, `push`).
+- Setting `{ "marketing": { "email": false, "push": false } }` suppresses marketing emails and push but still delivers in-app inbox notifications.
+- System / transactional emails (password reset, email verification, magic login, deactivation confirmation) are **never suppressed** by preferences.
+
+### Example: opt out of marketing emails
+
+```json
+POST /api/account/notification/preferences
+Authorization: Bearer <access_token>
+
+{
+  "preferences": {
+    "marketing": { "email": false, "push": false }
+  }
+}
+```
+
+### Enforcement
+
+Preferences are checked in all three delivery paths automatically:
+
+| Channel | Check point |
+|---|---|
+| In-app inbox | `Notification.send()` — before creating the DB row |
+| Email | `send_template_email()` — when `kind=` is passed by the caller |
+| Push | `push_notification()` — when `kind=` is passed by the caller |
+
+---
+
 ## Notification lifecycle
 
 1. Server calls `user.notify(...)` — creates DB row, sends WebSocket, sends device push

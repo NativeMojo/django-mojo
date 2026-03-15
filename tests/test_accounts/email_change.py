@@ -1269,15 +1269,18 @@ def test_confirm_code_wrong_code_rejected(opts):
 def test_confirm_code_expired(opts):
     from mojo.apps.account.models import User
     from mojo.apps.account.utils import tokens
-    import mojo.apps.account.utils.tokens as tok_module
     from mojo.decorators.limits import clear_rate_limits
     clear_rate_limits(ip="127.0.0.1")
 
     user = User.objects.get(pk=opts.user_id)
-    orig_ttl = tok_module.EMAIL_CHANGE_CODE_TTL
-    tok_module.EMAIL_CHANGE_CODE_TTL = -1
     try:
         otp = tokens.generate_email_change_otp(user, "code_expired@example.com")
+        # Force the stored timestamp into the distant past so the server's
+        # real TTL (600 s) recognises it as expired.  Patching the module-level
+        # TTL only affects the test process, not the running server.
+        user.set_secret("email_change_otp_ts", 0)
+        user.save(update_fields=["mojo_secrets", "modified"])
+
         opts.client.login(TEST_USER, TEST_PWORD)
         resp = opts.client.post("/api/auth/email/change/confirm", {"code": otp})
         opts.client.logout()
@@ -1286,7 +1289,6 @@ def test_confirm_code_expired(opts):
         user.refresh_from_db()
         assert_eq(str(user.email), opts.original_email, "email must not change after expired code")
     finally:
-        tok_module.EMAIL_CHANGE_CODE_TTL = orig_ttl
         user.set_secret("pending_email", None)
         user.set_secret("email_change_otp", None)
         user.set_secret("email_change_otp_ts", None)
@@ -1338,7 +1340,12 @@ def test_confirm_code_single_use(opts):
         email=opts.original_email,
         username=opts.original_username,
     )
+    # Re-login: the first confirm rotated auth_key, invalidating the old JWT.
+    # Without a fresh JWT the second request fails with 401 (auth) instead of
+    # reaching the single-use code check.
+    opts.client.logout()
     clear_rate_limits(ip="127.0.0.1")
+    opts.client.login(TEST_USER, TEST_PWORD)
     resp2 = opts.client.post("/api/auth/email/change/confirm", {"code": otp})
     opts.client.logout()
     assert_true(resp2.status_code in (400, 422),

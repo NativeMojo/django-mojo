@@ -341,3 +341,260 @@ def test_token_prefixes(opts):
     assert ml_token.startswith("ml:"), f"Magic login token should start with 'ml:'"
     assert pr_token.startswith("pr:"), f"Password reset token should start with 'pr:'"
     assert not ml_token.startswith("pr:"), "Tokens should not share prefix"
+
+
+# -----------------------------------------------------------------
+# OAuth connection management
+# -----------------------------------------------------------------
+
+ADMIN_USER = "oauth_admin"
+ADMIN_PWORD = "oauthadmin##secret99"
+
+OTHER_USER = "oauth_other"
+OTHER_PWORD = "oauthother##secret99"
+OTHER_EMAIL = "oauth_other@example.com"
+
+
+@th.django_unit_setup()
+def setup_oauth_connection_env(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.models.oauth import OAuthConnection
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1")
+
+    # Ensure main test user exists and has a password
+    user = User.objects.filter(username=TEST_USER).last()
+    if user is None:
+        user = User(username=TEST_USER, email=TEST_EMAIL, display_name="OAuth User")
+        user.save()
+    user.is_active = True
+    user.is_email_verified = True
+    user.save_password(TEST_PWORD)
+    OAuthConnection.objects.filter(user=user).delete()
+    opts.user = user
+
+    # Admin user with manage_users
+    admin = User.objects.filter(username=ADMIN_USER).last()
+    if admin is None:
+        admin = User(username=ADMIN_USER, email=f"{ADMIN_USER}@example.com", display_name="OAuth Admin")
+        admin.save()
+    admin.is_active = True
+    admin.add_permission(["manage_users"])
+    admin.save_password(ADMIN_PWORD)
+    OAuthConnection.objects.filter(user=admin).delete()
+    opts.admin = admin
+
+    # Another regular user
+    other = User.objects.filter(username=OTHER_USER).last()
+    if other is None:
+        other = User(username=OTHER_USER, email=OTHER_EMAIL, display_name="Other User")
+        other.save()
+    other.is_active = True
+    other.save_password(OTHER_PWORD)
+    OAuthConnection.objects.filter(user=other).delete()
+    opts.other_user = other
+
+
+@th.django_unit_test("oauth: new user created via OAuth has unusable password")
+def test_new_oauth_user_unusable_password(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.models.oauth import OAuthConnection
+    from mojo.apps.account.rest.oauth import _find_or_create_user
+
+    new_email = "unusable_pw_test@example.com"
+    User.objects.filter(email=new_email).delete()
+
+    profile = {
+        "uid": "google_uid_unusable_pw",
+        "email": new_email,
+        "display_name": "Unusable PW User",
+    }
+    user, conn = _find_or_create_user(PROVIDER, profile)
+
+    assert user.email == new_email, "Should create user with OAuth email"
+    assert user.has_usable_password() is False, "New OAuth user should have unusable password"
+
+    # Cleanup
+    user.delete()
+
+
+@th.django_unit_test("oauth: owner can list their connections")
+def test_oauth_connection_list_owner(opts):
+    from mojo.apps.account.models.oauth import OAuthConnection
+
+    OAuthConnection.objects.filter(user=opts.user).delete()
+    conn = OAuthConnection.objects.create(
+        user=opts.user,
+        provider=PROVIDER,
+        provider_uid="google_uid_list_test",
+        email=TEST_EMAIL,
+    )
+
+    resp = opts.client.login(TEST_USER, TEST_PWORD)
+    assert opts.client.is_authenticated, "authentication failed"
+
+    resp = opts.client.get("/api/account/oauth_connection")
+    assert resp.status_code == 200, f"Unexpected status {resp.status_code}: {resp.response}"
+    assert resp.response.count >= 1, "Should have at least one connection"
+
+    conn_ids = [c.id for c in resp.response.data]
+    assert conn.id in conn_ids, "Owner's connection should be in list"
+
+
+@th.django_unit_test("oauth: owner does not see another user's connections")
+def test_oauth_connection_list_isolation(opts):
+    from mojo.apps.account.models.oauth import OAuthConnection
+
+    OAuthConnection.objects.filter(user=opts.other_user).delete()
+    other_conn = OAuthConnection.objects.create(
+        user=opts.other_user,
+        provider=PROVIDER,
+        provider_uid="google_uid_other_list",
+        email=OTHER_EMAIL,
+    )
+
+    resp = opts.client.login(TEST_USER, TEST_PWORD)
+    assert opts.client.is_authenticated, "authentication failed"
+
+    resp = opts.client.get("/api/account/oauth_connection")
+    assert resp.status_code == 200, f"Unexpected status {resp.status_code}"
+
+    conn_ids = [c.id for c in resp.response.data]
+    assert other_conn.id not in conn_ids, "Should not see other user's connection"
+
+
+@th.django_unit_test("oauth: owner can unlink when they have a usable password")
+def test_oauth_connection_delete_with_password(opts):
+    from mojo.apps.account.models.oauth import OAuthConnection
+
+    OAuthConnection.objects.filter(user=opts.user).delete()
+    conn = OAuthConnection.objects.create(
+        user=opts.user,
+        provider=PROVIDER,
+        provider_uid="google_uid_del_pw",
+        email=TEST_EMAIL,
+    )
+
+    resp = opts.client.login(TEST_USER, TEST_PWORD)
+    assert opts.client.is_authenticated, "authentication failed"
+
+    resp = opts.client.delete(f"/api/account/oauth_connection/{conn.id}")
+    assert resp.status_code == 200, f"Unexpected status {resp.status_code}: {resp.response}"
+    assert not OAuthConnection.objects.filter(pk=conn.id).exists(), "Connection should be deleted"
+
+
+@th.django_unit_test("oauth: owner can unlink one of two connections without password")
+def test_oauth_connection_delete_two_connections_no_password(opts):
+    from mojo.apps.account.models.oauth import OAuthConnection
+
+    OAuthConnection.objects.filter(user=opts.user).delete()
+    opts.user.set_unusable_password()
+    opts.user.save()
+
+    conn1 = OAuthConnection.objects.create(
+        user=opts.user,
+        provider="google",
+        provider_uid="google_uid_two_a",
+        email=TEST_EMAIL,
+    )
+    conn2 = OAuthConnection.objects.create(
+        user=opts.user,
+        provider="github",
+        provider_uid="github_uid_two_b",
+        email=TEST_EMAIL,
+    )
+
+    resp = opts.client.login(TEST_USER, TEST_PWORD)
+    assert opts.client.is_authenticated, "authentication failed"
+
+    resp = opts.client.delete(f"/api/account/oauth_connection/{conn1.id}")
+    assert resp.status_code == 200, f"Unexpected status {resp.status_code}: {resp.response}"
+    assert not OAuthConnection.objects.filter(pk=conn1.id).exists(), "Connection should be deleted"
+    assert OAuthConnection.objects.filter(pk=conn2.id).exists(), "Other connection should remain"
+
+    # Restore password for subsequent tests
+    opts.user.save_password(TEST_PWORD)
+
+
+@th.django_unit_test("oauth: unlink blocked when no password and only 1 active connection")
+def test_oauth_connection_delete_lockout_guard(opts):
+    from mojo.apps.account.models.oauth import OAuthConnection
+
+    OAuthConnection.objects.filter(user=opts.user).delete()
+    opts.user.set_unusable_password()
+    opts.user.save()
+
+    conn = OAuthConnection.objects.create(
+        user=opts.user,
+        provider=PROVIDER,
+        provider_uid="google_uid_lockout",
+        email=TEST_EMAIL,
+    )
+
+    resp = opts.client.login(TEST_USER, TEST_PWORD)
+    assert opts.client.is_authenticated, "authentication failed"
+
+    resp = opts.client.delete(f"/api/account/oauth_connection/{conn.id}")
+    assert resp.status_code == 400, f"Should block lockout, got {resp.status_code}: {resp.response}"
+    assert OAuthConnection.objects.filter(pk=conn.id).exists(), "Connection should NOT be deleted"
+
+    # Restore password for subsequent tests
+    opts.user.save_password(TEST_PWORD)
+
+
+@th.django_unit_test("oauth: manage_users admin can delete any connection")
+def test_oauth_connection_admin_delete(opts):
+    from mojo.apps.account.models.oauth import OAuthConnection
+
+    OAuthConnection.objects.filter(user=opts.other_user).delete()
+    conn = OAuthConnection.objects.create(
+        user=opts.other_user,
+        provider=PROVIDER,
+        provider_uid="google_uid_admin_del",
+        email=OTHER_EMAIL,
+    )
+
+    resp = opts.client.login(ADMIN_USER, ADMIN_PWORD)
+    assert opts.client.is_authenticated, "admin authentication failed"
+
+    resp = opts.client.delete(f"/api/account/oauth_connection/{conn.id}")
+    assert resp.status_code == 200, f"Admin delete failed: {resp.status_code}: {resp.response}"
+    assert not OAuthConnection.objects.filter(pk=conn.id).exists(), "Connection should be deleted by admin"
+
+
+@th.django_unit_test("oauth: 404 when trying to delete another user's connection")
+def test_oauth_connection_delete_other_user_404(opts):
+    from mojo.apps.account.models.oauth import OAuthConnection
+
+    OAuthConnection.objects.filter(user=opts.other_user).delete()
+    conn = OAuthConnection.objects.create(
+        user=opts.other_user,
+        provider=PROVIDER,
+        provider_uid="google_uid_other_del",
+        email=OTHER_EMAIL,
+    )
+
+    resp = opts.client.login(TEST_USER, TEST_PWORD)
+    assert opts.client.is_authenticated, "authentication failed"
+
+    resp = opts.client.delete(f"/api/account/oauth_connection/{conn.id}")
+    assert resp.status_code == 404, f"Should return 404, got {resp.status_code}"
+    assert OAuthConnection.objects.filter(pk=conn.id).exists(), "Connection should NOT be deleted"
+
+
+@th.django_unit_test("oauth: unauthenticated delete returns 403")
+def test_oauth_connection_delete_unauth(opts):
+    from mojo.apps.account.models.oauth import OAuthConnection
+
+    OAuthConnection.objects.filter(user=opts.user).delete()
+    conn = OAuthConnection.objects.create(
+        user=opts.user,
+        provider=PROVIDER,
+        provider_uid="google_uid_unauth_del",
+        email=TEST_EMAIL,
+    )
+
+    opts.client.logout()
+    resp = opts.client.delete(f"/api/account/oauth_connection/{conn.id}")
+    assert resp.status_code == 403, f"Should return 403, got {resp.status_code}"
+    assert OAuthConnection.objects.filter(pk=conn.id).exists(), "Connection should NOT be deleted"

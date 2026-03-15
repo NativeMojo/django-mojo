@@ -873,3 +873,246 @@ def generate_user_api_key(request):
     token = user.generate_api_token(allowed_ips=allowed_ips, expire_days=expire_days)
     user.log(f"API Key Generated {token.jti} expire {expire_days} days by {request.user.username}", "api_key:generated")
     return dict(status=True, data=token)
+
+
+# -----------------------------------------------------------------
+# Username change
+# -----------------------------------------------------------------
+
+@md.POST("auth/username/change")
+@md.requires_auth()
+@md.requires_params("username", "current_password")
+def on_username_change(request):
+    """Self-service username change. Requires current_password as proof of ownership."""
+    if not settings.get("ALLOW_USERNAME_CHANGE", True):
+        raise merrors.PermissionDeniedException("Username change is not allowed")
+
+    user = request.user
+    current_password = request.DATA.get("current_password", "")
+
+    if not user.has_usable_password():
+        raise merrors.ValueException(
+            "No password set on this account. Use password reset to set one first."
+        )
+
+    if not user.check_password(current_password):
+        user.report_incident(
+            f"{user.username} entered invalid password on username change",
+            "username:change_failed",
+        )
+        raise merrors.PermissionDeniedException("Incorrect password", 401, 401)
+
+    new_username = request.DATA.get("username", "").lower().strip()
+    if not new_username:
+        raise merrors.ValueException("Username is required")
+
+    if new_username == user.username:
+        raise merrors.ValueException("New username must be different from current username")
+
+    # Set on the user instance so validate_username() reads self.username
+    old_username = user.username
+    user.username = new_username
+    try:
+        user.validate_username()
+    except Exception:
+        user.username = old_username
+        raise
+
+    # Uniqueness check (exclude self)
+    if User.objects.filter(username=new_username).exclude(pk=user.pk).exists():
+        user.username = old_username
+        raise merrors.ValueException("Username already taken")
+
+    user.save(update_fields=["username", "modified"])
+    user.log(f"Username changed from {old_username} to {new_username}", "username:changed")
+
+    return JsonResponse({
+        "status": True,
+        "data": {"username": user.username},
+    })
+
+
+# -----------------------------------------------------------------
+# Session revoke (log out everywhere)
+# -----------------------------------------------------------------
+
+@md.POST("auth/sessions/revoke")
+@md.requires_auth()
+@md.requires_params("current_password")
+@md.rate_limit("sessions_revoke", ip_limit=5, ip_window=300)
+def on_sessions_revoke(request):
+    """
+    Rotate auth_key to invalidate all active sessions. Returns a fresh JWT
+    for the calling session so the user stays logged in.
+    """
+    import uuid
+
+    user = request.user
+    current_password = request.DATA.get("current_password", "")
+
+    if not user.check_password(current_password):
+        user.report_incident(
+            f"{user.username} entered invalid password on session revoke",
+            "sessions:revoke_failed",
+        )
+        raise merrors.PermissionDeniedException("Incorrect password", 401, 401)
+
+    # Rotate auth_key — immediately invalidates every other JWT
+    user.auth_key = uuid.uuid4().hex
+    user.save(update_fields=["auth_key", "modified"])
+
+    user.report_incident(f"{user.username} revoked all sessions", "sessions:revoked")
+
+    # Issue fresh JWT signed with the new key
+    return jwt_login(request, user)
+
+
+# -----------------------------------------------------------------
+# Account deactivation
+# -----------------------------------------------------------------
+
+@md.POST("account/deactivate")
+@md.requires_auth()
+@md.rate_limit("account_deactivate", ip_limit=5, ip_window=300)
+def on_account_deactivate(request):
+    """
+    Step 1: Send a confirmation email with a short-lived dv: token.
+    The account is NOT deactivated until the token is confirmed.
+    """
+    if not settings.get("ALLOW_SELF_DEACTIVATION", True):
+        raise merrors.PermissionDeniedException("Account deactivation is not allowed")
+
+    user = request.user
+    token = tokens.generate_deactivate_token(user)
+
+    try:
+        user.send_template_email("account_deactivate_confirm", {"token": token})
+    except Exception:
+        pass
+
+    user.report_incident(f"{user.username} requested account deactivation", "account:deactivate_requested")
+
+    return JsonResponse({
+        "status": True,
+        "message": "A confirmation email has been sent. Follow the link to complete deactivation.",
+    })
+
+
+@md.POST("account/deactivate/confirm")
+@md.requires_params("token")
+@md.public_endpoint()
+def on_account_deactivate_confirm(request):
+    """
+    Step 2: Validate the dv: token and call pii_anonymize().
+    Public endpoint — the token is the credential.
+    """
+    raw_token = request.DATA.get("token", "")
+    user = tokens.verify_deactivate_token(raw_token)
+
+    if not user.is_active:
+        return JsonResponse({"status": True, "message": "Your account has been deactivated."})
+
+    # Log BEFORE anonymisation so username is still readable
+    user.report_incident(f"{user.username} account deactivated", "account:deactivated", uid=user.pk)
+
+    user.pii_anonymize()
+
+    return JsonResponse({"status": True, "message": "Your account has been deactivated."})
+
+
+# -----------------------------------------------------------------
+# Security events log
+# -----------------------------------------------------------------
+
+_SECURITY_KIND_SUMMARIES = {
+    "login": "Successful login",
+    "login:unknown": "Login attempt with unknown account",
+    "invalid_password": "Failed login — incorrect password",
+    "password_reset": "Password reset requested",
+    "totp:confirm_failed": "TOTP setup — invalid confirmation code",
+    "totp:login_failed": "Failed login — incorrect TOTP code",
+    "totp:login_unknown": "TOTP login attempt with unknown account",
+    "totp:recovery_used": "TOTP recovery code used",
+    "email_change:requested": "Email change requested",
+    "email_change:requested_code": "Email change requested (code flow)",
+    "email_change:cancelled": "Email change cancelled",
+    "email_change:invalid": "Email change — invalid token",
+    "email_change:expired": "Email change — expired token",
+    "email_verify:confirmed": "Email address verified",
+    "email_verify:confirmed_code": "Email address verified via code",
+    "phone_change:requested": "Phone number change requested",
+    "phone_change:confirmed": "Phone number changed",
+    "phone_change:cancelled": "Phone number change cancelled",
+    "phone_verify:confirmed": "Phone number verified",
+    "username:changed": "Username changed",
+    "oauth": "Signed in with social account",
+    "passkey:login_failed": "Failed passkey login",
+    "account:deactivated": "Account deactivated",
+    "account:deactivate_requested": "Account deactivation requested",
+    "sessions:revoked": "All sessions revoked",
+    "sessions:revoke_failed": "Session revoke — incorrect password",
+}
+
+_SECURITY_CATEGORY_PREFIXES = [
+    "login",
+    "invalid_password",
+    "password_reset",
+    "totp:",
+    "email_change:",
+    "email_verify:",
+    "phone_change:",
+    "phone_verify:",
+    "username:",
+    "oauth",
+    "passkey:",
+    "account:deactivat",
+    "sessions:",
+    "api_key:",
+    "magic_login",
+]
+
+
+@md.GET("account/security-events")
+@md.requires_auth()
+def on_account_security_events(request):
+    """
+    Return auth-relevant audit events for the authenticated user.
+    Scoped unconditionally to request.user — no cross-user access.
+    """
+    from django.db.models import Q
+    from mojo.apps.incident.models.event import Event
+
+    size = min(int(request.DATA.get("size", 25) or 25), 100)
+
+    # Build category filter
+    q = Q()
+    for prefix in _SECURITY_CATEGORY_PREFIXES:
+        q |= Q(category__startswith=prefix)
+
+    qs = Event.objects.filter(q, uid=request.user.pk)
+
+    # Optional date range
+    dr_start = request.DATA.get("dr_start")
+    dr_end = request.DATA.get("dr_end")
+    if dr_start:
+        qs = qs.filter(created__gte=dr_start)
+    if dr_end:
+        qs = qs.filter(created__lte=dr_end)
+
+    qs = qs.order_by("-created")[:size]
+
+    results = []
+    for event in qs:
+        summary = _SECURITY_KIND_SUMMARIES.get(event.category, event.category)
+        results.append({
+            "created": event.created.isoformat() if event.created else None,
+            "kind": event.category,
+            "summary": summary,
+            "ip": event.source_ip,
+        })
+
+    return JsonResponse({
+        "status": True,
+        "count": len(results),
+        "results": results,
+    })

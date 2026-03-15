@@ -106,8 +106,23 @@ class Notification(models.Model, MojoModel):
             "data": data,
         }
 
+        from mojo.apps.account.services.notification_prefs import is_notification_allowed
+
         notifications = []
         for recipient in users:
+            # Check in-app preference before creating inbox notification
+            if not is_notification_allowed(recipient, kind, "in_app"):
+                # Still attempt push/ws if those channels are allowed
+                if push and is_notification_allowed(recipient, kind, "push"):
+                    try:
+                        recipient.push_notification(
+                            title=title, body=body, data=data,
+                            category=kind, action_url=action_url,
+                        )
+                    except Exception:
+                        pass
+                continue
+
             notif = cls(
                 user=recipient,
                 group=group,
@@ -128,7 +143,7 @@ class Notification(models.Model, MojoModel):
                 except Exception:
                     pass
 
-            if push:
+            if push and is_notification_allowed(recipient, kind, "push"):
                 try:
                     recipient.push_notification(
                         title=title, body=body, data=data,

@@ -13,102 +13,83 @@ Use this file as a lightweight running log between AI threads.
 
 ## Current Focus
 
-- No active task. OAuth email-verified fix + full OAuth docs shipped (v1.0.57).
+- **7-request self-management sprint** — implementation complete (v1.0.58). All code, tests, and docs written. Pending user validation in downstream Django project.
 
 ## Key Decisions
 
-- `REQUIRE_VERIFIED_EMAIL` / `REQUIRE_VERIFIED_PHONE` default to `False` — opt-in only. No breaking change for existing deployments.
-- Verification gate fires inside `jwt_login` via `source` param — single choke point for all login paths (password, SMS, phone-as-identifier, magic link).
-- `REQUIRE_VERIFIED_EMAIL` gate fires **only when `source == "email"`** — plain username logins (`source == "username"`) are never gated. Bug fix: `"username"` was incorrectly included in the gate condition.
-- `REQUIRE_VERIFIED_PHONE` gate is symmetric with the email gate: if the login identifier is a phone number (`ALLOW_PHONE_LOGIN=True`), the phone gate applies on password login too.
-- **OAuth is a trusted second factor** — `on_oauth_complete` calls `jwt_login()` with no `source=` and no `get_mfa_methods()` check. Users with `requires_mfa=True` are not challenged after OAuth. This is intentional and documented.
-- **OAuth confirms email** — `_find_or_create_user` sets `is_email_verified=True` on all three paths: existing connection (already set), email-match link (set if not already), new user (set at creation). Provider confirmation is treated as equivalent to link verification.
-- **Never use `override_settings` in testit tests.** Testit hits a real HTTP server in a separate process — `override_settings` only patches the calling process. Setting-dependent tests must read the live setting via `settings.get()` and raise `TestitSkip` when the required setting is not active.
-- FK assignments in `on_rest_save_related_field` must call `_set_field_change` before `setattr` so the field appears in `changed_fields` and guards like `MANAGE_USERS_ONLY_FIELDS` fire correctly.
+- `REQUIRE_VERIFIED_EMAIL` / `REQUIRE_VERIFIED_PHONE` default to `False` — opt-in only.
+- **OAuth is a trusted second factor** — bypasses MFA gate entirely.
+- **Never use `override_settings` in testit tests.** Use `settings.get()` + `TestitSkip` instead.
+- FK assignments in `on_rest_save_related_field` must call `_set_field_change` before `setattr`.
+- **Notification preferences default is allow** — only suppress on explicit opt-out. System/transactional emails never suppressed.
 
 ## In-Progress Work
 
-- None.
+- **Awaiting user test run** for all 7 sprint features. Commands:
+  - `python manage.py testit test_accounts.notification_prefs`
+  - `python manage.py testit test_accounts.totp_recovery`
+  - `python manage.py testit test_accounts.username_change`
+  - `python manage.py testit test_accounts.session_revoke`
+  - `python manage.py testit test_accounts.deactivation`
+  - `python manage.py testit test_accounts.security_events`
+  - `python manage.py testit test_accounts.oauth`
+  - Also re-run existing: `python manage.py testit test_accounts.totp`
 
-## Handoff Notes
+## Handoff Notes — v1.0.58 Sprint (7 requests)
 
-- OAuth email-verified fix + docs (v1.0.57):
-  - `_find_or_create_user` in `mojo/apps/account/rest/oauth.py` — path 2 (email match) now sets `is_email_verified=True` + saves if not already set; path 3 (new user) already did this.
-  - 3 new tests in `tests/test_accounts/oauth.py`: email-match marks verified, email-match already-verified (no clobber), MFA bypass is intentional.
-  - New `docs/django_developer/account/oauth.md` — settings, model, auto-link logic, email verification, MFA bypass rationale, adding providers, CSRF state, security notes.
-  - Updated `docs/web_developer/account/oauth.md` — added callout, Security Behaviour section (email + MFA), optional settings table, auto-link table updated.
-  - Updated `docs/django_developer/account/README.md` — OAuth added to index.
-  - Run in downstream project: `python manage.py testit test_accounts.oauth`
+All 7 requests implemented. Files changed per feature:
 
+### 1. Notification Preferences
+- `mojo/apps/account/services/notification_prefs.py` — new: `is_notification_allowed()`, `get_preferences()`, `set_preferences()`
+- `mojo/apps/account/rest/notification_prefs.py` — new: GET + POST endpoints
+- `mojo/apps/account/rest/__init__.py` — added import
+- `mojo/apps/account/models/notification.py` — wired `is_notification_allowed` in `Notification.send()`
+- `mojo/apps/account/models/user.py` — added `kind` param to `send_template_email()` and `push_notification()`
+- `tests/test_accounts/notification_prefs.py` — new test file
 
+### 2. TOTP Recovery Codes
+- `mojo/apps/account/models/totp.py` — added `generate_recovery_codes()`, `get_masked_recovery_codes()`, `verify_and_consume_recovery_code()`
+- `mojo/apps/account/rest/totp.py` — modified `on_totp_confirm`, added GET recovery-codes, POST regenerate, POST recover
+- `tests/test_accounts/totp_recovery.py` — new test file
+- `docs/web_developer/account/mfa_totp.md` — updated
+
+### 3. Username Change
+- `mojo/apps/account/rest/user.py` — added `on_username_change`
+- `tests/test_accounts/username_change.py` — new test file
+
+### 4. Session Revoke
+- `mojo/apps/account/rest/user.py` — added `on_sessions_revoke`
+- `tests/test_accounts/session_revoke.py` — new test file
+
+### 5. Account Deactivation
+- `mojo/apps/account/utils/tokens.py` — added `KIND_DEACTIVATE`, `generate_deactivate_token()`, `verify_deactivate_token()`
+- `mojo/apps/account/rest/user.py` — added `on_account_deactivate`, `on_account_deactivate_confirm`
+- `tests/test_accounts/deactivation.py` — new test file
+
+### 6. Security Events Log
+- `mojo/apps/account/rest/user.py` — added `on_account_security_events` with kind→summary mapping
+- `tests/test_accounts/security_events.py` — new test file
+
+### 7. Linked OAuth Accounts + set_unusable_password fix
+- `mojo/apps/account/rest/oauth.py` — added `set_unusable_password()` in path 3, added CRUD + custom DELETE with lockout guard
+- `tests/test_accounts/oauth.py` — extended with connection management tests
+- `docs/web_developer/account/oauth.md` — added Managing Connections section
+
+### Shared docs updated
+- `docs/web_developer/account/user_self_management.md` — 5 new sections (11-15), renumbered, quick reference table updated
+- `docs/web_developer/account/notifications.md` — added preferences section
+- `docs/web_developer/account/authentication.md` — added session revoke + security events cross-references
+- `docs/django_developer/account/user.md` — added new settings to table
+- `CHANGELOG.md` — v1.0.58 entry
 
 ## Open Questions
 
-- **Verification gate scope — needs more thought.** Current behaviour: `REQUIRE_VERIFIED_EMAIL` only gates logins where the identifier is an email address; username logins always pass through. There is probably a valid use case where a project wants to require verified email (or phone) before *any* login is allowed, regardless of identifier type (e.g. a sign-up flow where all new accounts must verify before using the app). This would need a separate setting — something like `REQUIRE_VERIFIED_EMAIL_ALL_LOGINS` — so the current default stays safe and non-breaking. Needs design before implementation.
-
-
-## Handoff Notes
-
-- phone change (v1.0.55): three new endpoints in `mojo/apps/account/rest/user.py`:
-  - `POST /api/auth/phone/change/request` — requires `current_password`; sends 6-digit OTP to new number; returns `session_token`.
-  - `POST /api/auth/phone/change/confirm` — requires `session_token` + `code`; commits change, sets `is_phone_verified=True`; no JWT rotation (phone not a JWT signing input).
-  - `POST /api/auth/phone/change/cancel` — idempotent; kills pending state and JTI immediately.
-  - `KIND_PHONE_CHANGE` (`pc:`) added to token infrastructure in `tokens.py`; TTL=10min; `generate_phone_change_token(user, new_phone)` → `(session_token, otp)`, `verify_phone_change_token(token, code)` → `(user, new_phone)`.
-  - Security fix: `on_rest_pre_save` now normalizes phone, checks uniqueness, and resets `is_phone_verified=False` on any phone number change.
-  - Security fix: `_handle_existing_user_pre_save` blocks direct REST replacement of an existing phone number for non-superusers — must use change flow.
-  - First-time set and clearing to `null` are still allowed via plain profile update.
-  - Docs: `docs/web_developer/account/phone_change.md` added and linked from account README and email_verification.md.
-  - `ALLOW_PHONE_CHANGE` setting (default `True`) gates the feature; `PHONE_CHANGE_TOKEN_TTL` (default `600`) controls OTP lifetime.
-
-- jobs sysinfo (v1.0.55): `jobs.get_sysinfo(runner_id=None, timeout=5.0)` added to `mojo/apps/jobs/__init__.py`.
-  - Broadcasts `mojo.apps.jobs.services.sysinfo_task.collect_sysinfo` via `broadcast_execute` (all runners) or `execute_on_runner` (single runner).
-  - Always returns a list of reply dicts: `{runner_id, func, status, timestamp, result}`.
-  - REST: `GET /api/jobs/runners/sysinfo` (all) and `GET /api/jobs/runners/sysinfo/<runner_id>` (one, 404 on timeout).
-  - Both endpoints accept optional `?timeout=` query param (default `5.0`).
-  - Tests: `tests/test_jobs/test_sysinfo.py` — permission guards always run; live-runner tests skip via `TestitSkip` when no runners active.
-  - Requires `psutil` installed in runner environment.
-  - Run in downstream project: `python manage.py testit test_jobs.test_sysinfo`
-
-- Email gate bug fix: `_check_verification_gate` in `mojo/apps/account/rest/user.py` — removed `"username"` from gate condition. Gate now only fires for `source == "email"`. Username logins always pass through regardless of `REQUIRE_VERIFIED_EMAIL`.
-- Gate tests updated in `tests/test_accounts/verification.py` — block/allow/wrong-password tests now submit the email address as the identifier (not the username) to correctly exercise the gate. Added new test: username login must not be blocked when gate is on.
-- Docs updated: `docs/web_developer/account/email_verification.md` and `docs/web_developer/account/authentication.md` — clarified gate only applies to email-identifier logins.
-- Phone login tests (`login_with_phone_e164`, `login_with_phone_unformatted`, `login_with_phone_wrong_password`) now raise `TestitSkip` when `ALLOW_PHONE_LOGIN=False` — they require the setting to be enabled on the server and were failing unconditionally without it.
-- CloudWatch (v1.0.51–v1.0.54): two endpoints — `GET /api/aws/cloudwatch/resources` and `GET /api/aws/cloudwatch/fetch`.
-- `fetch` mirrors the metrics app exactly: `account` = resource type, `category` = metric shortname, `slugs` = friendly names or AWS IDs (auto-discovered when omitted).
-- **Slugs are friendly names** (v1.0.54): EC2 uses the `Name` tag value (falls back to instance ID); RDS/ElastiCache identifiers are already human-readable. `slugs` input accepts either friendly names or raw IDs — resolved internally.
-- `resources` endpoint now includes a `slug` field on every entry — use this as input to `fetch`'s `slugs` parameter.
-- `CloudWatchHelper.list_resource_slugs(account)` returns `[{id, slug}]` for the given account type.
-- IAM policy needed: `cloudwatch:GetMetricStatistics`, `ec2:DescribeInstances`, `rds:DescribeDBInstances`, `elasticache:DescribeCacheClusters`.
-- Run in downstream project: `python manage.py testit test_aws.cloudwatch`
+- **Verification gate scope — needs more thought.** Current behaviour: `REQUIRE_VERIFIED_EMAIL` only gates email-identifier logins. A broader `REQUIRE_VERIFIED_EMAIL_ALL_LOGINS` may be needed for some deployments. Needs design before implementation.
 
 ## Archive
 
-- 2026-03-14: CloudWatch monitoring work completed (v1.0.51) + friendly-slug resolution (v1.0.54).
-  - `CloudWatchHelper` with `fetch()` mirrors metrics app API: `account`/`category`/`slugs` params, `periods`+`data` response.
-  - Two REST endpoints: `GET /api/aws/cloudwatch/resources` + `GET /api/aws/cloudwatch/fetch`.
-  - `slugs` omitted → all instances auto-discovered for the account type.
-  - Slugs in responses are friendly names (EC2 Name tag, or ID fallback; RDS/ElastiCache IDs are already human-readable).
-  - `slugs` input accepts friendly names or raw AWS IDs — both resolved to instance ID before CloudWatch call.
-  - `list_resource_slugs(account)` → `[{id, slug}]`; `resources` endpoint exposes `slug` field on each entry.
-  - Mapping tables (`CATEGORY_METRIC`, `ACCOUNT_NAMESPACE`, etc.) live in `cloudwatch.py` as plain dicts.
-  - Tests skip gracefully when `AWS_KEY` not configured; permission/param/invalid-category tests always run.
-  - Docs added for both developer tracks; both README indexes updated.
-
+- 2026-04-01: 7-request sprint specs completed and ready for implementation.
+- 2026-03-14: OAuth email-verified fix + docs (v1.0.57).
+- 2026-03-14: CloudWatch monitoring work completed (v1.0.51-v1.0.54).
 - 2026-03-14: Shortlink + metrics work completed.
-  - Global shortlink analytics (`shortlink:click`) always on; per-source metrics removed.
-  - User-scoped per-link analytics when `track_clicks=True` + `link.user` set.
-  - `metrics.record()` supports `expires_at` override and `disable_expiry`.
-  - Unified metrics REST permission checks; added `user-<id>` enforcement.
-  - Expanded bot UA detection for Apple Messages, major chat/mail preview clients.
-  - All shortlink + metrics tests and docs updated.
-
-- 2026-03-14: Email/phone verification + email change work completed (v1.0.48–v1.0.50).
-  - `REQUIRE_VERIFIED_EMAIL` / `REQUIRE_VERIFIED_PHONE` gates on all login paths.
-  - Token infrastructure: `ev:`, `iv:`, `ec:` kinds with JTI rotation and auth-key binding.
-  - Self-service email change: request / confirm / cancel endpoints.
-  - `SUPERUSER_ONLY_FIELDS`, `MANAGE_USERS_ONLY_FIELDS`, `NO_SAVE_FIELDS` on User model.
-  - Full test suites: `tests/test_accounts/verification.py` (80+ tests), `tests/test_accounts/email_change.py`.
-  - Docs for both web developer and Django developer audiences.
-  - Bug fixes: `on_rest_save_related_field` FK tracking, `SettingsHelper` live-read, `ALLOW_EMAIL_CHANGE` call-time read, testit auth pattern (`login()`/`logout()` not `user_id=`), `resp.json` not `resp.json()`.
-  - Phone gate confirmed symmetric with email gate on password+phone-identifier login path.
-  - Email template seeds shipped in `mojo/apps/aws/seeds/email_templates/`.
+- 2026-03-14: Email/phone verification + email change work completed (v1.0.48-v1.0.50).
