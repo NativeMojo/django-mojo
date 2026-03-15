@@ -10,7 +10,7 @@
       
       
       
-        <link rel="canonical" href="https://NativeMojo.github.io/django-mojo/web_developer/account/email_change/">
+        <link rel="canonical" href="https://NativeMojo.github.io/django-mojo/web_developer/account/phone_change/">
       
       
       
@@ -23,7 +23,7 @@
     
     
       
-        <title>Email Change — REST API Reference - Django-MOJO</title>
+        <title>Phone Number Change — REST API Reference - Django-MOJO</title>
       
     
     
@@ -74,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#email-change-rest-api-reference" class="md-skip">
+        <a href="#phone-number-change-rest-api-reference" class="md-skip">
           Skip to content
         </a>
       
@@ -108,7 +108,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Email Change — REST API Reference
+              Phone Number Change — REST API Reference
             
           </span>
         </div>
@@ -3595,56 +3595,6 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Step 2 — Confirm the Change">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#option-a-code-confirm-portal-in-context-authenticated" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Option A — Code confirm (portal / in-context, authenticated)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#option-b-link-confirm-via-api-page-simple-setups" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Option B — Link confirm via API page (simple setups)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#option-c-link-confirm-via-frontend-spa-mobile" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Option C — Link confirm via frontend (SPA / mobile)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#token-code-behaviour-summary" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Token / code behaviour summary
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
 </li>
       
         <li class="md-nav__item">
@@ -3652,17 +3602,6 @@
     <span class="md-ellipsis">
       
         Cancelling a Pending Change
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#realtime-events" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Realtime Events
       
     </span>
   </a>
@@ -3678,44 +3617,27 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Recommended UI Flow">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#portal-in-context-code-flow" class="md-nav__link">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#verification-state-after-change" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Portal / in-context (code flow)
+        Verification State After Change
       
     </span>
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#simple-setup-link-api-page" class="md-nav__link">
+      
+        <li class="md-nav__item">
+  <a href="#how-this-differs-from-email-change" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Simple setup (link → API page)
+        How This Differs from Email Change
       
     </span>
   </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#spa-mobile-setup-frontend-handles-link" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        SPA / mobile setup (frontend handles link)
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -3727,56 +3649,6 @@
       
     </span>
   </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#template-customisation" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Template Customisation
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Template Customisation">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#email_change_confirm-link-flow" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        email_change_confirm (link flow)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#email_change_code-code-flow" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        email_change_code (code flow)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#email_change_notify" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        email_change_notify
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -3811,35 +3683,32 @@
   
 
 
-<h1 id="email-change-rest-api-reference">Email Change — REST API Reference<a class="headerlink" href="#email-change-rest-api-reference" title="Permanent link">&para;</a></h1>
+<h1 id="phone-number-change-rest-api-reference">Phone Number Change — REST API Reference<a class="headerlink" href="#phone-number-change-rest-api-reference" title="Permanent link">&para;</a></h1>
 <h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
-<p>Self-service email change is a two-step flow: <strong>request → confirm.</strong></p>
+<p>Self-service phone number change is a two-step flow: <strong>request → confirm.</strong></p>
 <ol>
-<li>The authenticated user submits their desired new address and current password.</li>
-<li>Either a <strong>confirmation link</strong> or a <strong>6-digit OTP code</strong> is sent to the <strong>new</strong> address (your choice). The current email is not changed yet.</li>
-<li>The user confirms — by clicking the link or submitting the code — and the new address is committed.</li>
+<li>The authenticated user submits their desired new number and current password.</li>
+<li>A 6-digit OTP is sent via SMS to the <strong>new</strong> number. The current number is not changed yet.</li>
+<li>The user submits the OTP (along with the session token returned in step 1) to commit the change.</li>
 </ol>
-<p><code>current_password</code> is always required in the request body. A valid Bearer token alone is not sufficient — this prevents an attacker who has stolen a session token from silently redirecting account communications.</p>
-<p>The feature is controlled by the <code>ALLOW_EMAIL_CHANGE</code> setting (default <code>True</code>). When set to <code>False</code>, all requests to <code>POST /api/auth/email/change/request</code> return 403.</p>
+<p><code>current_password</code> is always required. A valid Bearer token alone is not sufficient — this prevents an attacker who has stolen a session token from silently redirecting SMS communications to an attacker-controlled number.</p>
+<p>The feature is controlled by the <code>ALLOW_PHONE_CHANGE</code> setting (default <code>True</code>). When set to <code>False</code>, all requests to <code>POST /api/auth/phone/change/request</code> return 403.</p>
+<blockquote>
+<p><strong>Note — first-time number vs. change:</strong>
+This flow is required only when <strong>replacing</strong> an existing phone number with a new one. If the account has no phone number yet, you may set one directly via <code>POST /api/user/me</code> with a <code>phone_number</code> field. Clearing a phone number (setting it to <code>null</code>) is similarly allowed via the profile endpoint. The change flow exists specifically to prove ownership of the incoming number before replacing a verified one.</p>
+</blockquote>
 <hr />
 <h2 id="step-1-request-the-change">Step 1 — Request the Change<a class="headerlink" href="#step-1-request-the-change" title="Permanent link">&para;</a></h2>
-<p><strong>POST</strong> <code>/api/auth/email/change/request</code></p>
+<p><strong>POST</strong> <code>/api/auth/phone/change/request</code></p>
 <p>Requires authentication (Bearer token). Rate limited.</p>
-<p><strong>Request (link flow — default):</strong></p>
+<p><strong>Request:</strong></p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="p">{</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">&quot;email&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;newemail@example.com&quot;</span><span class="p">,</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">&quot;phone_number&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;+14155550123&quot;</span><span class="p">,</span>
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span><span class="nt">&quot;current_password&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;mysecretpassword&quot;</span>
 <a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="p">}</span>
 </code></pre></div>
-<p><strong>Request (code flow — portal use):</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">&quot;email&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;newemail@example.com&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span><span class="nt">&quot;current_password&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;mysecretpassword&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="nt">&quot;method&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;code&quot;</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="p">}</span>
-</code></pre></div>
-<p>The <code>method</code> field is optional and defaults to <code>"link"</code>. Pass <code>"code"</code> to receive a 6-digit OTP at the new address instead of a confirmation link — this is the recommended approach when the user is already in an authenticated portal context and should not have to leave to click a link.</p>
-<p><strong>Error cases (both methods):</strong></p>
+<p>Phone numbers are accepted in any common format (E.164, national with country code, etc.) and are normalized server-side. Use E.164 (<code>+</code> followed by country code and number) for maximum reliability.</p>
+<p><strong>Error cases:</strong></p>
 <table>
 <thead>
 <tr>
@@ -3852,7 +3721,7 @@
 <tr>
 <td><code>current_password</code> missing</td>
 <td>400</td>
-<td><code>"error": "current_password is required to change your email"</code></td>
+<td><code>"error": "current_password is required to change your phone number"</code></td>
 </tr>
 <tr>
 <td><code>current_password</code> incorrect</td>
@@ -3860,283 +3729,178 @@
 <td><code>"error": "Incorrect password"</code></td>
 </tr>
 <tr>
-<td><code>email</code> has an invalid format</td>
+<td><code>phone_number</code> has an invalid format</td>
 <td>400</td>
-<td><code>"error": "Invalid email address"</code></td>
+<td><code>"error": "Invalid phone number format"</code></td>
 </tr>
 <tr>
-<td><code>email</code> is the same as the current address</td>
+<td><code>phone_number</code> is the same as the current number</td>
 <td>400</td>
-<td><code>"error": "New email must be different from current email"</code></td>
+<td><code>"error": "New phone number must be different from current phone number"</code></td>
 </tr>
 <tr>
-<td><code>email</code> is already in use by another account</td>
+<td><code>phone_number</code> is already registered to another account</td>
 <td>400</td>
-<td><code>"error": "Email already in use"</code></td>
+<td><code>"error": "Phone number already in use"</code></td>
 </tr>
 <tr>
-<td>Feature disabled via <code>ALLOW_EMAIL_CHANGE</code></td>
+<td>SMS delivery to the new number failed</td>
+<td>400</td>
+<td><code>"error": "Failed to send SMS to the new number — check the number and try again"</code></td>
+</tr>
+<tr>
+<td>Feature disabled via <code>ALLOW_PHONE_CHANGE</code></td>
 <td>403</td>
-<td><code>"error": "Email change is not allowed"</code></td>
+<td><code>"error": "Phone number change is not allowed"</code></td>
 </tr>
 </tbody>
 </table>
-<p>In both cases, a <strong>notification</strong> is sent to the <strong>old</strong> address informing the real owner so they can react if the request was not made by them. Nothing is committed yet.</p>
-<p><strong>Response (link flow):</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;A confirmation link has been sent to your new email address.&quot;</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="p">}</span>
+<p>On success, a 6-digit OTP is sent via SMS to the <strong>new</strong> number. The current number and <code>is_phone_verified</code> flag are untouched until Step 2 is completed.</p>
+<p><strong>Response:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span><span class="nt">&quot;session_token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;pc:3a1b2c4d...&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;A verification code has been sent to your new phone number.&quot;</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="p">}</span>
 </code></pre></div>
-<p><strong>Response (code flow):</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;A verification code has been sent to your new email address.&quot;</span>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="p">}</span>
-</code></pre></div>
-<blockquote>
-<p><strong>Note — only one pending change at a time.</strong> Calling <code>/request</code> again (regardless of method) automatically invalidates any previously issued link or code before issuing a new one.</p>
-</blockquote>
+<p>Store the <code>session_token</code> — it must be submitted alongside the OTP in the confirm step. It is an opaque signed token that identifies this change session; it does not contain the phone number.</p>
 <hr />
 <h2 id="step-2-confirm-the-change">Step 2 — Confirm the Change<a class="headerlink" href="#step-2-confirm-the-change" title="Permanent link">&para;</a></h2>
-<h3 id="option-a-code-confirm-portal-in-context-authenticated">Option A — Code confirm (portal / in-context, authenticated)<a class="headerlink" href="#option-a-code-confirm-portal-in-context-authenticated" title="Permanent link">&para;</a></h3>
-<p>Use this when the request was made with <code>method: "code"</code>. The user stays in the portal and types the code they received.</p>
-<p><strong>POST</strong> <code>/api/auth/email/change/confirm</code></p>
-<p>Requires authentication (Bearer token). Rate limited.</p>
+<p><strong>POST</strong> <code>/api/auth/phone/change/confirm</code></p>
+<p>Requires authentication (Bearer token). The user must be logged in with the same session that initiated the request. Rate limited.</p>
 <p><strong>Request:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;847291&quot;</span><span class="w"> </span><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">&quot;session_token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;pc:3a1b2c4d...&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;847291&quot;</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="p">}</span>
 </code></pre></div>
 <p>On success:</p>
 <ul>
-<li>The new email address is committed to the account.</li>
-<li><code>is_email_verified</code> is set to <code>true</code>.</li>
-<li><strong>All other active sessions are invalidated</strong> — the account's <code>auth_key</code> is rotated.</li>
-<li>A fresh JWT is issued for the current session.</li>
-<li>If the account uses email as its username, <code>username</code> is updated automatically.</li>
+<li>The new phone number is committed to the account.</li>
+<li><code>is_phone_verified</code> is set to <code>true</code>.</li>
+<li>The user's existing session remains valid — no JWT rotation occurs (unlike email change, which rotates the <code>auth_key</code> because email can be a login identifier).</li>
 </ul>
-<p><strong>Response</strong> (identical to a normal login):</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">    </span><span class="nt">&quot;access_token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;eyJhbGci...&quot;</span><span class="p">,</span>
-<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">    </span><span class="nt">&quot;refresh_token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;eyJhbGci...&quot;</span><span class="p">,</span>
-<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">    </span><span class="nt">&quot;expires_in&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">21600</span><span class="p">,</span>
-<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">    </span><span class="nt">&quot;user&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">      </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">42</span><span class="p">,</span>
-<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">      </span><span class="nt">&quot;username&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;newemail@example.com&quot;</span><span class="p">,</span>
-<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">      </span><span class="nt">&quot;display_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Alice&quot;</span>
-<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="w">    </span><span class="p">}</span>
-<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a><span class="w">  </span><span class="p">}</span>
-<a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a><span class="p">}</span>
+<p><strong>Response:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Phone number updated successfully.&quot;</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="p">}</span>
 </code></pre></div>
-<p>Replace all stored tokens with the new JWT immediately. Previously stored tokens are no longer valid.</p>
+<p>The <code>session_token</code> and OTP are <strong>single-use</strong> and expire after 10 minutes by default (configurable via <code>PHONE_CHANGE_TOKEN_TTL</code>).</p>
 <p><strong>Error responses:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Response</th>
-<th>Meaning</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>"error": "Invalid code"</code></td>
-<td>Code does not match</td>
-</tr>
-<tr>
-<td><code>"error": "Expired code"</code></td>
-<td>Code is older than 10 minutes</td>
-</tr>
-<tr>
-<td><code>"error": "No pending email change"</code></td>
-<td>No code-flow change was initiated</td>
-</tr>
-<tr>
-<td><code>"error": "Email address is no longer available"</code></td>
-<td>Another account claimed the address in the window</td>
-</tr>
-<tr>
-<td>401</td>
-<td>No valid Bearer token — authentication is required for the code path</td>
-</tr>
-</tbody>
-</table>
-<p>Codes expire after <code>EMAIL_CHANGE_CODE_TTL</code> seconds (default 10 minutes) and are <strong>single-use</strong>.</p>
-<hr />
-<h3 id="option-b-link-confirm-via-api-page-simple-setups">Option B — Link confirm via API page (simple setups)<a class="headerlink" href="#option-b-link-confirm-via-api-page-simple-setups" title="Permanent link">&para;</a></h3>
-<p>Use this when the request was made with the default <code>method: "link"</code>. The confirmation email contains a link pointing to the API. The server renders a result page — no frontend JavaScript required.</p>
-<p><strong>GET</strong> <code>/api/auth/email/change/confirm?token=ec:...</code></p>
-<p>Public endpoint. No authentication header required. Rate limited.</p>
-<p>On success the server renders <code>account/email_change_confirm.html</code> — a minimal, self-contained page. Downstream projects can override this template (see <a href="#template-customisation">Template Customisation</a>).</p>
-<p><strong>Optional redirect parameter:</strong></p>
-<p>Append <code>&amp;redirect=https://yourapp.com/login</code> to the link in the confirmation email. On success the page shows a <strong>Continue</strong> button pointing to the redirect URL and automatically navigates there after 3 seconds. On error the redirect URL is shown as a <strong>Go back</strong> button only — no automatic redirect.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>GET /api/auth/email/change/confirm?token=ec:4e6f...&amp;redirect=https://app.example.com/login
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">400</span><span class="p">,</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Invalid code&quot;</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="p">}</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">400</span><span class="p">,</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Expired code&quot;</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="p">}</span>
+</code></pre></div>
+<p>If another account registered the target number in the window between request and confirm:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">400</span><span class="p">,</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Phone number is no longer available&quot;</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="p">}</span>
 </code></pre></div>
 <hr />
-<h3 id="option-c-link-confirm-via-frontend-spa-mobile">Option C — Link confirm via frontend (SPA / mobile)<a class="headerlink" href="#option-c-link-confirm-via-frontend-spa-mobile" title="Permanent link">&para;</a></h3>
-<p>Use this when the request was made with the default <code>method: "link"</code> and your frontend handles the token directly.</p>
-<p><strong>POST</strong> <code>/api/auth/email/change/confirm</code></p>
-<p>Public endpoint. No authentication header required. Rate limited.</p>
-<p><strong>Request:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ec:4e6f74546f6b656e...&quot;</span><span class="w"> </span><span class="p">}</span>
+<h2 id="cancelling-a-pending-change">Cancelling a Pending Change<a class="headerlink" href="#cancelling-a-pending-change" title="Permanent link">&para;</a></h2>
+<p><strong>POST</strong> <code>/api/auth/phone/change/cancel</code></p>
+<p>Requires authentication (Bearer token).</p>
+<p>Immediately invalidates the outstanding session token and OTP — even before the 10-minute TTL expires. The account is unchanged.</p>
+<p><strong>Response:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Pending phone number change has been cancelled.&quot;</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="p">}</span>
 </code></pre></div>
-<p>On success: same behavior as the code path — new email committed, <code>auth_key</code> rotated, fresh JWT returned.</p>
+<p>This endpoint is <strong>idempotent</strong>: if there is no pending change, it still returns 200 with the same response body.</p>
 <hr />
-<h3 id="token-code-behaviour-summary">Token / code behaviour summary<a class="headerlink" href="#token-code-behaviour-summary" title="Permanent link">&para;</a></h3>
+<h2 id="recommended-ui-flow">Recommended UI Flow<a class="headerlink" href="#recommended-ui-flow" title="Permanent link">&para;</a></h2>
+<ol>
+<li>Show the user a form with fields for <code>phone_number</code> (new number) and <code>current_password</code>.</li>
+<li>Call <code>POST /api/auth/phone/change/request</code>. On success, store the <code>session_token</code> and display a prompt: <em>"A 6-digit code has been sent to +14155550123. Enter it below to confirm."</em></li>
+<li>Optionally show a <strong>Cancel</strong> button that calls <code>POST /api/auth/phone/change/cancel</code>.</li>
+<li>When the user submits the code, call <code>POST /api/auth/phone/change/confirm</code> with the <code>session_token</code> and <code>code</code>.</li>
+<li>On success, the user's phone number is updated. No re-login is required. Update any locally cached profile data.</li>
+</ol>
+<p>If the user does not receive the SMS or enters the wrong code, allow them to restart from Step 1. Calling <code>/request</code> again generates a fresh session token and OTP, automatically invalidating the previous one.</p>
+<hr />
+<h2 id="verification-state-after-change">Verification State After Change<a class="headerlink" href="#verification-state-after-change" title="Permanent link">&para;</a></h2>
+<p>After a successful confirm, <code>is_phone_verified</code> is <code>true</code> for the new number. You can confirm this via the profile endpoint:</p>
+<p><strong>GET</strong> <code>/api/user/me</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p">{</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">    </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">42</span><span class="p">,</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">    </span><span class="nt">&quot;phone_number&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;+14155550123&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="w">    </span><span class="nt">&quot;is_phone_verified&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="p">}</span>
+</code></pre></div>
+<hr />
+<h2 id="how-this-differs-from-email-change">How This Differs from Email Change<a class="headerlink" href="#how-this-differs-from-email-change" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
 <tr>
 <th></th>
-<th>Code (method: code)</th>
-<th>Link (method: link)</th>
+<th>Email change</th>
+<th>Phone number change</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td>Confirm endpoint</td>
-<td><code>POST /confirm</code> with <code>{ "code": "..." }</code></td>
-<td><code>GET /confirm?token=ec:...</code> or <code>POST /confirm</code> with <code>{ "token": "ec:..." }</code></td>
+<td>Confirmation method</td>
+<td>Link <strong>or</strong> 6-digit OTP sent to new address (your choice via <code>method</code> param)</td>
+<td>6-digit OTP sent to new number</td>
+</tr>
+<tr>
+<td>Session token</td>
+<td>Link: embedded in URL as <code>ec:</code> token. Code: no session token — user is authenticated</td>
+<td>Returned in the <code>/request</code> response as <code>session_token</code></td>
+</tr>
+<tr>
+<td>Token / code TTL</td>
+<td>Link: 1 hour (configurable). Code: 10 minutes (configurable)</td>
+<td>10 minutes (configurable)</td>
 </tr>
 <tr>
 <td>Auth required on confirm</td>
-<td>Yes — Bearer token</td>
-<td>No — token/link is the credential</td>
+<td>Link path: no — token is the credential. Code path: yes — Bearer token required</td>
+<td>Yes — Bearer token required</td>
 </tr>
 <tr>
-<td>TTL</td>
-<td>10 minutes (configurable)</td>
-<td>1 hour (configurable)</td>
+<td>Sessions invalidated on confirm</td>
+<td>Yes — <code>auth_key</code> is rotated (both paths)</td>
+<td>No — phone is not a JWT signing input</td>
 </tr>
 <tr>
-<td>Single-use</td>
-<td>Yes</td>
-<td>Yes</td>
+<td>New JWT issued on confirm</td>
+<td>Yes (both paths)</td>
+<td>No — existing session continues</td>
+</tr>
+<tr>
+<td>Setting the field for the first time</td>
+<td>Must use change flow</td>
+<td>Direct profile update allowed</td>
 </tr>
 </tbody>
 </table>
-<p>If another account claimed the new email address in the window between the request and the confirm step, the confirmation is rejected on all paths.</p>
-<p><strong>Error responses for invalid or expired tokens (link paths):</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p">{</span>
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
-<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">400</span><span class="p">,</span>
-<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">  </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Invalid or expired token&quot;</span>
-<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="p">}</span>
-</code></pre></div>
-<hr />
-<h2 id="cancelling-a-pending-change">Cancelling a Pending Change<a class="headerlink" href="#cancelling-a-pending-change" title="Permanent link">&para;</a></h2>
-<p><strong>POST</strong> <code>/api/auth/email/change/cancel</code></p>
-<p>Requires authentication (Bearer token).</p>
-<p>Immediately invalidates any outstanding confirmation link <strong>or</strong> OTP code — even before their TTL expires. The account is unchanged.</p>
-<p><strong>Response:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="p">{</span>
-<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">  </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Pending email change has been cancelled.&quot;</span>
-<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="p">}</span>
-</code></pre></div>
-<p>This endpoint is <strong>idempotent</strong>: if there is no pending change, it still returns 200 with the same response body.</p>
-<hr />
-<h2 id="realtime-events">Realtime Events<a class="headerlink" href="#realtime-events" title="Permanent link">&para;</a></h2>
-<p>After a successful email change (on any confirm path), the server emits a WebSocket event to all of the user's active connections:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="p">{</span>
-<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">  </span><span class="nt">&quot;event&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;account:email:changed&quot;</span><span class="p">,</span>
-<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;email&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;newemail@example.com&quot;</span><span class="w"> </span><span class="p">}</span>
-<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="p">}</span>
-</code></pre></div>
-<p>Because <code>auth_key</code> is rotated on confirm, any open sessions will find their JWTs immediately invalid. This event gives them a clean signal to re-prompt login rather than silently failing on the next API call. Listen for it and redirect to your login screen with a message like <em>"Your email address was changed. Please sign in again."</em></p>
-<hr />
-<h2 id="recommended-ui-flow">Recommended UI Flow<a class="headerlink" href="#recommended-ui-flow" title="Permanent link">&para;</a></h2>
-<h3 id="portal-in-context-code-flow">Portal / in-context (code flow)<a class="headerlink" href="#portal-in-context-code-flow" title="Permanent link">&para;</a></h3>
-<ol>
-<li>Show the user a form with fields for <code>email</code> (new address) and <code>current_password</code>.</li>
-<li>Call <code>POST /api/auth/email/change/request</code> with <code>method: "code"</code>. On success, display an OTP entry prompt: <em>"A 6-digit code has been sent to newemail@example.com. Enter it below to confirm."</em></li>
-<li>Optionally show a <strong>Cancel</strong> button that calls <code>POST /api/auth/email/change/cancel</code>.</li>
-<li>When the user submits the code, call <code>POST /api/auth/email/change/confirm</code> with <code>{ "code": "..." }</code> and a valid Bearer token.</li>
-<li>Replace all stored tokens with the new JWT and continue the session.</li>
-</ol>
-<h3 id="simple-setup-link-api-page">Simple setup (link → API page)<a class="headerlink" href="#simple-setup-link-api-page" title="Permanent link">&para;</a></h3>
-<ol>
-<li>Show the user a form with fields for <code>email</code> and <code>current_password</code>.</li>
-<li>Call <code>POST /api/auth/email/change/request</code> (no <code>method</code> param). On success, display: <em>"A confirmation link has been sent to newemail@example.com. Check your inbox and click the link to confirm."</em></li>
-<li>Optionally show a <strong>Cancel pending change</strong> button that calls <code>POST /api/auth/email/change/cancel</code>.</li>
-<li>The link in the email points directly to <code>GET /api/auth/email/change/confirm?token=ec:...&amp;redirect=https://yourapp.com/login</code>. The server renders the result page; no frontend route needed.</li>
-</ol>
-<h3 id="spa-mobile-setup-frontend-handles-link">SPA / mobile setup (frontend handles link)<a class="headerlink" href="#spa-mobile-setup-frontend-handles-link" title="Permanent link">&para;</a></h3>
-<p>1–3. Same as the simple setup.
-4. The link in the email points to a frontend route like <code>/email-change?token=ec:...</code>. Your frontend extracts the token and calls <code>POST /api/auth/email/change/confirm</code> with <code>{ "token": "ec:..." }</code>.
-5. Replace all stored tokens with the new JWT and continue the session.</p>
 <hr />
 <h2 id="security-notes">Security Notes<a class="headerlink" href="#security-notes" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong><code>current_password</code> is always required.</strong> A stolen JWT alone is not enough to redirect account communications to an attacker-controlled address.</li>
-<li><strong>The old address always receives a notification.</strong> If the real owner did not request the change, they should call <code>POST /api/auth/email/change/cancel</code> immediately and change their password.</li>
-<li><strong>All existing sessions are invalidated on confirm.</strong> <code>auth_key</code> is rotated regardless of whether the link or code path was used.</li>
-<li><strong>Cancellation covers both paths.</strong> <code>POST /api/auth/email/change/cancel</code> clears the <code>pending_email</code>, the outstanding <code>ec:</code> JTI, and any OTP code simultaneously — no matter which method was used to initiate the change.</li>
-<li><strong>Only one pending change at a time.</strong> Issuing a new request (link or code) immediately invalidates the previous one before generating the new credentials.</li>
-<li><strong>The code path requires authentication.</strong> The Bearer token is the session guard; the OTP proves ownership of the new address. Both must be correct.</li>
-<li><strong>Email availability is re-checked at confirm time.</strong> Another account may have registered the target address in the window between request and confirm. All confirm paths reject the request if this has occurred.</li>
-<li><strong>Username is kept in sync.</strong> If the account uses email as its username, the <code>username</code> field is updated automatically on confirm so login with the new address works immediately.</li>
+<li><strong><code>current_password</code> is always required.</strong> A stolen JWT alone is not enough to redirect SMS messages to an attacker-controlled number.</li>
+<li><strong>The OTP is sent only to the new number.</strong> The old number receives no notification. If you want to alert users of changes to their account, send a notification to the old number or email address in your application layer.</li>
+<li><strong>The session token proves identity; the OTP proves number ownership.</strong> Both must be correct for the change to commit.</li>
+<li><strong>The <code>session_token</code> (pc:) is single-use and bound to the user's <code>auth_key</code>.</strong> It cannot be replayed, transferred to another user, or used after it has been consumed or cancelled.</li>
+<li><strong>Availability is re-checked at confirm time.</strong> Another account may have registered the target number in the 10-minute window. The confirm step will reject the request if this has occurred.</li>
+<li><strong>Direct replacement of an existing phone number via <code>POST /api/user/me</code> is blocked.</strong> The REST layer enforces use of this change flow whenever an existing verified number is being replaced, ensuring the new number is always OTP-verified before it is committed. Clearing a phone number (setting it to <code>null</code>) and setting one for the first time are not restricted.</li>
+<li><strong><code>is_phone_verified</code> is always reset</strong> if the phone number is changed by any path. It is only set back to <code>true</code> after the OTP confirm step succeeds.</li>
 </ul>
-<hr />
-<h2 id="template-customisation">Template Customisation<a class="headerlink" href="#template-customisation" title="Permanent link">&para;</a></h2>
-<p>The <code>GET /api/auth/email/change/confirm</code> endpoint renders <code>account/email_change_confirm.html</code>. The default template is a minimal, self-contained page with no external dependencies. To customise it, create your own version at a path that takes priority in Django's <code>TEMPLATES</code> settings:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>yourproject/templates/account/email_change_confirm.html
-</code></pre></div>
-<p>Template context variables:</p>
-<table>
-<thead>
-<tr>
-<th>Variable</th>
-<th>Type</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>success</code></td>
-<td>bool</td>
-<td><code>True</code> if the change was committed successfully</td>
-</tr>
-<tr>
-<td><code>new_email</code></td>
-<td>string</td>
-<td>The newly committed email address (on success)</td>
-</tr>
-<tr>
-<td><code>error_title</code></td>
-<td>string</td>
-<td>Short error heading (on failure)</td>
-</tr>
-<tr>
-<td><code>error_message</code></td>
-<td>string</td>
-<td>Descriptive error text (on failure)</td>
-</tr>
-<tr>
-<td><code>redirect_url</code></td>
-<td>string</td>
-<td>Value of the <code>?redirect=</code> param (may be empty)</td>
-</tr>
-<tr>
-<td><code>redirect_delay</code></td>
-<td>int</td>
-<td>Seconds before automatic redirect (3 on success, 0 on error)</td>
-</tr>
-</tbody>
-</table>
-<p>Two email templates must also be defined in your project's email template system:</p>
-<h3 id="email_change_confirm-link-flow"><code>email_change_confirm</code> (link flow)<a class="headerlink" href="#email_change_confirm-link-flow" title="Permanent link">&para;</a></h3>
-<p>Sent to the <strong>new</strong> address when <code>method: "link"</code>. Must contain a confirmation link embedding the <code>ec:</code> token:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>https://yourapp.com/email-change?token={{ token }}
-</code></pre></div>
-<p>Context: <code>token</code>, <code>new_email</code>, <code>user</code>.</p>
-<h3 id="email_change_code-code-flow"><code>email_change_code</code> (code flow)<a class="headerlink" href="#email_change_code-code-flow" title="Permanent link">&para;</a></h3>
-<p>Sent to the <strong>new</strong> address when <code>method: "code"</code>. Must display the 6-digit code prominently:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>Your email change code is: {{ code }}
-<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>This code expires in 10 minutes.
-</code></pre></div>
-<p>Context: <code>code</code>, <code>new_email</code>, <code>user</code>.</p>
-<h3 id="email_change_notify"><code>email_change_notify</code><a class="headerlink" href="#email_change_notify" title="Permanent link">&para;</a></h3>
-<p>Sent to the <strong>old</strong> address for both flows. Context: <code>new_email</code>. Should tell the owner what happened and direct them to cancel via <code>POST /api/auth/email/change/cancel</code> if they did not request this change.</p>
 <hr />
 <h2 id="settings-reference">Settings Reference<a class="headerlink" href="#settings-reference" title="Permanent link">&para;</a></h2>
 <table>
@@ -4149,19 +3913,14 @@
 </thead>
 <tbody>
 <tr>
-<td><code>ALLOW_EMAIL_CHANGE</code></td>
+<td><code>ALLOW_PHONE_CHANGE</code></td>
 <td><code>True</code></td>
-<td>Set to <code>False</code> to disable self-service email change entirely. The request endpoint returns 403 when disabled.</td>
+<td>Set to <code>False</code> to disable self-service phone number change entirely. The request endpoint returns 403 when disabled.</td>
 </tr>
 <tr>
-<td><code>EMAIL_CHANGE_TOKEN_TTL</code></td>
-<td><code>3600</code> (1 h)</td>
-<td>Expiry time for link-flow email change tokens, in seconds</td>
-</tr>
-<tr>
-<td><code>EMAIL_CHANGE_CODE_TTL</code></td>
+<td><code>PHONE_CHANGE_TOKEN_TTL</code></td>
 <td><code>600</code> (10 min)</td>
-<td>Expiry time for code-flow OTP codes, in seconds</td>
+<td>Expiry time for phone change session tokens and OTP codes, in seconds</td>
 </tr>
 </tbody>
 </table>

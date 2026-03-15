@@ -3576,24 +3576,63 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#sending-a-verification-email" class="md-nav__link">
+  <a href="#email-verification" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Sending a Verification Email
+        Email Verification
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Email Verification">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#send-a-verification-email" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Send a Verification Email
       
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#verifying-an-email-clicking-the-link" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#confirm-code-flow" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Verifying an Email (Clicking the Link)
+        Confirm — Code Flow
       
     </span>
   </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#confirm-link-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Confirm — Link Flow
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recommended-ui-flow-email-verification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recommended UI Flow — Email Verification
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -3670,10 +3709,49 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#recommended-ui-flow" class="md-nav__link">
+  <a href="#realtime-events" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Recommended UI Flow
+        Realtime Events
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Realtime Events">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#email-verified" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Email verified
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phone-verified" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phone verified
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#template-customisation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Template Customisation
       
     </span>
   </a>
@@ -3747,54 +3825,122 @@
 <a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="p">}</span>
 </code></pre></div>
 <hr />
-<h2 id="sending-a-verification-email">Sending a Verification Email<a class="headerlink" href="#sending-a-verification-email" title="Permanent link">&para;</a></h2>
-<p><strong>POST</strong> <code>/api/auth/email/verify/send</code></p>
-<p>Public endpoint — no authentication required. Accepts either <code>username</code> or <code>email</code>. Always returns 200 regardless of whether the account exists (prevents account enumeration).</p>
-<p><strong>Request:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;email&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;alice@example.com&quot;</span><span class="w"> </span><span class="p">}</span>
+<h2 id="email-verification">Email Verification<a class="headerlink" href="#email-verification" title="Permanent link">&para;</a></h2>
+<p>Email verification supports two flows depending on your integration context:</p>
+<ul>
+<li><strong>Link flow</strong> (default) — sends a verification link to the user's inbox. Suitable for post-registration flows or unauthenticated resend scenarios.</li>
+<li><strong>Code flow</strong> — sends a 6-digit OTP to the user's inbox. Suitable for in-portal verification where you don't want the user to leave the page to click a link.</li>
+</ul>
+<p>Both flows use the same send endpoint with an optional <code>method</code> parameter.</p>
+<hr />
+<h3 id="send-a-verification-email">Send a Verification Email<a class="headerlink" href="#send-a-verification-email" title="Permanent link">&para;</a></h3>
+<p><strong>POST</strong> <code>/api/auth/verify/email/send</code></p>
+<p>Requires authentication (Bearer token). Sends a verification message to the logged-in user's email address.</p>
+<p><strong>Request (link flow — default):</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;method&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;link&quot;</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
-<p><strong>Response:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;If the account exists, a verification email was sent.&quot;</span>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="p">}</span>
+<p>The <code>method</code> field is optional. Omitting it is equivalent to <code>"link"</code>.</p>
+<p><strong>Request (code flow):</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;method&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;code&quot;</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
-<p>If the email address is already verified, no email is sent and the response indicates that immediately:</p>
+<p><strong>Response (link flow):</strong></p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span>
 <a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Email is already verified.&quot;</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Verification email sent&quot;</span>
 <a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="p">}</span>
 </code></pre></div>
-<hr />
-<h2 id="verifying-an-email-clicking-the-link">Verifying an Email (Clicking the Link)<a class="headerlink" href="#verifying-an-email-clicking-the-link" title="Permanent link">&para;</a></h2>
-<p>The verification email contains a link with a <code>token</code> query parameter. Your frontend should extract that token and exchange it with the API.</p>
-<p><strong>POST</strong> <code>/api/auth/email/verify</code></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ev:4e6f74546f6b656e...&quot;</span><span class="w"> </span><span class="p">}</span>
+<p><strong>Response (code flow):</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Verification code sent&quot;</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="p">}</span>
 </code></pre></div>
-<p>On success, the server marks <code>is_email_verified = true</code> on the account and <strong>logs the user in</strong>, returning a full JWT — no separate login step is needed.</p>
-<p><strong>Response:</strong></p>
+<p>If the email address is already verified, no message is sent regardless of <code>method</code>:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span>
 <a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">    </span><span class="nt">&quot;access_token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;eyJhbGci...&quot;</span><span class="p">,</span>
-<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">    </span><span class="nt">&quot;refresh_token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;eyJhbGci...&quot;</span><span class="p">,</span>
-<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">    </span><span class="nt">&quot;expires_in&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">21600</span><span class="p">,</span>
-<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">    </span><span class="nt">&quot;user&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">      </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">42</span><span class="p">,</span>
-<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="w">      </span><span class="nt">&quot;username&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;alice@example.com&quot;</span><span class="p">,</span>
-<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="w">      </span><span class="nt">&quot;display_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Alice&quot;</span>
-<a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="w">    </span><span class="p">}</span>
-<a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a><span class="w">  </span><span class="p">}</span>
-<a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a><span class="p">}</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Email is already verified&quot;</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="p">}</span>
 </code></pre></div>
-<p>Store both tokens and proceed as a normal authenticated session.</p>
+<blockquote>
+<p><strong>Note:</strong> There is also a public (unauthenticated) endpoint at <code>POST /api/auth/email/verify/send</code> that accepts a <code>username</code> or <code>email</code> field and always returns 200 regardless of account existence (prevents enumeration). That endpoint is intended for post-registration nudges and does not support the <code>method</code> parameter — it always sends a link.</p>
+</blockquote>
+<hr />
+<h3 id="confirm-code-flow">Confirm — Code Flow<a class="headerlink" href="#confirm-code-flow" title="Permanent link">&para;</a></h3>
+<p><strong>POST</strong> <code>/api/auth/verify/email/confirm</code></p>
+<p>Requires authentication (Bearer token). Submits the 6-digit code received via email. On success, sets <code>is_email_verified = true</code> on the account. Does <strong>not</strong> issue a new JWT — the user's existing session remains active.</p>
+<p><strong>Request:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;123456&quot;</span><span class="w"> </span><span class="p">}</span>
+</code></pre></div>
+<p><strong>Response:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Email verified&quot;</span><span class="w"> </span><span class="p">}</span>
+</code></pre></div>
+<p><strong>Error responses:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Status</th>
+<th><code>error</code></th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>400</td>
+<td><code>Value Error</code></td>
+<td>Invalid or expired code</td>
+</tr>
+</tbody>
+</table>
+<p>Codes expire after <code>EMAIL_VERIFY_CODE_TTL</code> seconds (default 10 minutes) and are single-use. Codes and links are mutually exclusive — generating one via <code>/send</code> clears any outstanding token of the other type.</p>
+<hr />
+<h3 id="confirm-link-flow">Confirm — Link Flow<a class="headerlink" href="#confirm-link-flow" title="Permanent link">&para;</a></h3>
+<p>The verification email contains a link with a <code>token</code> query parameter. There are two ways to handle link clicks depending on your setup.</p>
+<p><strong>Option A — Link clicks directly to the API (recommended for simple setups)</strong></p>
+<p>The email link points to <code>GET /api/auth/verify/email/confirm?token=ev:...</code>. The server validates the token, marks the email verified, and renders a clean HTML page confirming success or describing the error. No frontend JavaScript is required.</p>
+<p>Append <code>&amp;redirect=https://yourapp.com/dashboard</code> to the link in the email. On success the page shows a <strong>Continue</strong> button and automatically navigates there after 3 seconds. On error the redirect URL is shown as a <strong>Go back</strong> button only.</p>
+<p><strong>Option B — Frontend handles the token (SPA / mobile apps)</strong></p>
+<p>The email link points to a frontend route (e.g. <code>/verify-email?token=ev:...</code>). The frontend extracts the token and submits it via API.</p>
+<p><strong>POST</strong> <code>/api/auth/email/verify</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ev:4e6f74546f6b656e...&quot;</span><span class="w"> </span><span class="p">}</span>
+</code></pre></div>
+<p>On success, the server marks <code>is_email_verified = true</code> and <strong>logs the user in</strong>, returning a full JWT — no separate login step is needed.</p>
+<p><strong>Response:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="p">{</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">    </span><span class="nt">&quot;access_token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;eyJhbGci...&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="w">    </span><span class="nt">&quot;refresh_token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;eyJhbGci...&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="w">    </span><span class="nt">&quot;expires_in&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">21600</span><span class="p">,</span>
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="w">    </span><span class="nt">&quot;user&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="w">      </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">42</span><span class="p">,</span>
+<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="w">      </span><span class="nt">&quot;username&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;alice@example.com&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a><span class="w">      </span><span class="nt">&quot;display_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Alice&quot;</span>
+<a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-10-13" name="__codelineno-10-13" href="#__codelineno-10-13"></a><span class="p">}</span>
+</code></pre></div>
 <p>Tokens are <strong>single-use</strong> and expire after 24 hours by default (configurable via <code>EMAIL_VERIFY_TOKEN_TTL</code>). An invalid or expired token returns:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span>
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
-<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">400</span><span class="p">,</span>
-<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">  </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Invalid token&quot;</span>
-<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="p">{</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">  </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">400</span><span class="p">,</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="w">  </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Invalid token&quot;</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="p">}</span>
 </code></pre></div>
+<hr />
+<h3 id="recommended-ui-flow-email-verification">Recommended UI Flow — Email Verification<a class="headerlink" href="#recommended-ui-flow-email-verification" title="Permanent link">&para;</a></h3>
+<p><strong>Portal / in-context (code flow):</strong></p>
+<ol>
+<li>Call <code>POST /api/auth/verify/email/send</code> with <code>{ "method": "code" }</code>.</li>
+<li>Show an inline OTP input: <em>"We sent a 6-digit code to alice@example.com. Enter it below."</em></li>
+<li>Submit the code to <code>POST /api/auth/verify/email/confirm</code>.</li>
+<li>On success, dismiss the prompt. The <code>account:email:verified</code> realtime event will also fire — use it to update any other open views.</li>
+</ol>
+<p><strong>Standard / link flow:</strong></p>
+<ol>
+<li>Call <code>POST /api/auth/verify/email/send</code> (no body, or <code>{ "method": "link" }</code>).</li>
+<li>Display: <em>"A verification link has been sent to alice@example.com. Click it to verify."</em></li>
+<li>When the user clicks the link, handle it via Option A (API renders the result page) or Option B (frontend extracts the token and calls <code>POST /api/auth/email/verify</code>).</li>
+</ol>
 <hr />
 <h2 id="invite-links">Invite Links<a class="headerlink" href="#invite-links" title="Permanent link">&para;</a></h2>
 <p>When a user is invited to the system or to a group, they receive an invite email containing a token. This token serves two purposes at once:</p>
@@ -3803,31 +3949,31 @@
 <li>It logs them in immediately — no password is required to complete verification.</li>
 </ol>
 <p><strong>POST</strong> <code>/api/auth/invite/accept</code></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;iv:4e6f74546f6b656e...&quot;</span><span class="w"> </span><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;iv:4e6f74546f6b656e...&quot;</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
 <p>The response is identical to the email verify response — a full JWT on success:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="p">{</span>
-<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">    </span><span class="nt">&quot;access_token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;eyJhbGci...&quot;</span><span class="p">,</span>
-<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="w">    </span><span class="nt">&quot;refresh_token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;eyJhbGci...&quot;</span><span class="p">,</span>
-<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="w">    </span><span class="nt">&quot;expires_in&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">21600</span><span class="p">,</span>
-<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="w">    </span><span class="nt">&quot;user&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="w">      </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">17</span><span class="p">,</span>
-<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="w">      </span><span class="nt">&quot;username&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;bob@example.com&quot;</span><span class="p">,</span>
-<a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a><span class="w">      </span><span class="nt">&quot;display_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Bob&quot;</span>
-<a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a><span class="w">    </span><span class="p">}</span>
-<a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a><span class="w">  </span><span class="p">}</span>
-<a id="__codelineno-9-13" name="__codelineno-9-13" href="#__codelineno-9-13"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="p">{</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="w">    </span><span class="nt">&quot;access_token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;eyJhbGci...&quot;</span><span class="p">,</span>
+<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="w">    </span><span class="nt">&quot;refresh_token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;eyJhbGci...&quot;</span><span class="p">,</span>
+<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a><span class="w">    </span><span class="nt">&quot;expires_in&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">21600</span><span class="p">,</span>
+<a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a><span class="w">    </span><span class="nt">&quot;user&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a><span class="w">      </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">17</span><span class="p">,</span>
+<a id="__codelineno-13-9" name="__codelineno-13-9" href="#__codelineno-13-9"></a><span class="w">      </span><span class="nt">&quot;username&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;bob@example.com&quot;</span><span class="p">,</span>
+<a id="__codelineno-13-10" name="__codelineno-13-10" href="#__codelineno-13-10"></a><span class="w">      </span><span class="nt">&quot;display_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Bob&quot;</span>
+<a id="__codelineno-13-11" name="__codelineno-13-11" href="#__codelineno-13-11"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-13-12" name="__codelineno-13-12" href="#__codelineno-13-12"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-13-13" name="__codelineno-13-13" href="#__codelineno-13-13"></a><span class="p">}</span>
 </code></pre></div>
 <p>Invite tokens expire after 7 days by default (configurable via <code>INVITE_TOKEN_TTL</code>).</p>
 <p>If the invited user has not yet set a password, they will be logged in but passwordless. After accepting the invite, prompt them to set a password using the standard password reset flow — they are already authenticated, so the reset can be performed directly from the authenticated session.</p>
 <p>An invalid or expired invite token returns:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="p">{</span>
-<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
-<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">  </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">400</span><span class="p">,</span>
-<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">  </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Invalid token&quot;</span>
-<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="p">{</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="w">  </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">400</span><span class="p">,</span>
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="w">  </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Invalid token&quot;</span>
+<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="p">}</span>
 </code></pre></div>
 <hr />
 <h2 id="phone-verification">Phone Verification<a class="headerlink" href="#phone-verification" title="Permanent link">&para;</a></h2>
@@ -3838,7 +3984,7 @@
 <p>Returns 200 immediately if the phone is already verified. Returns 400 if no phone number is on the account.</p>
 <p><strong>Request:</strong> No body required.</p>
 <p><strong>Response:</strong>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Verification code sent&quot;</span><span class="w"> </span><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Verification code sent&quot;</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div></p>
 <p><strong>Error responses:</strong></p>
 <table>
@@ -3862,10 +4008,10 @@
 <p><strong>POST</strong> <code>/api/auth/verify/phone/confirm</code></p>
 <p>Requires authentication. Submits the 6-digit code received via SMS. On success, sets <code>is_phone_verified = true</code> on the account. Does <strong>not</strong> issue a new JWT — the user's existing session remains active.</p>
 <p><strong>Request:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;123456&quot;</span><span class="w"> </span><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;123456&quot;</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
 <p><strong>Response:</strong>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Phone verified&quot;</span><span class="w"> </span><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Phone verified&quot;</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div></p>
 <p><strong>Error responses:</strong></p>
 <table>
@@ -3893,28 +4039,85 @@
 <h2 id="verification-state-in-the-user-profile">Verification State in the User Profile<a class="headerlink" href="#verification-state-in-the-user-profile" title="Permanent link">&para;</a></h2>
 <p><strong>GET</strong> <code>/api/user/me</code></p>
 <p>The authenticated user's profile includes verification flags:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="p">{</span>
-<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="w">    </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">42</span><span class="p">,</span>
-<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="w">    </span><span class="nt">&quot;username&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;alice@example.com&quot;</span><span class="p">,</span>
-<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a><span class="w">    </span><span class="nt">&quot;display_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Alice&quot;</span><span class="p">,</span>
-<a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a><span class="w">    </span><span class="nt">&quot;is_email_verified&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a><span class="w">    </span><span class="nt">&quot;is_phone_verified&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
-<a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a><span class="w">  </span><span class="p">}</span>
-<a id="__codelineno-14-10" name="__codelineno-14-10" href="#__codelineno-14-10"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="p">{</span>
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a><span class="w">    </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">42</span><span class="p">,</span>
+<a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a><span class="w">    </span><span class="nt">&quot;username&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;alice@example.com&quot;</span><span class="p">,</span>
+<a id="__codelineno-18-6" name="__codelineno-18-6" href="#__codelineno-18-6"></a><span class="w">    </span><span class="nt">&quot;display_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Alice&quot;</span><span class="p">,</span>
+<a id="__codelineno-18-7" name="__codelineno-18-7" href="#__codelineno-18-7"></a><span class="w">    </span><span class="nt">&quot;is_email_verified&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-18-8" name="__codelineno-18-8" href="#__codelineno-18-8"></a><span class="w">    </span><span class="nt">&quot;is_phone_verified&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
+<a id="__codelineno-18-9" name="__codelineno-18-9" href="#__codelineno-18-9"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-18-10" name="__codelineno-18-10" href="#__codelineno-18-10"></a><span class="p">}</span>
 </code></pre></div>
 <p>Use these fields to decide whether to surface a verification prompt in your UI — for example, a banner encouraging the user to verify their email even when <code>REQUIRE_VERIFIED_EMAIL</code> is not enabled.</p>
 <hr />
-<h2 id="recommended-ui-flow">Recommended UI Flow<a class="headerlink" href="#recommended-ui-flow" title="Permanent link">&para;</a></h2>
-<ol>
-<li>Attempt login via <code>POST /api/login</code>.</li>
-<li>If the response is a 403 with <code>error: "email_not_verified"</code>, do <strong>not</strong> show a generic error. Instead show: <em>"Your email isn't verified. [Resend verification email]"</em></li>
-<li>When the user taps the resend button, call <code>POST /api/auth/email/verify/send</code> with their email address.</li>
-<li>When the user clicks the link in the email, your frontend receives the token (typically via a route like <code>/verify-email?token=ev:...</code>). Extract the token and call <code>POST /api/auth/email/verify</code>.</li>
-<li>Store the returned JWT and redirect the user into the app as a normal authenticated session.</li>
-</ol>
-<p>For invite flows, the same pattern applies using <code>POST /api/auth/invite/accept</code> in place of step 4.</p>
+<h2 id="realtime-events">Realtime Events<a class="headerlink" href="#realtime-events" title="Permanent link">&para;</a></h2>
+<p>After successful verification, the server emits a WebSocket event to all of the user's active connections. Listen for these events to update the UI in real-time without polling or page reloads.</p>
+<h3 id="email-verified">Email verified<a class="headerlink" href="#email-verified" title="Permanent link">&para;</a></h3>
+<p>Emitted after either confirm path (<code>POST /api/auth/verify/email/confirm</code> or <code>GET /api/auth/verify/email/confirm</code>) succeeds:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="p">{</span>
+<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a><span class="w">  </span><span class="nt">&quot;event&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;account:email:verified&quot;</span><span class="p">,</span>
+<a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;email&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;alice@example.com&quot;</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a><span class="p">}</span>
+</code></pre></div>
+<p>Use this to dismiss a "please verify your email" banner, update the profile icon, or unlock features gated on <code>is_email_verified</code> without requiring a page reload.</p>
+<h3 id="phone-verified">Phone verified<a class="headerlink" href="#phone-verified" title="Permanent link">&para;</a></h3>
+<p>Emitted after <code>POST /api/auth/verify/phone/confirm</code> succeeds:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="p">{</span>
+<a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a><span class="w">  </span><span class="nt">&quot;event&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;account:phone:verified&quot;</span><span class="p">,</span>
+<a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;phone_number&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;+14155550123&quot;</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-20-4" name="__codelineno-20-4" href="#__codelineno-20-4"></a><span class="p">}</span>
+</code></pre></div>
+<p>Use this to dismiss a phone verification prompt or enable SMS-dependent features without requiring a page reload.</p>
+<hr />
+<h2 id="template-customisation">Template Customisation<a class="headerlink" href="#template-customisation" title="Permanent link">&para;</a></h2>
+<p>The <code>GET /api/auth/verify/email/confirm</code> endpoint renders <code>account/email_verify_confirm.html</code>. The default template is a minimal, self-contained page with no external dependencies. To customise it, create your own version at a path that takes priority in Django's <code>TEMPLATES</code> settings:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>yourproject/templates/account/email_verify_confirm.html
+</code></pre></div>
+<p>Template context variables:</p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>success</code></td>
+<td>bool</td>
+<td><code>True</code> if the address was verified successfully</td>
+</tr>
+<tr>
+<td><code>email</code></td>
+<td>string</td>
+<td>The verified email address (on success)</td>
+</tr>
+<tr>
+<td><code>error_title</code></td>
+<td>string</td>
+<td>Short error heading (on failure)</td>
+</tr>
+<tr>
+<td><code>error_message</code></td>
+<td>string</td>
+<td>Descriptive error text (on failure)</td>
+</tr>
+<tr>
+<td><code>redirect_url</code></td>
+<td>string</td>
+<td>Value of the <code>?redirect=</code> param (may be empty)</td>
+</tr>
+<tr>
+<td><code>redirect_delay</code></td>
+<td>int</td>
+<td>Seconds before automatic redirect (3 on success, 0 on error)</td>
+</tr>
+</tbody>
+</table>
+<p>Append <code>?redirect=https://yourapp.com/dashboard</code> to the verification link in the email to add a <strong>Continue</strong> button and an automatic 3-second redirect on success.</p>
 <hr />
 <h2 id="settings-reference">Settings Reference<a class="headerlink" href="#settings-reference" title="Permanent link">&para;</a></h2>
 <table>
@@ -3939,7 +4142,12 @@
 <tr>
 <td><code>EMAIL_VERIFY_TOKEN_TTL</code></td>
 <td><code>86400</code> (24 h)</td>
-<td>Expiry time for email verification tokens, in seconds</td>
+<td>Expiry time for email verification link tokens, in seconds</td>
+</tr>
+<tr>
+<td><code>EMAIL_VERIFY_CODE_TTL</code></td>
+<td><code>600</code> (10 min)</td>
+<td>Expiry time for email verification OTP codes, in seconds</td>
 </tr>
 <tr>
 <td><code>INVITE_TOKEN_TTL</code></td>
@@ -3956,11 +4164,11 @@
 <hr />
 <h2 id="write-protection-on-verification-fields">Write Protection on Verification Fields<a class="headerlink" href="#write-protection-on-verification-fields" title="Permanent link">&para;</a></h2>
 <p><code>is_email_verified</code> and <code>is_phone_verified</code> are <strong>read-only</strong> from the REST API for all non-superuser actors — including the account owner. Attempting to set them directly via <code>POST /api/user/&lt;id&gt;</code> will return a 403:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="p">{</span>
-<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
-<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="w">  </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">403</span><span class="p">,</span>
-<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="w">  </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Permission denied&quot;</span>
-<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="p">{</span>
+<a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a><span class="w">  </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">403</span><span class="p">,</span>
+<a id="__codelineno-22-4" name="__codelineno-22-4" href="#__codelineno-22-4"></a><span class="w">  </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Permission denied&quot;</span>
+<a id="__codelineno-22-5" name="__codelineno-22-5" href="#__codelineno-22-5"></a><span class="p">}</span>
 </code></pre></div>
 <p>The only legitimate paths that set these fields are:</p>
 <table>
@@ -3972,7 +4180,15 @@
 </thead>
 <tbody>
 <tr>
-<td><code>POST /api/auth/email/verify</code> (token redemption)</td>
+<td><code>POST /api/auth/email/verify</code> (link token redemption)</td>
+<td><code>is_email_verified = true</code></td>
+</tr>
+<tr>
+<td><code>GET /api/auth/verify/email/confirm</code> (link click)</td>
+<td><code>is_email_verified = true</code></td>
+</tr>
+<tr>
+<td><code>POST /api/auth/verify/email/confirm</code> (OTP code)</td>
 <td><code>is_email_verified = true</code></td>
 </tr>
 <tr>
@@ -3980,7 +4196,7 @@
 <td><code>is_email_verified = true</code></td>
 </tr>
 <tr>
-<td><code>POST /api/auth/verify/phone/confirm</code> (authenticated code confirmation)</td>
+<td><code>POST /api/auth/verify/phone/confirm</code> (OTP code)</td>
 <td><code>is_phone_verified = true</code></td>
 </tr>
 <tr>
@@ -3997,6 +4213,7 @@
 <p>This protection applies to both create and update requests. A non-superuser cannot create a new user record with <code>is_email_verified: true</code> pre-set in the payload.</p>
 <blockquote>
 <p>To allow users to change their email address, see <a href="../email_change/">Email Change</a>. The change uses a dedicated verify-then-commit flow that bypasses the write protection guard safely.</p>
+<p>To allow users to change their phone number, see <a href="../phone_change/">Phone Number Change</a>. Replacing an existing phone number requires OTP confirmation to the new number before the change is committed.</p>
 </blockquote>
 
 
