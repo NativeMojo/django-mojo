@@ -4,7 +4,7 @@ from mojo.helpers import logit
 from mojo.helpers.settings import settings
 from mojo.apps.jobs.models import Job, JobEvent, JobLog
 from mojo.apps.jobs.manager import get_manager
-from mojo.apps.jobs import publish, cancel, status
+from mojo.apps.jobs import publish, cancel, status, get_sysinfo
 from django.utils import timezone
 from django.db.models import Q
 import json
@@ -259,6 +259,54 @@ def on_shutdown_runner(request):
         return JsonResponse({
             'status': True,
             'message': f'Shutdown command sent to runner {runner_id}'
+        })
+
+    except Exception as e:
+        return JsonResponse({
+            'status': False,
+            'error': str(e)
+        }, status=400)
+
+
+# Get sysinfo from all runners or a specific runner
+@md.GET('runners/sysinfo')
+@md.requires_perms('manage_jobs', 'view_jobs')
+def on_runners_sysinfo(request):
+    """Collect host system info from all active runners."""
+    try:
+        timeout = float(request.DATA.get('timeout', 5.0))
+        results = get_sysinfo(timeout=timeout)
+
+        return JsonResponse({
+            'status': True,
+            'count': len(results),
+            'data': results
+        })
+
+    except Exception as e:
+        return JsonResponse({
+            'status': False,
+            'error': str(e)
+        }, status=400)
+
+
+@md.GET('runners/sysinfo/<str:runner_id>')
+@md.requires_perms('manage_jobs', 'view_jobs')
+def on_runner_sysinfo(request, runner_id):
+    """Collect host system info from a specific runner."""
+    try:
+        timeout = float(request.DATA.get('timeout', 5.0))
+        results = get_sysinfo(runner_id=runner_id, timeout=timeout)
+
+        if not results:
+            return JsonResponse({
+                'status': False,
+                'error': f'Runner {runner_id} did not respond'
+            }, status=404)
+
+        return JsonResponse({
+            'status': True,
+            'data': results[0]
         })
 
     except Exception as e:

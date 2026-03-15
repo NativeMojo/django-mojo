@@ -89,3 +89,103 @@ GET /api/jobs/job?channel=emails&status=pending
 | `channel` | `?channel=emails` | Queue channel |
 | `func` | `?func=myapp.services.email.send_welcome` | Job function |
 | `dr_start`/`dr_end` | Date range on `created` |
+
+## Runner Sysinfo
+
+Collect live host system information from one or all active job runners.
+
+### Permissions Required
+
+- `manage_jobs` or `view_jobs`
+
+### All Runners
+
+**GET** `/api/jobs/runners/sysinfo`
+
+Optional query parameter: `timeout` (float, seconds, default `5.0`).
+
+```
+GET /api/jobs/runners/sysinfo
+GET /api/jobs/runners/sysinfo?timeout=10.0
+```
+
+**Response:**
+
+```json
+{
+  "status": true,
+  "count": 2,
+  "data": [
+    {
+      "runner_id": "runner-host1-abc123",
+      "func": "mojo.apps.jobs.services.sysinfo_task.collect_sysinfo",
+      "status": "success",
+      "timestamp": "2026-03-14T10:00:00.000000",
+      "result": {
+        "os": { "system": "Linux", "hostname": "host1", "release": "6.1.0" },
+        "cpu_load": 12.5,
+        "cpus_load": [10.0, 15.0],
+        "memory": { "total": 8589934592, "used": 3604480000, "percent": 42.1 },
+        "disk":   { "total": 107374182400, "used": 40802189312, "percent": 38.0 },
+        "network": { "tcp_cons": 24, "bytes_sent": 1048576, "bytes_recv": 2097152 }
+      }
+    }
+  ]
+}
+```
+
+Returns an empty `data` list when no runners respond within the timeout.
+
+### Specific Runner
+
+**GET** `/api/jobs/runners/sysinfo/<runner_id>`
+
+Optional query parameter: `timeout` (float, seconds, default `5.0`).
+
+```
+GET /api/jobs/runners/sysinfo/runner-host1-abc123
+```
+
+**Response (200):**
+
+```json
+{
+  "status": true,
+  "data": {
+    "runner_id": "runner-host1-abc123",
+    "func": "mojo.apps.jobs.services.sysinfo_task.collect_sysinfo",
+    "status": "success",
+    "timestamp": "2026-03-14T10:00:00.000000",
+    "result": {
+      "os": { "system": "Linux", "hostname": "host1", "release": "6.1.0" },
+      "cpu_load": 12.5,
+      "cpus_load": [10.0, 15.0],
+      "memory": { "total": 8589934592, "used": 3604480000, "percent": 42.1 },
+      "disk":   { "total": 107374182400, "used": 40802189312, "percent": 38.0 },
+      "network": { "tcp_cons": 24, "bytes_sent": 1048576, "bytes_recv": 2097152 }
+    }
+  }
+}
+```
+
+**Response (404) — runner unknown or timed out:**
+
+```json
+{
+  "status": false,
+  "error": "Runner runner-host1-abc123 did not respond"
+}
+```
+
+### Error Reply Shape
+
+When a runner encounters an error executing the sysinfo function (e.g. `psutil` not installed), the reply entry has `status: "error"` instead of `"success"`, and an `error` field in place of `result`:
+
+```json
+{
+  "runner_id": "runner-host1-abc123",
+  "status": "error",
+  "error": "psutil is not installed. Install it with: pip install psutil",
+  "timestamp": "2026-03-14T10:00:00.000000"
+}
+```

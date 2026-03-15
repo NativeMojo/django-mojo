@@ -32,6 +32,7 @@ __all__ = [
     'publish_webhook',
     'cancel',
     'status',
+    'get_sysinfo',
 ]
 
 
@@ -508,3 +509,42 @@ def get_runners(channel=None):
     from .manager import get_manager
     manager = get_manager()
     return manager.get_runners(channel)
+
+
+def get_sysinfo(runner_id=None, timeout=5.0):
+    """
+    Collect host system info from one or all active runners.
+
+    Sends a broadcast-execute (or targeted execute) to runners, each of which
+    calls sysinfo.get_host_info() in-process and replies with the result.
+
+    Args:
+        runner_id: Target a specific runner by ID. If None, collects from all
+                   active runners via broadcast.
+        timeout:   Seconds to wait for replies (default 5.0).
+
+    Returns:
+        List of reply dicts, one per responding runner. Each dict contains:
+            - runner_id   (str)
+            - func        (str)
+            - status      ("success" | "error")
+            - timestamp   (ISO string)
+            - result      (dict from sysinfo.get_host_info(), on success)
+            - error       (str, on failure)
+
+    Example:
+        from mojo.apps import jobs
+
+        # All runners
+        info = jobs.get_sysinfo()
+
+        # Single runner
+        info = jobs.get_sysinfo(runner_id='runner-host1-abc123')
+    """
+    from .manager import get_manager
+    manager = get_manager()
+    func_path = "mojo.apps.jobs.services.sysinfo_task.collect_sysinfo"
+    if runner_id:
+        result = manager.execute_on_runner(runner_id, func_path, timeout=timeout)
+        return [result] if result else []
+    return manager.broadcast_execute(func_path, collect_replies=True, timeout=timeout)
