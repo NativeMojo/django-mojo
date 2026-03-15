@@ -4778,10 +4778,10 @@ register one.</p>
 <a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a><span class="p">{</span>
 <a id="__codelineno-27-3" name="__codelineno-27-3" href="#__codelineno-27-3"></a><span class="w">  </span><span class="nt">&quot;challenge_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;abc123&quot;</span><span class="p">,</span>
 <a id="__codelineno-27-4" name="__codelineno-27-4" href="#__codelineno-27-4"></a><span class="w">  </span><span class="nt">&quot;credential&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="err">...WebAu</span><span class="kc">t</span><span class="err">h</span><span class="kc">n</span><span class="w"> </span><span class="err">respo</span><span class="kc">nse</span><span class="w"> </span><span class="err">objec</span><span class="kc">t</span><span class="err">...</span><span class="w"> </span><span class="p">},</span>
-<a id="__codelineno-27-5" name="__codelineno-27-5" href="#__codelineno-27-5"></a><span class="w">  </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;MacBook Touch ID&quot;</span>
+<a id="__codelineno-27-5" name="__codelineno-27-5" href="#__codelineno-27-5"></a><span class="w">  </span><span class="nt">&quot;friendly_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;MacBook Touch ID&quot;</span>
 <a id="__codelineno-27-6" name="__codelineno-27-6" href="#__codelineno-27-6"></a><span class="p">}</span>
 </code></pre></div>
-<p><code>name</code> is a human-readable label shown in the passkeys list.</p>
+<p><code>friendly_name</code> is a human-readable label shown in the passkeys list.</p>
 <hr />
 <h3 id="list-registered-passkeys">List registered passkeys<a class="headerlink" href="#list-registered-passkeys" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a>GET /api/account/passkeys
@@ -4790,7 +4790,7 @@ register one.</p>
 <hr />
 <h3 id="rename-a-passkey">Rename a passkey<a class="headerlink" href="#rename-a-passkey" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a><span class="err">POST</span><span class="w"> </span><span class="err">/api/accou</span><span class="kc">nt</span><span class="err">/passkeys/&lt;id&gt;</span>
-<a id="__codelineno-29-2" name="__codelineno-29-2" href="#__codelineno-29-2"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;iPhone Face ID&quot;</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-29-2" name="__codelineno-29-2" href="#__codelineno-29-2"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;friendly_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;iPhone Face ID&quot;</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
 <hr />
 <h3 id="delete-a-passkey">Delete a passkey<a class="headerlink" href="#delete-a-passkey" title="Permanent link">&para;</a></h3>
@@ -4800,38 +4800,49 @@ register one.</p>
 <h2 id="7-two-factor-authentication-totp">7. Two-Factor Authentication (TOTP)<a class="headerlink" href="#7-two-factor-authentication-totp" title="Permanent link">&para;</a></h2>
 <p>TOTP lets the user link an authenticator app (Google Authenticator, Authy,
 1Password, etc.) as a second factor.</p>
+<blockquote>
+<p><strong>Two endpoint groups exist for TOTP.</strong> The <code>account/totp/*</code> endpoints below
+are for managing TOTP on a settings page (requires auth). The <code>auth/totp/*</code>
+endpoints are for the login page and are covered in
+<a href="../mfa_totp/">TOTP Authentication</a>.</p>
+</blockquote>
 <h3 id="check-totp-status">Check TOTP status<a class="headerlink" href="#check-totp-status" title="Permanent link">&para;</a></h3>
-<p>Read the user profile — the <code>full</code> graph includes TOTP status, or check
-via:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a>GET /api/auth/totp/status
+<p>Check <code>requires_mfa</code> on the user profile:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a>GET /api/user/me
+<a id="__codelineno-31-2" name="__codelineno-31-2" href="#__codelineno-31-2"></a>Authorization: Bearer &lt;access_token&gt;
 </code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;requires_mfa&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="p">}</span>
+</code></pre></div>
+<p><code>requires_mfa: true</code> means a second factor (TOTP or SMS) is active on this account.</p>
 <hr />
 <h3 id="set-up-totp">Set up TOTP<a class="headerlink" href="#set-up-totp" title="Permanent link">&para;</a></h3>
 <p><strong>Step 1 — Generate a secret</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a>POST /api/auth/totp/setup
+<div class="highlight"><pre><span></span><code><a id="__codelineno-33-1" name="__codelineno-33-1" href="#__codelineno-33-1"></a>POST /api/account/totp/setup
+<a id="__codelineno-33-2" name="__codelineno-33-2" href="#__codelineno-33-2"></a>Authorization: Bearer &lt;access_token&gt;
 </code></pre></div>
-<p>Returns a <code>secret</code>, a <code>qr_code</code> (base64 PNG), and an <code>otpauth_url</code> for
-deep linking into authenticator apps.</p>
-<p>Display the QR code to the user. Most users will scan it with their
-authenticator app.</p>
-<p><strong>Step 2 — Verify and enable</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-33-1" name="__codelineno-33-1" href="#__codelineno-33-1"></a><span class="err">POST</span><span class="w"> </span><span class="err">/api/au</span><span class="kc">t</span><span class="err">h/</span><span class="kc">t</span><span class="err">o</span><span class="kc">t</span><span class="err">p/veri</span><span class="kc">f</span><span class="err">y</span>
-<a id="__codelineno-33-2" name="__codelineno-33-2" href="#__codelineno-33-2"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;123456&quot;</span><span class="w"> </span><span class="p">}</span>
+<p>Returns a <code>secret</code>, a <code>qr_code</code> (base64 PNG), and a <code>uri</code> for deep linking
+into authenticator apps. Display the QR code for the user to scan. The secret
+is saved server-side but TOTP is <strong>not active yet</strong>.</p>
+<p><strong>Step 2 — Confirm with first code</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-34-1" name="__codelineno-34-1" href="#__codelineno-34-1"></a>POST /api/account/totp/confirm
+<a id="__codelineno-34-2" name="__codelineno-34-2" href="#__codelineno-34-2"></a>Authorization: Bearer &lt;access_token&gt;
 </code></pre></div>
-<p>Confirms the user has successfully linked their app. TOTP is now active
-for this account.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-35-1" name="__codelineno-35-1" href="#__codelineno-35-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;123456&quot;</span><span class="w"> </span><span class="p">}</span>
+</code></pre></div>
+<p>The user enters the 6-digit code from their app. A valid code proves the app
+is correctly linked and activates TOTP on the account. Sets <code>requires_mfa: true</code>.</p>
 <hr />
 <h3 id="disable-totp">Disable TOTP<a class="headerlink" href="#disable-totp" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-34-1" name="__codelineno-34-1" href="#__codelineno-34-1"></a><span class="err">POST</span><span class="w"> </span><span class="err">/api/au</span><span class="kc">t</span><span class="err">h/</span><span class="kc">t</span><span class="err">o</span><span class="kc">t</span><span class="err">p/disable</span>
-<a id="__codelineno-34-2" name="__codelineno-34-2" href="#__codelineno-34-2"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;123456&quot;</span><span class="w"> </span><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-36-1" name="__codelineno-36-1" href="#__codelineno-36-1"></a>DELETE /api/account/totp
+<a id="__codelineno-36-2" name="__codelineno-36-2" href="#__codelineno-36-2"></a>Authorization: Bearer &lt;access_token&gt;
 </code></pre></div>
-<p>A current TOTP code is required to disable — prevents an attacker with a
-stolen session from quietly removing 2FA.</p>
+<p>No request body required. TOTP is deactivated immediately. The current session
+remains valid; the next password login will return a JWT with no MFA challenge.</p>
 <hr />
 <h2 id="8-sessions-devices">8. Sessions &amp; Devices<a class="headerlink" href="#8-sessions-devices" title="Permanent link">&para;</a></h2>
 <h3 id="list-tracked-devices">List tracked devices<a class="headerlink" href="#list-tracked-devices" title="Permanent link">&para;</a></h3>
 <p>The framework tracks the devices that have logged into the account.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-35-1" name="__codelineno-35-1" href="#__codelineno-35-1"></a>GET /api/user/device
+<div class="highlight"><pre><span></span><code><a id="__codelineno-37-1" name="__codelineno-37-1" href="#__codelineno-37-1"></a>GET /api/user/device
 </code></pre></div>
 <p>Returns device records including <code>user_agent</code>, <code>ip</code>, <code>created</code>, and
 <code>last_seen</code>. Useful for showing the user "where you're logged in" on a
@@ -4847,19 +4858,19 @@ successful email change the user is effectively logged out everywhere except
 the session that performed the confirm.</p>
 <hr />
 <h3 id="register-device-for-push-notifications">Register device for push notifications<a class="headerlink" href="#register-device-for-push-notifications" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-36-1" name="__codelineno-36-1" href="#__codelineno-36-1"></a><span class="err">POST</span><span class="w"> </span><span class="err">/api/accou</span><span class="kc">nt</span><span class="err">/devices/push/regis</span><span class="kc">ter</span>
-<a id="__codelineno-36-2" name="__codelineno-36-2" href="#__codelineno-36-2"></a><span class="p">{</span>
-<a id="__codelineno-36-3" name="__codelineno-36-3" href="#__codelineno-36-3"></a><span class="w">  </span><span class="nt">&quot;device_token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span>
-<a id="__codelineno-36-4" name="__codelineno-36-4" href="#__codelineno-36-4"></a><span class="w">  </span><span class="nt">&quot;device_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;unique-device-id&quot;</span><span class="p">,</span>
-<a id="__codelineno-36-5" name="__codelineno-36-5" href="#__codelineno-36-5"></a><span class="w">  </span><span class="nt">&quot;platform&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ios&quot;</span>
-<a id="__codelineno-36-6" name="__codelineno-36-6" href="#__codelineno-36-6"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-38-1" name="__codelineno-38-1" href="#__codelineno-38-1"></a><span class="err">POST</span><span class="w"> </span><span class="err">/api/accou</span><span class="kc">nt</span><span class="err">/devices/push/regis</span><span class="kc">ter</span>
+<a id="__codelineno-38-2" name="__codelineno-38-2" href="#__codelineno-38-2"></a><span class="p">{</span>
+<a id="__codelineno-38-3" name="__codelineno-38-3" href="#__codelineno-38-3"></a><span class="w">  </span><span class="nt">&quot;device_token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span>
+<a id="__codelineno-38-4" name="__codelineno-38-4" href="#__codelineno-38-4"></a><span class="w">  </span><span class="nt">&quot;device_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;unique-device-id&quot;</span><span class="p">,</span>
+<a id="__codelineno-38-5" name="__codelineno-38-5" href="#__codelineno-38-5"></a><span class="w">  </span><span class="nt">&quot;platform&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ios&quot;</span>
+<a id="__codelineno-38-6" name="__codelineno-38-6" href="#__codelineno-38-6"></a><span class="p">}</span>
 </code></pre></div>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-37-1" name="__codelineno-37-1" href="#__codelineno-37-1"></a><span class="err">POST</span><span class="w"> </span><span class="err">/api/accou</span><span class="kc">nt</span><span class="err">/devices/push/u</span><span class="kc">nre</span><span class="err">gis</span><span class="kc">ter</span>
-<a id="__codelineno-37-2" name="__codelineno-37-2" href="#__codelineno-37-2"></a><span class="p">{</span>
-<a id="__codelineno-37-3" name="__codelineno-37-3" href="#__codelineno-37-3"></a><span class="w">  </span><span class="nt">&quot;device_token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span>
-<a id="__codelineno-37-4" name="__codelineno-37-4" href="#__codelineno-37-4"></a><span class="w">  </span><span class="nt">&quot;device_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;unique-device-id&quot;</span><span class="p">,</span>
-<a id="__codelineno-37-5" name="__codelineno-37-5" href="#__codelineno-37-5"></a><span class="w">  </span><span class="nt">&quot;platform&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ios&quot;</span>
-<a id="__codelineno-37-6" name="__codelineno-37-6" href="#__codelineno-37-6"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-39-1" name="__codelineno-39-1" href="#__codelineno-39-1"></a><span class="err">POST</span><span class="w"> </span><span class="err">/api/accou</span><span class="kc">nt</span><span class="err">/devices/push/u</span><span class="kc">nre</span><span class="err">gis</span><span class="kc">ter</span>
+<a id="__codelineno-39-2" name="__codelineno-39-2" href="#__codelineno-39-2"></a><span class="p">{</span>
+<a id="__codelineno-39-3" name="__codelineno-39-3" href="#__codelineno-39-3"></a><span class="w">  </span><span class="nt">&quot;device_token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span>
+<a id="__codelineno-39-4" name="__codelineno-39-4" href="#__codelineno-39-4"></a><span class="w">  </span><span class="nt">&quot;device_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;unique-device-id&quot;</span><span class="p">,</span>
+<a id="__codelineno-39-5" name="__codelineno-39-5" href="#__codelineno-39-5"></a><span class="w">  </span><span class="nt">&quot;platform&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ios&quot;</span>
+<a id="__codelineno-39-6" name="__codelineno-39-6" href="#__codelineno-39-6"></a><span class="p">}</span>
 </code></pre></div>
 <hr />
 <h2 id="9-api-keys">9. API Keys<a class="headerlink" href="#9-api-keys" title="Permanent link">&para;</a></h2>
@@ -4867,23 +4878,23 @@ the session that performed the confirm.</p>
 on their own behalf (e.g. from a script or automation). This token carries
 the user's full permissions and is IP-restricted.</p>
 <h3 id="generate-a-personal-api-key">Generate a personal API key<a class="headerlink" href="#generate-a-personal-api-key" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-38-1" name="__codelineno-38-1" href="#__codelineno-38-1"></a><span class="err">POST</span><span class="w"> </span><span class="err">/api/au</span><span class="kc">t</span><span class="err">h/ge</span><span class="kc">nerate</span><span class="err">_api_key</span>
-<a id="__codelineno-38-2" name="__codelineno-38-2" href="#__codelineno-38-2"></a><span class="p">{</span>
-<a id="__codelineno-38-3" name="__codelineno-38-3" href="#__codelineno-38-3"></a><span class="w">  </span><span class="nt">&quot;allowed_ips&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;203.0.113.0/24&quot;</span><span class="p">],</span>
-<a id="__codelineno-38-4" name="__codelineno-38-4" href="#__codelineno-38-4"></a><span class="w">  </span><span class="nt">&quot;expire_days&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">90</span>
-<a id="__codelineno-38-5" name="__codelineno-38-5" href="#__codelineno-38-5"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-40-1" name="__codelineno-40-1" href="#__codelineno-40-1"></a><span class="err">POST</span><span class="w"> </span><span class="err">/api/au</span><span class="kc">t</span><span class="err">h/ge</span><span class="kc">nerate</span><span class="err">_api_key</span>
+<a id="__codelineno-40-2" name="__codelineno-40-2" href="#__codelineno-40-2"></a><span class="p">{</span>
+<a id="__codelineno-40-3" name="__codelineno-40-3" href="#__codelineno-40-3"></a><span class="w">  </span><span class="nt">&quot;allowed_ips&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;203.0.113.0/24&quot;</span><span class="p">],</span>
+<a id="__codelineno-40-4" name="__codelineno-40-4" href="#__codelineno-40-4"></a><span class="w">  </span><span class="nt">&quot;expire_days&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">90</span>
+<a id="__codelineno-40-5" name="__codelineno-40-5" href="#__codelineno-40-5"></a><span class="p">}</span>
 </code></pre></div>
 <p><code>allowed_ips</code> is required. At least one IP or CIDR range must be specified.
 <code>expire_days</code> defaults to 360, maximum 360.</p>
 <p><strong>Response:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-39-1" name="__codelineno-39-1" href="#__codelineno-39-1"></a><span class="p">{</span>
-<a id="__codelineno-39-2" name="__codelineno-39-2" href="#__codelineno-39-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-39-3" name="__codelineno-39-3" href="#__codelineno-39-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-39-4" name="__codelineno-39-4" href="#__codelineno-39-4"></a><span class="w">    </span><span class="nt">&quot;token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;eyJhbGci...&quot;</span><span class="p">,</span>
-<a id="__codelineno-39-5" name="__codelineno-39-5" href="#__codelineno-39-5"></a><span class="w">    </span><span class="nt">&quot;jti&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;abc123&quot;</span><span class="p">,</span>
-<a id="__codelineno-39-6" name="__codelineno-39-6" href="#__codelineno-39-6"></a><span class="w">    </span><span class="nt">&quot;expires&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1760000000</span>
-<a id="__codelineno-39-7" name="__codelineno-39-7" href="#__codelineno-39-7"></a><span class="w">  </span><span class="p">}</span>
-<a id="__codelineno-39-8" name="__codelineno-39-8" href="#__codelineno-39-8"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-41-1" name="__codelineno-41-1" href="#__codelineno-41-1"></a><span class="p">{</span>
+<a id="__codelineno-41-2" name="__codelineno-41-2" href="#__codelineno-41-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-41-3" name="__codelineno-41-3" href="#__codelineno-41-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-41-4" name="__codelineno-41-4" href="#__codelineno-41-4"></a><span class="w">    </span><span class="nt">&quot;token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;eyJhbGci...&quot;</span><span class="p">,</span>
+<a id="__codelineno-41-5" name="__codelineno-41-5" href="#__codelineno-41-5"></a><span class="w">    </span><span class="nt">&quot;jti&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;abc123&quot;</span><span class="p">,</span>
+<a id="__codelineno-41-6" name="__codelineno-41-6" href="#__codelineno-41-6"></a><span class="w">    </span><span class="nt">&quot;expires&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1760000000</span>
+<a id="__codelineno-41-7" name="__codelineno-41-7" href="#__codelineno-41-7"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-41-8" name="__codelineno-41-8" href="#__codelineno-41-8"></a><span class="p">}</span>
 </code></pre></div>
 <blockquote>
 <p><strong>Security:</strong> Treat this token like a password. It carries full account
@@ -4894,30 +4905,30 @@ permissions. Store it securely; do not expose it in client-side code.</p>
 <p>The user has an inbox of server-generated notifications. These are also
 delivered in real-time via WebSocket and device push.</p>
 <h3 id="list-unread-notifications">List unread notifications<a class="headerlink" href="#list-unread-notifications" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-40-1" name="__codelineno-40-1" href="#__codelineno-40-1"></a>GET /api/account/notification
+<div class="highlight"><pre><span></span><code><a id="__codelineno-42-1" name="__codelineno-42-1" href="#__codelineno-42-1"></a>GET /api/account/notification
 </code></pre></div>
 <p>Returns unread notifications by default.</p>
 <h3 id="list-all-notifications-including-read">List all notifications (including read)<a class="headerlink" href="#list-all-notifications-including-read" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-41-1" name="__codelineno-41-1" href="#__codelineno-41-1"></a>GET /api/account/notification?is_unread=false
+<div class="highlight"><pre><span></span><code><a id="__codelineno-43-1" name="__codelineno-43-1" href="#__codelineno-43-1"></a>GET /api/account/notification?is_unread=false
 </code></pre></div>
 <h3 id="mark-as-read">Mark as read<a class="headerlink" href="#mark-as-read" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-42-1" name="__codelineno-42-1" href="#__codelineno-42-1"></a><span class="err">POST</span><span class="w"> </span><span class="err">/api/accou</span><span class="kc">nt</span><span class="err">/</span><span class="kc">n</span><span class="err">o</span><span class="kc">t</span><span class="err">i</span><span class="kc">f</span><span class="err">ica</span><span class="kc">t</span><span class="err">io</span><span class="kc">n</span><span class="err">/&lt;id&gt;</span>
-<a id="__codelineno-42-2" name="__codelineno-42-2" href="#__codelineno-42-2"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;mark_read&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="w"> </span><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-44-1" name="__codelineno-44-1" href="#__codelineno-44-1"></a><span class="err">POST</span><span class="w"> </span><span class="err">/api/accou</span><span class="kc">nt</span><span class="err">/</span><span class="kc">n</span><span class="err">o</span><span class="kc">t</span><span class="err">i</span><span class="kc">f</span><span class="err">ica</span><span class="kc">t</span><span class="err">io</span><span class="kc">n</span><span class="err">/&lt;id&gt;</span>
+<a id="__codelineno-44-2" name="__codelineno-44-2" href="#__codelineno-44-2"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;mark_read&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
 <h3 id="filter-by-kind">Filter by kind<a class="headerlink" href="#filter-by-kind" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-43-1" name="__codelineno-43-1" href="#__codelineno-43-1"></a>GET /api/account/notification?kind=message
+<div class="highlight"><pre><span></span><code><a id="__codelineno-45-1" name="__codelineno-45-1" href="#__codelineno-45-1"></a>GET /api/account/notification?kind=message
 </code></pre></div>
 <h3 id="notification-shape">Notification shape<a class="headerlink" href="#notification-shape" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-44-1" name="__codelineno-44-1" href="#__codelineno-44-1"></a><span class="p">{</span>
-<a id="__codelineno-44-2" name="__codelineno-44-2" href="#__codelineno-44-2"></a><span class="w">  </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">101</span><span class="p">,</span>
-<a id="__codelineno-44-3" name="__codelineno-44-3" href="#__codelineno-44-3"></a><span class="w">  </span><span class="nt">&quot;created&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-03-11T10:00:00Z&quot;</span><span class="p">,</span>
-<a id="__codelineno-44-4" name="__codelineno-44-4" href="#__codelineno-44-4"></a><span class="w">  </span><span class="nt">&quot;title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Your order shipped&quot;</span><span class="p">,</span>
-<a id="__codelineno-44-5" name="__codelineno-44-5" href="#__codelineno-44-5"></a><span class="w">  </span><span class="nt">&quot;body&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Order #123 is on its way.&quot;</span><span class="p">,</span>
-<a id="__codelineno-44-6" name="__codelineno-44-6" href="#__codelineno-44-6"></a><span class="w">  </span><span class="nt">&quot;kind&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;general&quot;</span><span class="p">,</span>
-<a id="__codelineno-44-7" name="__codelineno-44-7" href="#__codelineno-44-7"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{},</span>
-<a id="__codelineno-44-8" name="__codelineno-44-8" href="#__codelineno-44-8"></a><span class="w">  </span><span class="nt">&quot;action_url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/orders/123&quot;</span><span class="p">,</span>
-<a id="__codelineno-44-9" name="__codelineno-44-9" href="#__codelineno-44-9"></a><span class="w">  </span><span class="nt">&quot;is_unread&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
-<a id="__codelineno-44-10" name="__codelineno-44-10" href="#__codelineno-44-10"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-46-1" name="__codelineno-46-1" href="#__codelineno-46-1"></a><span class="p">{</span>
+<a id="__codelineno-46-2" name="__codelineno-46-2" href="#__codelineno-46-2"></a><span class="w">  </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">101</span><span class="p">,</span>
+<a id="__codelineno-46-3" name="__codelineno-46-3" href="#__codelineno-46-3"></a><span class="w">  </span><span class="nt">&quot;created&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-03-11T10:00:00Z&quot;</span><span class="p">,</span>
+<a id="__codelineno-46-4" name="__codelineno-46-4" href="#__codelineno-46-4"></a><span class="w">  </span><span class="nt">&quot;title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Your order shipped&quot;</span><span class="p">,</span>
+<a id="__codelineno-46-5" name="__codelineno-46-5" href="#__codelineno-46-5"></a><span class="w">  </span><span class="nt">&quot;body&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Order #123 is on its way.&quot;</span><span class="p">,</span>
+<a id="__codelineno-46-6" name="__codelineno-46-6" href="#__codelineno-46-6"></a><span class="w">  </span><span class="nt">&quot;kind&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;general&quot;</span><span class="p">,</span>
+<a id="__codelineno-46-7" name="__codelineno-46-7" href="#__codelineno-46-7"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{},</span>
+<a id="__codelineno-46-8" name="__codelineno-46-8" href="#__codelineno-46-8"></a><span class="w">  </span><span class="nt">&quot;action_url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/orders/123&quot;</span><span class="p">,</span>
+<a id="__codelineno-46-9" name="__codelineno-46-9" href="#__codelineno-46-9"></a><span class="w">  </span><span class="nt">&quot;is_unread&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-46-10" name="__codelineno-46-10" href="#__codelineno-46-10"></a><span class="p">}</span>
 </code></pre></div>
 <p>Real-time delivery comes via WebSocket — listen for <code>type === "notification"</code>
 in your message handler to show banners without polling.</p>
@@ -4926,12 +4937,12 @@ in your message handler to show banners without polling.</p>
 <p>Users can upload and manage their own files — documents, images, and other
 attachments.</p>
 <h3 id="list-own-files">List own files<a class="headerlink" href="#list-own-files" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-45-1" name="__codelineno-45-1" href="#__codelineno-45-1"></a>GET /api/fileman/file?sort=-created
+<div class="highlight"><pre><span></span><code><a id="__codelineno-47-1" name="__codelineno-47-1" href="#__codelineno-47-1"></a>GET /api/fileman/file?sort=-created
 </code></pre></div>
 <p>Filter by type, status, or search term:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-46-1" name="__codelineno-46-1" href="#__codelineno-46-1"></a>GET /api/fileman/file?content_type=image/jpeg
-<a id="__codelineno-46-2" name="__codelineno-46-2" href="#__codelineno-46-2"></a>GET /api/fileman/file?upload_status=completed
-<a id="__codelineno-46-3" name="__codelineno-46-3" href="#__codelineno-46-3"></a>GET /api/fileman/file?search=report
+<div class="highlight"><pre><span></span><code><a id="__codelineno-48-1" name="__codelineno-48-1" href="#__codelineno-48-1"></a>GET /api/fileman/file?content_type=image/jpeg
+<a id="__codelineno-48-2" name="__codelineno-48-2" href="#__codelineno-48-2"></a>GET /api/fileman/file?upload_status=completed
+<a id="__codelineno-48-3" name="__codelineno-48-3" href="#__codelineno-48-3"></a>GET /api/fileman/file?search=report
 </code></pre></div>
 <hr />
 <h3 id="upload-a-file">Upload a file<a class="headerlink" href="#upload-a-file" title="Permanent link">&para;</a></h3>
@@ -4944,21 +4955,21 @@ without the final profile-update step:</p>
 </ol>
 <hr />
 <h3 id="view-a-file">View a file<a class="headerlink" href="#view-a-file" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-47-1" name="__codelineno-47-1" href="#__codelineno-47-1"></a>GET /api/fileman/file/&lt;id&gt;
+<div class="highlight"><pre><span></span><code><a id="__codelineno-49-1" name="__codelineno-49-1" href="#__codelineno-49-1"></a>GET /api/fileman/file/&lt;id&gt;
 </code></pre></div>
 <p>Returns the file record including <code>url</code>, <code>thumbnail</code> (for images), and
 <code>renditions</code>.</p>
 <hr />
 <h3 id="update-file-metadata">Update file metadata<a class="headerlink" href="#update-file-metadata" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-48-1" name="__codelineno-48-1" href="#__codelineno-48-1"></a><span class="err">POST</span><span class="w"> </span><span class="err">/api/</span><span class="kc">f</span><span class="err">ilema</span><span class="kc">n</span><span class="err">/</span><span class="kc">f</span><span class="err">ile/&lt;id&gt;</span>
-<a id="__codelineno-48-2" name="__codelineno-48-2" href="#__codelineno-48-2"></a><span class="p">{</span>
-<a id="__codelineno-48-3" name="__codelineno-48-3" href="#__codelineno-48-3"></a><span class="w">  </span><span class="nt">&quot;is_public&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-48-4" name="__codelineno-48-4" href="#__codelineno-48-4"></a><span class="w">  </span><span class="nt">&quot;metadata&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;tags&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;invoice&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;2026&quot;</span><span class="p">]}</span>
-<a id="__codelineno-48-5" name="__codelineno-48-5" href="#__codelineno-48-5"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-50-1" name="__codelineno-50-1" href="#__codelineno-50-1"></a><span class="err">POST</span><span class="w"> </span><span class="err">/api/</span><span class="kc">f</span><span class="err">ilema</span><span class="kc">n</span><span class="err">/</span><span class="kc">f</span><span class="err">ile/&lt;id&gt;</span>
+<a id="__codelineno-50-2" name="__codelineno-50-2" href="#__codelineno-50-2"></a><span class="p">{</span>
+<a id="__codelineno-50-3" name="__codelineno-50-3" href="#__codelineno-50-3"></a><span class="w">  </span><span class="nt">&quot;is_public&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-50-4" name="__codelineno-50-4" href="#__codelineno-50-4"></a><span class="w">  </span><span class="nt">&quot;metadata&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;tags&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;invoice&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;2026&quot;</span><span class="p">]}</span>
+<a id="__codelineno-50-5" name="__codelineno-50-5" href="#__codelineno-50-5"></a><span class="p">}</span>
 </code></pre></div>
 <hr />
 <h3 id="delete-a-file">Delete a file<a class="headerlink" href="#delete-a-file" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-49-1" name="__codelineno-49-1" href="#__codelineno-49-1"></a>DELETE /api/fileman/file/&lt;id&gt;
+<div class="highlight"><pre><span></span><code><a id="__codelineno-51-1" name="__codelineno-51-1" href="#__codelineno-51-1"></a>DELETE /api/fileman/file/&lt;id&gt;
 </code></pre></div>
 <p>Deletes the database record and the underlying file from storage, including
 all renditions (thumbnails, previews, etc.).</p>
@@ -4998,15 +5009,15 @@ all renditions (thumbnails, previews, etc.).</p>
 <h3 id="encrypted-sensitive-files-filevault">Encrypted / sensitive files (FileVault)<a class="headerlink" href="#encrypted-sensitive-files-filevault" title="Permanent link">&para;</a></h3>
 <p>For files that need AES-256-GCM encryption at rest — contracts, ID
 documents, financial records — use the FileVault API.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-50-1" name="__codelineno-50-1" href="#__codelineno-50-1"></a><span class="err">POST</span><span class="w"> </span><span class="err">/api/</span><span class="kc">f</span><span class="err">ilevaul</span><span class="kc">t</span><span class="err">/</span><span class="kc">f</span><span class="err">ile/upload</span><span class="w">   </span><span class="err">(mul</span><span class="kc">t</span><span class="err">ipar</span><span class="kc">t</span><span class="err">/</span><span class="kc">f</span><span class="err">orm</span><span class="mi">-</span><span class="err">da</span><span class="kc">ta</span><span class="err">)</span>
-<a id="__codelineno-50-2" name="__codelineno-50-2" href="#__codelineno-50-2"></a><span class="w">  </span><span class="kc">f</span><span class="err">ile=@docume</span><span class="kc">nt</span><span class="err">.pd</span><span class="kc">f</span>
-<a id="__codelineno-50-3" name="__codelineno-50-3" href="#__codelineno-50-3"></a><span class="w">  </span><span class="kc">na</span><span class="err">me=Q</span><span class="mi">4</span><span class="w"> </span><span class="err">Co</span><span class="kc">ntra</span><span class="err">c</span><span class="kc">t</span>
-<a id="__codelineno-50-4" name="__codelineno-50-4" href="#__codelineno-50-4"></a><span class="w">  </span><span class="err">descrip</span><span class="kc">t</span><span class="err">io</span><span class="kc">n</span><span class="err">=Sig</span><span class="kc">ne</span><span class="err">d</span><span class="w"> </span><span class="err">copy</span>
-<a id="__codelineno-50-5" name="__codelineno-50-5" href="#__codelineno-50-5"></a><span class="w">  </span><span class="err">password=op</span><span class="kc">t</span><span class="err">io</span><span class="kc">nal</span><span class="mf">-e</span><span class="err">x</span><span class="kc">tra</span><span class="mi">-</span><span class="err">password</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-52-1" name="__codelineno-52-1" href="#__codelineno-52-1"></a><span class="err">POST</span><span class="w"> </span><span class="err">/api/</span><span class="kc">f</span><span class="err">ilevaul</span><span class="kc">t</span><span class="err">/</span><span class="kc">f</span><span class="err">ile/upload</span><span class="w">   </span><span class="err">(mul</span><span class="kc">t</span><span class="err">ipar</span><span class="kc">t</span><span class="err">/</span><span class="kc">f</span><span class="err">orm</span><span class="mi">-</span><span class="err">da</span><span class="kc">ta</span><span class="err">)</span>
+<a id="__codelineno-52-2" name="__codelineno-52-2" href="#__codelineno-52-2"></a><span class="w">  </span><span class="kc">f</span><span class="err">ile=@docume</span><span class="kc">nt</span><span class="err">.pd</span><span class="kc">f</span>
+<a id="__codelineno-52-3" name="__codelineno-52-3" href="#__codelineno-52-3"></a><span class="w">  </span><span class="kc">na</span><span class="err">me=Q</span><span class="mi">4</span><span class="w"> </span><span class="err">Co</span><span class="kc">ntra</span><span class="err">c</span><span class="kc">t</span>
+<a id="__codelineno-52-4" name="__codelineno-52-4" href="#__codelineno-52-4"></a><span class="w">  </span><span class="err">descrip</span><span class="kc">t</span><span class="err">io</span><span class="kc">n</span><span class="err">=Sig</span><span class="kc">ne</span><span class="err">d</span><span class="w"> </span><span class="err">copy</span>
+<a id="__codelineno-52-5" name="__codelineno-52-5" href="#__codelineno-52-5"></a><span class="w">  </span><span class="err">password=op</span><span class="kc">t</span><span class="err">io</span><span class="kc">nal</span><span class="mf">-e</span><span class="err">x</span><span class="kc">tra</span><span class="mi">-</span><span class="err">password</span>
 </code></pre></div>
 <p>Download via a time-limited, IP-bound token:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-51-1" name="__codelineno-51-1" href="#__codelineno-51-1"></a><span class="err">POST</span><span class="w"> </span><span class="err">/api/</span><span class="kc">f</span><span class="err">ilevaul</span><span class="kc">t</span><span class="err">/</span><span class="kc">f</span><span class="err">ile/&lt;id&gt;/u</span><span class="kc">nl</span><span class="err">ock</span>
-<a id="__codelineno-51-2" name="__codelineno-51-2" href="#__codelineno-51-2"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;ttl&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">300</span><span class="w"> </span><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-53-1" name="__codelineno-53-1" href="#__codelineno-53-1"></a><span class="err">POST</span><span class="w"> </span><span class="err">/api/</span><span class="kc">f</span><span class="err">ilevaul</span><span class="kc">t</span><span class="err">/</span><span class="kc">f</span><span class="err">ile/&lt;id&gt;/u</span><span class="kc">nl</span><span class="err">ock</span>
+<a id="__codelineno-53-2" name="__codelineno-53-2" href="#__codelineno-53-2"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;ttl&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">300</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
 <p>Then <code>GET /api/filevault/file/download/&lt;token&gt;</code>.</p>
 <p>See <a href="../../filevault/README.md">FileVault docs</a> for the full reference.</p>
@@ -5020,12 +5031,12 @@ deployment grants this to ordinary users is a product decision. The
 endpoints below are available when it is granted.</p>
 </blockquote>
 <h3 id="list-own-activity">List own activity<a class="headerlink" href="#list-own-activity" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-52-1" name="__codelineno-52-1" href="#__codelineno-52-1"></a>GET /api/logit/log?uid=&lt;me&gt;&amp;sort=-created&amp;size=50
+<div class="highlight"><pre><span></span><code><a id="__codelineno-54-1" name="__codelineno-54-1" href="#__codelineno-54-1"></a>GET /api/logit/log?uid=&lt;me&gt;&amp;sort=-created&amp;size=50
 </code></pre></div>
 <p>Filter by kind prefix to show specific categories:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-53-1" name="__codelineno-53-1" href="#__codelineno-53-1"></a>GET /api/logit/log?uid=&lt;me&gt;&amp;kind__startswith=email:
-<a id="__codelineno-53-2" name="__codelineno-53-2" href="#__codelineno-53-2"></a>GET /api/logit/log?uid=&lt;me&gt;&amp;kind__startswith=password
-<a id="__codelineno-53-3" name="__codelineno-53-3" href="#__codelineno-53-3"></a>GET /api/logit/log?uid=&lt;me&gt;&amp;kind__startswith=login
+<div class="highlight"><pre><span></span><code><a id="__codelineno-55-1" name="__codelineno-55-1" href="#__codelineno-55-1"></a>GET /api/logit/log?uid=&lt;me&gt;&amp;kind__startswith=email:
+<a id="__codelineno-55-2" name="__codelineno-55-2" href="#__codelineno-55-2"></a>GET /api/logit/log?uid=&lt;me&gt;&amp;kind__startswith=password
+<a id="__codelineno-55-3" name="__codelineno-55-3" href="#__codelineno-55-3"></a>GET /api/logit/log?uid=&lt;me&gt;&amp;kind__startswith=login
 </code></pre></div>
 <h3 id="common-audit-kinds-for-user-self-management">Common audit kinds for user self-management<a class="headerlink" href="#common-audit-kinds-for-user-self-management" title="Permanent link">&para;</a></h3>
 <table>
@@ -5083,24 +5094,24 @@ endpoints below are available when it is granted.</p>
 </tbody>
 </table>
 <h3 id="date-range">Date range<a class="headerlink" href="#date-range" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-54-1" name="__codelineno-54-1" href="#__codelineno-54-1"></a>GET /api/logit/log?uid=&lt;me&gt;&amp;dr_start=2026-01-01&amp;dr_end=2026-01-31
+<div class="highlight"><pre><span></span><code><a id="__codelineno-56-1" name="__codelineno-56-1" href="#__codelineno-56-1"></a>GET /api/logit/log?uid=&lt;me&gt;&amp;dr_start=2026-01-01&amp;dr_end=2026-01-31
 </code></pre></div>
 <hr />
 <h2 id="13-qr-codes">13. QR Codes<a class="headerlink" href="#13-qr-codes" title="Permanent link">&para;</a></h2>
 <p>Generate a QR code for any string — useful for sharing profile links,
 transfer codes, tickets, or MFA setup (see TOTP above).</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-55-1" name="__codelineno-55-1" href="#__codelineno-55-1"></a>GET /api/qrcode?data=https://app.example.com/profile/42&amp;format=png&amp;size=256
+<div class="highlight"><pre><span></span><code><a id="__codelineno-57-1" name="__codelineno-57-1" href="#__codelineno-57-1"></a>GET /api/qrcode?data=https://app.example.com/profile/42&amp;format=png&amp;size=256
 </code></pre></div>
 <p>Or via POST for more options:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-56-1" name="__codelineno-56-1" href="#__codelineno-56-1"></a><span class="err">POST</span><span class="w"> </span><span class="err">/api/qrcode</span>
-<a id="__codelineno-56-2" name="__codelineno-56-2" href="#__codelineno-56-2"></a><span class="p">{</span>
-<a id="__codelineno-56-3" name="__codelineno-56-3" href="#__codelineno-56-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://app.example.com/profile/42&quot;</span><span class="p">,</span>
-<a id="__codelineno-56-4" name="__codelineno-56-4" href="#__codelineno-56-4"></a><span class="w">  </span><span class="nt">&quot;format&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;base64&quot;</span><span class="p">,</span>
-<a id="__codelineno-56-5" name="__codelineno-56-5" href="#__codelineno-56-5"></a><span class="w">  </span><span class="nt">&quot;base64_format&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;svg&quot;</span><span class="p">,</span>
-<a id="__codelineno-56-6" name="__codelineno-56-6" href="#__codelineno-56-6"></a><span class="w">  </span><span class="nt">&quot;size&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">256</span><span class="p">,</span>
-<a id="__codelineno-56-7" name="__codelineno-56-7" href="#__codelineno-56-7"></a><span class="w">  </span><span class="nt">&quot;color&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;#0D9488&quot;</span><span class="p">,</span>
-<a id="__codelineno-56-8" name="__codelineno-56-8" href="#__codelineno-56-8"></a><span class="w">  </span><span class="nt">&quot;background&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;#FFFFFF&quot;</span>
-<a id="__codelineno-56-9" name="__codelineno-56-9" href="#__codelineno-56-9"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-58-1" name="__codelineno-58-1" href="#__codelineno-58-1"></a><span class="err">POST</span><span class="w"> </span><span class="err">/api/qrcode</span>
+<a id="__codelineno-58-2" name="__codelineno-58-2" href="#__codelineno-58-2"></a><span class="p">{</span>
+<a id="__codelineno-58-3" name="__codelineno-58-3" href="#__codelineno-58-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://app.example.com/profile/42&quot;</span><span class="p">,</span>
+<a id="__codelineno-58-4" name="__codelineno-58-4" href="#__codelineno-58-4"></a><span class="w">  </span><span class="nt">&quot;format&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;base64&quot;</span><span class="p">,</span>
+<a id="__codelineno-58-5" name="__codelineno-58-5" href="#__codelineno-58-5"></a><span class="w">  </span><span class="nt">&quot;base64_format&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;svg&quot;</span><span class="p">,</span>
+<a id="__codelineno-58-6" name="__codelineno-58-6" href="#__codelineno-58-6"></a><span class="w">  </span><span class="nt">&quot;size&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">256</span><span class="p">,</span>
+<a id="__codelineno-58-7" name="__codelineno-58-7" href="#__codelineno-58-7"></a><span class="w">  </span><span class="nt">&quot;color&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;#0D9488&quot;</span><span class="p">,</span>
+<a id="__codelineno-58-8" name="__codelineno-58-8" href="#__codelineno-58-8"></a><span class="w">  </span><span class="nt">&quot;background&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;#FFFFFF&quot;</span>
+<a id="__codelineno-58-9" name="__codelineno-58-9" href="#__codelineno-58-9"></a><span class="p">}</span>
 </code></pre></div>
 <p><strong>Formats:</strong></p>
 <table>
@@ -5132,12 +5143,12 @@ browser <code>&lt;img&gt;</code> tag or file download.</p>
 <p>Pass a base64-encoded image in <code>logo</code> to center it over the QR code (e.g.
 your app icon). <code>logo_scale</code> controls how much of the QR the logo covers
 (default <code>0.2</code> = 20%).</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-57-1" name="__codelineno-57-1" href="#__codelineno-57-1"></a><span class="p">{</span>
-<a id="__codelineno-57-2" name="__codelineno-57-2" href="#__codelineno-57-2"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://app.example.com/profile/42&quot;</span><span class="p">,</span>
-<a id="__codelineno-57-3" name="__codelineno-57-3" href="#__codelineno-57-3"></a><span class="w">  </span><span class="nt">&quot;format&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;base64&quot;</span><span class="p">,</span>
-<a id="__codelineno-57-4" name="__codelineno-57-4" href="#__codelineno-57-4"></a><span class="w">  </span><span class="nt">&quot;logo&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;base64-encoded-png&gt;&quot;</span><span class="p">,</span>
-<a id="__codelineno-57-5" name="__codelineno-57-5" href="#__codelineno-57-5"></a><span class="w">  </span><span class="nt">&quot;logo_scale&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.2</span>
-<a id="__codelineno-57-6" name="__codelineno-57-6" href="#__codelineno-57-6"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-59-1" name="__codelineno-59-1" href="#__codelineno-59-1"></a><span class="p">{</span>
+<a id="__codelineno-59-2" name="__codelineno-59-2" href="#__codelineno-59-2"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://app.example.com/profile/42&quot;</span><span class="p">,</span>
+<a id="__codelineno-59-3" name="__codelineno-59-3" href="#__codelineno-59-3"></a><span class="w">  </span><span class="nt">&quot;format&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;base64&quot;</span><span class="p">,</span>
+<a id="__codelineno-59-4" name="__codelineno-59-4" href="#__codelineno-59-4"></a><span class="w">  </span><span class="nt">&quot;logo&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;base64-encoded-png&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-59-5" name="__codelineno-59-5" href="#__codelineno-59-5"></a><span class="w">  </span><span class="nt">&quot;logo_scale&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.2</span>
+<a id="__codelineno-59-6" name="__codelineno-59-6" href="#__codelineno-59-6"></a><span class="p">}</span>
 </code></pre></div>
 <hr />
 <h2 id="14-realtime-events-reference">14. Realtime Events Reference<a class="headerlink" href="#14-realtime-events-reference" title="Permanent link">&para;</a></h2>
@@ -5173,7 +5184,7 @@ or on another device.</p>
 <h3 id="handling-accountemailchanged">Handling <code>account:email:changed</code><a class="headerlink" href="#handling-accountemailchanged" title="Permanent link">&para;</a></h3>
 <p>This event signals that <code>auth_key</code> was rotated — all existing JWTs are now
 invalid. On receiving it, redirect to login with a message:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-58-1" name="__codelineno-58-1" href="#__codelineno-58-1"></a>&quot;Your email address was updated. Please sign in again.&quot;
+<div class="highlight"><pre><span></span><code><a id="__codelineno-60-1" name="__codelineno-60-1" href="#__codelineno-60-1"></a>&quot;Your email address was updated. Please sign in again.&quot;
 </code></pre></div>
 <h3 id="handling-accountemailverified-and-accountphoneverified">Handling <code>account:email:verified</code> and <code>account:phone:verified</code><a class="headerlink" href="#handling-accountemailverified-and-accountphoneverified" title="Permanent link">&para;</a></h3>
 <p>These signal that a verification step completed in another tab or device.
@@ -5342,27 +5353,33 @@ Refresh the user profile to pick up the updated <code>is_email_verified</code> o
 <td>Required</td>
 </tr>
 <tr>
+<td>Rename a passkey</td>
+<td>POST</td>
+<td><code>/api/account/passkeys/&lt;id&gt;</code></td>
+<td>Required</td>
+</tr>
+<tr>
 <td>Delete passkey</td>
 <td>DELETE</td>
 <td><code>/api/account/passkeys/&lt;id&gt;</code></td>
 <td>Required</td>
 </tr>
 <tr>
-<td>Setup TOTP</td>
+<td>Setup TOTP (get QR code)</td>
 <td>POST</td>
-<td><code>/api/auth/totp/setup</code></td>
+<td><code>/api/account/totp/setup</code></td>
 <td>Required</td>
 </tr>
 <tr>
-<td>Verify &amp; enable TOTP</td>
+<td>Confirm TOTP (activate)</td>
 <td>POST</td>
-<td><code>/api/auth/totp/verify</code></td>
+<td><code>/api/account/totp/confirm</code></td>
 <td>Required</td>
 </tr>
 <tr>
 <td>Disable TOTP</td>
-<td>POST</td>
-<td><code>/api/auth/totp/disable</code></td>
+<td>DELETE</td>
+<td><code>/api/account/totp</code></td>
 <td>Required</td>
 </tr>
 <tr>
