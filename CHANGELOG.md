@@ -1,5 +1,25 @@
 ## v1.0.55 - (current)
 
+## v1.0.49 - March 14, 2026
+
+support to get runners sysinfo
+
+
+### New Features
+
+- jobs: added `jobs.get_sysinfo(runner_id=None, timeout=5.0)` — collects live host system info (OS, CPU, memory, disk, network) from one or all active runners via the existing `broadcast_execute`/`execute_on_runner` control channel; always returns a list of reply dicts (`mojo/apps/jobs/__init__.py`, `mojo/apps/jobs/services/sysinfo_task.py`)
+- jobs: added `GET /api/jobs/runners/sysinfo` — REST endpoint returning sysinfo from all active runners; accepts optional `timeout` query param (`mojo/apps/jobs/rest/jobs.py`)
+- jobs: added `GET /api/jobs/runners/sysinfo/<runner_id>` — REST endpoint returning sysinfo for a specific runner; returns 404 when the runner does not respond (`mojo/apps/jobs/rest/jobs.py`)
+
+### Tests
+
+- tests: added `tests/test_jobs/test_sysinfo.py` — permission guard tests (always run), Python API shape tests, and live-runner tests (skipped via `TestitSkip` when no runners are active)
+
+### Docs
+
+- docs: updated `docs/django_developer/jobs/README.md` — added Runner Sysinfo section covering `get_sysinfo()` usage, return shape, and `psutil` requirement
+- docs: updated `docs/web_developer/jobs/jobs.md` — added Runner Sysinfo section covering both REST endpoints, response shapes, and error reply format
+
 ## v1.0.48 - March 14, 2026
 
 new aws metrics support

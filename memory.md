@@ -13,7 +13,7 @@ Use this file as a lightweight running log between AI threads.
 
 ## Current Focus
 
-- No active task. CloudWatch friendly-slug resolution shipped (v1.0.54).
+- No active task. `jobs.get_sysinfo()` + REST endpoints shipped (v1.0.55).
 
 ## Key Decisions
 
@@ -27,6 +27,9 @@ Use this file as a lightweight running log between AI threads.
 
 ## In-Progress Work
 
+- None.
+
+
 
 ## Open Questions
 
@@ -34,6 +37,15 @@ Use this file as a lightweight running log between AI threads.
 
 
 ## Handoff Notes
+
+- jobs sysinfo (v1.0.55): `jobs.get_sysinfo(runner_id=None, timeout=5.0)` added to `mojo/apps/jobs/__init__.py`.
+  - Broadcasts `mojo.apps.jobs.services.sysinfo_task.collect_sysinfo` via `broadcast_execute` (all runners) or `execute_on_runner` (single runner).
+  - Always returns a list of reply dicts: `{runner_id, func, status, timestamp, result}`.
+  - REST: `GET /api/jobs/runners/sysinfo` (all) and `GET /api/jobs/runners/sysinfo/<runner_id>` (one, 404 on timeout).
+  - Both endpoints accept optional `?timeout=` query param (default `5.0`).
+  - Tests: `tests/test_jobs/test_sysinfo.py` — permission guards always run; live-runner tests skip via `TestitSkip` when no runners active.
+  - Requires `psutil` installed in runner environment.
+  - Run in downstream project: `python manage.py testit test_jobs.test_sysinfo`
 
 - Email gate bug fix: `_check_verification_gate` in `mojo/apps/account/rest/user.py` — removed `"username"` from gate condition. Gate now only fires for `source == "email"`. Username logins always pass through regardless of `REQUIRE_VERIFIED_EMAIL`.
 - Gate tests updated in `tests/test_accounts/verification.py` — block/allow/wrong-password tests now submit the email address as the identifier (not the username) to correctly exercise the gate. Added new test: username login must not be blocked when gate is on.

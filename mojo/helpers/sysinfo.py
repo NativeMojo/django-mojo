@@ -98,12 +98,10 @@ def connections_to_dict(connections):
     ]
 
 
-def get_host_info(include_versions=False, include_blocked=False):
+def get_host_info():
     """
     Gather information about the host.
 
-    :param include_versions: Include software versions if True
-    :param include_blocked: Include blocked hosts if True
     :return: Dictionary with host information
     """
     if psutil is None:
