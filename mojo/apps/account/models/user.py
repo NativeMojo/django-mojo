@@ -150,9 +150,11 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
                     "avatar": "basic"
                 }
             },
-            "default": {
+            "list": {
                 "fields": [
                     'id',
+                    "first_name",
+                    "last_name",
                     'display_name',
                     'username',
                     'email',
@@ -171,7 +173,34 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
                     "org": "basic"
                 }
             },
+            "default": {
+                "fields": [
+                    'id',
+                    "first_name",
+                    "last_name",
+                    'display_name',
+                    'username',
+                    'email',
+                    'phone_number',
+                    'last_login',
+                    'last_activity',
+                    'permissions',
+                    'metadata',
+                    'is_active',
+                    "is_superuser",
+                    "is_email_verified",
+                    "is_phone_verified",
+                    "has_passkey"
+                ],
+                "graphs": {
+                    "avatar": "basic",
+                    "org": "basic"
+                }
+            },
             "full": {
+                "extra": [
+                    "full_name", "has_passkey"
+                ],
                 "graphs": {
                     "avatar": "basic"
                 }
@@ -180,6 +209,10 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
 
     def __str__(self):
         return self.email
+
+    @property
+    def has_passkey(self):
+        return self.passkeys.filter(is_enabled=True).count() > 0
 
     @property
     def full_name(self):

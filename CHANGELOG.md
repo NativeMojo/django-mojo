@@ -1,5 +1,11 @@
 ## v1.0.55 - (current)
 
+## v1.0.50 - March 15, 2026
+
+fix local dev bugs for passkeys and uploads
+added list graph for user
+
+
 ## v1.0.49 - March 14, 2026
 
 support to get runners sysinfo
