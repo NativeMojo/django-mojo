@@ -1684,6 +1684,24 @@
         
       
       
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
       <a href="./" class="md-nav__link md-nav__link--active">
         
   
@@ -1700,6 +1718,36 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#runner-sysinfo" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Runner Sysinfo
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
       
     </li>
   
@@ -3604,6 +3652,25 @@
     
   
   
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#runner-sysinfo" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Runner Sysinfo
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
 </nav>
                   </div>
                 </div>
@@ -3629,6 +3696,46 @@
 <li><a href="writing_jobs/">Writing Job Functions</a> — Job function signature, lifecycle, best practices</li>
 <li><a href="job_model/">Job Model</a> — Job database model, status, querying</li>
 </ul>
+<h2 id="runner-sysinfo">Runner Sysinfo<a class="headerlink" href="#runner-sysinfo" title="Permanent link">&para;</a></h2>
+<p>Collect live host system information (CPU, memory, disk, network) from one or all active job runners via the broadcast-execute mechanism.</p>
+<p>```django-mojo/mojo/apps/jobs/<strong>init</strong>.py#L1-1
+from mojo.apps import jobs</p>
+<h1 id="all-active-runners">All active runners<a class="headerlink" href="#all-active-runners" title="Permanent link">&para;</a></h1>
+<p>info = jobs.get_sysinfo()</p>
+<h1 id="one-specific-runner">One specific runner<a class="headerlink" href="#one-specific-runner" title="Permanent link">&para;</a></h1>
+<p>info = jobs.get_sysinfo(runner_id='runner-host1-abc123')</p>
+<h1 id="custom-timeout-default-50s">Custom timeout (default 5.0s)<a class="headerlink" href="#custom-timeout-default-50s" title="Permanent link">&para;</a></h1>
+<p>info = jobs.get_sysinfo(timeout=10.0)
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>### Return shape
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>`get_sysinfo()` always returns a list — one entry per responding runner:
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>```django-mojo/mojo/apps/jobs/__init__.py#L1-1
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>[
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    {
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>        &quot;runner_id&quot;: &quot;runner-host1-abc123&quot;,
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>        &quot;func&quot;: &quot;mojo.apps.jobs.services.sysinfo_task.collect_sysinfo&quot;,
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>        &quot;status&quot;: &quot;success&quot;,       # or &quot;error&quot;
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>        &quot;timestamp&quot;: &quot;2026-03-14T10:00:00.000000&quot;,
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>        &quot;result&quot;: {
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>            &quot;os&quot;: { &quot;system&quot;: &quot;Linux&quot;, &quot;hostname&quot;: &quot;host1&quot;, ... },
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>            &quot;cpu_load&quot;: 12.5,
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>            &quot;cpus_load&quot;: [10.0, 15.0],
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>            &quot;memory&quot;: { &quot;total&quot;: 8589934592, &quot;used&quot;: ..., &quot;percent&quot;: 42.1 },
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>            &quot;disk&quot;:   { &quot;total&quot;: 107374182400, &quot;used&quot;: ..., &quot;percent&quot;: 38.0 },
+<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>            &quot;network&quot;: { &quot;tcp_cons&quot;: 24, &quot;bytes_sent&quot;: ..., &quot;bytes_recv&quot;: ... }
+<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>        }
+<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>    }
+<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>]
+</code></pre></div></p>
+<p>On failure (e.g. <code>psutil</code> not installed on the runner), the entry has <code>status: "error"</code> and an <code>error</code> key instead of <code>result</code>.</p>
+<p>An empty list <code>[]</code> is returned when no runners respond (no live runners, unknown runner ID, or timeout).</p>
+<h3 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h3>
+<p><code>get_sysinfo()</code> uses the existing <code>broadcast_execute</code> / <code>execute_on_runner</code> control channel mechanism. It calls <code>mojo.apps.jobs.services.sysinfo_task.collect_sysinfo</code> in-process on each runner, which calls <code>mojo.helpers.sysinfo.get_host_info()</code>. No job record is created and there is no retry — this is a real-time, fire-and-collect operation.</p>
+<h3 id="requirements">Requirements<a class="headerlink" href="#requirements" title="Permanent link">&para;</a></h3>
+<p><code>psutil</code> must be installed in the runner's Python environment:</p>
+<p><code>django-mojo/mojo/apps/jobs/__init__.py#L1-1
+pip install psutil</code></p>
 
 
 
