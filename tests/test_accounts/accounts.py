@@ -441,6 +441,8 @@ def test_phone_number_set_normalizes(opts):
     user.save_password(TEST_PHONE_PWORD)
     # Set via the set_phone_number method directly
     user.set_phone_number("415-555-0199")
+    # Mark phone verified so REQUIRE_VERIFIED_PHONE gate doesn't block login tests
+    user.is_phone_verified = True
     user.save()
     assert user.phone_number == TEST_PHONE, f"Expected {TEST_PHONE} but got {user.phone_number}"
 
@@ -459,6 +461,10 @@ def test_phone_number_set_via_rest(opts):
 
 @th.unit_test("login_with_phone_e164")
 def test_login_with_phone_e164(opts):
+    from testit import TestitSkip
+    from mojo.helpers.settings import settings
+    if not settings.get("ALLOW_PHONE_LOGIN", False):
+        raise TestitSkip("requires ALLOW_PHONE_LOGIN=True in server settings")
     resp = opts.client.login(TEST_PHONE, TEST_PHONE_PWORD)
     assert opts.client.is_authenticated, "login with E.164 phone number failed"
     assert opts.client.jwt_data.uid == opts.phone_user_id, "logged in as wrong user"
@@ -466,6 +472,10 @@ def test_login_with_phone_e164(opts):
 
 @th.unit_test("login_with_phone_unformatted")
 def test_login_with_phone_unformatted(opts):
+    from testit import TestitSkip
+    from mojo.helpers.settings import settings
+    if not settings.get("ALLOW_PHONE_LOGIN", False):
+        raise TestitSkip("requires ALLOW_PHONE_LOGIN=True in server settings")
     # Login with raw 10-digit number — should normalize to +14155550199 and match
     resp = opts.client.login("4155550199", TEST_PHONE_PWORD)
     assert opts.client.is_authenticated, "login with unformatted phone number failed"
@@ -474,6 +484,10 @@ def test_login_with_phone_unformatted(opts):
 
 @th.unit_test("login_with_phone_wrong_password")
 def test_login_with_phone_wrong_password(opts):
+    from testit import TestitSkip
+    from mojo.helpers.settings import settings
+    if not settings.get("ALLOW_PHONE_LOGIN", False):
+        raise TestitSkip("requires ALLOW_PHONE_LOGIN=True in server settings")
     resp = opts.client.login(TEST_PHONE, "wrongpassword")
     assert not opts.client.is_authenticated, "login should have failed with wrong password"
 

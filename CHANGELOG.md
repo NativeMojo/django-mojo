@@ -1,3 +1,195 @@
+## v1.0.55 - (current)
+
+## v1.0.48 - March 14, 2026
+
+new aws metrics support
+
+
+### Improvements
+
+- aws: added `memory` category for EC2 — fetches `mem_used_percent` from the `CWAgent` namespace (requires the CloudWatch Agent installed on the instance; instances without the agent return all-zero values) (`mojo/helpers/aws/cloudwatch.py`)
+- aws: added `disk` category for EC2 — fetches `disk_used_percent` from the `CWAgent` namespace, targeting the root filesystem (`path="/"`); rounds out the three core utilisation metrics alongside `cpu` and `memory` (requires the CloudWatch Agent; instances without the agent return all-zero values) (`mojo/helpers/aws/cloudwatch.py`)
+- aws: added `CATEGORY_NAMESPACE_OVERRIDE` table — maps `(account, category)` pairs that require a non-default CloudWatch namespace; used as the extension point for any future categories that live outside their account's primary namespace (`mojo/helpers/aws/cloudwatch.py`)
+- aws: added `CATEGORY_EXTRA_DIMENSIONS` table — maps `(account, category)` pairs that require additional fixed dimensions beyond the primary instance dimension (e.g. `disk` requires `path="/"` to target the root filesystem); appended automatically inside `fetch()` (`mojo/helpers/aws/cloudwatch.py`)
+- aws: added `resolve_namespace(account, category)` helper — returns the correct CloudWatch namespace for a given account/category pair, consulting `CATEGORY_NAMESPACE_OVERRIDE` before falling back to `ACCOUNT_NAMESPACE`; `fetch()` now calls this instead of the bare `ACCOUNT_NAMESPACE` lookup (`mojo/helpers/aws/cloudwatch.py`)
+
+### Bug Fixes
+
+- aws: fixed CloudWatch `_fetch_values` returning all-zero values for every metric on live systems — two root causes (`mojo/helpers/aws/cloudwatch.py`):
+  1. **Timezone mismatch**: boto3 returns CloudWatch `Timestamp` values as timezone-aware datetimes (`tzlocal()`); bucket keys were naive UTC. Added `replace(tzinfo=None)` to strip timezone before key lookup.
+  2. **Period offset mismatch**: CloudWatch returns datapoints at an internal offset (e.g. `:17` past the hour) rather than on clean period boundaries. A plain `replace(second=0, microsecond=0)` was not sufficient — timestamps are now floored to the period boundary using `_align_to_period()` before being used as dict keys, matching how `_build_buckets` constructs the bucket list.
+
+### Tests
+
+- tests: added `cw_fetch_ec2_memory` — verifies the `memory` category returns a valid `200` response with correct shape; non-zero assertion is conditional on the CloudWatch Agent being present (all-zero is legitimate when the agent is not installed) (`tests/test_aws/cloudwatch.py`)
+- tests: added `cw_fetch_ec2_disk` — verifies the `disk` category returns a valid `200` response with correct shape; same conditional non-zero pattern as memory (`tests/test_aws/cloudwatch.py`)
+
+### Docs
+
+- docs: updated `docs/django_developer/aws/cloudwatch.md` — added `memory` to category table with CWAgent footnote, documented `CATEGORY_NAMESPACE_OVERRIDE` and `resolve_namespace()` under a new Namespace Resolution section, updated module-level helper examples
+- docs: updated `docs/web_developer/aws/cloudwatch.md` — added `memory` to EC2-only category table with CWAgent footnote and install link
+
+---
+
+## v1.0.54
+
+### Improvements
+
+- aws: CloudWatch `fetch()` now resolves friendly names for chart slugs — EC2 instances use their `Name` tag value (e.g. `"web-server-1"`) instead of the raw AWS instance ID (e.g. `"i-0abc1234"`); RDS and ElastiCache identifiers are already human-readable and are used as-is (`mojo/helpers/aws/cloudwatch.py`)
+- aws: `fetch()` `slugs` input parameter now accepts either friendly names or raw AWS IDs — both are resolved to the underlying instance ID before the CloudWatch call is made (`mojo/helpers/aws/cloudwatch.py`)
+- aws: added `CloudWatchHelper.list_resource_slugs(account)` — returns `[{id, slug}]` for a given account type; used internally by `fetch()` for id↔slug mapping and available directly for callers that need to enumerate resources with their display names (`mojo/helpers/aws/cloudwatch.py`)
+- aws: `GET /api/aws/cloudwatch/resources` now includes a `slug` field on every resource entry — the same friendly name that will appear in chart labels; use `slug` (not `id`) as input to the `fetch` endpoint's `slugs` parameter (`mojo/apps/aws/rest/cloudwatch.py`)
+
+### Tests
+
+- tests: updated `cw_resources_list` — asserts that each resource entry now includes a non-empty `slug` field; stashes both `ec2_id` (raw AWS ID) and `ec2_slug` (friendly name) for downstream tests (`tests/test_aws/cloudwatch.py`)
+- tests: updated single-slug and per-resource tests to pass the friendly slug (not the raw AWS ID) as the `slugs` parameter, matching production usage
+- tests: added `cw_fetch_ec2_slug_is_name` — verifies end-to-end that when an EC2 instance has a `Name` tag the returned `slug` in the response matches the friendly name advertised by the `resources` endpoint, and does not look like a raw instance ID (`tests/test_aws/cloudwatch.py`)
+
+### Docs
+
+- docs: updated `docs/django_developer/aws/cloudwatch.md` — documented friendly-slug behavior in `fetch()`, updated examples to use friendly names, documented `list_resource_slugs()`, clarified `slugs` parameter accepts names or IDs
+- docs: updated `docs/web_developer/aws/cloudwatch.md` — added friendly-name overview, updated `resources` response shape to show `slug` field, updated `fetch` query parameter description and all response examples
+
+---
+
+## v1.0.53
+
+### Tests
+
+- tests: `login_with_phone_e164`, `login_with_phone_unformatted`, and `login_with_phone_wrong_password` now raise `TestitSkip` when `ALLOW_PHONE_LOGIN=False` on the server — these tests require phone-as-username login to be enabled and were failing unconditionally on servers where it is not (`tests/test_accounts/accounts.py`)
+
+---
+
+## v1.0.52
+
+### Bug Fixes
+
+- account: `REQUIRE_VERIFIED_EMAIL` gate was incorrectly blocking logins where the identifier was a plain **username** — the gate now only fires when `source == "email"` (i.e. the user submitted an email address as their login identifier). Username-based logins are never gated by email verification status (`mojo/apps/account/rest/user.py`)
+
+### Tests
+
+- tests: fixed `test_email_gate_blocks_unverified`, `test_email_gate_allows_verified`, and `test_email_gate_wrong_password_returns_401` — all three were posting with `username=TEST_USER` (a plain username), which would no longer trigger the gate; they now use the email address as the login identifier to correctly exercise the gate path
+- tests: added `test_email_gate_does_not_block_username_login` — asserts that a user with an unverified email can still log in via username when `REQUIRE_VERIFIED_EMAIL=True`
+
+### Docs
+
+- docs: updated `docs/web_developer/account/email_verification.md` — clarified that `REQUIRE_VERIFIED_EMAIL` only gates email-identifier logins; username logins are not affected
+- docs: updated `docs/web_developer/account/authentication.md` — added explicit callout that the email gate does not apply to plain username logins
+
+---
+
+## v1.0.51
+
+### AWS CloudWatch Monitoring
+
+- aws: added `CloudWatchHelper` in `mojo/helpers/aws/cloudwatch.py` — boto3 wrapper for fetching live time-series metrics from CloudWatch for EC2 instances (`AWS/EC2`), RDS DB instances (`AWS/RDS`), and ElastiCache clusters (`AWS/ElastiCache`)
+- aws: high-level `CloudWatchHelper.fetch(account, category, slugs, ...)` mirrors the metrics app API exactly — same `account`/`category`/`slugs` parameters, same `periods` + `data` response shape; existing frontend chart components work without modification
+- aws: when `slugs` is omitted, all instances for the account type are discovered automatically via `list_instance_ids(account)` — no need to specify IDs for the common case
+- aws: mapping tables in `cloudwatch.py` — `ACCOUNT_NAMESPACE`, `ACCOUNT_DIMENSION`, `CATEGORY_METRIC`, `GRANULARITY_SECONDS`, `STAT_MAP` — drive all account/category/granularity resolution; invalid combos raise `ValueError` (REST layer converts to `400`)
+- aws: two REST endpoints under `manage_aws` permission (`mojo/apps/aws/rest/cloudwatch.py`):
+  - `GET /api/aws/cloudwatch/resources` — list EC2, RDS, and ElastiCache resource IDs (use as `slugs`)
+  - `GET /api/aws/cloudwatch/fetch` — time-series metric data; params: `account`, `category`, `slugs` (optional), `dt_start`, `dt_end`, `granularity` (`minutes`/`hours`/`days`), `stat` (`avg`/`max`/`min`/`sum`)
+- aws: gap buckets (no CloudWatch datapoints) filled with `0.0` so `periods` and `values` are always the same length and cover the full requested range
+- aws: `CloudWatchHelper` exported from `mojo/helpers/aws/__init__.py`
+- docs: added `docs/django_developer/aws/cloudwatch.md` — helper usage, category reference table, IAM policy, and testing guide
+- docs: added `docs/web_developer/aws/cloudwatch.md` — endpoint reference, category tables by account type, response shape, granularity guide, and error codes
+- docs: updated both README indexes to include the new AWS CloudWatch section
+
+### Tests
+
+- tests: added `tests/test_aws/cloudwatch.py` — permission guard, missing-param, invalid account, invalid category, and wrong-account-for-category validation tests always run (no AWS credentials needed); live resource-list and metric fetch tests skip gracefully via `TestitSkip` when `AWS_KEY` is not configured on the server
+
+---
+
+## v1.0.50
+
+### Bug Fixes
+
+- rest: `on_rest_save_related_field` now calls `_set_field_change` before every `setattr` — FK assignments (e.g. `org`) previously never appeared in `changed_fields`, so guards like `MANAGE_USERS_ONLY_FIELDS` silently did nothing when a relation was set via a raw PK integer (`mojo/models/rest.py`)
+- settings: `SettingsHelper.get()` now reads from the live `django.conf.settings` proxy on every call instead of caching `self.root` — the cached reference went stale under Django's `override_settings`, causing settings changes to be ignored (`mojo/helpers/settings/helper.py`)
+- account: `on_email_change_request` now reads `ALLOW_EMAIL_CHANGE` at call time via `settings.get()` instead of using the module-level constant frozen at import time (`mojo/apps/account/rest/user.py`)
+
+### Phone Gate
+
+- account: confirmed `REQUIRE_VERIFIED_PHONE` gate applies symmetrically to password login when the identifier is a phone number (`ALLOW_PHONE_LOGIN=True`) — `lookup_from_request_with_source` returns `source="phone_number"` which flows into `_check_verification_gate` via `jwt_login`; no code change was required, only test coverage was missing
+
+### Phone Verification Endpoints
+
+- account: `POST /api/auth/verify/phone/send` — authenticated; sends a 6-digit OTP to the user's `phone_number` on file; no-ops with 200 if already verified; returns 400 if no phone number is set (`mojo/apps/account/rest/verify.py`)
+- account: `POST /api/auth/verify/phone/confirm` — authenticated; submits the 6-digit code to set `is_phone_verified=True`; code is single-use and expires after `PHONE_VERIFY_CODE_TTL` seconds (default 10 min); does not issue a new JWT (`mojo/apps/account/rest/verify.py`)
+- tokens: `generate_phone_verify_code(user)` / `verify_phone_verify_code(user, code)` — stores code + timestamp in user secrets, same pattern as SMS OTP (`mojo/apps/account/utils/tokens.py`)
+- docs: updated `docs/web_developer/account/email_verification.md` — replaced "coming soon" note with full endpoint reference, added `PHONE_VERIFY_CODE_TTL` to settings table, updated write-protection table with the new confirm endpoint
+
+### Email Template Seeds
+
+- aws: added seed JSON files for all account email templates — `email_verify.json`, `email_verify_link.json`, `email_change_confirm.json`, `email_change_notify.json` (`mojo/apps/aws/seeds/email_templates/`)
+- aws: `seed_email_templates` command skips existing records by default; `--update-existing` is an explicit opt-in — safe to re-run at any time
+
+### Tests
+
+- tests: fixed `test_accounts.verification` and `test_accounts.email_change` suites — all tests now pass
+- tests: gate tests (`REQUIRE_VERIFIED_EMAIL`, `REQUIRE_VERIFIED_PHONE`, `ALLOW_PHONE_LOGIN`, `ALLOW_EMAIL_CHANGE`) now read the live server setting and raise `TestitSkip` with a descriptive message when the required setting is not active — `override_settings` has no effect across the testit process boundary
+- tests: added three new phone-gate tests covering the password-login-via-phone-identifier path (off by default, blocks unverified, allows verified)
+- tests: fixed email change REST tests — replaced invalid `user_id=opts.user_id` kwarg pattern (silently ignored by `requests`) with explicit `opts.client.login()` / `opts.client.logout()` calls
+- tests: fixed `resp.json()` → `resp.json` throughout email change tests — `json` is a plain `objict` attribute on the testit `RestClient` response, not a callable
+- tests: write-protect and field-protect test actors now created with `is_email_verified=True` in setup; individual tests ensure the target user's `is_email_verified` is restored before each login so the email gate does not block test logins when `REQUIRE_VERIFIED_EMAIL=True` is active
+- tests: `sms auto-verify` standalone test now skips when `REQUIRE_VERIFIED_PHONE=True` — the gate correctly fires before auto-verify in that configuration, and the gate behavior is already covered by the dedicated gate tests
+
+## v1.0.49
+
+### Self-Service Email Change
+
+- account: added `POST /api/auth/email/change/request` — authenticated, password-confirmed request to change email; sends a confirmation link to the new address and a notification to the old address; current email is unchanged until confirmed
+- account: added `POST /api/auth/email/change/confirm` — public token-exchange endpoint; commits new email, sets `is_email_verified=True`, rotates `auth_key` (invalidates all prior sessions), and issues a fresh JWT in one step
+- account: added `POST /api/auth/email/change/cancel` — authenticated cancel; clears `pending_email` and nulls the stored `ec:` JTI so the outstanding link is dead immediately, before its 1-hour TTL expires; idempotent (no-op when no change is pending)
+- account: `username` is automatically mirrored to the new email address on confirm when it matched the old email address
+- account: email availability is re-checked at confirm time to guard against the race where another account registers the target address in the 1-hour window
+- tokens: added `KIND_EMAIL_CHANGE = "ec"` token (1-hour TTL, configurable via `EMAIL_CHANGE_TOKEN_TTL`) with `generate_email_change_token(user, new_email)` / `verify_email_change_token(token)` — stores `pending_email` in user secrets alongside the JTI (same pattern as `magic_login_channel`)
+- account: added `ALLOW_EMAIL_CHANGE` setting (default `True`) — set to `False` to disable the entire self-service email change flow; request endpoint returns 403 when disabled
+
+### Tests
+
+- tests: added `tests/test_accounts/email_change.py` — token unit tests (prefix, pending_email storage, verify tuple return, single-use, kind-mismatch rejection, expiry, auth-key rotation, re-request invalidation, garbage rejection) and REST endpoint tests for all three endpoints (request happy path, auth required, wrong password, missing password, same-email, duplicate-email, invalid format, setting disabled, confirm commit, auth-key rotation, username mirroring, inactive user, race condition, token single-use, kind mismatch, cancel clears pending + JTI, cancel no-op, cancel-then-confirm rejected)
+
+### Docs
+
+- docs/web: added `docs/web_developer/account/email_change.md` — full reference for all three endpoints, recommended UI flow, security notes, and settings reference
+- docs/web: `docs/web_developer/account/README.md` already lists the new doc (entry was pre-existing)
+
+## v1.0.48
+
+### Email & Phone Verification
+
+- account: added `REQUIRE_VERIFIED_EMAIL` setting (default `False`) — blocks password/email-based logins until `is_email_verified=True`
+- account: added `REQUIRE_VERIFIED_PHONE` setting (default `False`) — blocks SMS-based logins until `is_phone_verified=True`
+- account: login gate returns structured `{"error": "email_not_verified"}` / `{"error": "phone_not_verified"}` 403 so clients can prompt appropriately rather than showing a generic error
+- account: added `POST /api/auth/email/verify/send` — sends a verification link; anti-enumeration (always 200, inactive users silently ignored)
+- account: added `POST /api/auth/email/verify` — exchanges `ev:` token, sets `is_email_verified=True`, issues JWT in one step
+- account: added `POST /api/auth/invite/accept` — exchanges `iv:` invite token, sets `is_email_verified=True`, issues JWT
+- tokens: added `KIND_INVITE = "iv"` token (7-day TTL, configurable via `INVITE_TOKEN_TTL`) with `generate_invite_token` / `verify_invite_token`
+- account: `send_invite` now issues a purpose-specific `iv:` token instead of the legacy `pr:` password-reset alias
+- account: added `User.lookup_from_request_with_source()` — returns `(user, source)` where source is `"email"`, `"phone_number"`, or `"username"`; used to select the correct verification gate at login
+- sms: standalone SMS OTP verify (`/api/auth/sms/verify` without `mfa_token`) now auto-sets `is_phone_verified=True` on success — phone receipt proves ownership
+- sms: MFA-step SMS verify does **not** auto-set `is_phone_verified` (completing your own 2FA is not a verification act)
+
+### User Model Field Security
+
+- account: `is_email_verified` and `is_phone_verified` are now superuser-only via REST (both create and update paths)
+- account: `requires_mfa`, `last_activity`, `auth_key` added to superuser-only field guard
+- account: `is_active` and `org` now require `manage_users` permission to write via REST; owners can no longer deactivate/reactivate their own accounts or self-assign an org
+- account: `SUPERUSER_ONLY_FIELDS` and `MANAGE_USERS_ONLY_FIELDS` extracted to module-level `frozenset` constants for audibility
+- account: removed `creds_changed` flag passed between `on_rest_pre_save` and `_handle_existing_user_pre_save`; logic now lives where it belongs
+
+### Tests
+
+- tests: added `tests/test_accounts/verification.py` covering token unit tests (prefix, single-use, expiry, auth-key rotation, resend invalidation, cross-user rejection), REST endpoint correctness and security, verification gate (email + phone), SMS auto-verify, and full field write-protection matrix for all newly protected fields
+
+### Docs
+
+- docs/web: added `docs/web_developer/account/email_verification.md` — full reference for verification endpoints, invite flow, phone verification, UI flow, and settings
+- docs/web: updated `authentication.md` with Email Verification Gate section
+- docs/web: updated `account/README.md` index with link to new verification doc
 
 ## v1.0.45 - March 14, 2026
 ## v1.0.47 - March 14, 2026

@@ -260,3 +260,22 @@ If the account has TOTP or SMS MFA enabled, the login response is different — 
   "is_authenticated": false
 }
 ```
+
+## Email Verification Gate
+
+When the server has `REQUIRE_VERIFIED_EMAIL` or `REQUIRE_VERIFIED_PHONE` enabled, a login attempt by an unverified user returns a structured 403 with a machine-readable `error` field instead of a generic failure.
+
+**Important:** `REQUIRE_VERIFIED_EMAIL` only gates logins where the identifier submitted is an **email address** (i.e. the user typed their email into the username field, or used the `email` parameter). Logging in with a plain username is never blocked by this gate, regardless of the user's email verification status.
+
+```json
+{
+  "status": false,
+  "code": 403,
+  "error": "email_not_verified",
+  "message": "Please verify your email before logging in."
+}
+```
+
+Detect this error and show a **Resend verification email** prompt rather than a generic error message. The user does not need to re-enter their password — they only need to click the link.
+
+See [Email & Phone Verification](email_verification.md) for the full send/verify flow, invite link handling, phone verification, and settings reference.

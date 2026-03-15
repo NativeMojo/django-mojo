@@ -33,6 +33,21 @@ class SettingsHelper:
         from django.conf import settings as django_settings
         self.root = django_settings
 
+    def _live_django_settings(self):
+        """Always return the current django.conf.settings object.
+
+        We intentionally re-import on every call rather than using self.root so
+        that Django's override_settings context manager works correctly in tests.
+        override_settings swaps the underlying LazySettings._wrapped object; any
+        cached reference obtained before the override will silently read stale
+        values. Importing django.conf.settings is cheap — it returns the same
+        module-level LazySettings proxy each time, which always delegates to the
+        currently active wrapped object.
+        """
+        from django.conf import settings as django_settings
+        return django_settings
+
+
     def get_app_settings(self, app_name):
         key = f"{app_name.upper()}_SETTINGS"
         if key in self._app_cache:
@@ -45,12 +60,14 @@ class SettingsHelper:
         return self._app_cache[key]
 
     def get(self, name, default=UNKNOWN):
-        if self.root is None:
-            self.load_settings()
-        if isinstance(self.root, dict):
+        # When root is an explicit dict (app-settings sub-helper), read from it
+        # directly — no Django settings involved.
+        if self.root is not None and isinstance(self.root, dict):
             value = self.root.get(name, UNKNOWN)
-        else:
-            value = getattr(self.root, name, UNKNOWN)
+            return value if value is not UNKNOWN else self.get_default(name, default)
+        # For all other cases always read from the live Django settings object
+        # rather than a cached reference so that override_settings works in tests.
+        value = getattr(self._live_django_settings(), name, UNKNOWN)
         return value if value is not UNKNOWN else self.get_default(name, default)
 
     def get_default(self, name, default=None):

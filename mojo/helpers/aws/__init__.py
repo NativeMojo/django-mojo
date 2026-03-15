@@ -14,6 +14,7 @@ from .iam import IAMRole, IAMPolicy, IAMUser
 from .ses import EmailSender, EmailTemplate
 from .sns import SNSTopic, SNSSubscription
 from .ec2 import EC2Instance, EC2SecurityGroup
+from .cloudwatch import CloudWatchHelper
 
 __all__ = [
     # Base
@@ -42,4 +43,7 @@ __all__ = [
     # EC2
     'EC2Instance',
     'EC2SecurityGroup',
+
+    # CloudWatch
+    'CloudWatchHelper',
 ]

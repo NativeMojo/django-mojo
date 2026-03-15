@@ -13,6 +13,9 @@ JWT_REFRESH_TOKEN_EXPIRY = settings.get("JWT_REFRESH_TOKEN_EXPIRY", 604800)
 PASSWORD_RESET_TOKEN_TTL = settings.get("PASSWORD_RESET_TOKEN_TTL", 3600)
 PASSWORD_RESET_CODE_TTL = settings.get("PASSWORD_RESET_CODE_TTL", 600)
 ALLOW_PHONE_LOGIN = settings.get("ALLOW_PHONE_LOGIN", False)
+REQUIRE_VERIFIED_EMAIL = settings.get("REQUIRE_VERIFIED_EMAIL", False)
+REQUIRE_VERIFIED_PHONE = settings.get("REQUIRE_VERIFIED_PHONE", False)
+ALLOW_EMAIL_CHANGE = settings.get("ALLOW_EMAIL_CHANGE", True)
 
 @md.URL('user')
 @md.URL('user/<int:pk>')
@@ -68,7 +71,7 @@ def on_user_login(request):
     username = request.DATA.username
     password = request.DATA.password
 
-    user = User.lookup_from_request(request, phone_as_username=ALLOW_PHONE_LOGIN)
+    user, source = User.lookup_from_request_with_source(request, phone_as_username=ALLOW_PHONE_LOGIN)
     if user is None:
         User.class_report_incident(
             f"login attempt with unknown username {username}",
@@ -82,7 +85,7 @@ def on_user_login(request):
     mfa_methods = get_mfa_methods(user)
     if mfa_methods:
         return mfa_required_response(user, mfa_methods)
-    return jwt_login(request, user, "account/jwt/login" in request.path)
+    return jwt_login(request, user, "account/jwt/login" in request.path, source=source)
 
 
 def get_mfa_methods(user):
@@ -116,7 +119,30 @@ def mfa_required_response(user, methods):
     })
 
 
-def jwt_login(request, user, legacy=False):
+def _check_verification_gate(user, source):
+    """
+    Raises PermissionDeniedException with error='email_not_verified' or
+    'phone_not_verified' if the relevant verification setting is enabled
+    and the user's channel is not yet verified.
+
+    Settings are read at call time (not cached at import time) so that
+    Django's override_settings works correctly in tests.
+    """
+    require_verified_email = settings.get("REQUIRE_VERIFIED_EMAIL", False)
+    require_verified_phone = settings.get("REQUIRE_VERIFIED_PHONE", False)
+    if source == "email" and require_verified_email and not user.is_email_verified:
+        raise merrors.PermissionDeniedException(
+            "email_not_verified", 403, 403
+        )
+    if source == "phone_number" and require_verified_phone and not user.is_phone_verified:
+        raise merrors.PermissionDeniedException(
+            "phone_not_verified", 403, 403
+        )
+
+
+def jwt_login(request, user, legacy=False, source=None):
+    if source is not None:
+        _check_verification_gate(user, source)
     user.last_login = dates.utcnow()
     user.track()
     keys = dict(uid=user.id, ip=request.ip)
@@ -264,6 +290,227 @@ def on_magic_login_complete(request):
         user.is_email_verified = True
         user.save(update_fields=["is_email_verified", "modified"])
     return jwt_login(request, user)
+
+
+# -----------------------------------------------------------------
+# Email verification
+# -----------------------------------------------------------------
+
+@md.POST("auth/email/verify/send")
+@md.strict_rate_limit("email_verify_send", ip_limit=5, ip_window=300)
+@md.public_endpoint()
+def on_email_verify_send(request):
+    """Send an email verification link. Accepts username or email."""
+    from mojo.apps.account.utils import tokens as tok_utils
+    user = User.lookup_from_request(request)
+    if user is None or not user.is_active:
+        # No enumeration — always return success regardless of existence or active state
+        return JsonResponse({"status": True, "message": "If the account exists, a verification email was sent."})
+    if user.is_email_verified:
+        return JsonResponse({"status": True, "message": "Email is already verified."})
+    token = tok_utils.generate_email_verify_token(user)
+    user.send_template_email("email_verify_link", dict(token=token))
+    return JsonResponse({"status": True, "message": "If the account exists, a verification email was sent."})
+
+
+@md.POST("auth/email/verify")
+@md.strict_rate_limit("email_verify", ip_limit=10, ip_window=300)
+@md.custom_security("requires valid email verify token")
+@md.requires_params("token")
+def on_email_verify(request):
+    """Exchange an email verify token — marks email verified and logs the user in."""
+    from mojo.apps.account.utils import tokens as tok_utils
+    token = request.DATA.get("token")
+    user = tok_utils.verify_email_verify_token(token)
+    if not user.is_active:
+        raise merrors.PermissionDeniedException("Account is disabled", 403, 403)
+    user.is_email_verified = True
+    user.save(update_fields=["is_email_verified", "modified"])
+    return jwt_login(request, user)
+
+
+@md.POST("auth/invite/accept")
+@md.strict_rate_limit("invite_accept", ip_limit=10, ip_window=300)
+@md.custom_security("requires valid invite token")
+@md.requires_params("token")
+def on_invite_accept(request):
+    """
+    Accept an invite token.
+    Marks email as verified and issues a JWT.
+    If the user has no password yet, the client should prompt them to set one
+    via POST /api/auth/password/reset/token (the invite token is the same shape).
+    """
+    from mojo.apps.account.utils import tokens as tok_utils
+    token = request.DATA.get("token")
+    user = tok_utils.verify_invite_token(token)
+    if not user.is_active:
+        raise merrors.PermissionDeniedException("Account is disabled", 403, 403)
+    user.is_email_verified = True
+    user.save(update_fields=["is_email_verified", "modified"])
+    return jwt_login(request, user)
+
+
+# -----------------------------------------------------------------
+# Email change (self-service, verify-then-commit)
+# -----------------------------------------------------------------
+
+@md.POST("auth/email/change/request")
+@md.requires_auth()
+@md.strict_rate_limit("email_change_request", ip_limit=5, ip_window=3600)
+@md.requires_params("email")
+def on_email_change_request(request):
+    """
+    Begin a self-service email change. Requires current_password.
+    Sends a confirmation link to the NEW address and a notification to the OLD address.
+    The current email is NOT changed until the user clicks the confirmation link.
+    """
+    if not settings.get("ALLOW_EMAIL_CHANGE", True):
+        raise merrors.PermissionDeniedException("Email change is not allowed")
+
+    import re
+    from mojo.apps.account.utils import tokens as tok_utils
+
+    user = request.user
+    new_email = request.DATA.get("email", "").lower().strip()
+    current_password = request.DATA.get("current_password", "")
+
+    if not current_password:
+        raise merrors.ValueException("current_password is required to change your email")
+    if not user.check_password(current_password):
+        user.report_incident("Invalid password on email change request", "email_change:bad_password")
+        raise merrors.PermissionDeniedException("Incorrect password", 401, 401)
+    if not new_email or not re.match(r"[^@]+@[^@]+\.[^@]+", new_email):
+        raise merrors.ValueException("Invalid email address")
+    if new_email == str(user.email).lower():
+        raise merrors.ValueException("New email must be different from current email")
+    if User.objects.filter(email=new_email).exclude(pk=user.pk).exists():
+        raise merrors.ValueException("Email already in use")
+
+    token = tok_utils.generate_email_change_token(user, new_email)
+
+    # Confirmation link sent to the NEW address — resolve the mailbox the same way
+    # send_template_email does internally, since that method always sends to self.email.
+    _send_email_change_confirm(user, new_email, token)
+
+    # Notification to the OLD address — no cancel token (single-JTI design means issuing
+    # a second ec: token would immediately invalidate the first). The user can cancel via
+    # POST /api/auth/email/change/cancel while authenticated, or simply let the 1h link expire.
+    user.send_template_email("email_change_notify", dict(new_email=new_email))
+
+    user.report_incident(f"{user.username} requested email change to {new_email}", "email_change:requested")
+    return JsonResponse({"status": True, "message": "A confirmation link has been sent to your new email address."})
+
+
+def _send_email_change_confirm(user, new_email, token):
+    """
+    Send the email-change confirmation link to the NEW address.
+    Uses the same mailbox-resolution logic as user.send_template_email but
+    overrides the recipient so the message goes to new_email, not user.email.
+    """
+    from mojo.apps.aws.models import Mailbox
+
+    mailbox = None
+    if user.org and hasattr(user.org, "metadata"):
+        domain = user.org.metadata.get("domain")
+        if domain:
+            mailbox = Mailbox.get_domain_default(domain)
+            if not mailbox:
+                mailbox = Mailbox.objects.filter(
+                    domain__name__iexact=domain,
+                    allow_outbound=True,
+                ).first()
+    if not mailbox:
+        mailbox = Mailbox.get_system_default()
+
+    if not mailbox:
+        user.report_incident(
+            "No mailbox available to send email change confirmation",
+            "email:no_mailbox",
+            level=6,
+        )
+        return
+
+    context = {
+        "user": user.to_dict("basic"),
+        "token": token,
+        "new_email": new_email,
+    }
+    try:
+        mailbox.send_template_email(
+            to=new_email,
+            template_name="email_change_confirm",
+            context=context,
+            allow_unverified=True,
+        )
+    except Exception as e:
+        user.report_incident(
+            f"email change confirm send failed: {e}",
+            "email:send_failed",
+            level=6,
+        )
+
+
+@md.POST("auth/email/change/confirm")
+@md.strict_rate_limit("email_change_confirm", ip_limit=10, ip_window=3600)
+@md.custom_security("requires valid email change token")
+@md.requires_params("token")
+def on_email_change_confirm(request):
+    """
+    Complete an email change by exchanging the ec: token sent to the new address.
+    Commits the new email, marks it verified, rotates auth_key (invalidates all
+    other sessions), and issues a fresh JWT.
+    """
+    import uuid
+    from mojo.apps.account.utils import tokens as tok_utils
+
+    token = request.DATA.get("token")
+    user, new_email = tok_utils.verify_email_change_token(token)
+
+    if not user.is_active:
+        raise merrors.PermissionDeniedException("Account is disabled", 403, 403)
+
+    # Confirm new email is still available (another account may have claimed it in the interim)
+    if User.objects.filter(email=new_email).exclude(pk=user.pk).exists():
+        raise merrors.ValueException("Email address is no longer available")
+
+    old_email = str(user.email)
+
+    # Commit the change — bypass the REST guard by updating directly
+    User.objects.filter(pk=user.pk).update(
+        email=new_email,
+        is_email_verified=True,
+        auth_key=uuid.uuid4().hex,  # invalidate all other active sessions
+    )
+    # Update username too if it mirrored the old email
+    if str(user.username).lower() == old_email.lower():
+        User.objects.filter(pk=user.pk).update(username=new_email)
+
+    user.refresh_from_db()
+    user.log(kind="email:changed", log=f"{old_email} to {new_email}")
+    return jwt_login(request, user)
+
+
+@md.POST("auth/email/change/cancel")
+@md.requires_auth()
+@md.strict_rate_limit("email_change_cancel", ip_limit=10, ip_window=3600)
+def on_email_change_cancel(request):
+    """
+    Cancel a pending email change. Clears the stored pending_email so the
+    outstanding confirmation link becomes useless even before it expires.
+    Requires authentication (the real owner cancels via their active session).
+    """
+    import mojo.apps.account.utils.tokens as tok_module
+
+    user = request.user
+    pending = user.get_secret("pending_email")
+    if not pending:
+        return JsonResponse({"status": True, "message": "No pending email change to cancel."})
+    user.set_secret("pending_email", None)
+    # Also clear the JTI so the outstanding ec: token is immediately dead
+    user.set_secret(tok_module._JTI_KEYS[tok_module.KIND_EMAIL_CHANGE], None)
+    user.save(update_fields=["mojo_secrets", "modified"])
+    user.report_incident(f"{user.username} cancelled pending email change to {pending}", "email_change:cancelled")
+    return JsonResponse({"status": True, "message": "Pending email change has been cancelled."})
 
 
 @md.POST("auth/generate_api_key")

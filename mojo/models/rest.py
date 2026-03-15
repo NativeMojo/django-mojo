@@ -1089,6 +1089,8 @@ class MojoModel:
             if not bool(field_value):
                 # None, "", 0 will set it to None
                 # logger.info(f"Setting field {field.name} to None")
+                old_value = getattr(self, field.name, None)
+                self._set_field_change(field.name, old_value, None)
                 setattr(self, field.name, None)
                 return
             field_value = int(field_value)
@@ -1096,8 +1098,12 @@ class MojoModel:
                 self.debug("Skipping self-reference")
                 return
             related_instance = field.related_model.objects.get(pk=field_value)
+            old_value = getattr(self, field.name, None)
+            self._set_field_change(field.name, old_value, related_instance)
             setattr(self, field.name, related_instance)
         elif field_value is None:
+            old_value = getattr(self, field.name, None)
+            self._set_field_change(field.name, old_value, None)
             setattr(self, field.name, None)
 
     def on_rest_update_jsonfield(self, field_name, field_value, request=None):

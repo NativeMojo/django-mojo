@@ -8,27 +8,37 @@ PASSWORD_RESET_CODE_TTL = settings.get("PASSWORD_RESET_CODE_TTL", 600)
 MAGIC_LOGIN_TOKEN_TTL = settings.get("MAGIC_LOGIN_TOKEN_TTL", 3600)
 EMAIL_VERIFY_TOKEN_TTL = settings.get("EMAIL_VERIFY_TOKEN_TTL", 86400)
 PHONE_VERIFY_CODE_TTL = settings.get("PHONE_VERIFY_CODE_TTL", 600)
+INVITE_TOKEN_TTL = settings.get("INVITE_TOKEN_TTL", 604800)
+EMAIL_CHANGE_TOKEN_TTL = settings.get("EMAIL_CHANGE_TOKEN_TTL", 3600)  # 1 hour
 
 # Token kind prefixes — visible to the webapp before any decoding
 KIND_PASSWORD_RESET = "pr"
 KIND_MAGIC_LOGIN = "ml"
 KIND_EMAIL_VERIFY = "ev"
+KIND_INVITE = "iv"
+KIND_EMAIL_CHANGE = "ec"
 
 # Secrets keys per kind — kept separate so they don't invalidate each other
 _JTI_KEYS = {
     KIND_PASSWORD_RESET: "password_reset_jti",
     KIND_MAGIC_LOGIN: "magic_login_jti",
     KIND_EMAIL_VERIFY: "email_verify_jti",
+    KIND_INVITE: "invite_jti",
+    KIND_EMAIL_CHANGE: "email_change_jti",
 }
 _TS_KEYS = {
     KIND_PASSWORD_RESET: "password_reset_ts",
     KIND_MAGIC_LOGIN: "magic_login_ts",
     KIND_EMAIL_VERIFY: "email_verify_ts",
+    KIND_INVITE: "invite_ts",
+    KIND_EMAIL_CHANGE: "email_change_ts",
 }
 _TTL = {
     KIND_PASSWORD_RESET: PASSWORD_RESET_TOKEN_TTL,
     KIND_MAGIC_LOGIN: MAGIC_LOGIN_TOKEN_TTL,
     KIND_EMAIL_VERIFY: EMAIL_VERIFY_TOKEN_TTL,
+    KIND_INVITE: INVITE_TOKEN_TTL,
+    KIND_EMAIL_CHANGE: EMAIL_CHANGE_TOKEN_TTL,
 }
 
 
@@ -204,6 +214,46 @@ def verify_phone_verify_code(user, code):
     user.set_secret("phone_verify_code", None)
     user.set_secret("phone_verify_ts", None)
     user.save(update_fields=["mojo_secrets", "modified"])
+
+
+def generate_invite_token(user):
+    """Generate an invite token (kind=iv). TTL defaults to 7 days."""
+    return _generate(user, KIND_INVITE)
+
+
+def verify_invite_token(token):
+    """Verify an invite token and return the User."""
+    return _verify(token, expected_kind=KIND_INVITE)
+
+
+def generate_email_change_token(user, new_email):
+    """
+    Generate an email-change confirmation token (kind=ec). TTL defaults to 1 hour.
+    Stores the pending new_email in user secrets alongside the JTI so the confirm
+    step can retrieve it without it being in the URL.
+    """
+    token = _generate(user, KIND_EMAIL_CHANGE)
+    user.set_secret("pending_email", new_email)
+    user.save(update_fields=["mojo_secrets", "modified"])
+    return token
+
+
+def verify_email_change_token(token):
+    """
+    Verify an email-change token and return (user, new_email).
+    Clears pending_email from secrets on success (single-use).
+    Raises ValueException on any failure.
+    """
+    user = _verify(token, expected_kind=KIND_EMAIL_CHANGE)
+    new_email = user.get_secret("pending_email")
+    user.set_secret("pending_email", None)
+    user.save(update_fields=["mojo_secrets", "modified"])
+    if not new_email:
+        user.report_incident(
+            details=f"{user.username} email change token had no pending_email",
+            event_type="email_change:invalid")
+        raise merrors.ValueException("Invalid token")
+    return user, new_email
 
 
 # Legacy aliases — kept so existing call sites don't break

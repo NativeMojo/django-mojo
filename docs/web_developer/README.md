@@ -24,6 +24,7 @@ Companion track for framework developers: [docs/django_developer/README.md](../d
 | [realtime/](realtime/README.md) | WebSocket protocol |
 | [phonehub/](phonehub/README.md) | Phone and device management |
 | [shortlink/](shortlink/README.md) | Short URL creation, redirect behavior, OG previews |
+| [aws/cloudwatch](aws/cloudwatch.md) | Live AWS infrastructure metrics (EC2, RDS, ElastiCache) |
 | [filevault/](filevault/README.md) | Encrypted file vault |
 | [docit/](docit/README.md) | Documentation system |
 

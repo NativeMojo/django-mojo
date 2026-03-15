@@ -29,6 +29,26 @@ USER_PERMS_PROTECTION = settings.get("USER_PERMS_PROTECTION", {})
 USER_PERMS_PROTECTION.update(SYS_USER_PERMS_PROTECTION)
 
 USER_LAST_ACTIVITY_FREQ = settings.get("USER_LAST_ACTIVITY_FREQ", 300)
+
+# Fields that only a superuser may write via REST, on both create and update paths.
+#   is_email_verified / is_phone_verified  — set only by internal token flows
+#   requires_mfa                           — disabling MFA is a security policy decision
+#
+# Note: auth_key and last_activity are NOT listed here because they are in
+# NO_SAVE_FIELDS — the REST framework silently ignores them for everyone,
+# which is a stronger guarantee than a permission check.
+SUPERUSER_ONLY_FIELDS = frozenset((
+    "is_email_verified", "is_phone_verified",
+    "requires_mfa",
+))
+
+# Fields that require manage_users permission (superusers implicitly qualify).
+#   is_active       — activating/deactivating an account is an admin action
+#   org / org_id    — org assignment controls token TTLs and push config;
+#                     both names checked because Django FK fields appear in
+#                     changed_fields as the attrib name ("org") when set via
+#                     setattr, but REST may also pass "org_id" directly
+MANAGE_USERS_ONLY_FIELDS = frozenset(("is_active", "org", "org_id"))
 METRICS_TIMEZONE = settings.get("METRICS_TIMEZONE", "America/Los_Angeles")
 METRICS_TRACK_USER_ACTIVITY = settings.get("METRICS_TRACK_USER_ACTIVITY", False)
 
@@ -100,6 +120,12 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         LOG_CHANGES = True
         POST_SAVE_ACTIONS = ['send_invite']
         NO_SHOW_FIELDS = ["password", "auth_key", "onetime_code"]
+        # auth_key and last_activity must never be writable via REST by anyone.
+        # auth_key is the JWT signing secret — writing it is a session-invalidation
+        # attack vector. last_activity is a server-managed audit timestamp.
+        # Superusers who need to rotate auth_key or correct last_activity should
+        # do so via direct DB access or a dedicated management command.
+        NO_SAVE_FIELDS = ["auth_key", "last_activity"]
         SEARCH_FIELDS = ["username", "email", "display_name", "phone_number"]
         VIEW_PERMS = ["view_users", "manage_users", "owner"]
         SAVE_PERMS = ["manage_users", "owner"]
@@ -592,11 +618,16 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             metrics.set_value("total_users", User.objects.filter(is_active=True).count(), account="global")
 
     def on_rest_pre_save(self, changed_fields, created):
-        creds_changed = False
+        for _field in SUPERUSER_ONLY_FIELDS:
+            if _field in changed_fields and not self.active_user.is_superuser:
+                raise merrors.PermissionDeniedException(f"You are not allowed to change {_field}")
+        for _field in MANAGE_USERS_ONLY_FIELDS:
+            if _field in changed_fields and not self.active_user.has_permission("manage_users"):
+                raise merrors.PermissionDeniedException(f"You are not allowed to change {_field}")
         if "email" in changed_fields:
-            creds_changed = True
             self.validate_email()
             self.email = self.email.lower()
+            self.is_email_verified = False
             if not self.username:
                 self.username = self.generate_username_from_email()
             elif "@" in self.username and self.username != self.email:
@@ -607,7 +638,6 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             if qset.exists():
                 raise merrors.ValueException("Email already exists")
         if "username" in changed_fields:
-            creds_changed = True
             self.validate_username()
             self.username = self.username.lower()
             qset = User.objects.filter(username=self.username)
@@ -619,10 +649,12 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             self.display_name = self.generate_display_name()
         self.validate_name_fields(changed_fields, created)
         if self.pk is not None:
-            self._handle_existing_user_pre_save(creds_changed, changed_fields)
+            self._handle_existing_user_pre_save(changed_fields)
 
-    def _handle_existing_user_pre_save(self, creds_changed, changed_fields):
-        # only super user can change email or username
+    def _handle_existing_user_pre_save(self, changed_fields):
+        creds_changed = "email" in changed_fields or "username" in changed_fields
+        # only superuser can change email or username (guard already fired in on_rest_pre_save
+        # for the REST path; this catches any direct programmatic call to this method)
         if creds_changed and not self.active_user.is_superuser:
             raise merrors.PermissionDeniedException("You are not allowed to change email or username")
         if "password" in changed_fields:
@@ -786,7 +818,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
 
         context = {
             "user": self.to_dict("basic"),
-            "token": tokens.generate_token(self)
+            "token": tokens.generate_invite_token(self)
         }
         for key, value in kwargs.items():
             if hasattr(value, 'to_dict'):
@@ -1052,6 +1084,35 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         if not phone_number and phone_as_username:
             phone_number = username
         return cls.lookup(username=username, email=email, phone_number=phone_number)
+
+    @classmethod
+    def lookup_from_request_with_source(cls, request, phone_as_username=False):
+        username = request.DATA.get("username", "").lower().strip()
+        email = request.DATA.get("email", "").lower().strip()
+        phone_number = request.DATA.get("phone_number")
+
+        if not email and username and "@" in username:
+            email = username
+
+        if phone_number:
+            user = cls.lookup(phone_number=phone_number)
+            if user:
+                return user, "phone_number"
+        if not phone_number and phone_as_username and username and "@" not in username:
+            normalized = cls.normalize_phone(username)
+            if normalized:
+                user = cls.lookup(phone_number=normalized)
+                if user:
+                    return user, "phone_number"
+        if email:
+            user = cls.lookup(email=email)
+            if user:
+                return user, "email"
+        if username:
+            user = cls.lookup(username=username)
+            if user:
+                return user, "username"
+        return None, None
 
     @classmethod
     def lookup(cls, username=None, email=None, phone_number=None):
