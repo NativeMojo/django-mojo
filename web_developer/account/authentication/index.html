@@ -4058,6 +4058,9 @@
 <li>strict CSP</li>
 <li>output escaping/sanitization</li>
 <li>dependency hygiene</li>
+<li><strong>Revoke all sessions:</strong> <code>POST /api/auth/sessions/revoke</code> rotates <code>auth_key</code>, immediately invalidating every outstanding JWT. Requires <code>current_password</code>. Returns a fresh JWT for the calling session so the user stays logged in. See <a href="../user_self_management/#8-sessions--devices">User Self-Management § Sessions &amp; Devices</a>.</li>
+<li><strong>Email change also rotates <code>auth_key</code></strong> — after a successful email change confirm, all other sessions are invalidated as a side effect.</li>
+<li><strong>Security events feed:</strong> <code>GET /api/account/security-events</code> returns auth-relevant audit events (logins, failed passwords, MFA events, email/phone changes, session revokes, etc.) scoped to the authenticated user. No special permission required. See <a href="../user_self_management/#15-security-events">User Self-Management § Security Events</a>.</li>
 </ul>
 <h2 id="get-current-user">Get Current User<a class="headerlink" href="#get-current-user" title="Permanent link">&para;</a></h2>
 <p><strong>GET</strong> <code>/api/user/me</code></p>

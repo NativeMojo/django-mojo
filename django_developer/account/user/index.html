@@ -4253,6 +4253,16 @@
 <td>Phone number verified flag</td>
 </tr>
 <tr>
+<td><code>is_dob_verified</code></td>
+<td>BooleanField</td>
+<td>DOB verified flag (system-only, never REST-writable)</td>
+</tr>
+<tr>
+<td><code>dob</code></td>
+<td>DateField (nullable)</td>
+<td>Date of birth — PII, cleared by <code>pii_anonymize()</code></td>
+</tr>
+<tr>
 <td><code>permissions</code></td>
 <td>JSONField</td>
 <td>Key-based permission dict</td>
@@ -4291,14 +4301,15 @@
 <a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    <span class="n">SAVE_PERMS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;manage_users&quot;</span><span class="p">,</span> <span class="s2">&quot;owner&quot;</span><span class="p">]</span>
 <a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>    <span class="n">OWNER_FIELD</span> <span class="o">=</span> <span class="s2">&quot;self&quot;</span>           <span class="c1"># owner = user is themselves</span>
 <a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>    <span class="n">NO_SHOW_FIELDS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;password&quot;</span><span class="p">,</span> <span class="s2">&quot;auth_key&quot;</span><span class="p">,</span> <span class="s2">&quot;onetime_code&quot;</span><span class="p">]</span>
-<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>    <span class="n">SEARCH_FIELDS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;username&quot;</span><span class="p">,</span> <span class="s2">&quot;email&quot;</span><span class="p">,</span> <span class="s2">&quot;display_name&quot;</span><span class="p">]</span>
-<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>    <span class="n">POST_SAVE_ACTIONS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;send_invite&quot;</span><span class="p">]</span>
-<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>    <span class="n">GRAPHS</span> <span class="o">=</span> <span class="p">{</span>
-<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>        <span class="s2">&quot;basic&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;fields&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;id&quot;</span><span class="p">,</span> <span class="s2">&quot;display_name&quot;</span><span class="p">,</span> <span class="s2">&quot;username&quot;</span><span class="p">,</span> <span class="s2">&quot;last_activity&quot;</span><span class="p">,</span> <span class="s2">&quot;is_active&quot;</span><span class="p">]},</span>
-<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>        <span class="s2">&quot;default&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;fields&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;id&quot;</span><span class="p">,</span> <span class="s2">&quot;display_name&quot;</span><span class="p">,</span> <span class="s2">&quot;username&quot;</span><span class="p">,</span> <span class="s2">&quot;email&quot;</span><span class="p">,</span> <span class="s2">&quot;phone_number&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>                               <span class="s2">&quot;permissions&quot;</span><span class="p">,</span> <span class="s2">&quot;metadata&quot;</span><span class="p">,</span> <span class="s2">&quot;is_active&quot;</span><span class="p">]},</span>
-<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>        <span class="s2">&quot;full&quot;</span><span class="p">:</span> <span class="p">{}</span>
-<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>    <span class="p">}</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>    <span class="n">NO_SAVE_FIELDS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;auth_key&quot;</span><span class="p">,</span> <span class="s2">&quot;last_activity&quot;</span><span class="p">,</span> <span class="s2">&quot;is_dob_verified&quot;</span><span class="p">]</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>    <span class="n">SEARCH_FIELDS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;username&quot;</span><span class="p">,</span> <span class="s2">&quot;email&quot;</span><span class="p">,</span> <span class="s2">&quot;display_name&quot;</span><span class="p">]</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>    <span class="n">POST_SAVE_ACTIONS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;send_invite&quot;</span><span class="p">]</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>    <span class="n">GRAPHS</span> <span class="o">=</span> <span class="p">{</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>        <span class="s2">&quot;basic&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;fields&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;id&quot;</span><span class="p">,</span> <span class="s2">&quot;display_name&quot;</span><span class="p">,</span> <span class="s2">&quot;username&quot;</span><span class="p">,</span> <span class="s2">&quot;last_activity&quot;</span><span class="p">,</span> <span class="s2">&quot;is_active&quot;</span><span class="p">]},</span>
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>        <span class="s2">&quot;default&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;fields&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;id&quot;</span><span class="p">,</span> <span class="s2">&quot;display_name&quot;</span><span class="p">,</span> <span class="s2">&quot;username&quot;</span><span class="p">,</span> <span class="s2">&quot;email&quot;</span><span class="p">,</span> <span class="s2">&quot;phone_number&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>                               <span class="s2">&quot;permissions&quot;</span><span class="p">,</span> <span class="s2">&quot;metadata&quot;</span><span class="p">,</span> <span class="s2">&quot;is_active&quot;</span><span class="p">]},</span>
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>        <span class="s2">&quot;full&quot;</span><span class="p">:</span> <span class="p">{}</span>
+<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>    <span class="p">}</span>
 </code></pre></div>
 <h2 id="name-helpers">Name Helpers<a class="headerlink" href="#name-helpers" title="Permanent link">&para;</a></h2>
 <h3 id="full_name-property"><code>full_name</code> property<a class="headerlink" href="#full_name-property" title="Permanent link">&para;</a></h3>
@@ -4456,6 +4467,21 @@
 <td><code>USER_PERMS_PROTECTION</code></td>
 <td>(system defaults)</td>
 <td>Dict of perm → required perm to grant it</td>
+</tr>
+<tr>
+<td><code>ALLOW_USERNAME_CHANGE</code></td>
+<td><code>True</code></td>
+<td>Feature flag — set <code>False</code> to disable the self-service username change endpoint</td>
+</tr>
+<tr>
+<td><code>ALLOW_SELF_DEACTIVATION</code></td>
+<td><code>True</code></td>
+<td>Feature flag — set <code>False</code> to disable self-service account deactivation</td>
+</tr>
+<tr>
+<td><code>DEACTIVATE_TOKEN_TTL</code></td>
+<td><code>900</code></td>
+<td>Account deactivation confirmation token TTL (seconds, 15 min default)</td>
 </tr>
 </tbody>
 </table>
