@@ -6,8 +6,15 @@ Setup flow (authenticated):
   POST /api/account/totp/confirm  -> verify first code, mark is_enabled=True
   DELETE /api/account/totp        -> disable TOTP
 
+Recovery codes (authenticated):
+  GET  /api/account/totp/recovery-codes           -> masked codes + remaining count
+  POST /api/account/totp/recovery-codes/regenerate -> new codes (requires valid TOTP code)
+
 Login (2FA verify step — consumes mfa_token):
   POST /api/auth/totp/verify      -> verify code + mfa_token, issue JWT
+
+Recovery login (consumes mfa_token + recovery code):
+  POST /api/auth/totp/recover     -> recovery_code + mfa_token, issue JWT
 
 Standalone login (no password):
   POST /api/auth/totp/login       -> username + code -> JWT
@@ -75,10 +82,11 @@ def on_totp_confirm(request):
 
     totp.is_enabled = True
     totp.save()
+    codes = totp.generate_recovery_codes()
     request.user.requires_mfa = True
     request.user.save()
     logit.info("account.totp", f"TOTP enabled for user {request.user.username}")
-    return JsonResponse({"status": True, "data": {"is_enabled": True}})
+    return JsonResponse({"status": True, "data": {"is_enabled": True, "recovery_codes": codes}})
 
 
 @md.DELETE("account/totp")
@@ -88,6 +96,37 @@ def on_totp_disable(request):
     UserTOTP.objects.filter(user=request.user).update(is_enabled=False)
     logit.info("account.totp", f"TOTP disabled for user {request.user.username}")
     return JsonResponse({"status": True})
+
+
+# -----------------------------------------------------------------
+# Recovery codes (requires auth)
+# -----------------------------------------------------------------
+
+@md.GET("account/totp/recovery-codes")
+@md.requires_auth()
+def on_totp_recovery_codes_get(request):
+    """Return masked recovery codes and remaining count."""
+    totp = UserTOTP.objects.filter(user=request.user, is_enabled=True).first()
+    if not totp:
+        raise merrors.ValueException("TOTP is not enabled for this account")
+    data = totp.get_masked_recovery_codes()
+    return JsonResponse({"status": True, "data": data})
+
+
+@md.POST("account/totp/recovery-codes/regenerate")
+@md.requires_auth()
+@md.requires_params("code")
+def on_totp_recovery_codes_regenerate(request):
+    """Regenerate recovery codes. Requires a valid TOTP code to authorize."""
+    totp = UserTOTP.objects.filter(user=request.user, is_enabled=True).first()
+    if not totp:
+        raise merrors.ValueException("TOTP is not enabled for this account")
+    secret = totp.get_secret("totp_secret")
+    code = request.DATA.get("code", "").strip()
+    if not totp_service.verify_code(secret, code):
+        raise merrors.PermissionDeniedException("Invalid TOTP code", 403, 403)
+    codes = totp.generate_recovery_codes()
+    return JsonResponse({"status": True, "data": {"is_enabled": True, "recovery_codes": codes}})
 
 
 # -----------------------------------------------------------------
@@ -120,6 +159,44 @@ def on_totp_verify(request):
         user.report_incident("Invalid TOTP code during login", "totp:login_failed")
         raise merrors.PermissionDeniedException("Invalid code", 401, 401)
 
+    return jwt_login(request, user)
+
+
+# -----------------------------------------------------------------
+# Recovery login (consumes mfa_token + recovery code)
+# -----------------------------------------------------------------
+
+@md.POST("auth/totp/recover")
+@md.requires_params("mfa_token", "recovery_code")
+@md.public_endpoint()
+def on_totp_recover(request):
+    """
+    Authenticate using a recovery code instead of a TOTP code.
+    Consumes the mfa_token and one recovery code, then issues a JWT.
+    """
+    token_data = mfa_service.consume_mfa_token(request.DATA.get("mfa_token"))
+    if not token_data:
+        raise merrors.PermissionDeniedException("Invalid or expired MFA token", 401, 401)
+
+    user = User.objects.filter(pk=token_data["uid"]).first()
+    if not user or not user.is_active:
+        raise merrors.PermissionDeniedException()
+
+    totp = UserTOTP.objects.filter(user=user, is_enabled=True).select_for_update().first()
+    if not totp:
+        raise merrors.PermissionDeniedException("TOTP not enabled for this account")
+
+    recovery_code = request.DATA.get("recovery_code", "").strip()
+    if not totp.verify_and_consume_recovery_code(recovery_code):
+        raise merrors.PermissionDeniedException("Invalid recovery code", 403, 403)
+
+    user.report_incident("TOTP recovery code used", "totp:recovery_used")
+    remaining = len(totp.get_secret("recovery_codes") or [])
+    if remaining == 0:
+        user.notify(
+            "You have used your last TOTP recovery code. Generate new ones in your security settings.",
+            kind="security",
+        )
     return jwt_login(request, user)
 
 

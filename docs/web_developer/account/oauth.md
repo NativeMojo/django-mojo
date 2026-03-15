@@ -180,6 +180,77 @@ If `OAUTH_REDIRECT_URI` is not set, the server builds it from the request `Origi
 
 ---
 
+## Managing Connections
+
+Once a user has linked one or more OAuth providers, they can list and unlink connections via the REST API.
+
+### List Linked Providers
+
+**GET** `/api/account/oauth_connection`
+
+Returns the authenticated user's OAuth connections. Admins with `manage_users` permission see all connections.
+
+**Response:**
+
+```json
+{
+  "status": true,
+  "count": 1,
+  "data": [
+    {
+      "id": 7,
+      "provider": "google",
+      "email": "alice@example.com",
+      "is_active": true,
+      "created": "2025-01-15T10:30:00Z"
+    }
+  ]
+}
+```
+
+### Unlink a Connection
+
+**DELETE** `/api/account/oauth_connection/<id>`
+
+Removes an OAuth connection. Admins with `manage_users` can delete any connection. Regular users can only delete their own.
+
+**Response (success):**
+
+```json
+{
+  "status": true
+}
+```
+
+#### Lockout Guard
+
+To prevent users from locking themselves out, the server blocks the delete if **both** of the following are true:
+
+1. The user has **no usable password** (account was created via OAuth and no password has been set)
+2. This is the user's **only active** OAuth connection
+
+In that case the server returns `400`:
+
+```json
+{
+  "status": false,
+  "error": "Cannot unlink your only login method. Set a password first."
+}
+```
+
+To unlink, the user must first set a password (via the password-reset or set-password flow) or link a second OAuth provider.
+
+Admins with `manage_users` bypass the lockout guard and can always delete any connection.
+
+| Status | Cause |
+|--------|-------|
+| `200` | Connection deleted successfully |
+| `400` | Lockout guard — only login method |
+| `403` | Not authenticated or not permitted |
+| `404` | Connection not found or not owned by user |
+
+---
+
 ## Error Responses
 
 | Status | Cause |

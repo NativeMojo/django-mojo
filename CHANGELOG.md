@@ -1,4 +1,35 @@
-## v1.0.57 - (current)
+## v1.0.59 - (current)
+
+### New Features
+
+- account: added `dob` (DateField) and `is_dob_verified` (BooleanField) to User model — `dob` is user-writable, `is_dob_verified` is system-only (in `NO_SAVE_FIELDS`, never REST-writable); changing `dob` automatically resets `is_dob_verified = False`; both fields cleared by `pii_anonymize()`; added `get_age()` helper that returns current age in whole years; `is_dob_verified` also in `SUPERUSER_ONLY_FIELDS` so only superusers can set it via direct model save (`mojo/apps/account/models/user.py`)
+
+---
+
+## v1.0.58
+
+- account: added notification preferences endpoints — `GET /api/account/notification/preferences` and `POST /api/account/notification/preferences` let users control which notification kinds they receive on which channels (in-app, email, push); default is allow, only suppress on explicit opt-out; preferences stored in `user.metadata["notification_preferences"]` — no migration required (`mojo/apps/account/rest/notification_prefs.py`, `mojo/apps/account/services/notification_prefs.py`)
+- account: wired notification preference enforcement into all three delivery paths — `Notification.send()` checks `in_app` channel, `send_template_email()` checks `email` channel when `kind=` is passed, `push_notification()` checks `push` channel when `kind=` is passed; system/transactional emails (password reset, verification, magic login, deactivation) never pass `kind` and are therefore never suppressed (`mojo/apps/account/models/notification.py`, `mojo/apps/account/models/user.py`)
+- account: added TOTP recovery codes — 8 single-use `xxxx-xxxx-xxxx` hex codes generated on TOTP confirm, bcrypt-hashed and stored in `UserTOTP.mojo_secrets`; `GET /api/account/totp/recovery-codes` returns masked codes; `POST /api/account/totp/recovery-codes/regenerate` requires live TOTP code; `POST /api/auth/totp/recover` consumes `mfa_token` + `recovery_code` to issue JWT; warning notification sent when last code consumed (`mojo/apps/account/rest/totp.py`, `mojo/apps/account/models/totp.py`)
+- account: added self-service username change — `POST /api/auth/username/change` requires `current_password`; validates via `content_guard`, checks uniqueness, lowercases; OAuth-only accounts (no usable password) get 400; `ALLOW_USERNAME_CHANGE` setting (default `True`) (`mojo/apps/account/rest/user.py`)
+- account: added session revoke / log-out-everywhere — `POST /api/auth/sessions/revoke` requires `current_password`, rotates `auth_key` to invalidate all active JWTs, returns fresh JWT for the calling session; rate-limited (5/IP/5min); incidents logged on success and failure (`mojo/apps/account/rest/user.py`)
+- account: added self-service account deactivation — two-step email confirmation flow: `POST /api/account/deactivate` sends `dv:` token email (15-min TTL), `POST /api/account/deactivate/confirm` validates token and calls `pii_anonymize()`; `ALLOW_SELF_DEACTIVATION` setting (default `True`), `DEACTIVATE_TOKEN_TTL` setting (default 900); already-inactive is idempotent 200 (`mojo/apps/account/rest/user.py`, `mojo/apps/account/utils/tokens.py`)
+- account: added security events log — `GET /api/account/security-events` returns auth-relevant audit events for the authenticated user from `incident.Event`; no special permission required; returns only `created`, `kind`, `summary`, `ip`; never exposes `details`, `title`, `metadata`; supports `size`, `dr_start`, `dr_end` params; hard cap 100 results (`mojo/apps/account/rest/user.py`)
+- account: added OAuth connection management endpoints — `GET /api/account/oauth_connection` lists linked providers; custom `DELETE /api/account/oauth_connection/<id>` with lockout guard (blocks unlink when no usable password and last active connection); `manage_users` admins bypass the guard (`mojo/apps/account/rest/oauth.py`)
+
+### Security / Bug Fixes
+
+- account: OAuth user creation now calls `set_unusable_password()` on new users — previously left `password=""` which could technically pass `check_password("")` in edge cases; now Django's unusable password sentinel is correctly stored (`mojo/apps/account/rest/oauth.py`)
+
+### Docs
+
+- docs: updated `docs/web_developer/account/user_self_management.md` — added sections for Notification Preferences (11), Username Change (12), Linked OAuth Accounts (13), Account Deactivation (14), Security Events (15); updated quick reference table with all new endpoints; renumbered Files (16), Activity Log (17), QR Codes (18), Realtime Events (19)
+- docs: updated `docs/web_developer/account/mfa_totp.md` — added recovery code sections for view, regenerate, and recovery login endpoints
+- docs: updated `docs/web_developer/account/oauth.md` — added Managing Connections section with list and unlink endpoints
+
+---
+
+## v1.0.57
 
 ### Security / Bug Fixes
 

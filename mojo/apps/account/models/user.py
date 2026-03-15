@@ -4,6 +4,7 @@ from mojo.models import MojoModel, MojoSecrets, MojoAuthMixin
 from mojo.helpers.settings import settings
 from mojo import errors as merrors
 from mojo.helpers import dates
+from mojo.helpers import content_guard
 from mojo.apps.account.utils.jwtoken import JWToken
 from mojo.apps import metrics
 from .device import UserDevice
@@ -39,6 +40,7 @@ USER_LAST_ACTIVITY_FREQ = settings.get("USER_LAST_ACTIVITY_FREQ", 300)
 # which is a stronger guarantee than a permission check.
 SUPERUSER_ONLY_FIELDS = frozenset((
     "is_email_verified", "is_phone_verified",
+    "is_dob_verified",
     "requires_mfa",
 ))
 
@@ -108,7 +110,10 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
 
     is_email_verified = models.BooleanField(default=False)
     is_phone_verified = models.BooleanField(default=False)
+    is_dob_verified = models.BooleanField(default=False)
     requires_mfa = models.BooleanField(default=False)
+
+    dob = models.DateField(null=True, blank=True, default=None)
 
     avatar = models.ForeignKey('fileman.File', on_delete=models.SET_NULL,
         null=True, blank=True, related_name='+')
@@ -125,7 +130,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         # attack vector. last_activity is a server-managed audit timestamp.
         # Superusers who need to rotate auth_key or correct last_activity should
         # do so via direct DB access or a dedicated management command.
-        NO_SAVE_FIELDS = ["auth_key", "last_activity"]
+        NO_SAVE_FIELDS = ["auth_key", "last_activity", "is_dob_verified"]
         SEARCH_FIELDS = ["username", "email", "display_name", "phone_number"]
         VIEW_PERMS = ["view_users", "manage_users", "owner"]
         SAVE_PERMS = ["manage_users", "owner"]
@@ -144,7 +149,8 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
                     'last_activity',
                     'is_active',
                     "is_email_verified",
-                    "is_phone_verified"
+                    "is_phone_verified",
+                    "is_dob_verified"
                 ],
                 "graphs": {
                     "avatar": "basic"
@@ -166,7 +172,9 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
                     'is_active',
                     "is_superuser",
                     "is_email_verified",
-                    "is_phone_verified"
+                    "is_phone_verified",
+                    "is_dob_verified",
+                    "dob"
                 ],
                 "graphs": {
                     "avatar": "basic",
@@ -190,6 +198,8 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
                     "is_superuser",
                     "is_email_verified",
                     "is_phone_verified",
+                    "is_dob_verified",
+                    "dob",
                     "has_passkey"
                 ],
                 "graphs": {
@@ -209,6 +219,18 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
 
     def __str__(self):
         return self.email
+
+    def get_age(self):
+        """
+        Calculate current age in whole years from `dob`.
+        Returns None if `dob` is not set.
+        """
+        if not self.dob:
+            return None
+        from mojo.helpers import dates
+        today = dates.utcnow().date()
+        born = self.dob
+        return today.year - born.year - ((today.month, today.day) < (born.month, born.day))
 
     @property
     def has_passkey(self):
@@ -495,7 +517,6 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         """Check display_name, first_name, and last_name for inappropriate content."""
         if self.active_request and self.active_request.user.is_superuser:
             return
-        from mojo.helpers import content_guard
         fields = {
             "display_name": self.display_name,
             "first_name": self.first_name,
@@ -527,7 +548,6 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             raise merrors.ValueException("Username containing @ must match the email address")
         # Only run content guard on non-email usernames (email usernames are validated above)
         if '@' not in str(self.username):
-            from mojo.helpers import content_guard
             result = content_guard.check_username(self.username, policy={"allow_dot_in_username": True})
             if result.decision == "block":
                 raise merrors.ValueException("Username is not allowed")
@@ -657,6 +677,8 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         for _field in MANAGE_USERS_ONLY_FIELDS:
             if _field in changed_fields and not self.active_user.has_permission("manage_users"):
                 raise merrors.PermissionDeniedException(f"You are not allowed to change {_field}")
+        if "dob" in changed_fields:
+            self.is_dob_verified = False
         if "email" in changed_fields:
             self.validate_email()
             self.email = self.email.lower()
@@ -757,6 +779,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         self.display_name = None
         self.first_name = ""
         self.last_name = ""
+        self.dob = None
         self.metadata = {}
         self.onetime_code = None
         self.avatar = None
@@ -769,12 +792,13 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         self.permissions = {}
         self.is_email_verified = False
         self.is_phone_verified = False
+        self.is_dob_verified = False
         self.save(update_fields=[
             "username", "email", "phone_number", "display_name",
             "first_name", "last_name", "metadata", "onetime_code",
             "avatar", "org", "auth_key", "is_active", "is_staff",
             "is_superuser", "permissions", "is_email_verified",
-            "is_phone_verified", "modified",
+            "is_phone_verified", "is_dob_verified", "dob", "modified",
         ])
 
         # ── 3. Wipe secrets (MojoSecrets encrypted JSON field) ────────────────
@@ -839,7 +863,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         )
 
     def push_notification(self, title=None, body=None, data=None,
-                          category="general", action_url=None):
+                          category="general", action_url=None, kind=None):
         """
         Send push notification to all user's active devices.
         Simple - just loops through devices and calls device.send().
@@ -850,10 +874,18 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             data: Custom data payload dict
             category: Notification category
             action_url: URL to open when notification is tapped
+            kind: Optional notification kind for preference check.
+                  When provided, the user's notification preferences are
+                  checked before sending. Omit for system/transactional pushes.
 
         Returns:
             List of NotificationDelivery objects
         """
+        if kind:
+            from mojo.apps.account.services.notification_prefs import is_notification_allowed
+            if not is_notification_allowed(self, kind, "push"):
+                return []
+
         devices = self.registered_devices.filter(is_active=True, push_enabled=True)
 
         deliveries = []
@@ -968,6 +1000,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         template_prefix=None,
         fail_silently=True,
         group=None,
+        kind=None,
         **kwargs
     ):
         """Send template email to this user using mailbox determined by user's org domain or system default
@@ -977,11 +1010,22 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             context: Template context variables (user will be added automatically)
             cc, bcc, reply_to: Optional addressing
             fail_silently: If True (default), log failures via incident reporting instead of raising
+            kind: Optional notification kind string (e.g. "marketing"). When provided,
+                  the user's notification preferences are checked before sending.
+                  System/transactional emails should NOT pass kind so they are never suppressed.
             **kwargs: Additional arguments passed to mailbox.send_template_email()
 
         Returns:
             SentMessage instance or None if fail_silently and send fails
         """
+        # Check notification preferences if a kind is provided.
+        # System/transactional emails (password reset, verification, etc.) do NOT
+        # pass kind and are therefore never suppressed.
+        if kind:
+            from mojo.apps.account.services.notification_prefs import is_notification_allowed
+            if not is_notification_allowed(self, kind, "email"):
+                return None
+
         from mojo.apps.aws.models import Mailbox, EmailTemplate
 
         mailbox = None
