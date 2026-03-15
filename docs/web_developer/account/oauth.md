@@ -4,6 +4,8 @@ OAuth allows users to log in with a third-party provider (Google, etc.) without 
 
 **Supported providers:** `google`
 
+> **Trusted second factor.** OAuth is treated as a strong, trusted authentication event. Completing an OAuth login automatically confirms the user's email address and bypasses any local MFA requirement — see [Security Behaviour](#security-behaviour) below.
+
 ---
 
 ## Flow Overview
@@ -86,10 +88,43 @@ Same JWT response as password login. Store and use tokens as normal.
 The server automatically resolves which account to log in to:
 
 1. **Existing OAuth connection** — a previous login with this provider/account is found → log in that user directly
-2. **Matching email** — no connection but an existing account has the same email → create a connection and log in
+2. **Matching email** — no connection but an existing account has the same email → create a connection, mark email as verified, and log in
 3. **New user** — no match → create a new account and connection, mark email as verified
 
 No manual linking step is required.
+
+### Email Verification on Auto-Link
+
+Because the provider has confirmed ownership of the email address, the framework marks `is_email_verified = True` on the resolved account in all three cases above:
+
+- **Existing connection** — user was already verified when they first connected; flag unchanged
+- **Email match** — if the matched account was not yet verified, it is marked verified at link time
+- **New user** — account is created with `is_email_verified = True`
+
+This means a user who signed up via password but never clicked their verification email will be automatically verified the first time they log in with Google (or another provider) using the same address.
+
+---
+
+## Security Behaviour
+
+### Email Verification
+
+OAuth confirmation is treated as equivalent to clicking an email verification link. The provider vouches for ownership of the address, so no separate verification step is needed.
+
+If your project has `REQUIRE_VERIFIED_EMAIL` enabled, users who log in via OAuth are unaffected by the gate — their email is marked verified by the OAuth flow itself.
+
+### MFA Bypass
+
+A user with MFA enabled (`requires_mfa = True`) is **not** challenged for TOTP or SMS after a successful OAuth login. The JWT is issued directly.
+
+**Why:** OAuth is itself a trusted second factor:
+
+- The user has authenticated to an external identity provider
+- The provider may have enforced its own MFA (Google Workspace policies, Advanced Protection, etc.)
+- The CSRF `state` token is single-use and Redis-backed — replay and CSRF attacks are prevented
+- The authorization `code` is exchanged server-side only
+
+Requiring an additional local second factor after a trusted provider assertion is redundant for most applications. If your project has a strict policy requiring local MFA regardless of OAuth, contact your backend developer to configure a project-level override.
 
 ---
 
@@ -135,6 +170,13 @@ OAUTH_REDIRECT_URI = "https://your-app.example.com/auth/oauth/google/complete"
 ```
 
 If `OAUTH_REDIRECT_URI` is not set, the server builds it from the request `Origin` header as `<origin>/auth/oauth/<provider>/complete`.
+
+### Optional Settings
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `GOOGLE_SCOPES` | `"openid email profile"` | OAuth scopes requested from Google |
+| `OAUTH_STATE_TTL` | `600` | Seconds a CSRF state token is valid before it expires |
 
 ---
 

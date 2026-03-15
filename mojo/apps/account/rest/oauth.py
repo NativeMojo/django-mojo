@@ -46,8 +46,12 @@ def _find_or_create_user(provider_name, profile):
     if conn:
         return conn.user, conn
 
-    # 2. Existing user by email
+    # 2. Existing user by email — OAuth has confirmed ownership of this address
     user = User.lookup(email=email)
+    if user and not user.is_email_verified:
+        user.is_email_verified = True
+        user.save(update_fields=["is_email_verified", "modified"])
+        logit.info("oauth", f"Marked email verified for {user.username} via {provider_name} OAuth")
 
     # 3. Create new user
     if not user:

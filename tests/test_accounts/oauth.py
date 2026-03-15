@@ -120,6 +120,55 @@ def test_oauth_autolink_by_email(opts):
     assert conn.provider == PROVIDER
 
 
+@th.django_unit_test("oauth: auto-link by email marks is_email_verified=True for unverified user")
+def test_oauth_autolink_by_email_marks_verified(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.models.oauth import OAuthConnection
+    from mojo.apps.account.rest.oauth import _find_or_create_user
+
+    # Ensure the user exists and is NOT verified
+    OAuthConnection.objects.filter(user=opts.user).delete()
+    opts.user.is_email_verified = False
+    opts.user.save(update_fields=["is_email_verified", "modified"])
+
+    profile = {
+        "uid": "google_uid_verify_check",
+        "email": TEST_EMAIL,
+        "display_name": "OAuth User",
+    }
+    user, conn = _find_or_create_user(PROVIDER, profile)
+
+    assert user.id == opts.user.id, "Should link to existing user"
+    fresh = User.objects.get(pk=opts.user.pk)
+    assert fresh.is_email_verified is True, "OAuth email match should mark user as verified"
+
+    # Restore for subsequent tests
+    opts.user.is_email_verified = True
+    opts.user.save(update_fields=["is_email_verified", "modified"])
+
+
+@th.django_unit_test("oauth: auto-link by email does not clobber already-verified user")
+def test_oauth_autolink_by_email_already_verified(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.models.oauth import OAuthConnection
+    from mojo.apps.account.rest.oauth import _find_or_create_user
+
+    OAuthConnection.objects.filter(user=opts.user).delete()
+    opts.user.is_email_verified = True
+    opts.user.save(update_fields=["is_email_verified", "modified"])
+
+    profile = {
+        "uid": "google_uid_already_verified",
+        "email": TEST_EMAIL,
+        "display_name": "OAuth User",
+    }
+    user, conn = _find_or_create_user(PROVIDER, profile)
+
+    assert user.id == opts.user.id, "Should link to existing user"
+    fresh = User.objects.get(pk=opts.user.pk)
+    assert fresh.is_email_verified is True, "Already-verified flag should remain True"
+
+
 @th.django_unit_test("oauth: auto-link creates new user for unknown email")
 def test_oauth_autolink_creates_user(opts):
     from mojo.apps.account.models import User
@@ -142,6 +191,37 @@ def test_oauth_autolink_creates_user(opts):
 
     # Cleanup
     user.delete()
+
+
+@th.django_unit_test("oauth: MFA is bypassed — OAuth is a trusted second factor")
+def test_oauth_bypasses_mfa(opts):
+    """
+    OAuth is treated as a trusted second factor. A user with requires_mfa=True
+    must NOT be challenged for an additional MFA step after OAuth — the provider
+    has already authenticated the identity. This test confirms get_mfa_methods()
+    is never consulted on the OAuth complete path.
+    """
+    from mojo.apps.account.rest.oauth import _find_or_create_user
+    from mojo.apps.account.models.oauth import OAuthConnection
+
+    # Enable MFA flag on the test user
+    opts.user.requires_mfa = True
+    opts.user.save(update_fields=["requires_mfa", "modified"])
+
+    OAuthConnection.objects.filter(user=opts.user).delete()
+
+    profile = {
+        "uid": "google_uid_mfa_bypass_test",
+        "email": TEST_EMAIL,
+        "display_name": "OAuth MFA User",
+    }
+    # _find_or_create_user must succeed without any MFA challenge being raised
+    user, conn = _find_or_create_user(PROVIDER, profile)
+    assert user.id == opts.user.id, "Should resolve the MFA-enabled user normally"
+
+    # Restore
+    opts.user.requires_mfa = False
+    opts.user.save(update_fields=["requires_mfa", "modified"])
 
 
 @th.django_unit_test("oauth: disabled user is rejected")

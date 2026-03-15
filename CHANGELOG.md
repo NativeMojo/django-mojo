@@ -1,4 +1,18 @@
-## v1.0.56 - (current)
+## v1.0.57 - (current)
+
+### Security / Bug Fixes
+
+- account: OAuth auto-link by email now sets `is_email_verified = True` on the matched user if it was not already set — the provider has confirmed ownership of the address, so no separate verification step is needed (`mojo/apps/account/rest/oauth.py`)
+
+### Docs
+
+- docs: added `docs/django_developer/account/oauth.md` — new Django developer reference covering required settings, `OAuthConnection` model, auto-link logic, email verification behaviour, MFA bypass rationale, adding new providers, CSRF state token design, and security notes
+- docs: updated `docs/web_developer/account/oauth.md` — documented email verification on auto-link, added Security Behaviour section covering email verification gate interaction and MFA bypass rationale, added optional settings table
+- docs: updated `docs/django_developer/account/README.md` — added OAuth entry to index
+
+---
+
+## v1.0.56
 
 ### New Features
 
