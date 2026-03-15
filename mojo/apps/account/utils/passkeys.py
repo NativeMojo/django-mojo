@@ -51,9 +51,22 @@ def get_origin_from_request(request) -> str:
 
 
 def origin_to_rp_id(origin: str) -> str:
-    """Convert origin to RP ID (just the hostname)."""
+    """
+    Convert origin to RP ID (hostname only, no port).
+
+    WebAuthn spec requires rp.id to be a valid domain with no scheme,
+    no port, and no path.  urlparse.hostname does exactly this:
+
+        "http://localhost:3001"      -> "localhost"
+        "https://portal.example.com" -> "portal.example.com"
+        "https://app.example.com:8443" -> "app.example.com"
+    """
     parsed = urlparse(origin)
-    host = parsed.netloc or parsed.path
+    # parsed.hostname strips the port and lowercases; fall back to
+    # netloc (minus port) for bare strings that have no scheme.
+    host = parsed.hostname or parsed.netloc.split(":")[0]
+    if not host:
+        raise merrors.ValueException(f"Could not determine hostname from origin: {origin!r}")
     return host.lower()
 
 

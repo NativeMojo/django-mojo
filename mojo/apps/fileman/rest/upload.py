@@ -1,8 +1,44 @@
 from mojo import decorators as md
 from mojo import JsonResponse
 import mojo.errors
+import io
 from mojo.apps.fileman.models import File, FileManager
 from mojo.apps.fileman.utils.upload import get_download_url
+
+
+class RawUploadFile:
+    """
+    Wraps a raw request body (bytes) to expose the same interface that
+    direct_upload and the storage backends expect from a Django UploadedFile:
+      .size         — byte length
+      .content_type — MIME type from the Content-Type request header
+      .read(n)      — standard file read
+      .seek(pos)    — standard file seek
+      .chunks()     — generator yielding chunks (matches UploadedFile.chunks)
+    """
+    CHUNK_SIZE = 65536
+
+    def __init__(self, body, content_type='application/octet-stream'):
+        self._buf = io.BytesIO(body)
+        self.size = len(body)
+        self.content_type = content_type
+
+    def read(self, size=-1):
+        if size == -1:
+            return self._buf.read()
+        return self._buf.read(size)
+
+    def seek(self, pos):
+        return self._buf.seek(pos)
+
+    def chunks(self, chunk_size=None):
+        chunk_size = chunk_size or self.CHUNK_SIZE
+        self._buf.seek(0)
+        while True:
+            chunk = self._buf.read(chunk_size)
+            if not chunk:
+                break
+            yield chunk
 
 
 @md.POST('upload/initiate')
@@ -49,18 +85,40 @@ def on_upload_initiate(request):
 
 
 @md.POST('upload/<str:upload_token>')
+@md.PUT('upload/<str:upload_token>')
 @md.custom_security("requires upload token")
 def on_direct_upload(request, upload_token):
     """
-    Handle direct file upload for backends that don't support pre-signed URLs
+    Handle direct file upload.
+
+    Supports two upload styles:
+      PUT  — raw body upload, matching the presigned S3 PUT pattern.
+             The file bytes are the entire request body; Content-Type header
+             carries the MIME type.  No multipart encoding.
+      POST — multipart/form-data upload (browser forms, SDK fallback).
+             The file must be in the 'file' field of request.FILES.
     """
-    if not request.FILES or 'file' not in request.FILES:
-        return JsonResponse({
-            'success': False,
-            'error': 'No file provided'
-        }, status=400)
     from mojo.apps.fileman.utils.upload import direct_upload
-    file_data = request.FILES['file']
+
+    if request.method == 'PUT':
+        body = request.body
+        if not body:
+            return JsonResponse({
+                'success': False,
+                'error': 'No file body provided'
+            }, status=400)
+        content_type = request.META.get('CONTENT_TYPE', 'application/octet-stream')
+        # Strip any parameters (e.g. "application/pdf; charset=utf-8")
+        content_type = content_type.split(';')[0].strip()
+        file_data = RawUploadFile(body, content_type)
+    else:
+        if not request.FILES or 'file' not in request.FILES:
+            return JsonResponse({
+                'success': False,
+                'error': 'No file provided'
+            }, status=400)
+        file_data = request.FILES['file']
+
     response_data = direct_upload(request, upload_token, file_data)
     status_code = response_data.pop('status_code', 200)
     return JsonResponse(response_data, status=status_code)
