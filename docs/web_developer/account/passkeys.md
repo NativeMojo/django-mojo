@@ -306,7 +306,9 @@ All management endpoints require authentication.
 
 **GET** `/api/account/passkeys`
 
-Returns all passkeys for the authenticated user across all portals.
+Returns all **enabled** passkeys for the authenticated user across all portals.
+Disabled passkeys are excluded from the list by default — use
+`GET /api/account/passkeys?is_enabled=false` to include them.
 
 ```json
 {
@@ -356,6 +358,21 @@ Disabled passkeys are excluded from login challenges but not deleted.
 {
   "status": true
 }
+```
+
+---
+
+## Configuration
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `PASSKEYS_RP_NAME` | `"MOJO"` | Relying Party name shown in the browser's passkey prompt (e.g. `"Acme Corp"`) |
+
+The RP ID is derived automatically from the `Origin` header — no setting required. Set `PASSKEYS_RP_NAME` in your Django settings to show your app's name in the authenticator dialog instead of the default.
+
+```python
+# settings.py
+PASSKEYS_RP_NAME = "Acme Corp"
 ```
 
 ---

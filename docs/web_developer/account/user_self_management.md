@@ -499,11 +499,11 @@ POST /api/account/passkeys/register/complete
 {
   "challenge_id": "abc123",
   "credential": { ...WebAuthn response object... },
-  "name": "MacBook Touch ID"
+  "friendly_name": "MacBook Touch ID"
 }
 ```
 
-`name` is a human-readable label shown in the passkeys list.
+`friendly_name` is a human-readable label shown in the passkeys list.
 
 ---
 
@@ -521,7 +521,7 @@ Returns all passkeys registered by the current user.
 
 ```json
 POST /api/account/passkeys/<id>
-{ "name": "iPhone Face ID" }
+{ "friendly_name": "iPhone Face ID" }
 ```
 
 ---
@@ -539,14 +539,25 @@ DELETE /api/account/passkeys/<id>
 TOTP lets the user link an authenticator app (Google Authenticator, Authy,
 1Password, etc.) as a second factor.
 
+> **Two endpoint groups exist for TOTP.** The `account/totp/*` endpoints below
+> are for managing TOTP on a settings page (requires auth). The `auth/totp/*`
+> endpoints are for the login page and are covered in
+> [TOTP Authentication](mfa_totp.md).
+
 ### Check TOTP status
 
-Read the user profile — the `full` graph includes TOTP status, or check
-via:
+Check `requires_mfa` on the user profile:
 
 ```
-GET /api/auth/totp/status
+GET /api/user/me
+Authorization: Bearer <access_token>
 ```
+
+```json
+{ "data": { "requires_mfa": true } }
+```
+
+`requires_mfa: true` means a second factor (TOTP or SMS) is active on this account.
 
 ---
 
@@ -555,36 +566,39 @@ GET /api/auth/totp/status
 **Step 1 — Generate a secret**
 
 ```
-POST /api/auth/totp/setup
+POST /api/account/totp/setup
+Authorization: Bearer <access_token>
 ```
 
-Returns a `secret`, a `qr_code` (base64 PNG), and an `otpauth_url` for
-deep linking into authenticator apps.
+Returns a `secret`, a `qr_code` (base64 PNG), and a `uri` for deep linking
+into authenticator apps. Display the QR code for the user to scan. The secret
+is saved server-side but TOTP is **not active yet**.
 
-Display the QR code to the user. Most users will scan it with their
-authenticator app.
+**Step 2 — Confirm with first code**
 
-**Step 2 — Verify and enable**
+```
+POST /api/account/totp/confirm
+Authorization: Bearer <access_token>
+```
 
 ```json
-POST /api/auth/totp/verify
 { "code": "123456" }
 ```
 
-Confirms the user has successfully linked their app. TOTP is now active
-for this account.
+The user enters the 6-digit code from their app. A valid code proves the app
+is correctly linked and activates TOTP on the account. Sets `requires_mfa: true`.
 
 ---
 
 ### Disable TOTP
 
-```json
-POST /api/auth/totp/disable
-{ "code": "123456" }
+```
+DELETE /api/account/totp
+Authorization: Bearer <access_token>
 ```
 
-A current TOTP code is required to disable — prevents an attacker with a
-stolen session from quietly removing 2FA.
+No request body required. TOTP is deactivated immediately. The current session
+remains valid; the next password login will return a JWT with no MFA challenge.
 
 ---
 
@@ -990,10 +1004,11 @@ Refresh the user profile to pick up the updated `is_email_verified` or
 | Begin passkey registration | POST | `/api/account/passkeys/register/begin` | Required |
 | Complete passkey registration | POST | `/api/account/passkeys/register/complete` | Required |
 | List passkeys | GET | `/api/account/passkeys` | Required |
+| Rename a passkey | POST | `/api/account/passkeys/<id>` | Required |
 | Delete passkey | DELETE | `/api/account/passkeys/<id>` | Required |
-| Setup TOTP | POST | `/api/auth/totp/setup` | Required |
-| Verify & enable TOTP | POST | `/api/auth/totp/verify` | Required |
-| Disable TOTP | POST | `/api/auth/totp/disable` | Required |
+| Setup TOTP (get QR code) | POST | `/api/account/totp/setup` | Required |
+| Confirm TOTP (activate) | POST | `/api/account/totp/confirm` | Required |
+| Disable TOTP | DELETE | `/api/account/totp` | Required |
 | List devices | GET | `/api/user/device` | Required |
 | Register push device | POST | `/api/account/devices/push/register` | Required |
 | Unregister push device | POST | `/api/account/devices/push/unregister` | Required |

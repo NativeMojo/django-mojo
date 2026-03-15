@@ -13,21 +13,32 @@ Use this file as a lightweight running log between AI threads.
 
 ## Current Focus
 
-- No active task. Phone number change flow + security fixes shipped (v1.0.55).
+- No active task. OAuth email-verified fix + full OAuth docs shipped (v1.0.57).
 
 ## Key Decisions
 
 - `REQUIRE_VERIFIED_EMAIL` / `REQUIRE_VERIFIED_PHONE` default to `False` — opt-in only. No breaking change for existing deployments.
 - Verification gate fires inside `jwt_login` via `source` param — single choke point for all login paths (password, SMS, phone-as-identifier, magic link).
 - `REQUIRE_VERIFIED_EMAIL` gate fires **only when `source == "email"`** — plain username logins (`source == "username"`) are never gated. Bug fix: `"username"` was incorrectly included in the gate condition.
-
 - `REQUIRE_VERIFIED_PHONE` gate is symmetric with the email gate: if the login identifier is a phone number (`ALLOW_PHONE_LOGIN=True`), the phone gate applies on password login too.
+- **OAuth is a trusted second factor** — `on_oauth_complete` calls `jwt_login()` with no `source=` and no `get_mfa_methods()` check. Users with `requires_mfa=True` are not challenged after OAuth. This is intentional and documented.
+- **OAuth confirms email** — `_find_or_create_user` sets `is_email_verified=True` on all three paths: existing connection (already set), email-match link (set if not already), new user (set at creation). Provider confirmation is treated as equivalent to link verification.
 - **Never use `override_settings` in testit tests.** Testit hits a real HTTP server in a separate process — `override_settings` only patches the calling process. Setting-dependent tests must read the live setting via `settings.get()` and raise `TestitSkip` when the required setting is not active.
 - FK assignments in `on_rest_save_related_field` must call `_set_field_change` before `setattr` so the field appears in `changed_fields` and guards like `MANAGE_USERS_ONLY_FIELDS` fire correctly.
 
 ## In-Progress Work
 
 - None.
+
+## Handoff Notes
+
+- OAuth email-verified fix + docs (v1.0.57):
+  - `_find_or_create_user` in `mojo/apps/account/rest/oauth.py` — path 2 (email match) now sets `is_email_verified=True` + saves if not already set; path 3 (new user) already did this.
+  - 3 new tests in `tests/test_accounts/oauth.py`: email-match marks verified, email-match already-verified (no clobber), MFA bypass is intentional.
+  - New `docs/django_developer/account/oauth.md` — settings, model, auto-link logic, email verification, MFA bypass rationale, adding providers, CSRF state, security notes.
+  - Updated `docs/web_developer/account/oauth.md` — added callout, Security Behaviour section (email + MFA), optional settings table, auto-link table updated.
+  - Updated `docs/django_developer/account/README.md` — OAuth added to index.
+  - Run in downstream project: `python manage.py testit test_accounts.oauth`
 
 
 
