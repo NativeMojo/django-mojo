@@ -19,6 +19,7 @@ Companion track for REST integrators: [docs/web_developer/README.md](../web_deve
 | [logging/](logging/README.md) | Database logging (logit app), security incidents |
 | [files/](files/README.md) | File upload, storage backends, renditions |
 | [email/](email/README.md) | AWS SES email, templates, mailboxes, inbound handling |
+| [aws/cloudwatch.md](aws/cloudwatch.md) | CloudWatch monitoring — EC2, RDS, and ElastiCache metrics via boto3 |
 | [jobs/](jobs/README.md) | Async task queue, job publishing, worker configuration |
 | [metrics/](metrics/README.md) | Redis-backed time-series metrics |
 | [realtime/](realtime/README.md) | WebSocket pub/sub via Django Channels |

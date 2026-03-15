@@ -5,3 +5,4 @@ from .messages import *
 from .sns import *
 from .send import *
 from .templates import *
+from .cloudwatch import *

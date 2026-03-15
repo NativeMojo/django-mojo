@@ -116,8 +116,9 @@ def on_sms_verify(request):
         if not token_data:
             raise merrors.PermissionDeniedException("Invalid or expired MFA token", 401, 401)
         user = User.objects.filter(pk=token_data["uid"]).first()
+        source = None  # MFA step — primary auth already cleared
     else:
-        user = User.lookup_from_request(request, phone_as_username=True)
+        user, source = User.lookup_from_request_with_source(request, phone_as_username=True)
     if not user:
         raise merrors.PermissionDeniedException()
 
@@ -126,7 +127,18 @@ def on_sms_verify(request):
         raise merrors.PermissionDeniedException("Invalid or expired code", 401, 401)
 
     _clear_otp(user)
-    return jwt_login(request, user)
+    # For standalone phone login, entering the OTP proves phone ownership.
+    # We must check the gate BEFORE auto-verifying so the gate sees the
+    # original state. If the gate passes (or is off), we then mark verified.
+    if not mfa_token:
+        from mojo.helpers.settings import settings as _settings
+        require_verified_phone = _settings.get("REQUIRE_VERIFIED_PHONE", False)
+        if require_verified_phone and not user.is_phone_verified:
+            raise merrors.PermissionDeniedException("phone_not_verified", 403, 403)
+        if not user.is_phone_verified:
+            user.is_phone_verified = True
+            user.save(update_fields=["is_phone_verified", "modified"])
+    return jwt_login(request, user, source=None)
 
 
 # -----------------------------------------------------------------

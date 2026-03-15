@@ -149,11 +149,43 @@ def test_backfill_job(opts):
 
 ## Expectations for Every Test
 
-- **Asserts must explain the failure.** Include context, inputs, or expected behaviour.
+- **Every assert must include a failure message.** No bare `assert x` — always `assert x, "reason"`. The message must state what was expected, what the inputs were, or why the assertion matters. Silent failures waste debugging time for both humans and agents.
+
+  ```python
+  # Bad — silent on failure
+  assert resp.status_code == 200
+  assert isinstance(data, list)
+
+  # Good — tells you exactly what went wrong
+  assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.json}"
+  assert isinstance(data, list), f"Expected list, got {type(data).__name__}: {data!r}"
+  ```
+
 - **No `print()` debugging.** Use `-v` or `-e` for deeper logs.
 - **Stay inside the framework.** If behaviour is missing, file a TODO or note it in review instead of patching logic into the test.
 - **Call out design friction.** Tests should highlight confusing APIs; they should not cement workarounds.
 - **Reuse fixtures.** Prefer creating entities in setup once, mutate through `opts`, and tear down only when required for repeat runs.
+
+---
+
+## Accessing Response Data — objict Key Collision
+
+Testit parses all HTTP responses into `objict`, a `dict` subclass with attribute access. Because `objict` inherits from `dict`, **attribute access for keys that share a name with a built-in dict method will silently return the method instead of the value.**
+
+Affected names: `values`, `keys`, `items`, `get`, `update`, `pop`, `clear`, `copy`, `setdefault`.
+
+```python
+# WRONG — data["values"] is [1, 2, 3] but data.values is dict.values (a method)
+assert isinstance(resp.response.data.values, list)   # always False — dict method, not your key
+
+# CORRECT — use bracket notation for any key that shadows a dict built-in
+assert isinstance(resp.response.data["values"], list), \
+    f"Expected list, got {type(resp.response.data['values']).__name__}"
+```
+
+**Rule:** for any response key named `values`, `keys`, `items`, `get`, or `update`, always use `obj["key"]` bracket access, never `obj.key` dot access.
+
+All other keys (e.g. `periods`, `slug`, `status`, `data`, `id`) are safe to access with dot notation.
 
 ---
 
@@ -163,7 +195,8 @@ def test_backfill_job(opts):
 - Naming the test package the same as the Django app and shadowing real modules (prefix with `test_`).
 - Importing Django models at the module top or inside `@unit_*` functions.
 - Creating fresh users/records for every assertion instead of reusing shared state.
-- Missing assertion messages, making failures opaque for operators.
+- **Writing bare `assert x` with no failure message** — always include a descriptive string.
+- **Using `obj.values`, `obj.keys`, or `obj.items` on an `objict`** — returns the dict built-in method, not your key. Use `obj["values"]` instead.
 - Skipping the `--extra` gate on expensive tasks (cron jobs, third-party calls).
 - Writing custom business logic in tests instead of exercising the real APIs.
 
@@ -190,8 +223,9 @@ def test_backfill_job(opts):
 2. Draft setups first. Ensure Django imports stay inside decorated functions.
 3. Reuse `opts` data; avoid redundant inserts.
 4. For high-cost paths, add `@requires_extra("...")` and document the flag.
-5. Write asserts with actionable failure reasons.
-6. Before implementing workarounds, question the upstream API — document friction for follow-up.
-7. Run with `./bin/testit.py -v -e` (or via config) when validating locally.
+5. **Every `assert` must include a descriptive failure message string.** No bare asserts.
+6. **Use `obj["values"]` not `obj.values` for any key that shadows a dict built-in.**
+7. Before implementing workarounds, question the upstream API — document friction for follow-up.
+8. Run with `./bin/testit.py -v -e` (or via config) when validating locally.
 
 Keeping these habits makes the suite predictable for both humans and models, highlights design gaps early, and keeps TestIt simple.
