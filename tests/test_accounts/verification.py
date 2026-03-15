@@ -20,6 +20,18 @@ Security contract this file enforces:
   - SMS standalone verify auto-sets is_phone_verified (phone receipt = ownership proof)
   - MFA-step SMS verify does NOT auto-set is_phone_verified
   - Token for user A cannot be used to verify/log in as user B
+
+Email OTP code flow (POST /api/auth/verify/email/send + confirm):
+  - method=code stores a 6-digit code in user secrets; method=link (default) still works
+  - Omitting method is backward-compatible — sends a link, no code generated
+  - Code confirm endpoint requires authentication — identity comes from JWT, never from the code
+  - Unauthenticated call to confirm is always rejected
+  - Wrong code is rejected without consuming the valid code (brute-force safety)
+  - Expired code is rejected
+  - Code is single-use — second confirm call is rejected
+  - Code confirm does NOT issue a new JWT — existing session continues (unlike link flow)
+  - User A's code cannot verify User B — JWT identity is the gate, not the code value
+  - Already-verified user: send returns 200 but no code is generated
 """
 from testit import helpers as th
 from testit.helpers import assert_true, assert_eq
@@ -1722,6 +1734,474 @@ def test_auth_key_is_not_writable_via_rest(opts):
 def cleanup_field_protection(opts):
     from mojo.apps.account.models import Group
     Group.objects.filter(name="verify_wp_test_org").delete()
+
+
+# ===========================================================================
+# Email verify — OTP code unit tests
+# ===========================================================================
+
+@th.django_unit_test("email verify code: generate stores 6-digit code and timestamp in user secrets")
+def test_email_verify_code_stored_in_secrets(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+
+    User.objects.filter(pk=opts.user_id).update(is_email_verified=False)
+    user = User.objects.get(pk=opts.user_id)
+    code = tokens.generate_email_verify_code(user)
+    user.refresh_from_db()
+    assert_eq(user.get_secret("email_verify_code"), code,
+              "code must be stored in secrets after generate")
+    assert_true(user.get_secret("email_verify_code_ts") is not None,
+                "timestamp must be stored after generate")
+    assert_true(len(code) == 6 and code.isdigit(),
+                f"code must be a 6-digit numeric string, got: {code!r}")
+    # consume cleanly
+    tokens.verify_email_verify_code(user, code)
+
+
+@th.django_unit_test("email verify code: correct code succeeds and is consumed (single-use)")
+def test_email_verify_code_single_use(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+    from mojo import errors as merrors
+
+    User.objects.filter(pk=opts.user_id).update(is_email_verified=False)
+    user = User.objects.get(pk=opts.user_id)
+    code = tokens.generate_email_verify_code(user)
+    tokens.verify_email_verify_code(user, code)
+
+    # Secrets must be cleared after first verify
+    user.refresh_from_db()
+    assert_eq(user.get_secret("email_verify_code"), None,
+              "code must be cleared from secrets after successful verify")
+
+    # Second call must raise
+    raised = False
+    try:
+        tokens.verify_email_verify_code(user, code)
+    except merrors.ValueException:
+        raised = True
+    assert_true(raised, "Reusing an email verify code must raise ValueException")
+
+
+@th.django_unit_test("email verify code: wrong code rejected without consuming the valid code")
+def test_email_verify_code_wrong_code_does_not_consume(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+    from mojo import errors as merrors
+
+    User.objects.filter(pk=opts.user_id).update(is_email_verified=False)
+    user = User.objects.get(pk=opts.user_id)
+    code = tokens.generate_email_verify_code(user)
+
+    raised = False
+    try:
+        tokens.verify_email_verify_code(user, "000000")
+    except merrors.ValueException:
+        raised = True
+    assert_true(raised, "Wrong code must raise ValueException")
+
+    # Valid code must still work — a wrong guess must not burn the real code
+    user.refresh_from_db()
+    tokens.verify_email_verify_code(user, code)
+
+
+@th.django_unit_test("email verify code: expired code is rejected")
+def test_email_verify_code_expired(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+    import mojo.apps.account.utils.tokens as tok_module
+    from mojo import errors as merrors
+
+    User.objects.filter(pk=opts.user_id).update(is_email_verified=False)
+    user = User.objects.get(pk=opts.user_id)
+    orig_ttl = tok_module.EMAIL_VERIFY_CODE_TTL
+    tok_module.EMAIL_VERIFY_CODE_TTL = -1
+    try:
+        code = tokens.generate_email_verify_code(user)
+        raised = False
+        try:
+            tokens.verify_email_verify_code(user, code)
+        except merrors.ValueException:
+            raised = True
+        assert_true(raised, "Expired email verify code must raise ValueException")
+    finally:
+        tok_module.EMAIL_VERIFY_CODE_TTL = orig_ttl
+        user.set_secret("email_verify_code", None)
+        user.set_secret("email_verify_code_ts", None)
+        user.save(update_fields=["mojo_secrets", "modified"])
+
+
+# ===========================================================================
+# REST: POST /api/auth/verify/email/send  (authenticated, method param)
+# ===========================================================================
+
+@th.django_unit_test("verify/email/send: method=code returns 200 and stores code in secrets")
+def test_email_verify_send_code_happy_path(opts):
+    from mojo.apps.account.models import User
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1")
+
+    User.objects.filter(pk=opts.user_id).update(is_email_verified=False, is_active=True)
+    opts.client.login(TEST_USER, TEST_PWORD)
+    resp = opts.client.post("/api/auth/verify/email/send", {"method": "code"})
+    opts.client.logout()
+
+    assert_eq(resp.status_code, 200, f"Expected 200, got {resp.status_code}")
+    assert_true(resp.response.status is True, "Response status must be True")
+
+    user = User.objects.get(pk=opts.user_id)
+    stored_code = user.get_secret("email_verify_code")
+    assert_true(
+        stored_code is not None and len(stored_code) == 6 and stored_code.isdigit(),
+        f"6-digit numeric code must be stored in secrets after send, got: {stored_code!r}",
+    )
+
+    # clean up
+    user.set_secret("email_verify_code", None)
+    user.set_secret("email_verify_code_ts", None)
+    user.save(update_fields=["mojo_secrets", "modified"])
+
+
+@th.django_unit_test("verify/email/send: method=code requires authentication — 401 without token")
+def test_email_verify_send_code_requires_auth(opts):
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1")
+    opts.client.logout()
+
+    resp = opts.client.post("/api/auth/verify/email/send", {"method": "code"})
+    assert_true(
+        resp.status_code in (401, 403),
+        f"method=code send must require authentication, got {resp.status_code}",
+    )
+
+
+@th.django_unit_test("verify/email/send: method=code when already verified returns 200 without generating code")
+def test_email_verify_send_code_already_verified_no_code_generated(opts):
+    from mojo.apps.account.models import User
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1")
+
+    User.objects.filter(pk=opts.user_id).update(is_email_verified=True, is_active=True)
+    opts.client.login(TEST_USER, TEST_PWORD)
+    resp = opts.client.post("/api/auth/verify/email/send", {"method": "code"})
+    opts.client.logout()
+
+    assert_eq(resp.status_code, 200, f"Expected 200, got {resp.status_code}")
+    user = User.objects.get(pk=opts.user_id)
+    assert_eq(
+        user.get_secret("email_verify_code"), None,
+        "No code must be stored when email is already verified",
+    )
+    User.objects.filter(pk=opts.user_id).update(is_email_verified=False)
+
+
+@th.django_unit_test("verify/email/send: omitting method sends link — backward compatible")
+def test_email_verify_send_omit_method_sends_link(opts):
+    """
+    Existing callers that omit 'method' must receive a link token, not a code.
+    The ev: JTI must be stored; the OTP code secret must remain absent.
+    """
+    from mojo.apps.account.models import User
+    import mojo.apps.account.utils.tokens as tok_module
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1")
+
+    User.objects.filter(pk=opts.user_id).update(is_email_verified=False, is_active=True)
+    opts.client.login(TEST_USER, TEST_PWORD)
+    resp = opts.client.post("/api/auth/verify/email/send", {})
+    opts.client.logout()
+
+    assert_eq(resp.status_code, 200, f"Expected 200, got {resp.status_code}")
+    user = User.objects.get(pk=opts.user_id)
+    assert_true(
+        user.get_secret(tok_module._JTI_KEYS[tok_module.KIND_EMAIL_VERIFY]) is not None,
+        "ev: JTI must be stored when method is omitted (link flow)",
+    )
+    assert_eq(
+        user.get_secret("email_verify_code"), None,
+        "email_verify_code must NOT be set when method is omitted",
+    )
+    # clear leftover JTI
+    user.set_secret(tok_module._JTI_KEYS[tok_module.KIND_EMAIL_VERIFY], None)
+    user.save(update_fields=["mojo_secrets", "modified"])
+
+
+@th.django_unit_test("verify/email/send: method=link explicit sends link — backward compatible")
+def test_email_verify_send_explicit_link_method(opts):
+    from mojo.apps.account.models import User
+    import mojo.apps.account.utils.tokens as tok_module
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1")
+
+    User.objects.filter(pk=opts.user_id).update(is_email_verified=False, is_active=True)
+    opts.client.login(TEST_USER, TEST_PWORD)
+    resp = opts.client.post("/api/auth/verify/email/send", {"method": "link"})
+    opts.client.logout()
+
+    assert_eq(resp.status_code, 200, f"Expected 200, got {resp.status_code}")
+    user = User.objects.get(pk=opts.user_id)
+    assert_true(
+        user.get_secret(tok_module._JTI_KEYS[tok_module.KIND_EMAIL_VERIFY]) is not None,
+        "ev: JTI must be stored for method=link",
+    )
+    assert_eq(user.get_secret("email_verify_code"), None,
+              "OTP code must NOT be set for method=link")
+    user.set_secret(tok_module._JTI_KEYS[tok_module.KIND_EMAIL_VERIFY], None)
+    user.save(update_fields=["mojo_secrets", "modified"])
+
+
+# ===========================================================================
+# REST: POST /api/auth/verify/email/confirm  (code path — authenticated)
+# ===========================================================================
+
+@th.django_unit_test("verify/email/confirm POST: correct code marks is_email_verified=True")
+def test_email_verify_confirm_code_marks_verified(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1")
+
+    User.objects.filter(pk=opts.user_id).update(is_email_verified=False, is_active=True)
+    user = User.objects.get(pk=opts.user_id)
+    code = tokens.generate_email_verify_code(user)
+
+    opts.client.login(TEST_USER, TEST_PWORD)
+    resp = opts.client.post("/api/auth/verify/email/confirm", {"code": code})
+    opts.client.logout()
+
+    assert_eq(resp.status_code, 200, f"Expected 200, got {resp.status_code}: {resp.content}")
+    data = resp.json
+    assert_true(data.get("status") is True, "Response status must be True")
+
+    user.refresh_from_db()
+    assert_true(user.is_email_verified, "is_email_verified must be True after code confirm")
+
+
+@th.django_unit_test("verify/email/confirm POST: does NOT issue a new JWT — existing session continues")
+def test_email_verify_confirm_code_no_jwt_issued(opts):
+    """
+    The code flow is for in-portal use — the user is already authenticated.
+    Unlike the link flow, no new JWT should be returned and auth_key must not
+    be rotated.
+    """
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1")
+
+    User.objects.filter(pk=opts.user_id).update(is_email_verified=False, is_active=True)
+    user = User.objects.get(pk=opts.user_id)
+    old_auth_key = user.auth_key
+    code = tokens.generate_email_verify_code(user)
+
+    opts.client.login(TEST_USER, TEST_PWORD)
+    resp = opts.client.post("/api/auth/verify/email/confirm", {"code": code})
+    opts.client.logout()
+
+    assert_eq(resp.status_code, 200, f"Expected 200, got {resp.status_code}")
+    data = resp.json
+    # Must not contain JWT data envelope
+    jwt_data = data.get("data") or {}
+    has_jwt = bool(getattr(jwt_data, "access_token", None) or
+                   (isinstance(jwt_data, dict) and jwt_data.get("access_token")))
+    assert_true(not has_jwt, "Code confirm must not return a JWT — existing session continues")
+
+    user.refresh_from_db()
+    assert_eq(user.auth_key, old_auth_key,
+              "auth_key must not be rotated by email verify code confirm")
+
+
+@th.django_unit_test("verify/email/confirm POST: requires authentication — 401 without token")
+def test_email_verify_confirm_code_requires_auth(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1")
+
+    User.objects.filter(pk=opts.user_id).update(is_email_verified=False, is_active=True)
+    user = User.objects.get(pk=opts.user_id)
+    code = tokens.generate_email_verify_code(user)
+
+    opts.client.logout()
+    resp = opts.client.post("/api/auth/verify/email/confirm", {"code": code})
+    assert_true(
+        resp.status_code in (401, 403),
+        f"Code confirm must require authentication, got {resp.status_code}",
+    )
+
+    # clean up the unused code
+    user.set_secret("email_verify_code", None)
+    user.set_secret("email_verify_code_ts", None)
+    user.save(update_fields=["mojo_secrets", "modified"])
+
+
+@th.django_unit_test("verify/email/confirm POST: wrong code returns 4xx and does not mark verified")
+def test_email_verify_confirm_code_wrong_code_rejected(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1")
+
+    User.objects.filter(pk=opts.user_id).update(is_email_verified=False, is_active=True)
+    user = User.objects.get(pk=opts.user_id)
+    tokens.generate_email_verify_code(user)
+
+    opts.client.login(TEST_USER, TEST_PWORD)
+    resp = opts.client.post("/api/auth/verify/email/confirm", {"code": "000000"})
+    opts.client.logout()
+
+    assert_true(resp.status_code in (400, 422),
+                f"Wrong code must return 4xx, got {resp.status_code}")
+    user.refresh_from_db()
+    assert_true(not user.is_email_verified,
+                "is_email_verified must remain False after wrong code")
+
+    # clean up the valid code
+    user.set_secret("email_verify_code", None)
+    user.set_secret("email_verify_code_ts", None)
+    user.save(update_fields=["mojo_secrets", "modified"])
+
+
+@th.django_unit_test("verify/email/confirm POST: expired code returns 4xx and does not mark verified")
+def test_email_verify_confirm_code_expired(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+    import mojo.apps.account.utils.tokens as tok_module
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1")
+
+    User.objects.filter(pk=opts.user_id).update(is_email_verified=False, is_active=True)
+    user = User.objects.get(pk=opts.user_id)
+    orig_ttl = tok_module.EMAIL_VERIFY_CODE_TTL
+    tok_module.EMAIL_VERIFY_CODE_TTL = -1
+    try:
+        code = tokens.generate_email_verify_code(user)
+        opts.client.login(TEST_USER, TEST_PWORD)
+        resp = opts.client.post("/api/auth/verify/email/confirm", {"code": code})
+        opts.client.logout()
+        assert_true(resp.status_code in (400, 422),
+                    f"Expired code must return 4xx, got {resp.status_code}")
+        user.refresh_from_db()
+        assert_true(not user.is_email_verified,
+                    "is_email_verified must remain False after expired code")
+    finally:
+        tok_module.EMAIL_VERIFY_CODE_TTL = orig_ttl
+        user.set_secret("email_verify_code", None)
+        user.set_secret("email_verify_code_ts", None)
+        user.save(update_fields=["mojo_secrets", "modified"])
+
+
+@th.django_unit_test("verify/email/confirm POST: code is single-use — second confirm rejected")
+def test_email_verify_confirm_code_single_use(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1")
+
+    User.objects.filter(pk=opts.user_id).update(is_email_verified=False, is_active=True)
+    user = User.objects.get(pk=opts.user_id)
+    code = tokens.generate_email_verify_code(user)
+
+    opts.client.login(TEST_USER, TEST_PWORD)
+    resp1 = opts.client.post("/api/auth/verify/email/confirm", {"code": code})
+    assert_eq(resp1.status_code, 200, f"First confirm must succeed, got {resp1.status_code}")
+
+    # Reset verified state so the gate is not what blocks the second attempt
+    User.objects.filter(pk=opts.user_id).update(is_email_verified=False)
+    clear_rate_limits(ip="127.0.0.1")
+    resp2 = opts.client.post("/api/auth/verify/email/confirm", {"code": code})
+    opts.client.logout()
+    assert_true(resp2.status_code in (400, 422),
+                f"Second use of same code must be rejected, got {resp2.status_code}")
+
+
+@th.django_unit_test("verify/email/confirm POST: missing code param returns 4xx")
+def test_email_verify_confirm_code_missing_param(opts):
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1")
+
+    opts.client.login(TEST_USER, TEST_PWORD)
+    resp = opts.client.post("/api/auth/verify/email/confirm", {})
+    opts.client.logout()
+    assert_true(resp.status_code in (400, 422),
+                f"Missing code param must return 4xx, got {resp.status_code}")
+
+
+@th.django_unit_test("verify/email/confirm POST: user A's code cannot verify user B (identity from JWT)")
+def test_email_verify_confirm_code_cross_user_rejected(opts):
+    """
+    The code path resolves identity from the Bearer token, not from the code
+    itself. User B cannot submit User A's code to verify User B's account —
+    the code lives in User A's secrets and will not match User B's (empty)
+    secrets.
+    """
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1")
+
+    User.objects.filter(pk=opts.user_id).update(is_email_verified=False, is_active=True)
+    User.objects.filter(pk=opts.user_b_id).update(is_email_verified=False, is_active=True)
+
+    # Generate a code for User A
+    user_a = User.objects.get(pk=opts.user_id)
+    code_for_a = tokens.generate_email_verify_code(user_a)
+
+    # Authenticate as User B and submit User A's code
+    opts.client.login("verify_test_user_b", TEST_PWORD)
+    clear_rate_limits(ip="127.0.0.1")
+    resp = opts.client.post("/api/auth/verify/email/confirm", {"code": code_for_a})
+    opts.client.logout()
+
+    # User B has no code stored — must be rejected
+    assert_true(resp.status_code in (400, 422),
+                f"User A's code must not verify User B, got {resp.status_code}")
+
+    user_b = User.objects.get(pk=opts.user_b_id)
+    assert_true(not user_b.is_email_verified,
+                "User B must not be verified by submitting User A's code")
+
+    # User A's code was never consumed — clean up
+    user_a.set_secret("email_verify_code", None)
+    user_a.set_secret("email_verify_code_ts", None)
+    user_a.save(update_fields=["mojo_secrets", "modified"])
+
+
+@th.django_unit_test("verify/email/confirm POST: wrong guess does not burn the valid code (brute-force safety)")
+def test_email_verify_confirm_code_wrong_guess_preserves_valid_code(opts):
+    """
+    A wrong code submission must NOT consume the stored code. If it did, any
+    single bad request — accidental typo or attacker-injected garbage — would
+    force the user to request a completely new code.
+    """
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1")
+
+    User.objects.filter(pk=opts.user_id).update(is_email_verified=False, is_active=True)
+    user = User.objects.get(pk=opts.user_id)
+    code = tokens.generate_email_verify_code(user)
+
+    opts.client.login(TEST_USER, TEST_PWORD)
+
+    # First: submit wrong code
+    clear_rate_limits(ip="127.0.0.1")
+    resp_bad = opts.client.post("/api/auth/verify/email/confirm", {"code": "000000"})
+    assert_true(resp_bad.status_code in (400, 422),
+                f"Wrong code must be rejected, got {resp_bad.status_code}")
+
+    # Then: the real code must still work
+    clear_rate_limits(ip="127.0.0.1")
+    resp_good = opts.client.post("/api/auth/verify/email/confirm", {"code": code})
+    opts.client.logout()
+    assert_eq(resp_good.status_code, 200,
+              f"Valid code must still work after a wrong guess, got {resp_good.status_code}")
+
+    user.refresh_from_db()
+    assert_true(user.is_email_verified,
+                "is_email_verified must be True after correct code following a wrong guess")
 
 
 # ===========================================================================

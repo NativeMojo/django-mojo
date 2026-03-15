@@ -8,6 +8,8 @@
 - [OAuth / Social Login](oauth.md) — Login with Google (and more)
 - [Email & Phone Verification](email_verification.md) — Verification gates, send/verify flow, invite links
 - [Email Change](email_change.md) — Self-service email address change with password confirmation
+- [Phone Number Change](phone_change.md) — Self-service phone number change with OTP verification
+- [User Self-Management](user_self_management.md) — Everything a logged-in user can do for their own account (profile, avatar, password, email, phone, passkeys, TOTP, files, notifications, activity log)
 - [User API](user.md) — User profile, registration, password reset
 - [Group API](group.md) — Groups, membership, permissions
 - [API Keys](api_keys.md) — Long-lived tokens for programmatic access
