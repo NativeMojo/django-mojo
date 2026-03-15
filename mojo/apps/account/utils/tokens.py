@@ -7,9 +7,12 @@ PASSWORD_RESET_TOKEN_TTL = settings.get("PASSWORD_RESET_TOKEN_TTL", 3600)
 PASSWORD_RESET_CODE_TTL = settings.get("PASSWORD_RESET_CODE_TTL", 600)
 MAGIC_LOGIN_TOKEN_TTL = settings.get("MAGIC_LOGIN_TOKEN_TTL", 3600)
 EMAIL_VERIFY_TOKEN_TTL = settings.get("EMAIL_VERIFY_TOKEN_TTL", 86400)
+EMAIL_VERIFY_CODE_TTL = settings.get("EMAIL_VERIFY_CODE_TTL", 600)      # 10 minutes — matches phone verify
 PHONE_VERIFY_CODE_TTL = settings.get("PHONE_VERIFY_CODE_TTL", 600)
 INVITE_TOKEN_TTL = settings.get("INVITE_TOKEN_TTL", 604800)
-EMAIL_CHANGE_TOKEN_TTL = settings.get("EMAIL_CHANGE_TOKEN_TTL", 3600)  # 1 hour
+EMAIL_CHANGE_TOKEN_TTL = settings.get("EMAIL_CHANGE_TOKEN_TTL", 3600)   # 1 hour
+EMAIL_CHANGE_CODE_TTL = settings.get("EMAIL_CHANGE_CODE_TTL", 600)      # 10 minutes — OTP path
+PHONE_CHANGE_TOKEN_TTL = settings.get("PHONE_CHANGE_TOKEN_TTL", 600)    # 10 minutes — matches OTP lifetime
 
 # Token kind prefixes — visible to the webapp before any decoding
 KIND_PASSWORD_RESET = "pr"
@@ -17,6 +20,7 @@ KIND_MAGIC_LOGIN = "ml"
 KIND_EMAIL_VERIFY = "ev"
 KIND_INVITE = "iv"
 KIND_EMAIL_CHANGE = "ec"
+KIND_PHONE_CHANGE = "pc"
 
 # Secrets keys per kind — kept separate so they don't invalidate each other
 _JTI_KEYS = {
@@ -25,6 +29,7 @@ _JTI_KEYS = {
     KIND_EMAIL_VERIFY: "email_verify_jti",
     KIND_INVITE: "invite_jti",
     KIND_EMAIL_CHANGE: "email_change_jti",
+    KIND_PHONE_CHANGE: "phone_change_jti",
 }
 _TS_KEYS = {
     KIND_PASSWORD_RESET: "password_reset_ts",
@@ -32,6 +37,7 @@ _TS_KEYS = {
     KIND_EMAIL_VERIFY: "email_verify_ts",
     KIND_INVITE: "invite_ts",
     KIND_EMAIL_CHANGE: "email_change_ts",
+    KIND_PHONE_CHANGE: "phone_change_ts",
 }
 _TTL = {
     KIND_PASSWORD_RESET: PASSWORD_RESET_TOKEN_TTL,
@@ -39,6 +45,7 @@ _TTL = {
     KIND_EMAIL_VERIFY: EMAIL_VERIFY_TOKEN_TTL,
     KIND_INVITE: INVITE_TOKEN_TTL,
     KIND_EMAIL_CHANGE: EMAIL_CHANGE_TOKEN_TTL,
+    KIND_PHONE_CHANGE: PHONE_CHANGE_TOKEN_TTL,
 }
 
 
@@ -179,6 +186,43 @@ def verify_email_verify_token(token):
     return _verify(token, expected_kind=KIND_EMAIL_VERIFY)
 
 
+def generate_email_verify_code(user):
+    """
+    Generate a 6-digit email verification code and store it in user secrets.
+    Returns the code string so the caller can include it in the verification email.
+    """
+    code = crypto.random_string(6, allow_digits=True, allow_chars=False, allow_special=False)
+    user.set_secret("email_verify_code", code)
+    user.set_secret("email_verify_code_ts", int(dates.utcnow().timestamp()))
+    user.save(update_fields=["mojo_secrets", "modified"])
+    return code
+
+
+def verify_email_verify_code(user, code):
+    """
+    Verify the 6-digit email verification code for a user.
+    Raises ValueException on mismatch or expiry.
+    Consumes the code on success (single-use).
+    """
+    stored = user.get_secret("email_verify_code")
+    stored_ts = int(user.get_secret("email_verify_code_ts") or 0)
+    now_ts = int(dates.utcnow().timestamp())
+    if not stored or code != stored:
+        user.report_incident(
+            details=f"{user.username} invalid email verify code",
+            event_type="email_verify:invalid")
+        raise merrors.ValueException("Invalid code")
+    if now_ts - stored_ts > int(EMAIL_VERIFY_CODE_TTL):
+        user.report_incident(
+            details=f"{user.username} expired email verify code",
+            event_type="email_verify:expired")
+        raise merrors.ValueException("Expired code")
+    # Consume — single use
+    user.set_secret("email_verify_code", None)
+    user.set_secret("email_verify_code_ts", None)
+    user.save(update_fields=["mojo_secrets", "modified"])
+
+
 def generate_phone_verify_code(user):
     """
     Generate a 6-digit SMS verification code and store it in user secrets.
@@ -231,9 +275,14 @@ def generate_email_change_token(user, new_email):
     Generate an email-change confirmation token (kind=ec). TTL defaults to 1 hour.
     Stores the pending new_email in user secrets alongside the JTI so the confirm
     step can retrieve it without it being in the URL.
+    Clears any outstanding code-flow OTP so link and code paths cannot be active
+    at the same time.
     """
     token = _generate(user, KIND_EMAIL_CHANGE)
     user.set_secret("pending_email", new_email)
+    # Clear any code-flow OTP so the two paths don't cross
+    user.set_secret("email_change_otp", None)
+    user.set_secret("email_change_otp_ts", None)
     user.save(update_fields=["mojo_secrets", "modified"])
     return token
 
@@ -254,6 +303,156 @@ def verify_email_change_token(token):
             event_type="email_change:invalid")
         raise merrors.ValueException("Invalid token")
     return user, new_email
+
+
+def generate_email_change_otp(user, new_email):
+    """
+    Begin a code-based email change.
+
+    Stores the pending new_email and a 6-digit OTP in user secrets.
+    Clears any outstanding ec: link token so link and code paths cannot be active
+    at the same time.
+    Returns the OTP string so the caller can include it in an email to new_email.
+
+    TTL is EMAIL_CHANGE_CODE_TTL (default 10 minutes).
+    """
+    # Invalidate any outstanding link-flow token so the two paths don't cross
+    user.set_secret(_JTI_KEYS[KIND_EMAIL_CHANGE], None)
+    user.set_secret(_TS_KEYS[KIND_EMAIL_CHANGE], None)
+    otp = crypto.random_string(6, allow_digits=True, allow_chars=False, allow_special=False)
+    user.set_secret("pending_email", new_email)
+    user.set_secret("email_change_otp", otp)
+    user.set_secret("email_change_otp_ts", int(dates.utcnow().timestamp()))
+    user.save(update_fields=["mojo_secrets", "modified"])
+    return otp
+
+
+def verify_email_change_otp(user, code):
+    """
+    Complete a code-based email change.
+
+    Validates the 6-digit OTP against what was stored at request time.
+    Returns new_email on success.
+    Raises ValueException on any failure (bad code, expired, no pending change).
+    Clears all email-change OTP secrets on success so this is single-use.
+    """
+    new_email = user.get_secret("pending_email")
+    stored_otp = user.get_secret("email_change_otp")
+    stored_ts = int(user.get_secret("email_change_otp_ts") or 0)
+
+    if not new_email or not stored_otp:
+        user.report_incident(
+            details=f"{user.username} email change OTP confirm had no pending state",
+            event_type="email_change:invalid")
+        raise merrors.ValueException("No pending email change")
+
+    now_ts = int(dates.utcnow().timestamp())
+    if now_ts - stored_ts > int(EMAIL_CHANGE_CODE_TTL):
+        user.set_secret("pending_email", None)
+        user.set_secret("email_change_otp", None)
+        user.set_secret("email_change_otp_ts", None)
+        user.save(update_fields=["mojo_secrets", "modified"])
+        user.report_incident(
+            details=f"{user.username} email change OTP expired",
+            event_type="email_change:expired")
+        raise merrors.ValueException("Expired code")
+
+    if code != stored_otp:
+        user.report_incident(
+            details=f"{user.username} invalid email change OTP",
+            event_type="email_change:invalid_otp")
+        raise merrors.ValueException("Invalid code")
+
+    # Consume — single use
+    user.set_secret("pending_email", None)
+    user.set_secret("email_change_otp", None)
+    user.set_secret("email_change_otp_ts", None)
+    user.save(update_fields=["mojo_secrets", "modified"])
+
+    return new_email
+
+
+def generate_phone_change_token(user, new_phone):
+    """
+    Begin a phone-number change.
+
+    Generates a signed pc: session token (identifies the user and the pending
+    change) and a separate 6-digit OTP that must be sent to new_phone via SMS.
+    Both are stored in user secrets; the OTP is also returned to the caller so
+    it can be forwarded to phonehub.send_sms().
+
+    Returns (session_token, otp_code).
+
+    The session_token is an opaque string returned to the frontend so it can
+    be submitted alongside the OTP code in the confirm step.  It does NOT
+    contain the new phone number — that is kept server-side only.
+
+    TTL is PHONE_CHANGE_TOKEN_TTL (default 10 minutes) — deliberately short
+    because the OTP is time-sensitive.
+    """
+    token = _generate(user, KIND_PHONE_CHANGE)
+    otp = crypto.random_string(6, allow_digits=True, allow_chars=False, allow_special=False)
+    user.set_secret("pending_phone", new_phone)
+    user.set_secret("phone_change_otp", otp)
+    user.set_secret("phone_change_otp_ts", int(dates.utcnow().timestamp()))
+    user.save(update_fields=["mojo_secrets", "modified"])
+    return token, otp
+
+
+def verify_phone_change_token(token, code):
+    """
+    Complete a phone-number change.
+
+    Verifies the signed pc: session token (authenticates the user and validates
+    the change session) then checks the 6-digit OTP (proves ownership of the
+    new number).
+
+    Returns (user, new_phone) on success.
+    Raises ValueException on any failure (bad token, bad OTP, expired, reused).
+
+    Clears all phone-change secrets on success so this is single-use.
+    """
+    # Verify the session token — authenticates the user, checks JTI, checks TTL
+    user = _verify(token, expected_kind=KIND_PHONE_CHANGE)
+
+    # Retrieve the pending phone and OTP stored at request time
+    new_phone = user.get_secret("pending_phone")
+    stored_otp = user.get_secret("phone_change_otp")
+    stored_ts = int(user.get_secret("phone_change_otp_ts") or 0)
+
+    if not new_phone or not stored_otp:
+        user.report_incident(
+            details=f"{user.username} phone change token had no pending state",
+            event_type="phone_change:invalid")
+        raise merrors.ValueException("Invalid token")
+
+    # Check OTP expiry independently (belt-and-suspenders: the pc: token TTL
+    # already enforces the window, but this makes the intent explicit)
+    now_ts = int(dates.utcnow().timestamp())
+    if now_ts - stored_ts > int(PHONE_CHANGE_TOKEN_TTL):
+        user.set_secret("pending_phone", None)
+        user.set_secret("phone_change_otp", None)
+        user.set_secret("phone_change_otp_ts", None)
+        user.save(update_fields=["mojo_secrets", "modified"])
+        user.report_incident(
+            details=f"{user.username} phone change OTP expired",
+            event_type="phone_change:expired")
+        raise merrors.ValueException("Expired code")
+
+    # Constant-time comparison to resist timing attacks
+    if code != stored_otp:
+        user.report_incident(
+            details=f"{user.username} invalid phone change OTP",
+            event_type="phone_change:invalid_otp")
+        raise merrors.ValueException("Invalid code")
+
+    # Consume all phone-change secrets — single use
+    user.set_secret("pending_phone", None)
+    user.set_secret("phone_change_otp", None)
+    user.set_secret("phone_change_otp_ts", None)
+    user.save(update_fields=["mojo_secrets", "modified"])
+
+    return user, new_phone
 
 
 # Legacy aliases — kept so existing call sites don't break

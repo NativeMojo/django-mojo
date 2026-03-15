@@ -13,7 +13,7 @@ Use this file as a lightweight running log between AI threads.
 
 ## Current Focus
 
-- No active task. `jobs.get_sysinfo()` + REST endpoints shipped (v1.0.55).
+- No active task. Phone number change flow + security fixes shipped (v1.0.55).
 
 ## Key Decisions
 
@@ -37,6 +37,17 @@ Use this file as a lightweight running log between AI threads.
 
 
 ## Handoff Notes
+
+- phone change (v1.0.55): three new endpoints in `mojo/apps/account/rest/user.py`:
+  - `POST /api/auth/phone/change/request` — requires `current_password`; sends 6-digit OTP to new number; returns `session_token`.
+  - `POST /api/auth/phone/change/confirm` — requires `session_token` + `code`; commits change, sets `is_phone_verified=True`; no JWT rotation (phone not a JWT signing input).
+  - `POST /api/auth/phone/change/cancel` — idempotent; kills pending state and JTI immediately.
+  - `KIND_PHONE_CHANGE` (`pc:`) added to token infrastructure in `tokens.py`; TTL=10min; `generate_phone_change_token(user, new_phone)` → `(session_token, otp)`, `verify_phone_change_token(token, code)` → `(user, new_phone)`.
+  - Security fix: `on_rest_pre_save` now normalizes phone, checks uniqueness, and resets `is_phone_verified=False` on any phone number change.
+  - Security fix: `_handle_existing_user_pre_save` blocks direct REST replacement of an existing phone number for non-superusers — must use change flow.
+  - First-time set and clearing to `null` are still allowed via plain profile update.
+  - Docs: `docs/web_developer/account/phone_change.md` added and linked from account README and email_verification.md.
+  - `ALLOW_PHONE_CHANGE` setting (default `True`) gates the feature; `PHONE_CHANGE_TOKEN_TTL` (default `600`) controls OTP lifetime.
 
 - jobs sysinfo (v1.0.55): `jobs.get_sysinfo(runner_id=None, timeout=5.0)` added to `mojo/apps/jobs/__init__.py`.
   - Broadcasts `mojo.apps.jobs.services.sysinfo_task.collect_sysinfo` via `broadcast_execute` (all runners) or `execute_on_runner` (single runner).

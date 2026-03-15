@@ -1,7 +1,7 @@
 """
 Tests for the self-service email-change flow — security and correctness.
 
-Security contract this file enforces:
+Security contract this file enforces (link flow):
   - ec: token has the correct kind prefix
   - pending_email is stored in secrets and returned by verify
   - ec: token is single-use
@@ -20,6 +20,24 @@ Security contract this file enforces:
   - Request endpoint: duplicate email rejected
   - Request endpoint: ALLOW_EMAIL_CHANGE=False blocks the entire flow
   - Request endpoint: requires authentication
+
+Security contract this file enforces (code/OTP flow):
+  - generate_email_change_otp stores pending_email and OTP in secrets
+  - OTP is 6 digits numeric, single-use
+  - Wrong OTP rejected without consuming the valid code (brute-force safety)
+  - Expired OTP rejected
+  - generate_email_change_otp clears any outstanding ec: JTI (mutual exclusivity)
+  - generate_email_change_token clears any outstanding OTP (mutual exclusivity)
+  - method=code on request stores OTP and does NOT store an ec: token
+  - method=link (or omitted) on request stores ec: token and clears any OTP
+  - Confirm with code requires authentication — identity from JWT, not the code
+  - Unauthenticated confirm with code is always rejected
+  - Confirm with code commits new email, sets is_email_verified, rotates auth_key, returns JWT
+  - Confirm with code checks email availability (race condition)
+  - Confirm with code blocks inactive users
+  - Confirm with code mirrors username when it matched the old email
+  - Cancel clears pending_email, ec: JTI, AND OTP secrets — covers both paths
+  - Submitting neither token nor code returns 4xx
 """
 from testit import helpers as th
 from testit.helpers import assert_true, assert_eq
@@ -67,6 +85,8 @@ def setup_email_change(opts):
     user.set_secret("pending_email", None)
     import mojo.apps.account.utils.tokens as tok_module
     user.set_secret(tok_module._JTI_KEYS[tok_module.KIND_EMAIL_CHANGE], None)
+    user.set_secret("email_change_otp", None)
+    user.set_secret("email_change_otp_ts", None)
     user.save(update_fields=["mojo_secrets", "modified"])
 
 
@@ -708,10 +728,11 @@ def test_confirm_missing_token(opts):
 # REST: POST /api/auth/email/change/cancel
 # ===========================================================================
 
-@th.django_unit_test("email/change/cancel: cancels pending change — pending_email cleared")
+@th.django_unit_test("email/change/cancel: cancels pending link change — pending_email and JTI cleared")
 def test_cancel_clears_pending_email(opts):
     from mojo.apps.account.models import User
     from mojo.apps.account.utils import tokens
+    import mojo.apps.account.utils.tokens as tok_module
     from mojo.decorators.limits import clear_rate_limits
     clear_rate_limits(ip="127.0.0.1")
 
@@ -729,6 +750,34 @@ def test_cancel_clears_pending_email(opts):
 
     user.refresh_from_db()
     assert_eq(user.get_secret("pending_email"), None, "pending_email must be None after cancel")
+    assert_eq(user.get_secret(tok_module._JTI_KEYS[tok_module.KIND_EMAIL_CHANGE]), None,
+              "ec: JTI must be None after cancel")
+
+
+@th.django_unit_test("email/change/cancel: cancels pending code change — pending_email and OTP cleared")
+def test_cancel_clears_pending_otp(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1")
+
+    user = User.objects.get(pk=opts.user_id)
+    tokens.generate_email_change_otp(user, "otp_cancel@example.com")
+    user.refresh_from_db()
+    assert_eq(user.get_secret("pending_email"), "otp_cancel@example.com",
+              "precondition: pending_email must be set by OTP flow")
+    assert_true(user.get_secret("email_change_otp") is not None,
+                "precondition: email_change_otp must be set")
+
+    opts.client.login(TEST_USER, TEST_PWORD)
+    resp = opts.client.post("/api/auth/email/change/cancel", {})
+    opts.client.logout()
+    assert_eq(resp.status_code, 200, f"Cancel must return 200, got {resp.status_code}")
+
+    user.refresh_from_db()
+    assert_eq(user.get_secret("pending_email"), None, "pending_email must be None after cancel")
+    assert_eq(user.get_secret("email_change_otp"), None, "email_change_otp must be None after cancel")
+    assert_eq(user.get_secret("email_change_otp_ts"), None, "email_change_otp_ts must be None after cancel")
 
 
 @th.django_unit_test("email/change/cancel: cancels JTI so outstanding ec: token is dead")
@@ -814,6 +863,615 @@ def test_cancel_then_confirm_rejected(opts):
     # email must be unchanged
     user.refresh_from_db()
     assert_eq(str(user.email), opts.original_email, "email must not change after cancel+confirm attempt")
+
+
+# ===========================================================================
+# OTP / code flow — token unit tests
+# ===========================================================================
+
+@th.django_unit_test("email change OTP: generate stores pending_email and 6-digit code in secrets")
+def test_email_change_otp_stored_in_secrets(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+
+    user = User.objects.get(pk=opts.user_id)
+    otp = tokens.generate_email_change_otp(user, "otp_stored@example.com")
+    user.refresh_from_db()
+    assert_eq(user.get_secret("pending_email"), "otp_stored@example.com",
+              "pending_email must be stored after generate_email_change_otp")
+    assert_eq(user.get_secret("email_change_otp"), otp,
+              "OTP must be stored in secrets after generate")
+    assert_true(user.get_secret("email_change_otp_ts") is not None,
+                "OTP timestamp must be stored after generate")
+    assert_true(len(otp) == 6 and otp.isdigit(),
+                f"OTP must be a 6-digit numeric string, got: {otp!r}")
+    # consume cleanly
+    tokens.verify_email_change_otp(user, otp)
+
+
+@th.django_unit_test("email change OTP: correct code returns new_email and clears secrets (single-use)")
+def test_email_change_otp_single_use(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+    from mojo import errors as merrors
+
+    user = User.objects.get(pk=opts.user_id)
+    otp = tokens.generate_email_change_otp(user, "otp_single@example.com")
+    result = tokens.verify_email_change_otp(user, otp)
+    assert_eq(result, "otp_single@example.com", "verify must return the pending new_email")
+
+    user.refresh_from_db()
+    assert_eq(user.get_secret("email_change_otp"), None, "OTP must be cleared after successful verify")
+    assert_eq(user.get_secret("pending_email"), None, "pending_email must be cleared after successful verify")
+
+    raised = False
+    try:
+        tokens.verify_email_change_otp(user, otp)
+    except merrors.ValueException:
+        raised = True
+    assert_true(raised, "Reusing an email change OTP must raise ValueException")
+
+
+@th.django_unit_test("email change OTP: wrong code rejected without consuming the valid OTP")
+def test_email_change_otp_wrong_code_does_not_consume(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+    from mojo import errors as merrors
+
+    user = User.objects.get(pk=opts.user_id)
+    otp = tokens.generate_email_change_otp(user, "otp_noburn@example.com")
+
+    raised = False
+    try:
+        tokens.verify_email_change_otp(user, "000000")
+    except merrors.ValueException:
+        raised = True
+    assert_true(raised, "Wrong OTP must raise ValueException")
+
+    # Valid OTP must still work after a wrong guess
+    user.refresh_from_db()
+    result = tokens.verify_email_change_otp(user, otp)
+    assert_eq(result, "otp_noburn@example.com", "Valid OTP must still work after a wrong guess")
+
+
+@th.django_unit_test("email change OTP: expired OTP is rejected")
+def test_email_change_otp_expired(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+    import mojo.apps.account.utils.tokens as tok_module
+    from mojo import errors as merrors
+
+    user = User.objects.get(pk=opts.user_id)
+    orig_ttl = tok_module.EMAIL_CHANGE_CODE_TTL
+    tok_module.EMAIL_CHANGE_CODE_TTL = -1
+    try:
+        otp = tokens.generate_email_change_otp(user, "otp_expired@example.com")
+        raised = False
+        try:
+            tokens.verify_email_change_otp(user, otp)
+        except merrors.ValueException:
+            raised = True
+        assert_true(raised, "Expired email change OTP must raise ValueException")
+    finally:
+        tok_module.EMAIL_CHANGE_CODE_TTL = orig_ttl
+        user.set_secret("pending_email", None)
+        user.set_secret("email_change_otp", None)
+        user.set_secret("email_change_otp_ts", None)
+        user.save(update_fields=["mojo_secrets", "modified"])
+
+
+@th.django_unit_test("email change OTP: no pending state raises ValueException")
+def test_email_change_otp_no_pending_state(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+    from mojo import errors as merrors
+
+    user = User.objects.get(pk=opts.user_id)
+    user.set_secret("pending_email", None)
+    user.set_secret("email_change_otp", None)
+    user.set_secret("email_change_otp_ts", None)
+    user.save(update_fields=["mojo_secrets", "modified"])
+
+    raised = False
+    try:
+        tokens.verify_email_change_otp(user, "123456")
+    except merrors.ValueException:
+        raised = True
+    assert_true(raised, "verify_email_change_otp with no pending state must raise ValueException")
+
+
+@th.django_unit_test("email change OTP: generate_email_change_otp clears outstanding ec: JTI (mutual exclusivity)")
+def test_email_change_otp_clears_link_token(opts):
+    """
+    Generating an OTP must invalidate any in-flight link token so both paths
+    cannot be active at the same time.
+    """
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+    from mojo import errors as merrors
+
+    user = User.objects.get(pk=opts.user_id)
+    # Issue a link token first
+    link_tok = tokens.generate_email_change_token(user, "mutual_link@example.com")
+
+    # Now generate an OTP — must kill the link token
+    otp = tokens.generate_email_change_otp(user, "mutual_otp@example.com")
+
+    raised = False
+    try:
+        tokens.verify_email_change_token(link_tok)
+    except merrors.ValueException:
+        raised = True
+    assert_true(raised, "ec: token must be invalid after generate_email_change_otp clears the JTI")
+
+    # consume the OTP cleanly
+    try:
+        tokens.verify_email_change_otp(user, otp)
+    except merrors.ValueException:
+        pass
+
+
+@th.django_unit_test("email change OTP: generate_email_change_token clears outstanding OTP (mutual exclusivity)")
+def test_email_change_link_token_clears_otp(opts):
+    """
+    Generating a link token must clear any in-flight OTP so both paths
+    cannot be active at the same time.
+    """
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+    from mojo import errors as merrors
+
+    user = User.objects.get(pk=opts.user_id)
+    # Issue an OTP first
+    otp = tokens.generate_email_change_otp(user, "mutual_otp2@example.com")
+
+    # Now generate a link token — must kill the OTP
+    link_tok = tokens.generate_email_change_token(user, "mutual_link2@example.com")
+
+    # OTP must now be gone from secrets
+    user.refresh_from_db()
+    assert_eq(user.get_secret("email_change_otp"), None,
+              "email_change_otp must be cleared after generate_email_change_token")
+
+    raised = False
+    try:
+        tokens.verify_email_change_otp(user, otp)
+    except merrors.ValueException:
+        raised = True
+    assert_true(raised, "OTP must be invalid after generate_email_change_token clears it")
+
+    # consume the link token cleanly
+    try:
+        tokens.verify_email_change_token(link_tok)
+    except merrors.ValueException:
+        pass
+
+
+# ===========================================================================
+# REST: POST /api/auth/email/change/request  (method=code)
+# ===========================================================================
+
+@th.django_unit_test("email/change/request method=code: happy path returns 200 and stores OTP")
+def test_request_code_method_stores_otp(opts):
+    from mojo.apps.account.models import User
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1")
+
+    opts.client.login(TEST_USER, TEST_PWORD)
+    resp = opts.client.post(
+        "/api/auth/email/change/request",
+        {"email": "code_req_happy@example.com", "current_password": TEST_PWORD, "method": "code"},
+    )
+    opts.client.logout()
+    assert_eq(resp.status_code, 200, f"Expected 200, got {resp.status_code}")
+    data = resp.json
+    assert_true(data.get("status") is True, "Response status must be True")
+
+    user = User.objects.get(pk=opts.user_id)
+    otp = user.get_secret("email_change_otp")
+    assert_true(
+        otp is not None and len(otp) == 6 and otp.isdigit(),
+        f"6-digit OTP must be stored in secrets after method=code request, got: {otp!r}",
+    )
+    assert_eq(user.get_secret("pending_email"), "code_req_happy@example.com",
+              "pending_email must be stored after method=code request")
+
+    # clean up
+    user.set_secret("pending_email", None)
+    user.set_secret("email_change_otp", None)
+    user.set_secret("email_change_otp_ts", None)
+    user.save(update_fields=["mojo_secrets", "modified"])
+
+
+@th.django_unit_test("email/change/request method=code: does NOT store ec: link token")
+def test_request_code_method_no_ec_token(opts):
+    from mojo.apps.account.models import User
+    import mojo.apps.account.utils.tokens as tok_module
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1")
+
+    opts.client.login(TEST_USER, TEST_PWORD)
+    opts.client.post(
+        "/api/auth/email/change/request",
+        {"email": "code_no_ec@example.com", "current_password": TEST_PWORD, "method": "code"},
+    )
+    opts.client.logout()
+
+    user = User.objects.get(pk=opts.user_id)
+    assert_eq(
+        user.get_secret(tok_module._JTI_KEYS[tok_module.KIND_EMAIL_CHANGE]), None,
+        "method=code must not store an ec: JTI — the link flow must not be activated",
+    )
+
+    user.set_secret("pending_email", None)
+    user.set_secret("email_change_otp", None)
+    user.set_secret("email_change_otp_ts", None)
+    user.save(update_fields=["mojo_secrets", "modified"])
+
+
+@th.django_unit_test("email/change/request method=link: clears any outstanding OTP (mutual exclusivity via REST)")
+def test_request_link_method_clears_previous_otp(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1")
+
+    # Seed an OTP directly
+    user = User.objects.get(pk=opts.user_id)
+    tokens.generate_email_change_otp(user, "prev_otp@example.com")
+    user.refresh_from_db()
+    assert_true(user.get_secret("email_change_otp") is not None, "precondition: OTP must be set")
+
+    # Now request via link method — must clear the OTP
+    opts.client.login(TEST_USER, TEST_PWORD)
+    opts.client.post(
+        "/api/auth/email/change/request",
+        {"email": "link_after_otp@example.com", "current_password": TEST_PWORD},
+    )
+    opts.client.logout()
+
+    user.refresh_from_db()
+    assert_eq(user.get_secret("email_change_otp"), None,
+              "Switching to link method must clear any outstanding OTP")
+
+    import mojo.apps.account.utils.tokens as tok_module
+    user.set_secret("pending_email", None)
+    user.set_secret(tok_module._JTI_KEYS[tok_module.KIND_EMAIL_CHANGE], None)
+    user.save(update_fields=["mojo_secrets", "modified"])
+
+
+# ===========================================================================
+# REST: POST /api/auth/email/change/confirm  (code path)
+# ===========================================================================
+
+@th.django_unit_test("email/change/confirm code: happy path commits new email and returns JWT")
+def test_confirm_code_happy_path(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1")
+
+    User.objects.filter(pk=opts.user_id).update(
+        email=opts.original_email,
+        username=opts.original_username,
+    )
+    user = User.objects.get(pk=opts.user_id)
+    otp = tokens.generate_email_change_otp(user, "code_confirm_happy@example.com")
+
+    opts.client.login(TEST_USER, TEST_PWORD)
+    resp = opts.client.post("/api/auth/email/change/confirm", {"code": otp})
+    opts.client.logout()
+
+    assert_eq(resp.status_code, 200, f"Code confirm must return 200, got {resp.status_code}: {resp.content}")
+    data = resp.json
+    assert_true(data.get("status") is True, "Response status must be True")
+    assert_true("data" in data, "Response must contain JWT data envelope")
+
+    user.refresh_from_db()
+    assert_eq(str(user.email), "code_confirm_happy@example.com",
+              "user.email must be updated to new_email after code confirm")
+    assert_true(user.is_email_verified, "is_email_verified must be True after code confirm")
+
+    # Restore
+    User.objects.filter(pk=user.pk).update(
+        email=opts.original_email,
+        username=opts.original_username,
+    )
+
+
+@th.django_unit_test("email/change/confirm code: rotates auth_key (invalidates other sessions)")
+def test_confirm_code_rotates_auth_key(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1")
+
+    User.objects.filter(pk=opts.user_id).update(
+        email=opts.original_email,
+        username=opts.original_username,
+    )
+    user = User.objects.get(pk=opts.user_id)
+    old_auth_key = user.auth_key
+    otp = tokens.generate_email_change_otp(user, "code_rotatekey@example.com")
+
+    opts.client.login(TEST_USER, TEST_PWORD)
+    opts.client.post("/api/auth/email/change/confirm", {"code": otp})
+    opts.client.logout()
+
+    user.refresh_from_db()
+    assert_true(
+        user.auth_key != old_auth_key,
+        "auth_key must be rotated after code-path email change confirm",
+    )
+
+    # Restore
+    User.objects.filter(pk=user.pk).update(
+        email=opts.original_email,
+        username=opts.original_username,
+    )
+
+
+@th.django_unit_test("email/change/confirm code: requires authentication — 401 without token")
+def test_confirm_code_requires_auth(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1")
+
+    user = User.objects.get(pk=opts.user_id)
+    otp = tokens.generate_email_change_otp(user, "code_noauth@example.com")
+
+    opts.client.logout()
+    resp = opts.client.post("/api/auth/email/change/confirm", {"code": otp})
+    assert_true(
+        resp.status_code in (401, 403),
+        f"Code confirm without auth must return 401/403, got {resp.status_code}",
+    )
+
+    # email must be unchanged
+    user.refresh_from_db()
+    assert_eq(str(user.email), opts.original_email, "email must not change without authentication")
+
+    # clean up the unused OTP
+    user.set_secret("pending_email", None)
+    user.set_secret("email_change_otp", None)
+    user.set_secret("email_change_otp_ts", None)
+    user.save(update_fields=["mojo_secrets", "modified"])
+
+
+@th.django_unit_test("email/change/confirm code: wrong code rejected — email unchanged")
+def test_confirm_code_wrong_code_rejected(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1")
+
+    user = User.objects.get(pk=opts.user_id)
+    tokens.generate_email_change_otp(user, "code_wrongcode@example.com")
+
+    opts.client.login(TEST_USER, TEST_PWORD)
+    resp = opts.client.post("/api/auth/email/change/confirm", {"code": "000000"})
+    opts.client.logout()
+
+    assert_true(resp.status_code in (400, 422),
+                f"Wrong code must return 4xx, got {resp.status_code}")
+    user.refresh_from_db()
+    assert_eq(str(user.email), opts.original_email, "email must not change after wrong code")
+
+    # clean up the valid OTP
+    user.set_secret("pending_email", None)
+    user.set_secret("email_change_otp", None)
+    user.set_secret("email_change_otp_ts", None)
+    user.save(update_fields=["mojo_secrets", "modified"])
+
+
+@th.django_unit_test("email/change/confirm code: expired code returns 4xx — email unchanged")
+def test_confirm_code_expired(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+    import mojo.apps.account.utils.tokens as tok_module
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1")
+
+    user = User.objects.get(pk=opts.user_id)
+    orig_ttl = tok_module.EMAIL_CHANGE_CODE_TTL
+    tok_module.EMAIL_CHANGE_CODE_TTL = -1
+    try:
+        otp = tokens.generate_email_change_otp(user, "code_expired@example.com")
+        opts.client.login(TEST_USER, TEST_PWORD)
+        resp = opts.client.post("/api/auth/email/change/confirm", {"code": otp})
+        opts.client.logout()
+        assert_true(resp.status_code in (400, 422),
+                    f"Expired code must return 4xx, got {resp.status_code}")
+        user.refresh_from_db()
+        assert_eq(str(user.email), opts.original_email, "email must not change after expired code")
+    finally:
+        tok_module.EMAIL_CHANGE_CODE_TTL = orig_ttl
+        user.set_secret("pending_email", None)
+        user.set_secret("email_change_otp", None)
+        user.set_secret("email_change_otp_ts", None)
+        user.save(update_fields=["mojo_secrets", "modified"])
+
+
+@th.django_unit_test("email/change/confirm code: no pending change returns 4xx")
+def test_confirm_code_no_pending_state(opts):
+    from mojo.apps.account.models import User
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1")
+
+    # Ensure no pending OTP
+    user = User.objects.get(pk=opts.user_id)
+    user.set_secret("pending_email", None)
+    user.set_secret("email_change_otp", None)
+    user.set_secret("email_change_otp_ts", None)
+    user.save(update_fields=["mojo_secrets", "modified"])
+
+    opts.client.login(TEST_USER, TEST_PWORD)
+    resp = opts.client.post("/api/auth/email/change/confirm", {"code": "123456"})
+    opts.client.logout()
+    assert_true(resp.status_code in (400, 422),
+                f"Confirm with code and no pending state must return 4xx, got {resp.status_code}")
+    user.refresh_from_db()
+    assert_eq(str(user.email), opts.original_email, "email must not change when no pending state")
+
+
+@th.django_unit_test("email/change/confirm code: code is single-use — second confirm rejected")
+def test_confirm_code_single_use(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1")
+
+    User.objects.filter(pk=opts.user_id).update(
+        email=opts.original_email,
+        username=opts.original_username,
+    )
+    user = User.objects.get(pk=opts.user_id)
+    otp = tokens.generate_email_change_otp(user, "code_single_use@example.com")
+
+    opts.client.login(TEST_USER, TEST_PWORD)
+    resp1 = opts.client.post("/api/auth/email/change/confirm", {"code": otp})
+    assert_eq(resp1.status_code, 200, f"First confirm must succeed, got {resp1.status_code}")
+
+    # Restore email so it's not the availability check that blocks the second attempt
+    User.objects.filter(pk=user.pk).update(
+        email=opts.original_email,
+        username=opts.original_username,
+    )
+    clear_rate_limits(ip="127.0.0.1")
+    resp2 = opts.client.post("/api/auth/email/change/confirm", {"code": otp})
+    opts.client.logout()
+    assert_true(resp2.status_code in (400, 422),
+                f"Second use of same code must be rejected, got {resp2.status_code}")
+
+    User.objects.filter(pk=user.pk).update(
+        email=opts.original_email,
+        username=opts.original_username,
+    )
+
+
+@th.django_unit_test("email/change/confirm code: race — email claimed by another account is rejected")
+def test_confirm_code_race_email_claimed(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1")
+
+    user = User.objects.get(pk=opts.user_id)
+    # TEST_NEW_EMAIL is owned by the collision user created in setup
+    otp = tokens.generate_email_change_otp(user, TEST_NEW_EMAIL)
+
+    opts.client.login(TEST_USER, TEST_PWORD)
+    resp = opts.client.post("/api/auth/email/change/confirm", {"code": otp})
+    opts.client.logout()
+
+    assert_true(
+        resp.status_code in (400, 409, 422),
+        f"Code confirm must reject an email claimed by another account, got {resp.status_code}",
+    )
+    user.refresh_from_db()
+    assert_eq(str(user.email), opts.original_email,
+              "email must not change after a code confirm rejected for availability")
+
+
+@th.django_unit_test("email/change/confirm code: inactive user is blocked (403)")
+def test_confirm_code_inactive_user_blocked(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1")
+
+    user = User.objects.get(pk=opts.user_id)
+    otp = tokens.generate_email_change_otp(user, "code_inactive@example.com")
+
+    # Deactivate after OTP generation
+    User.objects.filter(pk=user.pk).update(is_active=False)
+
+    opts.client.login(TEST_USER, TEST_PWORD)
+    resp = opts.client.post("/api/auth/email/change/confirm", {"code": otp})
+    opts.client.logout()
+    assert_eq(resp.status_code, 403,
+              f"Inactive user must receive 403 at code confirm, got {resp.status_code}")
+
+    # Restore
+    User.objects.filter(pk=user.pk).update(is_active=True)
+    user.refresh_from_db()
+    user.set_secret("pending_email", None)
+    user.set_secret("email_change_otp", None)
+    user.set_secret("email_change_otp_ts", None)
+    user.save(update_fields=["mojo_secrets", "modified"])
+
+
+@th.django_unit_test("email/change/confirm code: mirrors username when it matched old email")
+def test_confirm_code_mirrors_username(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1")
+
+    mirror_email = "code_mirror_old@example.com"
+    User.objects.filter(pk=opts.user_id).update(
+        email=mirror_email,
+        username=mirror_email,
+    )
+    user = User.objects.get(pk=opts.user_id)
+    assert_eq(str(user.username).lower(), str(user.email).lower(),
+              "precondition: username must equal email")
+
+    new_email = "code_mirror_new@example.com"
+    otp = tokens.generate_email_change_otp(user, new_email)
+
+    opts.client.login(mirror_email, TEST_PWORD)
+    opts.client.post("/api/auth/email/change/confirm", {"code": otp})
+    opts.client.logout()
+
+    user.refresh_from_db()
+    assert_eq(str(user.email), new_email, "email must be updated")
+    assert_eq(str(user.username), new_email,
+              "username must be mirrored to new_email when it matched old email (code path)")
+
+    # Restore
+    User.objects.filter(pk=user.pk).update(
+        email=opts.original_email,
+        username=opts.original_username,
+    )
+
+
+@th.django_unit_test("email/change/confirm: neither token nor code returns 4xx")
+def test_confirm_neither_token_nor_code(opts):
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1")
+
+    # Unauthenticated — covers both the token path (no token) and code path (no code)
+    resp = opts.client.post("/api/auth/email/change/confirm", {})
+    assert_true(resp.status_code in (400, 422),
+                f"Submitting neither token nor code must return 4xx, got {resp.status_code}")
+
+
+@th.django_unit_test("email/change/cancel: cancel after code-flow request kills OTP and confirm is rejected")
+def test_cancel_then_confirm_code_rejected(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1")
+
+    user = User.objects.get(pk=opts.user_id)
+    otp = tokens.generate_email_change_otp(user, "cancel_code_confirm@example.com")
+
+    opts.client.login(TEST_USER, TEST_PWORD)
+    opts.client.post("/api/auth/email/change/cancel", {})
+
+    # Attempt to confirm with the now-dead OTP
+    clear_rate_limits(ip="127.0.0.1")
+    resp = opts.client.post("/api/auth/email/change/confirm", {"code": otp})
+    opts.client.logout()
+    assert_true(
+        resp.status_code in (400, 422),
+        f"Code confirm after cancel must be rejected, got {resp.status_code}",
+    )
+    user.refresh_from_db()
+    assert_eq(str(user.email), opts.original_email,
+              "email must not change after cancel + code confirm attempt")
 
 
 # ===========================================================================

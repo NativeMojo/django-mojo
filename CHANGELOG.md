@@ -1,4 +1,47 @@
-## v1.0.55 - (current)
+## v1.0.56 - (current)
+
+### New Features
+
+- account: added `method` param to `POST /api/auth/verify/email/send` — pass `{ "method": "code" }` to send a 6-digit OTP to the user's inbox instead of a verification link; default `"link"` is fully backward-compatible (`mojo/apps/account/rest/verify.py`)
+- account: added `POST /api/auth/verify/email/confirm` — authenticated endpoint to confirm email ownership by submitting the 6-digit OTP; mirrors `POST /api/auth/verify/phone/confirm` exactly; sets `is_email_verified=True` and emits `account:email:verified` realtime event (`mojo/apps/account/rest/verify.py`)
+- account: added `method` param to `POST /api/auth/email/change/request` — pass `{ "method": "code" }` to send a 6-digit OTP to the new address instead of a confirmation link; default `"link"` is fully backward-compatible (`mojo/apps/account/rest/user.py`)
+- account: extended `POST /api/auth/email/change/confirm` — now accepts `{ "code": "123456" }` (requires authentication) alongside the existing `{ "token": "ec:..." }` (unauthenticated, token is the credential); both paths commit the change, rotate `auth_key`, and return a fresh JWT (`mojo/apps/account/rest/user.py`)
+- account: updated `POST /api/auth/email/change/cancel` — now clears both link-flow JTI and code-flow OTP in a single call, regardless of which method was used to initiate the change (`mojo/apps/account/rest/user.py`)
+- account: added `generate_email_verify_code()` and `verify_email_verify_code()` to token infrastructure — 6-digit OTP stored in `mojo_secrets`, TTL controlled by `EMAIL_VERIFY_CODE_TTL` (default 10 min), single-use (`mojo/apps/account/utils/tokens.py`)
+- account: added `generate_email_change_otp()` and `verify_email_change_otp()` to token infrastructure — 6-digit OTP stored in `mojo_secrets`, TTL controlled by `EMAIL_CHANGE_CODE_TTL` (default 10 min), single-use; mutually exclusive with the `ec:` link token so both paths cannot be active simultaneously (`mojo/apps/account/utils/tokens.py`)
+
+### Docs
+
+- docs: updated `docs/web_developer/account/email_verification.md` — added code flow section for `POST /api/auth/verify/email/send` and `POST /api/auth/verify/email/confirm`; updated write-protection table; added `EMAIL_VERIFY_CODE_TTL` to settings reference; updated realtime events section
+- docs: updated `docs/web_developer/account/email_change.md` — added code flow for request and confirm; restructured confirm into Option A (code), Option B (link→API page), Option C (link→frontend); updated cancel, security notes, template requirements, and settings reference; added `email_change_code` template docs
+- docs: updated `docs/django_developer/account/email_change.md` — added code flow token infrastructure reference; updated endpoint table; added confirm routing logic; documented `email_change_code` template; added cancel internals section; added settings reference table; expanded security design notes
+
+## v1.0.55
+
+
+### New Features
+
+- account: added `GET /api/auth/email/change/confirm` — browser-friendly confirm endpoint for email change links; renders `account/email_change_confirm.html` on success or error; supports `?redirect=<url>` param for automatic redirect after 3 seconds on success (`mojo/apps/account/rest/user.py`, `mojo/apps/account/templates/account/email_change_confirm.html`)
+- account: upgraded `GET /api/auth/verify/email/confirm` — now renders `account/email_verify_confirm.html` instead of returning JSON; supports `?redirect=<url>` param; handles error states (invalid token, disabled account) with descriptive template pages (`mojo/apps/account/rest/verify.py`, `mojo/apps/account/templates/account/email_verify_confirm.html`)
+- account: added realtime WebSocket event `account:email:changed` — emitted to all active sessions after a successful email change confirm (both GET and POST paths); allows open sessions to react to the `auth_key` rotation cleanly (`mojo/apps/account/rest/user.py`)
+- account: added realtime WebSocket event `account:email:verified` — emitted after `GET /api/auth/verify/email/confirm` succeeds (`mojo/apps/account/rest/verify.py`)
+- account: added realtime WebSocket event `account:phone:verified` — emitted after `POST /api/auth/verify/phone/confirm` succeeds (`mojo/apps/account/rest/verify.py`)
+- account: added `POST /api/auth/phone/change/request` — begin a self-service phone number change; requires `current_password`; sends a 6-digit OTP via SMS to the new number (`mojo/apps/account/rest/user.py`)
+- account: added `POST /api/auth/phone/change/confirm` — commit a phone number change by submitting the session token and OTP; sets `is_phone_verified=True` on success (`mojo/apps/account/rest/user.py`)
+- account: added `POST /api/auth/phone/change/cancel` — cancel a pending phone number change immediately; idempotent (`mojo/apps/account/rest/user.py`)
+- account: added `KIND_PHONE_CHANGE` (`pc:`) token kind to the token infrastructure with `generate_phone_change_token()` and `verify_phone_change_token()`; TTL defaults to 10 minutes (`mojo/apps/account/utils/tokens.py`)
+
+### Security / Bug Fixes
+
+- account: `on_rest_pre_save` now normalizes and uniqueness-checks `phone_number` on every REST save, and resets `is_phone_verified=False` whenever the phone number changes — previously the verified flag was not cleared on a direct phone number update (`mojo/apps/account/models/user.py`)
+- account: `_handle_existing_user_pre_save` now blocks direct REST replacement of an existing phone number for non-superusers — must use the `auth/phone/change/*` flow to prove ownership of the new number before it is committed (`mojo/apps/account/models/user.py`)
+
+### Docs
+
+- docs: added `docs/web_developer/account/phone_change.md` — full REST API reference for the phone number change flow
+- docs: updated `docs/web_developer/account/README.md` — added Phone Number Change link
+- docs: updated `docs/web_developer/account/email_verification.md` — added Realtime Events section, Template Customisation section, and cross-reference to phone_change.md
+- docs: updated `docs/web_developer/account/email_change.md` — documented GET confirm endpoint, Option A/B integration patterns, redirect param, Realtime Events section, and Template Customisation section
 
 ## v1.0.50 - March 15, 2026
 

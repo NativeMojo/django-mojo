@@ -678,6 +678,18 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
                 qset = qset.exclude(pk=self.pk)
             if qset.exists():
                 raise merrors.ValueException("Username already exists")
+        if "phone_number" in changed_fields:
+            if self.phone_number:
+                normalized = self.normalize_phone(self.phone_number)
+                if not normalized:
+                    raise merrors.ValueException("Invalid phone number format")
+                self.phone_number = normalized
+                qset = User.objects.filter(phone_number=self.phone_number)
+                if self.pk is not None:
+                    qset = qset.exclude(pk=self.pk)
+                if qset.exists():
+                    raise merrors.ValueException("Phone number already in use")
+            self.is_phone_verified = False
         if not self.display_name:
             self.display_name = self.generate_display_name()
         self.validate_name_fields(changed_fields, created)
@@ -690,6 +702,15 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         # for the REST path; this catches any direct programmatic call to this method)
         if creds_changed and not self.active_user.is_superuser:
             raise merrors.PermissionDeniedException("You are not allowed to change email or username")
+        if "phone_number" in changed_fields and not self.active_user.is_superuser:
+            old_phone = changed_fields.get("phone_number")
+            # Block replacing an existing phone number directly — must use the phone change
+            # flow (POST /api/auth/phone/change/request → confirm) so ownership of the new
+            # number is verified via OTP before it is committed.
+            # Clearing a phone number or setting one for the first time is always allowed.
+            if old_phone and self.phone_number:
+                raise merrors.PermissionDeniedException(
+                    "Use the phone change flow to update an existing phone number")
         if "password" in changed_fields:
             raise merrors.PermissionDeniedException("You are not allowed to change password")
         if "new_password" in changed_fields:
@@ -701,6 +722,9 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             self.log(kind="email:changed", log=f"{changed_fields['email']} to {self.email}")
         if "username" in changed_fields:
             self.log(kind="username:changed", log=f"{changed_fields['username']} to {self.username}")
+        if "phone_number" in changed_fields:
+            old_phone = changed_fields.get("phone_number")
+            self.log(kind="phone:changed", log=f"{old_phone} to {self.phone_number}")
         if "is_active" in changed_fields:
             if not self.is_active:
                 metrics.record("user_deactivated", category="user", min_granularity="hours")
