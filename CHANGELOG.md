@@ -1,5 +1,10 @@
 ## v1.0.59 - (current)
 
+## v1.0.54 - March 16, 2026
+
+fix short link
+
+
 ## v1.0.53 - March 16, 2026
 
 greatly improved invite flow

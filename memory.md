@@ -24,7 +24,7 @@ Use this file as a lightweight running log between AI threads.
 - **Notification preferences default is allow** — only suppress on explicit opt-out. System/transactional emails never suppressed.
 - **`metadata.protected` is framework-protected.** `on_rest_update_jsonfield` in `mojo/models/rest.py` blocks writes to the `protected` sub-key for non-superusers. Use for system-set fields: `registration_source`, `invited_by_id`, `invited_to_group_id`.
 - **Transactional token URLs** use `build_token_url(flow, token, request, user, group)` from `mojo/apps/account/utils/webapp_url.py`. Single frontend auth endpoint: `{base_url}{auth_path}?flow={flow}&token={token}`. Config via `group.metadata["webapp_base_url"]` and `group.metadata["webapp_auth_path"]` (no deploy needed). Settings `WEBAPP_BASE_URL` / `WEBAPP_AUTH_PATH` as fallbacks.
-- **`maybe_shorten_url`** in `mojo/apps/shortlink/__init__.py` — wraps any URL if shortlink app is installed; no extra setting needed.
+- **`maybe_shorten_url`** in `mojo/apps/shortlink/__init__.py` — wraps any URL if shortlink app is installed. Base URL fallback chain: `SHORTLINK_BASE_URL` → `WEBAPP_BASE_URL` → `BASE_URL`.
 - **`jwt_login(extra=None)`** — `extra` dict merged into response `data`, not into `token_package` (JWT payload stays clean). OAuth uses `extra={"is_new_user": True}` for path 3.
 - **`get_protected_metadata(key, default=None)` / `set_protected_metadata(key, value)`** on `User` — safe read/write to `metadata["protected"]` without clobbering other keys. `jwt_login` records `orig_webapp_url` (first login, never overwritten) and `last_webapp_url` (updated every login). `orig_webapp_url` is step 5 in `get_webapp_base_url` lookup chain.
 
