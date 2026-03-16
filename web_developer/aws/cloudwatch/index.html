@@ -3638,21 +3638,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#response-multiple-instances-slugs-omitted-or-multiple-slugs" class="md-nav__link">
+  <a href="#response_1" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Response — multiple instances (slugs omitted or multiple slugs)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#response-single-instance-one-slug" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Response — single instance (one slug)
+        Response
       
     </span>
   </a>
@@ -3726,10 +3715,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#granularity-and-period-labels" class="md-nav__link">
+  <a href="#granularity-and-labels" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Granularity and Period Labels
+        Granularity and Labels
       
     </span>
   </a>
@@ -3895,16 +3884,28 @@ chart labels.</p>
 <td>Comma-separated friendly names or AWS IDs to target</td>
 </tr>
 <tr>
+<td><code>dr_start</code></td>
+<td>no</td>
+<td>24 hours ago</td>
+<td>Start of range as Unix timestamp (preferred)</td>
+</tr>
+<tr>
+<td><code>dr_end</code></td>
+<td>no</td>
+<td>now</td>
+<td>End of range as Unix timestamp (preferred)</td>
+</tr>
+<tr>
 <td><code>dt_start</code></td>
 <td>no</td>
 <td>24 hours ago</td>
-<td>Start of range (UTC ISO-8601)</td>
+<td>Alias for <code>dr_start</code>, accepts ISO-8601 datetime</td>
 </tr>
 <tr>
 <td><code>dt_end</code></td>
 <td>no</td>
 <td>now</td>
-<td>End of range (UTC ISO-8601)</td>
+<td>Alias for <code>dr_end</code>, accepts ISO-8601 datetime</td>
 </tr>
 <tr>
 <td><code>granularity</code></td>
@@ -3936,31 +3937,19 @@ chart labels.</p>
 <a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a># Peak CPU across all RDS instances
 <a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>GET /api/aws/cloudwatch/fetch?account=rds&amp;category=cpu&amp;stat=max
 </code></pre></div>
-<h3 id="response-multiple-instances-slugs-omitted-or-multiple-slugs">Response — multiple instances (slugs omitted or multiple slugs)<a class="headerlink" href="#response-multiple-instances-slugs-omitted-or-multiple-slugs" title="Permanent link">&para;</a></h3>
+<h3 id="response_1">Response<a class="headerlink" href="#response_1" title="Permanent link">&para;</a></h3>
+<p>The response shape is identical to the metrics app — <code>data</code> is a dict of
+<code>{slug: [values]}</code> and <code>labels</code> is the shared time axis.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span>
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">      </span><span class="p">{</span><span class="nt">&quot;slug&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;web-server-1&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;values&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="mf">12.4</span><span class="p">,</span><span class="w"> </span><span class="mf">15.1</span><span class="p">,</span><span class="w"> </span><span class="mf">9.8</span><span class="p">]},</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">      </span><span class="p">{</span><span class="nt">&quot;slug&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;api-server-2&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;values&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="mf">8.2</span><span class="p">,</span><span class="w">  </span><span class="mf">9.1</span><span class="p">,</span><span class="w">  </span><span class="mf">7.3</span><span class="p">]}</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">    </span><span class="p">],</span>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">    </span><span class="nt">&quot;periods&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;10:00&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;11:00&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;12:00&quot;</span><span class="p">]</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">      </span><span class="nt">&quot;web-server-1&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="mf">12.4</span><span class="p">,</span><span class="w"> </span><span class="mf">15.1</span><span class="p">,</span><span class="w"> </span><span class="mf">9.8</span><span class="p">],</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">      </span><span class="nt">&quot;api-server-2&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="mf">8.2</span><span class="p">,</span><span class="w">  </span><span class="mf">9.1</span><span class="p">,</span><span class="w">  </span><span class="mf">7.3</span><span class="p">]</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">    </span><span class="p">},</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">    </span><span class="nt">&quot;labels&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;10:00&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;11:00&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;12:00&quot;</span><span class="p">]</span>
 <a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">  </span><span class="p">},</span>
 <a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
 <a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="p">}</span>
-</code></pre></div>
-<h3 id="response-single-instance-one-slug">Response — single instance (one slug)<a class="headerlink" href="#response-single-instance-one-slug" title="Permanent link">&para;</a></h3>
-<p>When exactly one slug is provided the inner <code>data</code> is unwrapped to a plain dict,
-matching the metrics app single-slug behavior:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">      </span><span class="nt">&quot;slug&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;web-server-1&quot;</span><span class="p">,</span>
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">      </span><span class="nt">&quot;values&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="mf">12.4</span><span class="p">,</span><span class="w"> </span><span class="mf">15.1</span><span class="p">,</span><span class="w"> </span><span class="mf">9.8</span><span class="p">]</span>
-<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">    </span><span class="p">},</span>
-<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">    </span><span class="nt">&quot;periods&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;10:00&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;11:00&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;12:00&quot;</span><span class="p">]</span>
-<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">  </span><span class="p">},</span>
-<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
-<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="p">}</span>
 </code></pre></div>
 <hr />
 <h2 id="categories">Categories<a class="headerlink" href="#categories" title="Permanent link">&para;</a></h2>
@@ -4095,7 +4084,7 @@ The <code>disk</code> category always targets the root filesystem (<code>path="/
 </tbody>
 </table>
 <hr />
-<h2 id="granularity-and-period-labels">Granularity and Period Labels<a class="headerlink" href="#granularity-and-period-labels" title="Permanent link">&para;</a></h2>
+<h2 id="granularity-and-labels">Granularity and Labels<a class="headerlink" href="#granularity-and-labels" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
 <tr>
@@ -4126,24 +4115,24 @@ The <code>disk</code> category always targets the root filesystem (<code>path="/
 </tr>
 </tbody>
 </table>
-<p>Buckets with no CloudWatch data are filled with <code>0.0</code>. The <code>periods</code> and <code>values</code>
-arrays are always the same length and span the full requested range.</p>
+<p>Buckets with no CloudWatch data are filled with <code>0.0</code>. The <code>labels</code> array and each
+<code>data</code> values array are always the same length and span the full requested range.</p>
 <p>AWS CloudWatch enforces a minimum period of 60 seconds and may restrict finer
 granularities for data older than 15 days. Use <code>granularity=days</code> for ranges
 longer than a week.</p>
 <hr />
 <h2 id="iam-permissions-required">IAM Permissions Required<a class="headerlink" href="#iam-permissions-required" title="Permanent link">&para;</a></h2>
 <p>The AWS user or role configured in your project needs:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">&quot;Effect&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Allow&quot;</span><span class="p">,</span>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span><span class="nt">&quot;Action&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">    </span><span class="s2">&quot;cloudwatch:GetMetricStatistics&quot;</span><span class="p">,</span>
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">    </span><span class="s2">&quot;ec2:DescribeInstances&quot;</span><span class="p">,</span>
-<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">    </span><span class="s2">&quot;rds:DescribeDBInstances&quot;</span><span class="p">,</span>
-<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">    </span><span class="s2">&quot;elasticache:DescribeCacheClusters&quot;</span>
-<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">  </span><span class="p">],</span>
-<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">  </span><span class="nt">&quot;Resource&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;*&quot;</span>
-<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">&quot;Effect&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Allow&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="nt">&quot;Action&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">    </span><span class="s2">&quot;cloudwatch:GetMetricStatistics&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">    </span><span class="s2">&quot;ec2:DescribeInstances&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">    </span><span class="s2">&quot;rds:DescribeDBInstances&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">    </span><span class="s2">&quot;elasticache:DescribeCacheClusters&quot;</span>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">  </span><span class="p">],</span>
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">  </span><span class="nt">&quot;Resource&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;*&quot;</span>
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="p">}</span>
 </code></pre></div>
 <p>No additional Django settings are needed — the CloudWatch helper reuses
 <code>AWS_KEY</code>, <code>AWS_SECRET</code>, and <code>AWS_REGION</code> already configured for SES and S3.</p>
