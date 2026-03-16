@@ -15,21 +15,24 @@ def _require_aws():
         raise TestitSkip("AWS_KEY not configured — skipping live CloudWatch tests")
 
 
-def _assert_has_data(inner_data, label):
+def _assert_has_data(data_dict, label):
     """
-    Assert that at least one value across all records is non-zero.
+    Assert that at least one value across all slugs is non-zero.
 
-    inner_data is the inner data field from the fetch response: either a single
-    {slug, values} record or a list of such records. On a live system, metrics
-    like cpu and conns can never be all-zero — all zeros means the fetch is broken.
+    data_dict is the inner data field: {slug_name: [values, ...]}
+    On a live system, metrics like cpu and conns can never be all-zero.
     """
-    records = inner_data if isinstance(inner_data, list) else [inner_data]
-    for record in records:
-        if any(v != 0.0 for v in record["values"]):
+    for slug, values in data_dict.items():
+        if any(v != 0.0 for v in values):
             return
     raise AssertionError(
         f"{label}: all values are 0.0 on a live system — possible metric fetch or timezone bug"
     )
+
+
+def _get_values(data_dict, slug):
+    """Return the values list for a slug from the {slug: [values]} dict."""
+    return data_dict.get(slug)
 
 
 # ------------------------------------------------------------------
@@ -166,15 +169,12 @@ def test_fetch_invalid_category(opts):
 def test_fetch_category_wrong_account(opts):
     """Category unsupported for the given account type must return 400."""
     opts.client.login(ADMIN_USER, ADMIN_PWORD)
-    # cache_hits is redis-only — should be rejected for ec2
     resp = opts.client.get("/api/aws/cloudwatch/fetch?account=ec2&category=cache_hits")
     assert resp.status_code == 400, \
         f"Expected 400 for cache_hits on ec2, got {resp.status_code}"
-    # free_storage is rds-only — should be rejected for redis
     resp = opts.client.get("/api/aws/cloudwatch/fetch?account=redis&category=free_storage")
     assert resp.status_code == 400, \
         f"Expected 400 for free_storage on redis, got {resp.status_code}"
-    # disk_read is ec2-only — should be rejected for rds
     resp = opts.client.get("/api/aws/cloudwatch/fetch?account=rds&category=disk_read")
     assert resp.status_code == 400, \
         f"Expected 400 for disk_read on rds, got {resp.status_code}"
@@ -199,13 +199,12 @@ def test_resources_list(opts):
     assert isinstance(resp.response.ec2, list), "ec2 should be a list"
     assert isinstance(resp.response.rds, list), "rds should be a list"
     assert isinstance(resp.response.redis, list), "redis should be a list"
-    # Verify each entry now includes a slug field
     if resp.response.ec2:
         first_ec2 = resp.response.ec2[0]
         assert hasattr(first_ec2, "slug"), "EC2 resource entry missing slug field"
         assert first_ec2.slug, "EC2 resource slug should not be empty"
-        opts.ec2_id = first_ec2.id      # raw AWS ID (for low-level assertions)
-        opts.ec2_slug = first_ec2.slug  # friendly name (Name tag, or ID as fallback)
+        opts.ec2_id = first_ec2.id
+        opts.ec2_slug = first_ec2.slug
     if resp.response.rds:
         first_rds = resp.response.rds[0]
         assert hasattr(first_rds, "slug"), "RDS resource entry missing slug field"
@@ -223,6 +222,7 @@ def test_resources_list(opts):
 def test_fetch_ec2_all_instances(opts):
     """
     account=ec2&category=cpu with no slugs returns data for all EC2 instances.
+    Response shape: {data: {slug: [values]}, labels: [...]}
     """
     _require_aws()
     if not getattr(opts, "ec2_id", None):
@@ -233,12 +233,11 @@ def test_fetch_ec2_all_instances(opts):
     assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
     result = resp.response
     assert result.status is True
-    assert hasattr(result, "data"), "response missing data key"
     data = result.data
-    # periods live at the top level of data
-    assert hasattr(data, "periods"), "data missing periods key"
-    assert isinstance(data.periods, list), "periods should be a list"
-    assert len(data.periods) > 0, "periods should not be empty"
+    assert hasattr(data, "labels"), "data missing labels key"
+    assert isinstance(data.labels, list), "labels should be a list"
+    assert len(data.labels) > 0, "labels should not be empty"
+    assert isinstance(data.data, dict), "data.data should be a dict of {slug: values}"
     _assert_has_data(data.data, "EC2 cpu (all instances)")
     opts.client.logout()
 
@@ -246,8 +245,7 @@ def test_fetch_ec2_all_instances(opts):
 @th.unit_test("cw_fetch_ec2_single_slug")
 def test_fetch_ec2_single_slug(opts):
     """
-    Passing a single slug (friendly name) returns a dict (not a list) for data,
-    mirroring metrics fetch. The returned slug in the record is the friendly name.
+    Passing a single slug returns data keyed by that slug in the data dict.
     """
     _require_aws()
     if not getattr(opts, "ec2_slug", None):
@@ -259,16 +257,14 @@ def test_fetch_ec2_single_slug(opts):
     )
     assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
     data = resp.response.data
-    # Single slug -> unwrapped dict with slug + values, not a list
-    assert hasattr(data, "data"), "single-slug response should have data.data dict"
-    assert hasattr(data.data, "slug"), "data.data missing slug"
-    assert hasattr(data.data, "values"), "data.data missing values"
-    assert data.data.slug == opts.ec2_slug, \
-        f"Expected friendly slug '{opts.ec2_slug}', got '{data.data.slug}'"
-    assert isinstance(data.data["values"], list), \
-        f"data.data['values'] should be a list, got {type(data.data['values'])}"
-    assert len(data.data["values"]) == len(data.periods), \
-        f"values length {len(data.data['values'])} must match periods length {len(data.periods)}"
+    assert isinstance(data.data, dict), "data.data should be a {slug: values} dict"
+    assert opts.ec2_slug in data.data, \
+        f"Expected friendly slug '{opts.ec2_slug}', got keys: {list(data.data.keys())}"
+    values = data.data[opts.ec2_slug]
+    assert isinstance(values, list), \
+        f"values for '{opts.ec2_slug}' should be a list, got {type(values)}"
+    assert len(values) == len(data.labels), \
+        f"values length {len(values)} must match labels length {len(data.labels)}"
     _assert_has_data(data.data, "EC2 cpu (single slug)")
     opts.client.logout()
 
@@ -277,11 +273,7 @@ def test_fetch_ec2_single_slug(opts):
 def test_fetch_ec2_slug_is_name(opts):
     """
     When an EC2 instance has a Name tag the returned slug must be that name,
-    not the raw AWS instance ID (e.g. 'i-0abc1234...'). This verifies the
-    Name-tag resolution path end-to-end.
-
-    If no Name tag is present the slug falls back to the instance ID — we
-    still check that the slug matches what the resources endpoint advertised.
+    not the raw AWS instance ID. Slug must match what resources endpoint advertised.
     """
     _require_aws()
     if not getattr(opts, "ec2_slug", None):
@@ -292,18 +284,15 @@ def test_fetch_ec2_slug_is_name(opts):
         f"/api/aws/cloudwatch/fetch?account=ec2&category=cpu&slugs={opts.ec2_slug}"
     )
     assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
-    returned_slug = resp.response.data.data.slug
+    returned_slugs = list(resp.response.data.data.keys())
+    assert opts.ec2_slug in returned_slugs, \
+        f"fetch slug '{opts.ec2_slug}' not in response keys: {returned_slugs}"
 
-    # The slug in the response must match what resources endpoint advertised.
-    assert returned_slug == opts.ec2_slug, \
-        f"fetch slug '{returned_slug}' does not match resources slug '{opts.ec2_slug}'"
-
-    # If the instance has a Name tag, the slug must NOT look like a raw instance ID.
     if opts.ec2_slug != opts.ec2_id:
         import re
         raw_id_pattern = re.compile(r"^i-[0-9a-f]{8,17}$")
-        assert not raw_id_pattern.match(returned_slug), \
-            f"slug '{returned_slug}' looks like a raw AWS ID — expected friendly Name tag value"
+        assert not raw_id_pattern.match(opts.ec2_slug), \
+            f"slug '{opts.ec2_slug}' looks like a raw AWS ID — expected friendly Name tag value"
     opts.client.logout()
 
 
@@ -327,12 +316,7 @@ def test_fetch_ec2_net_in(opts):
 def test_fetch_ec2_memory(opts):
     """
     memory category uses the CWAgent namespace (mem_used_percent).
-    The endpoint must return 200 and a valid periods/values shape regardless
-    of whether the CloudWatch Agent is installed on the instance.
-
-    Non-zero assertion is only applied when the agent is present — all-zero
-    values are legitimate when the agent is not installed, so we check first
-    and skip the non-zero assert if no data came back at all.
+    Valid regardless of whether the CloudWatch Agent is installed.
     """
     _require_aws()
     if not getattr(opts, "ec2_slug", None):
@@ -344,27 +328,23 @@ def test_fetch_ec2_memory(opts):
     )
     assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
     assert resp.response.status is True, "response status should be True"
-    inner = resp.response.data.data
-    assert hasattr(inner, "values"), "memory response missing values"
-    assert isinstance(inner["values"], list), \
-        f"memory values should be a list, got {type(inner['values'])}"
-    assert len(inner["values"]) == len(resp.response.data.periods), \
-        "memory values length must match periods length"
-    # Only assert non-zero if the CloudWatch Agent is actually pushing data.
-    # All-zero is valid when the agent is not installed on this instance.
-    if any(v != 0.0 for v in inner["values"]):
-        _assert_has_data(inner, "EC2 memory (CWAgent)")
+    data = resp.response.data
+    assert isinstance(data.data, dict), "data.data should be a {slug: values} dict"
+    values = _get_values(data.data, opts.ec2_slug)
+    assert isinstance(values, list), \
+        f"memory values should be a list, got {type(values)}"
+    assert len(values) == len(data.labels), \
+        "memory values length must match labels length"
+    if any(v != 0.0 for v in values):
+        _assert_has_data(data.data, "EC2 memory (CWAgent)")
     opts.client.logout()
 
 
 @th.unit_test("cw_fetch_ec2_disk")
 def test_fetch_ec2_disk(opts):
     """
-    disk category uses the CWAgent namespace (disk_used_percent) with an extra
-    dimension path="/" targeting the root filesystem.
-
-    Non-zero assertion is only applied when the CloudWatch Agent is present —
-    all-zero values are legitimate when the agent is not installed.
+    disk category uses the CWAgent namespace (disk_used_percent) targeting root filesystem.
+    Valid regardless of whether the CloudWatch Agent is installed.
     """
     _require_aws()
     if not getattr(opts, "ec2_slug", None):
@@ -376,16 +356,15 @@ def test_fetch_ec2_disk(opts):
     )
     assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
     assert resp.response.status is True, "response status should be True"
-    inner = resp.response.data.data
-    assert hasattr(inner, "values"), "disk response missing values"
-    assert isinstance(inner["values"], list), \
-        f"disk values should be a list, got {type(inner['values'])}"
-    assert len(inner["values"]) == len(resp.response.data.periods), \
-        "disk values length must match periods length"
-    # Only assert non-zero if the CloudWatch Agent is actually pushing data.
-    # All-zero is valid when the agent is not installed on this instance.
-    if any(v != 0.0 for v in inner["values"]):
-        _assert_has_data(inner, "EC2 disk (CWAgent)")
+    data = resp.response.data
+    assert isinstance(data.data, dict), "data.data should be a {slug: values} dict"
+    values = _get_values(data.data, opts.ec2_slug)
+    assert isinstance(values, list), \
+        f"disk values should be a list, got {type(values)}"
+    assert len(values) == len(data.labels), \
+        "disk values length must match labels length"
+    if any(v != 0.0 for v in values):
+        _assert_has_data(data.data, "EC2 disk (CWAgent)")
     opts.client.logout()
 
 
@@ -405,9 +384,9 @@ def test_fetch_ec2_granularity_days(opts):
     )
     assert resp_hours.status_code == 200
     assert resp_days.status_code == 200
-    hours_periods = resp_hours.response.data.periods
-    days_periods = resp_days.response.data.periods
-    assert len(hours_periods) > len(days_periods), \
+    hours_labels = resp_hours.response.data.labels
+    days_labels = resp_days.response.data.labels
+    assert len(hours_labels) > len(days_labels), \
         "hours granularity should produce more buckets than days"
     opts.client.logout()
 
@@ -439,8 +418,8 @@ def test_fetch_rds_all_instances(opts):
     resp = opts.client.get("/api/aws/cloudwatch/fetch?account=rds&category=cpu")
     assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
     assert resp.response.status is True, "response status should be True"
-    assert isinstance(resp.response.data.periods, list), \
-        f"periods should be a list, got {type(resp.response.data.periods)}"
+    assert isinstance(resp.response.data.labels, list), \
+        f"labels should be a list, got {type(resp.response.data.labels)}"
     _assert_has_data(resp.response.data.data, "RDS cpu (all instances)")
     opts.client.logout()
 
@@ -473,8 +452,8 @@ def test_fetch_redis_all_clusters(opts):
     resp = opts.client.get("/api/aws/cloudwatch/fetch?account=redis&category=cpu")
     assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
     assert resp.response.status is True, "response status should be True"
-    assert isinstance(resp.response.data.periods, list), \
-        f"periods should be a list, got {type(resp.response.data.periods)}"
+    assert isinstance(resp.response.data.labels, list), \
+        f"labels should be a list, got {type(resp.response.data.labels)}"
     opts.client.logout()
 
 

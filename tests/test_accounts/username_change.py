@@ -205,9 +205,11 @@ def test_username_change_oauth_no_password(opts):
 
     opts.client.login(OAUTH_USER, "temp_pass_1234")
 
-    # Now remove the usable password while we still have a valid session
+    # Now remove the usable password while we still have a valid session.
+    # Use update_fields to avoid overwriting server-side state (last_login,
+    # last_activity) that was modified by the login call above.
     oauth_user.set_unusable_password()
-    oauth_user.save()
+    oauth_user.save(update_fields=["password", "modified"])
 
     resp = opts.client.post("/api/auth/username/change", {
         "username": "new_oauth_name",

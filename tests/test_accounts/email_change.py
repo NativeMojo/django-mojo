@@ -405,18 +405,18 @@ def test_request_wrong_password(opts):
     assert_eq(resp.status_code, 401, f"Wrong password must return 401, got {resp.status_code}")
 
 
-@th.django_unit_test("email/change/request: missing current_password returns 400")
-def test_request_missing_password(opts):
+@th.django_unit_test("email/change/request: succeeds without current_password (OAuth/passkey users)")
+def test_request_no_password_succeeds(opts):
     from mojo.decorators.limits import clear_rate_limits
     clear_rate_limits(ip="127.0.0.1")
 
     opts.client.login(TEST_USER, TEST_PWORD)
     resp = opts.client.post(
         "/api/auth/email/change/request",
-        {"email": "nopw@example.com"},
+        {"email": "no_pw_test@example.com"},
     )
     opts.client.logout()
-    assert_true(resp.status_code in (400, 422), f"Missing current_password must return 4xx, got {resp.status_code}")
+    assert_eq(resp.status_code, 200, f"Request without current_password should succeed, got {resp.status_code}")
 
 
 @th.django_unit_test("email/change/request: same email as current is rejected")

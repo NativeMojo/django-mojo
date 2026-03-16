@@ -1156,20 +1156,6 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             return True
         return False
 
-    def generate_api_token(self, expire_days=360, allowed_ips=[]):
-        expire_seconds = expire_days * 24 * 60 * 60
-        access_token_expiry = expire_seconds
-        refresh_token_expiry = expire_seconds
-        token = JWToken(
-            self.get_auth_key(),
-            access_token_expiry=access_token_expiry,
-            refresh_token_expiry=refresh_token_expiry)
-        package = token.create(uid=self.pk, allowed_ips=allowed_ips)
-        return objict(
-            jti=token.payload.jti,
-            expires=token.payload.exp,
-            token=package.access_token)
-
     @classmethod
     def normalize_phone(cls, phone_number):
         from mojo.apps.phonehub.services.phonenumbers import normalize
@@ -1239,6 +1225,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
 
     @classmethod
     def validate_jwt(cls, token, request=None):
+        from mojo.helpers import dates
         token_manager = JWToken()
         try:
             jwt_data = token_manager.decode(token, validate=False)
@@ -1246,6 +1233,28 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             return None, "Invalid token"
         if jwt_data.uid is None:
             return None, "Invalid token data"
+
+        if jwt_data.get("token_type") == "user_api_key":
+            from mojo.apps.account.models.user_api_key import UserAPIKey
+            jti = jwt_data.get("jti")
+            if not jti:
+                return None, "Invalid token: missing jti"
+            key_record = UserAPIKey.objects.filter(jti=jti, is_active=True).select_related("user").first()
+            if key_record is None:
+                return None, "Invalid token: api key not found or revoked"
+            if dates.utcnow() > key_record.expires:
+                return None, "Token expired"
+            token_manager.key = key_record.get_auth_key()
+            if not token_manager.is_token_valid(token):
+                return None, "Token has invalid signature"
+            if key_record.allowed_ips and request and request.ip not in key_record.allowed_ips:
+                return None, "Not allowed from this location"
+            try:
+                UserAPIKey.objects.filter(pk=key_record.pk).update(last_used=dates.utcnow())
+            except Exception:
+                pass
+            return key_record.user, None
+
         user = User.objects.filter(id=jwt_data.uid).last()
         if user is None:
             return None, "Invalid token user"
@@ -1255,8 +1264,8 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
                 return user, "Token expired"
             return user, "Token has invalid signature"
         # verify ip address is allowed
-        if isinstance(jwt_data.allowed_ips, list):
-            if request.ip not in jwt_data.allowed_ips:
-                return user, f"Not allowed from location"
+        if isinstance(jwt_data.get("allowed_ips"), list):
+            if request and request.ip not in jwt_data.allowed_ips:
+                return user, "Not allowed from location"
         user.track()
         return user, None

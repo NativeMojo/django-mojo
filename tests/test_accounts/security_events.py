@@ -117,7 +117,7 @@ def test_security_events_basic(opts):
     data = resp.json
     assert_true(data.get("status"), "Expected status=true")
     assert_true(data.get("count", 0) > 0, "Expected at least one event")
-    results = data.get("results", [])
+    results = data.get("data", [])
     assert_true(len(results) > 0, "Expected non-empty results list")
 
     # All results must belong to our user (we can't check uid directly
@@ -135,7 +135,7 @@ def test_security_events_fields(opts):
     resp = opts.client.get("/api/account/security-events")
     opts.client.logout()
     assert_eq(resp.status_code, 200, f"Expected 200, got {resp.status_code}")
-    results = resp.json.get("results", [])
+    results = resp.json.get("data", [])
     assert_true(len(results) > 0, "Need at least one result to check fields")
 
     for r in results:
@@ -162,7 +162,7 @@ def test_security_events_no_cross_user(opts):
     resp = opts.client.get("/api/account/security-events")
     opts.client.logout()
     assert_eq(resp.status_code, 200, f"Expected 200, got {resp.status_code}")
-    results = resp.json.get("results", [])
+    results = resp.json.get("data", [])
 
     for r in results:
         # Other user's event has IP 192.168.1.1 — must never appear
@@ -183,7 +183,7 @@ def test_security_events_size_limit(opts):
     resp = opts.client.get("/api/account/security-events?size=2")
     opts.client.logout()
     assert_eq(resp.status_code, 200, f"Expected 200, got {resp.status_code}")
-    results = resp.json.get("results", [])
+    results = resp.json.get("data", [])
     assert_true(len(results) <= 2, f"Expected at most 2 results, got {len(results)}")
 
 
@@ -195,7 +195,7 @@ def test_security_events_size_capped(opts):
     resp = opts.client.get("/api/account/security-events?size=999")
     opts.client.logout()
     assert_eq(resp.status_code, 200, f"Expected 200, got {resp.status_code}")
-    results = resp.json.get("results", [])
+    results = resp.json.get("data", [])
     assert_true(len(results) <= 100, f"Expected at most 100 results, got {len(results)}")
 
 
@@ -206,7 +206,7 @@ def test_security_events_date_filter(opts):
     resp = opts.client.get("/api/account/security-events?dr_start=2099-01-01")
     opts.client.logout()
     assert_eq(resp.status_code, 200, f"Expected 200, got {resp.status_code}")
-    results = resp.json.get("results", [])
+    results = resp.json.get("data", [])
     assert_eq(len(results), 0, "Expected zero results for future dr_start")
 
 
@@ -217,7 +217,7 @@ def test_security_events_date_end_filter(opts):
     resp = opts.client.get("/api/account/security-events?dr_end=2000-01-01")
     opts.client.logout()
     assert_eq(resp.status_code, 200, f"Expected 200, got {resp.status_code}")
-    results = resp.json.get("results", [])
+    results = resp.json.get("data", [])
     assert_eq(len(results), 0, "Expected zero results for past dr_end")
 
 
@@ -227,7 +227,7 @@ def test_security_events_known_summaries(opts):
     resp = opts.client.get("/api/account/security-events")
     opts.client.logout()
     assert_eq(resp.status_code, 200, f"Expected 200, got {resp.status_code}")
-    results = resp.json.get("results", [])
+    results = resp.json.get("data", [])
 
     summary_map = {
         "login": "Successful login",
@@ -252,7 +252,7 @@ def test_security_events_unknown_kind_fallback(opts):
     resp = opts.client.get("/api/account/security-events")
     opts.client.logout()
     assert_eq(resp.status_code, 200, f"Expected 200, got {resp.status_code}")
-    results = resp.json.get("results", [])
+    results = resp.json.get("data", [])
 
     # Find the unknown sub-kind event
     unknown_results = [r for r in results if r.get("kind") == "login:weird_sub_kind"]
@@ -278,16 +278,15 @@ def test_security_events_empty(opts):
     clean_user.save_password(TEST_PWORD)
     clean_user.save()
 
-    # Delete any events for this user
-    Event.objects.filter(uid=clean_user.pk).delete()
-
     opts.client.login("secevents_clean", TEST_PWORD)
+    # Delete any events (including the login event just created)
+    Event.objects.filter(uid=clean_user.pk).delete()
     resp = opts.client.get("/api/account/security-events")
     opts.client.logout()
     assert_eq(resp.status_code, 200, f"Expected 200, got {resp.status_code}")
     data = resp.json
     assert_eq(data.get("count", -1), 0, "Expected count=0 for user with no events")
-    assert_eq(len(data.get("results", [1])), 0, "Expected empty results list")
+    assert_eq(len(data.get("data", [1])), 0, "Expected empty results list")
 
 
 @th.django_unit_test("security events: non-security categories are excluded")
@@ -308,7 +307,7 @@ def test_security_events_non_security_excluded(opts):
     resp = opts.client.get("/api/account/security-events")
     opts.client.logout()
     assert_eq(resp.status_code, 200, f"Expected 200, got {resp.status_code}")
-    results = resp.json.get("results", [])
+    results = resp.json.get("data", [])
 
     for r in results:
         assert_true(r.get("kind") != "some_random_system_event",

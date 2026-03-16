@@ -7,5 +7,6 @@ from .push import RegisteredDevice, PushConfig, NotificationTemplate, Notificati
 from .pkey import Passkey
 from .api_key import ApiKey
 from .totp import UserTOTP
+from .user_api_key import UserAPIKey
 from .oauth import OAuthConnection
 from .notification import Notification

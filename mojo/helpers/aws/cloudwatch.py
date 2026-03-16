@@ -4,7 +4,7 @@ AWS CloudWatch Helper Module
 Provides a simple interface for fetching time-series infrastructure metrics
 from AWS CloudWatch for EC2 instances, RDS databases, and ElastiCache clusters.
 
-High-level fetch() response shape mirrors the metrics app (periods + data) so
+High-level fetch() response shape mirrors the metrics app (labels + data) so
 frontend chart components and the REST layer work without modification.
 """
 
@@ -12,6 +12,7 @@ import datetime
 import botocore
 
 from .client import get_session
+from mojo.helpers import dates as mdates
 from mojo.helpers.settings import settings
 from mojo.helpers import logit
 
@@ -254,9 +255,8 @@ class CloudWatchHelper:
 
         Returns:
             {
-                "data":    [{"slug": "<friendly name>", "values": [...]}, ...]  # list when multiple slugs
-                           or {"slug": "<friendly name>", "values": [...]}      # dict when single slug
-                "periods": ["10:00", "11:00", ...]
+                "data":   {"<friendly name>": [...], "<friendly name 2>": [...]},
+                "labels": ["10:00", "11:00", ...]
             }
         """
         # Resolve account type to namespace / dimension
@@ -270,12 +270,13 @@ class CloudWatchHelper:
         period_seconds = granularity_to_seconds(granularity or _DEFAULT_GRANULARITY)
         cw_stat = normalize_stat(stat)
 
-        # Resolve time range
-        now = datetime.datetime.utcnow()
+        # Resolve and normalize time range — always UTC-aware
         if dt_end is None:
-            dt_end = now
+            dt_end = mdates.utcnow()
         if dt_start is None:
             dt_start = dt_end - datetime.timedelta(hours=24)
+        dt_start = mdates.parse_datetime(dt_start)
+        dt_end = mdates.parse_datetime(dt_end)
 
         # Build id <-> friendly-slug maps from resource metadata.
         # id_to_slug: AWS ID -> display name (e.g. "i-0abc1234" -> "web-server-1")
@@ -304,20 +305,17 @@ class CloudWatchHelper:
         # (e.g. EC2 disk requires path="/" in addition to InstanceId).
         extra_dims = CATEGORY_EXTRA_DIMENSIONS.get((account, category), [])
 
-        # Fetch each instance and label the record with the friendly slug
-        records = []
+        # Fetch each instance; build {slug: values} dict to mirror metrics app shape
+        data = {}
         for instance_id in instance_ids:
             dimensions = [{"Name": dimension_key, "Value": instance_id}] + extra_dims
             values = self._fetch_values(
                 namespace, metric_name, dimensions, dt_start, dt_end, period_seconds, cw_stat, buckets
             )
             friendly_slug = id_to_slug.get(instance_id, instance_id)
-            records.append({"slug": friendly_slug, "values": values})
+            data[friendly_slug] = values
 
-        # Mirror metrics app: unwrap single-slug response to a plain dict
-        data = records[0] if len(records) == 1 else records
-
-        return {"data": data, "periods": periods}
+        return {"data": data, "labels": periods}
 
     # ------------------------------------------------------------------
     # Core metric fetch (low-level)
@@ -608,7 +606,8 @@ def _align_to_period(dt, period_seconds):
     Floor a datetime to the nearest period boundary.
     E.g. for period_seconds=3600, 10:47 -> 10:00.
     """
-    epoch = datetime.datetime(1970, 1, 1)
+    epoch = mdates.parse_datetime(datetime.datetime(1970, 1, 1))
+    dt = mdates.parse_datetime(dt)
     total_seconds = int((dt - epoch).total_seconds())
     aligned_seconds = (total_seconds // period_seconds) * period_seconds
     return epoch + datetime.timedelta(seconds=aligned_seconds)

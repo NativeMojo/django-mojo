@@ -11,7 +11,7 @@ MOJO provides two ways to authenticate programmatic access:
 | **Header** | `Authorization: apikey <token>` | `Authorization: bearer <token>` |
 | **Use case** | External services, bots, integrations | Server acting as a specific user |
 | **Permissions** | Only what you grant in `permissions` dict | Everything the user can do |
-| **IP restriction** | No | Yes (`allowed_ips` required) |
+| **IP restriction** | No | Optional (`allowed_ips`) |
 
 **Use API Keys** for external integrations and services. They follow least-privilege — only the permissions you explicitly grant are allowed, and access is confined to a single group.
 
@@ -103,7 +103,7 @@ Requires authentication.
 
 | Field | Required | Description |
 |---|---|---|
-| `allowed_ips` | Yes | List of allowed IP addresses/CIDR ranges (must have at least one) |
+| `allowed_ips` | No | List of allowed IP addresses/CIDR ranges (default: unrestricted) |
 | `expire_days` | No | Expiry in days (default 360, max 360) |
 
 **Response:**
@@ -139,7 +139,7 @@ Requires `manage_users` permission.
 Authorization: bearer <jwt_token>
 ```
 
-The request runs with the user's full permissions. Requests from IPs not in the `allowed_ips` list are rejected.
+The request runs with the user's full permissions. If `allowed_ips` was set, requests from IPs not in that list are rejected.
 
 ---
 
