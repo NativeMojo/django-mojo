@@ -270,7 +270,7 @@ def get_image_dimensions(image_path: str) -> Optional[Tuple[int, int]]:
     """
     try:
         from PIL import Image
-        with Image.open(image_path) as img:
+        with Image.open(image_path, formats=["JPEG", "PNG", "WEBP", "GIF", "BMP", "TIFF"]) as img:
             return img.size
     except Exception as e:
         logger.error(f"Failed to get image dimensions: {str(e)}")

@@ -217,7 +217,7 @@ def _overlay_logo(image, logo_bytes, logo_ratio):
     from PIL import Image
 
     try:
-        logo = Image.open(BytesIO(logo_bytes)).convert("RGBA")
+        logo = Image.open(BytesIO(logo_bytes), formats=["JPEG", "PNG", "WEBP", "GIF", "BMP", "TIFF"]).convert("RGBA")
     except Exception as exc:
         raise QRCodeError("Unable to read logo data.") from exc
 

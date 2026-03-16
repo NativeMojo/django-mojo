@@ -115,7 +115,7 @@ class ImageRenderer(BaseRenderer):
 
         try:
             # Open the image
-            with Image.open(source_path) as img:
+            with Image.open(source_path, formats=["JPEG", "PNG", "WEBP", "GIF", "BMP", "TIFF"]) as img:
                 # Convert to RGB if RGBA (unless PNG or format with alpha support)
                 if img.mode == 'RGBA' and options.get('format', '').upper() != 'PNG':
                     img = img.convert('RGB')
