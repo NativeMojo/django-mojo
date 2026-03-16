@@ -149,28 +149,38 @@ def on_passkeys_register_complete(request):
 # -----------------------------------------------------------------
 
 @md.POST("auth/passkeys/login/begin")
-@md.requires_params("username")
 @md.public_endpoint()
 def on_passkeys_login_begin(request):
-    """Begin passkey authentication (passwordless login)."""
-    user = User.lookup_from_request(request, phone_as_username=True)
-    if not user:
-        User.class_report_incident(
-            f"Passkey login attempt with unknown username: {request.DATA.username} - {request.DATA.email} - {request.DATA.phone_number}",
-            event_type="login:unknown",
-            level=8,
-            request=request,
-        )
-        raise merrors.PermissionDeniedException("Invalid username or no passkeys registered")
+    """Begin passkey authentication (passwordless login).
 
+    username/email/phone_number (optional) — when provided, the challenge is
+    scoped to that user's passkeys. When omitted, a discoverable-credential
+    challenge is issued and the browser presents all available passkeys.
+    """
     origin = get_origin_from_request(request)
     rp_id = origin_to_rp_id(origin)
-
-    # Check if user has passkeys for this portal
-    if not user.passkeys.filter(is_enabled=True, rp_id=rp_id).exists():
-        raise merrors.PermissionDeniedException("No passkeys registered for this portal")
-
     service = PasskeyService(rp_id=rp_id, origin=origin)
+
+    has_identifier = (
+        request.DATA.get("username")
+        or request.DATA.get("email")
+        or request.DATA.get("phone_number")
+    )
+    if has_identifier:
+        user = User.lookup_from_request(request, phone_as_username=True)
+        if not user:
+            User.class_report_incident(
+                f"Passkey login attempt with unknown identifier: {request.DATA.get('username')} - {request.DATA.get('email')} - {request.DATA.get('phone_number')}",
+                event_type="login:unknown",
+                level=8,
+                request=request,
+            )
+            raise merrors.PermissionDeniedException("Invalid username or no passkeys registered")
+
+        if not user.passkeys.filter(is_enabled=True, rp_id=rp_id).exists():
+            raise merrors.PermissionDeniedException("No passkeys registered for this portal")
+    else:
+        user = None
 
     try:
         public_key, challenge_id = service.authenticate_begin(user)

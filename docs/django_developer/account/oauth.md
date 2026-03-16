@@ -43,7 +43,7 @@ GOOGLE_CLIENT_SECRET = "your-client-secret"
 
 # The URL Google redirects back to after login.
 # Must match an authorised redirect URI in Google Cloud Console.
-OAUTH_REDIRECT_URI = "https://your-app.example.com/auth/oauth/google/complete"
+OAUTH_REDIRECT_URI = "https://your-app.example.com/api/oauth/google/complete"
 ```
 
 If `OAUTH_REDIRECT_URI` is not set, the server builds it from the request `Origin` header as `<origin>/auth/oauth/<provider>/complete`. This works for single-origin SPAs but is less reliable for server-rendered or multi-origin setups — prefer the explicit setting in production.
@@ -54,6 +54,47 @@ If `OAUTH_REDIRECT_URI` is not set, the server builds it from the request `Origi
 |---|---|---|
 | `GOOGLE_SCOPES` | `"openid email profile"` | OAuth scopes requested from Google |
 | `OAUTH_STATE_TTL` | `600` | Seconds a CSRF state token is valid (Redis-backed) |
+| `ALLOWED_REDIRECT_URLS` | `[]` | Allowlist for per-request `redirect_uri` (see below) |
+
+---
+
+## Per-Request redirect_uri
+
+For multi-app deployments (portal, urtiny, etc.) where each frontend has its own callback URL, the `begin` endpoint accepts an optional `redirect_uri` query parameter.
+
+```
+GET /api/auth/oauth/google/begin?redirect_uri=https://portal.example.com/auth/callback
+```
+
+### Allowlist Configuration
+
+A `redirect_uri` is accepted only if it starts with a prefix on the allowlist. If no allowlist is configured and a `redirect_uri` is provided, the request returns `400`.
+
+**Project-wide allowlist** (`settings.py`):
+
+```python
+ALLOWED_REDIRECT_URLS = [
+    "https://portal.example.com/",
+    "https://urtiny.example.com/",
+]
+```
+
+**Per-group allowlist** (`Group.metadata["allowed_redirect_urls"]`):
+
+```python
+group.metadata["allowed_redirect_urls"] = [
+    "https://tenant-a.example.com/",
+]
+group.save()
+```
+
+The group list is retrieved via `get_metadata_value()`, which traverses the parent chain. Project-wide and group lists are combined at validation time.
+
+### Security
+
+- The validated `redirect_uri` is stored in the Redis state token (single-use, TTL-bound).
+- The `complete` endpoint retrieves it from the state — the client never re-sends it.
+- This prevents an attacker from substituting a different `redirect_uri` in the callback.
 
 ---
 
@@ -202,8 +243,8 @@ GITHUB_CLIENT_SECRET = "your-github-app-client-secret"
 ```
 
 The new provider is immediately available at:
-- `GET /api/auth/oauth/github/begin`
-- `POST /api/auth/oauth/github/complete`
+- `GET /api/oauth/github/begin`
+- `POST /api/oauth/github/complete`
 
 No URL registration or model changes are required.
 

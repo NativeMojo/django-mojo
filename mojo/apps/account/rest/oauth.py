@@ -28,6 +28,36 @@ def _get_redirect_uri(request, provider_name):
     return f"{origin}/auth/oauth/{provider_name}/complete"
 
 
+def _validate_redirect_uri(request, redirect_uri):
+    """
+    Validate redirect_uri against the allowlist.
+
+    Sources (combined):
+      - ALLOWED_REDIRECT_URLS setting (list of allowed URL prefixes)
+      - group.metadata["allowed_redirect_urls"] (traverses parent chain)
+
+    Raises ValueException (400) if the URI is not on the allowlist or if no
+    allowlist is configured at all.
+    """
+    allowed = list(settings.get("ALLOWED_REDIRECT_URLS", []) or [])
+    group = getattr(request, "group", None)
+    if group:
+        group_allowed = group.get_metadata_value("allowed_redirect_urls")
+        if group_allowed:
+            allowed.extend(group_allowed)
+
+    if not allowed:
+        raise merrors.ValueException(
+            "redirect_uri is not permitted: no ALLOWED_REDIRECT_URLS configured"
+        )
+
+    for prefix in allowed:
+        if redirect_uri.startswith(prefix):
+            return
+
+    raise merrors.ValueException("redirect_uri is not on the allowlist")
+
+
 def _find_or_create_user(provider_name, profile):
     """
     Auto-link logic:
@@ -80,14 +110,25 @@ def _find_or_create_user(provider_name, profile):
 @md.GET("auth/oauth/<str:provider>/begin")
 @md.public_endpoint()
 def on_oauth_begin(request, provider):
-    """Return the provider's authorization URL."""
+    """Return the provider's authorization URL.
+
+    Optional query parameter:
+      redirect_uri — override the default redirect URI; must be on the allowlist
+                     (ALLOWED_REDIRECT_URLS setting or group.metadata["allowed_redirect_urls"]).
+    """
     try:
         svc = get_provider(provider)
     except ValueError:
         raise merrors.ValueException(f"Unknown provider: {provider}")
 
-    redirect_uri = _get_redirect_uri(request, provider)
-    state = svc.create_state()
+    custom_redirect_uri = request.DATA.get("redirect_uri", "")
+    if custom_redirect_uri:
+        _validate_redirect_uri(request, custom_redirect_uri)
+        redirect_uri = custom_redirect_uri
+    else:
+        redirect_uri = _get_redirect_uri(request, provider)
+
+    state = svc.create_state(extra={"redirect_uri": redirect_uri})
     auth_url = svc.get_auth_url(state=state, redirect_uri=redirect_uri)
 
     return JsonResponse({
@@ -104,6 +145,7 @@ def on_oauth_begin(request, provider):
 # -----------------------------------------------------------------
 
 @md.POST("auth/oauth/<str:provider>/complete")
+@md.POST("oauth/<str:provider>/complete")
 @md.requires_params("code", "state")
 @md.public_endpoint()
 def on_oauth_complete(request, provider):
@@ -119,7 +161,9 @@ def on_oauth_complete(request, provider):
         raise merrors.PermissionDeniedException("Invalid or expired OAuth state", 401, 401)
 
     code = request.DATA.get("code")
-    redirect_uri = _get_redirect_uri(request, provider)
+    # redirect_uri is bound to the state — use it for the token exchange.
+    # Falls back to the default if a legacy state has no stored URI.
+    redirect_uri = state_data.get("redirect_uri") or _get_redirect_uri(request, provider)
 
     try:
         tokens = svc.exchange_code(code=code, redirect_uri=redirect_uri)

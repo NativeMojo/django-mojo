@@ -330,3 +330,20 @@ def test_login_requires_origin(opts):
     )
 
     assert resp.status_code == 400, "Should fail without Origin header"
+
+
+@th.django_unit_test("login begin discoverable: no username returns empty allowCredentials")
+def test_passkey_login_begin_discoverable(opts):
+    """Login begin without a username should issue a discoverable-credential challenge."""
+    # Use portal2 which still has an active passkey
+    opts.client.headers["Origin"] = PORTAL2_ORIGIN
+    resp = opts.client.post("/api/auth/passkeys/login/begin", {})
+
+    assert resp.status_code == 200, f"Discoverable login begin should succeed, got {resp.status_code}: {resp.response}"
+    data = resp.response.data
+    assert data.challenge_id, "Missing challenge_id"
+    assert data.publicKey.challenge, "Missing challenge"
+
+    # allowCredentials must be absent or empty — that is the discoverable signal
+    allow_creds = getattr(data.publicKey, "allowCredentials", None)
+    assert not allow_creds, f"Discoverable challenge should have no allowCredentials, got: {allow_creds}"
