@@ -1,7 +1,9 @@
 # Planning Note: User Registration Patterns
 
 ## Status
-Documentation task — no new endpoints
+Resolved — 2026-03-16
+
+Added "Registration / Onboarding Patterns" and "Token URLs" sections to `docs/django_developer/account/auth.md`.
 
 ## Decision
 Self-service user registration is **left to downstream apps**, not implemented

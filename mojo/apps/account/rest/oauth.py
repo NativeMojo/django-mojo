@@ -61,9 +61,11 @@ def _validate_redirect_uri(request, redirect_uri):
 def _find_or_create_user(provider_name, profile):
     """
     Auto-link logic:
-    1. Existing OAuthConnection  -> return that user
-    2. Matching email on User    -> create OAuthConnection, return that user
-    3. Neither                   -> create User + OAuthConnection
+    1. Existing OAuthConnection  -> return (user, conn, False)
+    2. Matching email on User    -> create OAuthConnection, return (user, conn, False)
+    3. Neither                   -> create User + OAuthConnection, return (user, conn, True)
+
+    Path 3 raises PermissionDeniedException if OAUTH_ALLOW_REGISTRATION is False.
     """
     uid = profile["uid"]
     email = profile["email"]
@@ -74,7 +76,7 @@ def _find_or_create_user(provider_name, profile):
         provider=provider_name, provider_uid=uid
     ).select_related("user").first()
     if conn:
-        return conn.user, conn
+        return conn.user, conn, False
 
     # 2. Existing user by email — OAuth has confirmed ownership of this address
     user = User.lookup(email=email)
@@ -85,6 +87,8 @@ def _find_or_create_user(provider_name, profile):
 
     # 3. Create new user
     if not user:
+        if not settings.get("OAUTH_ALLOW_REGISTRATION", True):
+            raise merrors.PermissionDeniedException("Account registration via OAuth is not permitted")
         user = User(email=email)
         user.username = user.generate_username_from_email()
         if display_name:
@@ -93,6 +97,13 @@ def _find_or_create_user(provider_name, profile):
         user.set_unusable_password()
         user.save()
         logit.info("oauth", f"Created new user {user.username} via {provider_name}")
+        conn = OAuthConnection.objects.create(
+            user=user,
+            provider=provider_name,
+            provider_uid=uid,
+            email=email,
+        )
+        return user, conn, True
 
     conn = OAuthConnection.objects.create(
         user=user,
@@ -100,7 +111,7 @@ def _find_or_create_user(provider_name, profile):
         provider_uid=uid,
         email=email,
     )
-    return user, conn
+    return user, conn, False
 
 
 # -----------------------------------------------------------------
@@ -174,7 +185,7 @@ def on_oauth_complete(request, provider):
     if not profile.get("uid"):
         raise merrors.PermissionDeniedException("Could not retrieve user identity from provider")
 
-    user, conn = _find_or_create_user(provider, profile)
+    user, conn, created = _find_or_create_user(provider, profile)
 
     if not user.is_active:
         raise merrors.PermissionDeniedException("Account is disabled")
@@ -186,7 +197,8 @@ def on_oauth_complete(request, provider):
     conn.save()
 
     logit.info("oauth", f"User {user.username} logged in via {provider}")
-    return jwt_login(request, user)
+    extra = {"is_new_user": True} if created else None
+    return jwt_login(request, user, extra=extra)
 
 
 # -----------------------------------------------------------------

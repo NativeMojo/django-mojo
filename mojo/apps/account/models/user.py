@@ -250,6 +250,18 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         # this will init metadata to an objict
         return self.jsonfield_as_objict("metadata")
 
+    def get_protected_metadata(self, key, default=None):
+        meta = self.metadata or {}
+        protected = meta.get("protected") or {}
+        return protected.get(key, default)
+
+    def set_protected_metadata(self, key, value):
+        meta = self.init_metadata()
+        if not isinstance(meta.get("protected"), objict):
+            meta.protected = objict.fromdict(meta.get("protected") or {})
+        meta.protected[key] = value
+        self.save(update_fields=["metadata", "modified"])
+
     def is_request_user(self, request=None):
         if request is None:
             request = self.active_request
@@ -902,12 +914,19 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
 
         return deliveries
 
-    def send_invite(self, group=None, **kwargs):
+    def send_invite(self, group=None, request=None, **kwargs):
         from mojo.apps.account.utils import tokens
+        from mojo.apps.account.utils.webapp_url import build_token_url
+        from mojo.apps.shortlink import maybe_shorten_url
+
+        token = tokens.generate_invite_token(self)
+        token_url = build_token_url("invite", token, request=request, user=self, group=group)
+        token_url = maybe_shorten_url(token_url, source="invite", user=self, expire_days=7)
 
         context = {
             "user": self.to_dict("basic"),
-            "token": tokens.generate_invite_token(self)
+            "token": token,
+            "token_url": token_url,
         }
         for key, value in kwargs.items():
             if hasattr(value, 'to_dict'):

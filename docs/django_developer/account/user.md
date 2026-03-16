@@ -25,7 +25,7 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
 | `is_dob_verified` | BooleanField | DOB verified flag (system-only, never REST-writable) |
 | `dob` | DateField (nullable) | Date of birth — PII, cleared by `pii_anonymize()` |
 | `permissions` | JSONField | Key-based permission dict |
-| `metadata` | JSONField | Arbitrary user metadata |
+| `metadata` | JSONField | Arbitrary user metadata. The `metadata["protected"]` sub-key is system-only — see below. |
 | `org` | FK → Group | Primary organization/tenant |
 | `avatar` | FK → fileman.File | Profile image |
 | `last_activity` | DateTimeField | Last seen timestamp |
@@ -104,6 +104,32 @@ Uses a lowered block threshold (`text_block_threshold=50`) since short strings c
 ### Superuser Bypass
 
 Both `validate_username()` and `validate_name_fields()` are bypassed entirely when `request.user.is_superuser`. This allows superusers to create accounts with reserved names like `admin`, `support`, or `root`.
+
+## metadata.protected
+
+`metadata["protected"]` is a system-controlled sub-key within the `metadata` JSON field. Writes to it via REST are blocked by `on_rest_update_jsonfield` in `mojo/models/rest.py` for any user who is not a superuser or does not have a permission listed in `PROTECTED_JSON_PERMS` (RestMeta prop, defaults to empty — superuser only).
+
+Use it to record immutable system context that should never be overwritten by the user:
+
+```python
+user.metadata["protected"] = {
+    "registration_source": "google",   # how the account was created
+    "invited_by_id": 42,               # User.id of the person who sent the invite
+    "invited_to_group_id": 7,          # Group.id of the first group invite
+}
+user.save(update_fields=["metadata"])
+```
+
+Only write these at creation time. Check `"protected" not in (user.metadata or {})` before writing to avoid overwriting existing context.
+
+To allow a specific permission to write protected metadata:
+
+```python
+class RestMeta:
+    PROTECTED_JSON_PERMS = ["manage_users"]
+```
+
+---
 
 ## Protected Field Setters
 

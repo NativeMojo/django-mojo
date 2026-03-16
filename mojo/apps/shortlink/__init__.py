@@ -104,3 +104,40 @@ def shorten(url="", file=None, source="", expire_days=3, expire_hours=0,
                    settings.get("BASE_URL", "")
 
     return f"{base_url.rstrip('/')}/s/{link.code}"
+
+
+def maybe_shorten_url(url, source, user=None, expire_days=0, expire_hours=0):
+    """
+    Wrap a URL in a shortlink if the shortlink app is installed.
+    Otherwise returns the original URL unchanged.
+
+    Intended for transactional token links (invite, magic login, password reset,
+    email verify). Always uses bot_passthrough=False so link-preview bots hit
+    the OG interstitial page instead of consuming the single-use token.
+
+    Args:
+        url: Destination URL to shorten.
+        source: Traceability tag (e.g. "invite", "magic_login_sms").
+        user: User the link is being sent to.
+        expire_days: Days until shortlink expiry.
+        expire_hours: Hours until shortlink expiry.
+
+    Returns:
+        Short URL string, or original URL if shortlinking is disabled/unavailable.
+    """
+    from django.apps import apps
+
+    if not apps.is_installed("mojo.apps.shortlink"):
+        return url
+
+    try:
+        return shorten(
+            url,
+            source=source,
+            user=user,
+            expire_days=expire_days,
+            expire_hours=expire_hours,
+            bot_passthrough=False,
+        )
+    except Exception:
+        return url
