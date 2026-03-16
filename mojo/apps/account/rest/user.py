@@ -6,6 +6,8 @@ from django.shortcuts import render
 from django.http import HttpResponseRedirect
 from mojo.apps.account.models.user import User
 from mojo.apps.account.utils import tokens
+from mojo.apps.account.utils.webapp_url import build_token_url
+from mojo.apps.shortlink import maybe_shorten_url
 from mojo.helpers import dates, crypto
 from mojo import errors as merrors
 from mojo.helpers.settings import settings
@@ -142,7 +144,7 @@ def _check_verification_gate(user, source):
         )
 
 
-def jwt_login(request, user, legacy=False, source=None):
+def jwt_login(request, user, legacy=False, source=None, extra=None):
     if source is not None:
         _check_verification_gate(user, source)
     user.last_login = dates.utcnow()
@@ -162,6 +164,13 @@ def jwt_login(request, user, legacy=False, source=None):
         access_token_expiry=access_token_expiry,
         refresh_token_expiry=refresh_token_expiry).create(**keys)
     token_package['user'] = user.to_dict("basic")
+    # track webapp origin for multi-tenant URL resolution
+    webapp_url = request.DATA.get("webapp_base_url") or request.META.get("HTTP_ORIGIN")
+    if webapp_url:
+        if not user.get_protected_metadata("orig_webapp_url"):
+            user.set_protected_metadata("orig_webapp_url", webapp_url)
+        else:
+            user.set_protected_metadata("last_webapp_url", webapp_url)
     if legacy:
         return {
             "status": True,
@@ -171,7 +180,10 @@ def jwt_login(request, user, legacy=False, source=None):
                 "id": user.id
             }
         }
-    return JsonResponse(dict(status=True, data=token_package))
+    response_data = dict(token_package)
+    if extra:
+        response_data.update(extra)
+    return JsonResponse(dict(status=True, data=response_data))
 
 
 @md.POST("auth/forgot")
@@ -194,7 +206,10 @@ def on_user_forgot(request):
             user.save()
             user.send_template_email("password_reset_code", dict(code=code))
         elif request.DATA.get("method") in ["link", "email"]:
-            user.send_template_email("password_reset_link", dict(token=tokens.generate_password_reset_token(user)))
+            token = tokens.generate_password_reset_token(user)
+            token_url = build_token_url("password_reset", token, request=request, user=user, group=getattr(request, "group", None))
+            token_url = maybe_shorten_url(token_url, source="password_reset", user=user, expire_hours=1)
+            user.send_template_email("password_reset_link", dict(token=token, token_url=token_url))
         else:
             raise merrors.ValueException("Invalid method")
     return JsonResponse(dict(status=True, message="If email in our system a reset email was sent."))
@@ -268,12 +283,16 @@ def on_magic_login_send(request):
     else:
         user.report_incident(f"{user.username} requested a magic login link via {channel}", "magic_login")
         magic_token = tokens.generate_magic_login_token(user, channel=channel)
+        group = getattr(request, "group", None)
+        token_url = build_token_url("magic_login", magic_token, request=request, user=user, group=group)
         if channel == "sms":
             from mojo.apps import phonehub
             if user.phone_number:
-                phonehub.send_sms(user.phone_number, f"Your login link token: {magic_token}")
+                login_url = maybe_shorten_url(token_url, source="magic_login_sms", user=user, expire_hours=1)
+                phonehub.send_sms(user.phone_number, f"Your login link: {login_url}")
         else:
-            user.send_template_email("magic_login_link", dict(token=magic_token))
+            token_url = maybe_shorten_url(token_url, source="magic_login", user=user, expire_hours=1)
+            user.send_template_email("magic_login_link", dict(token=magic_token, token_url=token_url))
     return JsonResponse(dict(status=True, message="If account is in our system a login link was sent."))
 
 
@@ -311,7 +330,9 @@ def on_email_verify_send(request):
     if user.is_email_verified:
         return JsonResponse({"status": True, "message": "Email is already verified."})
     token = tok_utils.generate_email_verify_token(user)
-    user.send_template_email("email_verify_link", dict(token=token))
+    token_url = build_token_url("email_verify", token, request=request, user=user, group=getattr(request, "group", None))
+    token_url = maybe_shorten_url(token_url, source="email_verify", user=user, expire_hours=24)
+    user.send_template_email("email_verify_link", dict(token=token, token_url=token_url))
     return JsonResponse({"status": True, "message": "If the account exists, a verification email was sent."})
 
 

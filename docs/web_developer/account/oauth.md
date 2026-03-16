@@ -95,6 +95,25 @@ The user authenticates with Google and is redirected back to your `redirect_uri`
 
 Same JWT response as password login. Store and use tokens as normal.
 
+### New User Flag
+
+When a brand-new account is created (auto-link path 3), the response includes an extra field:
+
+```json
+{
+  "status": true,
+  "data": {
+    "access_token": "eyJhbGci...",
+    "refresh_token": "eyJhbGci...",
+    "expires_in": 21600,
+    "user": { ... },
+    "is_new_user": true
+  }
+}
+```
+
+`is_new_user` is only present in the response when a new account was just created — it is absent (not `false`) for existing users logging in. Use it to redirect new users to an onboarding flow.
+
 ---
 
 ## Auto-Link Behaviour
@@ -192,6 +211,7 @@ If `OAUTH_REDIRECT_URI` is not set, the server builds it from the request `Origi
 | `GOOGLE_SCOPES` | `"openid email profile"` | OAuth scopes requested from Google |
 | `OAUTH_STATE_TTL` | `600` | Seconds a CSRF state token is valid before it expires |
 | `ALLOWED_REDIRECT_URLS` | `[]` | URL prefixes permitted as `redirect_uri` on the `begin` endpoint |
+| `OAUTH_ALLOW_REGISTRATION` | `True` | Allow new accounts to be created via OAuth. Set to `False` for invite-only or closed deployments — the complete endpoint returns `403` if no existing account matches. |
 
 ---
 

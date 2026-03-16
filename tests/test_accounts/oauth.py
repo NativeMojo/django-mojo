@@ -113,11 +113,12 @@ def test_oauth_autolink_by_email(opts):
         "email": TEST_EMAIL,  # matches existing user's email
         "display_name": "OAuth User",
     }
-    user, conn = _find_or_create_user(PROVIDER, profile)
+    user, conn, created = _find_or_create_user(PROVIDER, profile)
 
     assert user.id == opts.user.id, "Should link to existing user by email"
     assert conn.provider_uid == "google_uid_new_99999", "Connection should use new uid"
     assert conn.provider == PROVIDER
+    assert created is False, "Existing user should not be flagged as new"
 
 
 @th.django_unit_test("oauth: auto-link by email marks is_email_verified=True for unverified user")
@@ -136,7 +137,7 @@ def test_oauth_autolink_by_email_marks_verified(opts):
         "email": TEST_EMAIL,
         "display_name": "OAuth User",
     }
-    user, conn = _find_or_create_user(PROVIDER, profile)
+    user, conn, created = _find_or_create_user(PROVIDER, profile)
 
     assert user.id == opts.user.id, "Should link to existing user"
     fresh = User.objects.get(pk=opts.user.pk)
@@ -162,7 +163,7 @@ def test_oauth_autolink_by_email_already_verified(opts):
         "email": TEST_EMAIL,
         "display_name": "OAuth User",
     }
-    user, conn = _find_or_create_user(PROVIDER, profile)
+    user, conn, created = _find_or_create_user(PROVIDER, profile)
 
     assert user.id == opts.user.id, "Should link to existing user"
     fresh = User.objects.get(pk=opts.user.pk)
@@ -183,14 +184,40 @@ def test_oauth_autolink_creates_user(opts):
         "email": new_email,
         "display_name": "Brand New User",
     }
-    user, conn = _find_or_create_user(PROVIDER, profile)
+    user, conn, created = _find_or_create_user(PROVIDER, profile)
 
     assert user.email == new_email, "Should create user with OAuth email"
     assert user.is_email_verified is True, "OAuth user should have email verified"
     assert conn.provider_uid == "google_uid_brandnew"
+    assert created is True, "New user should be flagged as created"
 
     # Cleanup
     user.delete()
+
+
+@th.django_unit_test("oauth: OAUTH_ALLOW_REGISTRATION=False blocks new user creation")
+def test_oauth_registration_gate(opts):
+    from django.conf import settings as django_settings
+    from mojo.apps.account.models import User
+    from mojo.apps.account.rest.oauth import _find_or_create_user
+    from mojo import errors as merrors
+
+    gated_email = "blocked_registration@example.com"
+    User.objects.filter(email=gated_email).delete()
+
+    original = getattr(django_settings, "OAUTH_ALLOW_REGISTRATION", True)
+    django_settings.OAUTH_ALLOW_REGISTRATION = False
+    try:
+        profile = {"uid": "google_uid_gated", "email": gated_email, "display_name": "Blocked"}
+        raised = False
+        try:
+            _find_or_create_user(PROVIDER, profile)
+        except merrors.PermissionDeniedException:
+            raised = True
+        assert raised, "Should raise PermissionDeniedException when registration is disabled"
+        assert not User.objects.filter(email=gated_email).exists(), "User should not have been created"
+    finally:
+        django_settings.OAUTH_ALLOW_REGISTRATION = original
 
 
 @th.django_unit_test("oauth: MFA is bypassed — OAuth is a trusted second factor")
@@ -216,7 +243,7 @@ def test_oauth_bypasses_mfa(opts):
         "display_name": "OAuth MFA User",
     }
     # _find_or_create_user must succeed without any MFA challenge being raised
-    user, conn = _find_or_create_user(PROVIDER, profile)
+    user, conn, created = _find_or_create_user(PROVIDER, profile)
     assert user.id == opts.user.id, "Should resolve the MFA-enabled user normally"
 
     # Restore
@@ -409,7 +436,7 @@ def test_new_oauth_user_unusable_password(opts):
         "email": new_email,
         "display_name": "Unusable PW User",
     }
-    user, conn = _find_or_create_user(PROVIDER, profile)
+    user, conn, created = _find_or_create_user(PROVIDER, profile)
 
     assert user.email == new_email, "Should create user with OAuth email"
     assert user.has_usable_password() is False, "New OAuth user should have unusable password"
