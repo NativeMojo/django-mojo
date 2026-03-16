@@ -100,7 +100,8 @@ def shorten(url="", file=None, source="", expire_days=3, expire_hours=0,
                 pass  # scraping is best-effort
 
     if not base_url:
-        base_url = settings.get("SHORTLINK_BASE_URL", None) or \
+        base_url = settings.get("SHORTLINK_BASE_URL") or \
+                   settings.get("WEBAPP_BASE_URL") or \
                    settings.get("BASE_URL", "")
 
     return f"{base_url.rstrip('/')}/s/{link.code}"
