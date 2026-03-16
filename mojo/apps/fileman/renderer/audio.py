@@ -122,7 +122,7 @@ class AudioRenderer(BaseRenderer):
             if os.path.exists(temp_output) and os.path.getsize(temp_output) > 0:
                 # Resize the image to the requested dimensions
                 from PIL import Image
-                with Image.open(temp_output) as img:
+                with Image.open(temp_output, formats=["JPEG", "PNG", "WEBP", "GIF", "BMP", "TIFF"]) as img:
                     img.thumbnail((width, height), Image.Resampling.LANCZOS)
                     img.save(temp_output, format=output_format.upper())
                 
