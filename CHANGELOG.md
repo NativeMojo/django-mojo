@@ -1,11 +1,22 @@
 ## v1.0.59 - (current)
 
+## v1.0.51 - March 15, 2026
+
+pretty big changes for security
+
+
 ### New Features
 
-- account: added `UserAPIKey` model — user-level JWT tokens are now tracked in the database with per-key signing secrets; each token carries `token_type="api_key"` in the payload and is linked to a `UserAPIKey` record via `jti`; revocation sets `is_active=False` without affecting the user's session; session revoke no longer kills API keys; `label` and `allowed_ips` are mutable after creation; `last_used` tracked on each request; new endpoints: `GET/POST /api/account/api_tokens`, `GET/POST/DELETE /api/account/api_tokens/<id>`, `GET /api/auth/manage/api_tokens?uid=X` (`mojo/apps/account/models/user_api_key.py`, `mojo/apps/account/rest/user_api_key.py`, `mojo/models/auth.py`, `mojo/apps/account/models/user.py`, `mojo/apps/account/utils/jwtoken.py`)
+- account: added `UserAPIKey` model — user-level long-lived JWT tokens tracked in the database with a per-key signing secret stored in `mojo_secrets`; each token carries `token_type="user_api_key"` and `jti` in the payload, linking it to the `UserAPIKey` record; revocation (`POST /api/account/api_keys/<id>` with `{"revoke": ...}`) rotates the per-key secret and sets `is_active=False`, immediately rejecting the token without affecting the user's session or other keys; `label` and `allowed_ips` are optional; generate logic and `validate_jwt` branch live entirely in `UserAPIKey` and `User` respectively — no coupling to `User.auth_key`; `POST /api/auth/generate_api_key` creates a key and returns the token once; `GET /api/account/api_keys` lists the owner's keys; incidents logged on generate (`api_key:generated`) and revoke (`api_key:revoked`) via `user.log()` (`mojo/apps/account/models/user_api_key.py`, `mojo/apps/account/rest/user_api_key.py`, `mojo/apps/account/models/user.py`, `mojo/apps/account/utils/jwtoken.py`)
 - account: `allowed_ips` is now optional on `POST /api/auth/generate_api_key` and `POST /api/auth/manage/generate_api_key` — omitting it (or passing an empty list) creates an unrestricted token; IP restriction remains enforced when the list is non-empty (`mojo/apps/account/rest/user.py`)
 - account: added `dob` (DateField) and `is_dob_verified` (BooleanField) to User model — `dob` is user-writable, `is_dob_verified` is system-only (in `NO_SAVE_FIELDS`, never REST-writable); changing `dob` automatically resets `is_dob_verified = False`; both fields cleared by `pii_anonymize()`; added `get_age()` helper that returns current age in whole years; `is_dob_verified` also in `SUPERUSER_ONLY_FIELDS` so only superusers can set it via direct model save (`mojo/apps/account/models/user.py`)
 - account: `current_password` is now **optional** on `POST /api/auth/email/change/request` and `POST /api/auth/phone/change/request` — if provided it is still validated (wrong password → 401), but omitting it allows OAuth-only and passkey-only users (no usable password) to use the change flows; a notification is always sent to the **old** email/phone alerting the account owner of the request; phone change now sends an SMS to the current number when one is on file (`mojo/apps/account/rest/user.py`)
+- aws: CloudWatch `fetch()` response shape now matches the metrics app — `data` is a `{slug: [values]}` dict and the timestamp axis is returned as `labels` (was `[{slug, values}]` list with `periods` key); all callers updated accordingly (`mojo/helpers/aws/cloudwatch.py`)
+- aws: CloudWatch fetch endpoint now accepts `dr_start`/`dr_end` Unix timestamp params (aliases for `dt_start`/`dt_end`); all datetime inputs are normalized to UTC-aware via `mojo.helpers.dates.parse_datetime` before use — eliminates offset-naive/offset-aware comparison errors (`mojo/apps/aws/rest/cloudwatch.py`, `mojo/helpers/aws/cloudwatch.py`)
+
+### Docs
+
+- docs: updated `docs/web_developer/aws/cloudwatch.md` — response shape updated to `{data: {slug: [values]}, labels: [...]}`, `periods` → `labels` throughout, `dr_start`/`dr_end` documented as preferred time-range params
 
 ---
 
