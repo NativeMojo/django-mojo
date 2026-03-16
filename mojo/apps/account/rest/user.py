@@ -240,6 +240,7 @@ def on_user_password_reset_code(request):
     if now_ts - code_ts > int(PASSWORD_RESET_CODE_TTL):
         user.report_incident(f"{user.username} expired password reset code", "password_reset")
         raise merrors.ValueException("Expired code")
+    user.check_password_strength(new_password)
     user.set_password(new_password)
     user.set_secret("password_reset_code", None)
     user.set_secret("password_reset_code_ts", None)
@@ -252,12 +253,19 @@ def on_user_password_reset_code(request):
 @md.requires_params("token", "new_password")
 def on_user_password_reset_token(request):
     token = request.DATA.get("token")
-    user = tokens.verify_password_reset_token(token)
     new_password = request.DATA.get("new_password")
-    # If the user has never logged in, this token was consumed via an invite link —
-    # the fact they received and clicked it proves email ownership.
-    if user.last_login is None:
+    if token.startswith("iv:"):
+        user = tokens.verify_invite_token(token)
         user.is_email_verified = True
+    elif token.startswith("pr:"):
+        user = tokens.verify_password_reset_token(token)
+        # If the user has never logged in, this token was consumed via an invite link —
+        # the fact they received and clicked it proves email ownership.
+        if user.last_login is None:
+            user.is_email_verified = True
+    else:
+        raise merrors.ValueException("Invalid token kind")
+    user.check_password_strength(new_password)
     user.set_password(new_password)
     user.save()
     return jwt_login(request, user)

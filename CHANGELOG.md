@@ -1,5 +1,10 @@
 ## v1.0.59 - (current)
 
+## v1.0.55 - March 16, 2026
+
+BUG FIX for iv tokens used in password reset
+
+
 ## v1.0.54 - March 16, 2026
 
 fix short link

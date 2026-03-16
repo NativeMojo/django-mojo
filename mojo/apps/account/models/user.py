@@ -565,7 +565,24 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
                 raise merrors.ValueException("Username is not allowed")
         return True
 
-    def set_new_password(self, new_password, old_password = None):
+    def check_password_strength(self, password):
+        """Raise ValueException if password does not meet minimum strength requirements."""
+        import re
+        strength_score = 0
+        if len(password) >= 12:
+            strength_score += 2
+        elif len(password) >= 10:
+            strength_score += 1
+        if any(c.isupper() for c in password) and any(c.islower() for c in password):
+            strength_score += 1
+        if any(c.isdigit() for c in password):
+            strength_score += 1
+        if re.search(r'[!@#$%^&*(),.?":{}|<>]', password):
+            strength_score += 1
+        if strength_score < 2:
+            raise merrors.ValueException("Password is too weak. Use a longer password or include a mix of uppercase, lowercase, numbers, and special characters")
+
+    def set_new_password(self, new_password, old_password=None):
         if self.active_request:
             old_password = self.active_request.DATA.get("current_password", None)
             if not old_password and not self.active_request.user.has_permission("manage_users"):
@@ -573,34 +590,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         if old_password and not self.check_password(old_password):
             self.report_incident(f"{self.username} entered an invalid password", "invalid_password")
             raise merrors.ValueException("Incorrect current password")
-        strength_score = 0
-        # Length contributes to strength (longer is better)
-        if len(new_password) >= 12:
-            strength_score += 2
-        elif len(new_password) >= 10:
-            strength_score += 1
-
-        # Check for mixed case
-        has_upper = any(c.isupper() for c in new_password)
-        has_lower = any(c.islower() for c in new_password)
-        if has_upper and has_lower:
-            strength_score += 1
-
-        # Check for numbers
-        has_numbers = any(c.isdigit() for c in new_password)
-        if has_numbers:
-            strength_score += 1
-
-        # Check for special characters
-        import re
-        has_special = bool(re.search(r'[!@#$%^&*(),.?":{}|<>]', new_password))
-        if has_special:
-            strength_score += 1
-
-        # Require minimum strength score
-        if strength_score < 2:
-            raise merrors.ValueException("Password is too weak. Use a longer password or include a mix of uppercase, lowercase, numbers, and special characters")
-
+        self.check_password_strength(new_password)
         self.set_password(new_password)
         self._set_field_change("new_password", "*", "*********")
 
