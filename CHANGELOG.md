@@ -1,5 +1,10 @@
 ## v1.0.59 - (current)
 
+## v1.0.53 - March 16, 2026
+
+greatly improved invite flow
+
+
 ## v1.0.52 - March 16, 2026
 
 BUGFIX passkeys required username
