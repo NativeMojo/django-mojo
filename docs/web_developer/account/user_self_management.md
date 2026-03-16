@@ -321,8 +321,17 @@ redirect the user to your app after 3 seconds on success.
 
 ### Change email address
 
-Requires `current_password`. The old address always receives a notification
-of the request. Nothing is committed until the confirm step.
+The old address always receives a notification alerting the user that a
+change was requested. Nothing is committed until the confirm step.
+
+`current_password` is **optional**. If provided it is validated (wrong
+password → 401). If omitted the request proceeds without a password check —
+this supports OAuth-only and passkey-only users who have no usable password.
+
+> **Security note:** A notification is always sent to the **current** email
+> address when a change is requested. This gives the real account owner a
+> window to react (revoke sessions, cancel the change) if the request was
+> not initiated by them.
 
 **Step 1: Request**
 
@@ -336,7 +345,8 @@ POST /api/auth/email/change/request
 ```
 
 `method` is optional — defaults to `"link"`. Use `"code"` for the
-in-portal flow.
+in-portal flow. `current_password` is optional — omit it for
+OAuth/passkey-only users.
 
 **Step 2: Confirm (code)**
 
@@ -374,7 +384,8 @@ Immediately kills any outstanding confirmation link or code. Idempotent.
 
 | Condition | Status | Error |
 |---|---|---|
-| `current_password` incorrect | 401 | `"Incorrect password"` |
+| `current_password` provided but incorrect | 401 | `"Incorrect password"` |
+| `current_password` omitted | *(allowed — request proceeds)* | |
 | New address already in use | 400 | `"Email already in use"` |
 | New address same as current | 400 | `"New email must be different..."` |
 | Invalid format | 400 | `"Invalid email address"` |
@@ -437,6 +448,15 @@ Direct REST replacement of an existing phone number is blocked. Use the
 change flow, which proves ownership of the new number via OTP before
 committing it.
 
+`current_password` is **optional**. If provided it is validated (wrong
+password → 401). If omitted the request proceeds without a password check —
+this supports OAuth-only and passkey-only users who have no usable password.
+
+> **Security note:** When the user already has a phone number on file, an
+> SMS is sent to the **current** number alerting them that a change was
+> requested. This gives the real account owner a chance to react if the
+> request was not initiated by them.
+
 **Step 1: Request**
 
 ```json
@@ -447,6 +467,7 @@ POST /api/auth/phone/change/request
 }
 ```
 
+`current_password` is optional — omit it for OAuth/passkey-only users.
 Response includes a `session_token` — keep it for Step 2.
 
 **Step 2: Confirm**

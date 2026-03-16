@@ -52,6 +52,14 @@ class Event(models.Model, MojoModel):
                     "geo_ip": "basic",
                 }
             },
+            "security": {
+                "fields": ["created"],
+                "extra": [
+                    ("category", "kind"),
+                    ("security_summary", "summary"),
+                    ("source_ip", "ip"),
+                ],
+            },
         }
 
         FORMATS = {
@@ -77,6 +85,40 @@ class Event(models.Model, MojoModel):
                 "incident.id",
             ]
         }
+
+    # kind → human-readable summary for the security events graph
+    _SECURITY_SUMMARIES = {
+        "login": "Successful login",
+        "login:unknown": "Login attempt with unknown account",
+        "invalid_password": "Failed login — incorrect password",
+        "password_reset": "Password reset requested",
+        "totp:confirm_failed": "TOTP setup — invalid confirmation code",
+        "totp:login_failed": "Failed login — incorrect TOTP code",
+        "totp:login_unknown": "TOTP login attempt with unknown account",
+        "totp:recovery_used": "TOTP recovery code used",
+        "email_change:requested": "Email change requested",
+        "email_change:requested_code": "Email change requested (code flow)",
+        "email_change:cancelled": "Email change cancelled",
+        "email_change:invalid": "Email change — invalid token",
+        "email_change:expired": "Email change — expired token",
+        "email_verify:confirmed": "Email address verified",
+        "email_verify:confirmed_code": "Email address verified via code",
+        "phone_change:requested": "Phone number change requested",
+        "phone_change:confirmed": "Phone number changed",
+        "phone_change:cancelled": "Phone number change cancelled",
+        "phone_verify:confirmed": "Phone number verified",
+        "username:changed": "Username changed",
+        "oauth": "Signed in with social account",
+        "passkey:login_failed": "Failed passkey login",
+        "account:deactivated": "Account deactivated",
+        "account:deactivate_requested": "Account deactivation requested",
+        "sessions:revoked": "All sessions revoked",
+        "sessions:revoke_failed": "Session revoke — incorrect password",
+    }
+
+    @property
+    def security_summary(self):
+        return self._SECURITY_SUMMARIES.get(self.category, self.category)
 
     _geo_ip = None
     @property

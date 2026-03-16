@@ -29,6 +29,7 @@ dependencies = [
     "dnspython (>=2.8.0,<3.0.0)",
     "python-whois (>=0.9.6,<0.10.0)",
     "pyotp (>=2.9.0,<3.0.0)",
+    "bcrypt (>=5.0.0,<6.0.0)",
 ]
 
 [tool.poetry]

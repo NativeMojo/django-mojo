@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from urllib.parse import urljoin
 import uuid
 
+from mojo.helpers.settings import settings
 from .base import StorageBackend
 
 
@@ -20,7 +21,8 @@ class FileSystemStorageBackend(StorageBackend):
 
         # File system configuration
         self.base_path = self.get_setting('base_path', '/tmp/fileman')
-        self.base_url = self.get_setting('base_url', '/media/')
+        default_base_url = settings.get('MEDIA_HOST', '') + settings.get('MEDIA_URL', '/media/')
+        self.base_url = self.get_setting('base_url', default_base_url)
         self.create_directories = self.get_setting('create_directories', True)
         self.permissions = self.get_setting('permissions', 0o644)
         self.directory_permissions = self.get_setting('directory_permissions', 0o755)

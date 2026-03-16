@@ -26,7 +26,7 @@ def configure_paths(base_dir, depth=2):
     LOG_ROOT = VAR_ROOT / "logs"
 
     # Media Settings
-    MEDIA_ROOT = base_path / "media"
+    MEDIA_ROOT = VAR_ROOT / "media"
     MEDIA_URL = "/media/"
 
     # Static Files Settings
@@ -36,9 +36,6 @@ def configure_paths(base_dir, depth=2):
     STATIC_URL = "/static/"
     STATIC_URL_SECURE = "/static/"
     STATICFILES_DIRS = [SITE_STATIC_ROOT]
-
-    MEDIA_URL = '/media/'
-    MEDIA_ROOT = base_path / "media"
 
 
     # Load additional site-packages paths from .site_packages file

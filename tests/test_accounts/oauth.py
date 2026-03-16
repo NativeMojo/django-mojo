@@ -488,8 +488,6 @@ def test_oauth_connection_delete_two_connections_no_password(opts):
     from mojo.apps.account.models.oauth import OAuthConnection
 
     OAuthConnection.objects.filter(user=opts.user).delete()
-    opts.user.set_unusable_password()
-    opts.user.save()
 
     conn1 = OAuthConnection.objects.create(
         user=opts.user,
@@ -504,8 +502,12 @@ def test_oauth_connection_delete_two_connections_no_password(opts):
         email=TEST_EMAIL,
     )
 
+    # Login while password is still usable, then remove it
     resp = opts.client.login(TEST_USER, TEST_PWORD)
     assert opts.client.is_authenticated, "authentication failed"
+
+    opts.user.set_unusable_password()
+    opts.user.save()
 
     resp = opts.client.delete(f"/api/account/oauth_connection/{conn1.id}")
     assert resp.status_code == 200, f"Unexpected status {resp.status_code}: {resp.response}"
@@ -521,8 +523,6 @@ def test_oauth_connection_delete_lockout_guard(opts):
     from mojo.apps.account.models.oauth import OAuthConnection
 
     OAuthConnection.objects.filter(user=opts.user).delete()
-    opts.user.set_unusable_password()
-    opts.user.save()
 
     conn = OAuthConnection.objects.create(
         user=opts.user,
@@ -531,8 +531,12 @@ def test_oauth_connection_delete_lockout_guard(opts):
         email=TEST_EMAIL,
     )
 
+    # Login while password is still usable, then remove it
     resp = opts.client.login(TEST_USER, TEST_PWORD)
     assert opts.client.is_authenticated, "authentication failed"
+
+    opts.user.set_unusable_password()
+    opts.user.save()
 
     resp = opts.client.delete(f"/api/account/oauth_connection/{conn.id}")
     assert resp.status_code == 400, f"Should block lockout, got {resp.status_code}: {resp.response}"

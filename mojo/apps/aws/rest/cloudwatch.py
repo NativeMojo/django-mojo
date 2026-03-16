@@ -12,8 +12,10 @@ Parameters for fetch:
     slugs       - friendly names or AWS IDs (optional; all instances returned when omitted)
                   EC2: use the Name tag value (e.g. "web-server-1") or the instance ID
                   RDS / ElastiCache: the identifier is already human-friendly
-    dt_start    - start of range, UTC datetime (optional, default: 24 h ago)
-    dt_end      - end of range, UTC datetime (optional, default: now)
+    dr_start    - start of range as Unix timestamp (optional, default: 24 h ago)
+    dr_end      - end of range as Unix timestamp (optional, default: now)
+    dt_start    - alias for dr_start, accepts ISO datetime string
+    dt_end      - alias for dr_end, accepts ISO datetime string
     granularity - "minutes", "hours" (default), or "days"
     stat        - "avg" (default), "max", "min", or "sum"
 
@@ -23,6 +25,7 @@ All endpoints require the manage_aws permission.
 import datetime
 
 from mojo import decorators as md
+from mojo.helpers import dates as mdates
 from mojo.helpers.response import JsonResponse
 from mojo.helpers.aws.cloudwatch import CloudWatchHelper, resolve_metric, resolve_namespace, CATEGORY_METRIC, ACCOUNT_NAMESPACE
 import mojo.errors
@@ -93,8 +96,11 @@ def on_cloudwatch_fetch(request):
     except ValueError as exc:
         raise mojo.errors.ValueException(str(exc))
 
-    dt_start = request.DATA.get_typed("dt_start", typed=datetime.datetime)
-    dt_end = request.DATA.get_typed("dt_end", typed=datetime.datetime)
+    # Accept dr_start/dr_end (Unix timestamps) or dt_start/dt_end (ISO datetime)
+    _start = request.DATA.get("dr_start") or request.DATA.get("dt_start")
+    _end = request.DATA.get("dr_end") or request.DATA.get("dt_end")
+    dt_start = mdates.parse_datetime(_start) if _start else None
+    dt_end = mdates.parse_datetime(_end) if _end else None
     granularity = request.DATA.get("granularity", "hours")
     stat = request.DATA.get("stat", "avg")
 

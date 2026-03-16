@@ -13,7 +13,7 @@ Use this file as a lightweight running log between AI threads.
 
 ## Current Focus
 
-- **7-request self-management sprint** — implementation complete (v1.0.58). All code, tests, and docs written. Pending user validation in downstream Django project.
+- **UserAPIKey** — per-user JWT API tokens with per-key signing secret. Implementation in progress (needs migration + test run in downstream project).
 
 ## Key Decisions
 
@@ -22,18 +22,19 @@ Use this file as a lightweight running log between AI threads.
 - **Never use `override_settings` in testit tests.** Use `settings.get()` + `TestitSkip` instead.
 - FK assignments in `on_rest_save_related_field` must call `_set_field_change` before `setattr`.
 - **Notification preferences default is allow** — only suppress on explicit opt-out. System/transactional emails never suppressed.
+- **UserAPIKey uses `token_type="user_api_key"`** (not `"api_key"` — that's the group-scoped `ApiKey`). Per-key `auth_key` in `mojo_secrets`. Revoke via `POST_SAVE_ACTIONS`. `User.validate_jwt` handles the `user_api_key` branch directly (overrides mixin).
+- **Dynamic URL segments go at the end only.** Per-instance actions use `POST_SAVE_ACTIONS` + `on_action_<name>`.
 
 ## In-Progress Work
 
-- **Awaiting user test run** for all 7 sprint features. Commands:
-  - `python manage.py testit test_accounts.notification_prefs`
-  - `python manage.py testit test_accounts.totp_recovery`
-  - `python manage.py testit test_accounts.username_change`
-  - `python manage.py testit test_accounts.session_revoke`
-  - `python manage.py testit test_accounts.deactivation`
-  - `python manage.py testit test_accounts.security_events`
-  - `python manage.py testit test_accounts.oauth`
-  - Also re-run existing: `python manage.py testit test_accounts.totp`
+- **UserAPIKey** — new model + migration needed in downstream project. Files changed:
+  - `mojo/apps/account/models/user_api_key.py` — new model: `create_for_user()`, `on_action_revoke()`
+  - `mojo/apps/account/models/user.py` — added `user_api_key` branch in `validate_jwt`; removed `generate_api_token()`
+  - `mojo/apps/account/rest/user_api_key.py` — moved generate endpoints here; revoke via `POST_SAVE_ACTIONS`
+  - `mojo/apps/account/rest/user.py` — removed generate endpoints
+  - `mojo/apps/account/models/__init__.py` + `rest/__init__.py` — added imports
+  - Run: `python manage.py makemigrations && python manage.py migrate`
+- **Awaiting user test run** for v1.0.58 sprint features (notification_prefs, totp_recovery, username_change, session_revoke, deactivation, security_events, oauth)
 
 ## Handoff Notes — v1.0.58 Sprint (7 requests)
 

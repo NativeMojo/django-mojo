@@ -2067,16 +2067,19 @@ def test_email_verify_confirm_code_wrong_code_rejected(opts):
 def test_email_verify_confirm_code_expired(opts):
     from mojo.apps.account.models import User
     from mojo.apps.account.utils import tokens
-    import mojo.apps.account.utils.tokens as tok_module
     from mojo.decorators.limits import clear_rate_limits
     clear_rate_limits(ip="127.0.0.1")
 
     User.objects.filter(pk=opts.user_id).update(is_email_verified=False, is_active=True)
     user = User.objects.get(pk=opts.user_id)
-    orig_ttl = tok_module.EMAIL_VERIFY_CODE_TTL
-    tok_module.EMAIL_VERIFY_CODE_TTL = -1
     try:
         code = tokens.generate_email_verify_code(user)
+        # Force the stored timestamp into the distant past so the server's
+        # real TTL recognises it as expired.  Patching the module-level
+        # TTL only affects the test process, not the running server.
+        user.set_secret("email_verify_code_ts", 0)
+        user.save(update_fields=["mojo_secrets", "modified"])
+
         opts.client.login(TEST_USER, TEST_PWORD)
         resp = opts.client.post("/api/auth/verify/email/confirm", {"code": code})
         opts.client.logout()
@@ -2086,7 +2089,6 @@ def test_email_verify_confirm_code_expired(opts):
         assert_true(not user.is_email_verified,
                     "is_email_verified must remain False after expired code")
     finally:
-        tok_module.EMAIL_VERIFY_CODE_TTL = orig_ttl
         user.set_secret("email_verify_code", None)
         user.set_secret("email_verify_code_ts", None)
         user.save(update_fields=["mojo_secrets", "modified"])

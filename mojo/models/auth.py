@@ -75,7 +75,14 @@ class MojoAuthMixin:
 
         Returns (instance, None) on success.
         Returns (None, error_string) on failure.
+
+        Handles two token types:
+          - "api_key": per-key signing secret stored in UserAPIKey record;
+                       revocable individually without affecting the user session.
+          - "access" (default): signed with the user's auth_key.
         """
+        from mojo.helpers import dates
+
         token_manager = JWToken()
         jwt_data = token_manager.decode(token, validate=False)
         if not jwt_data or jwt_data.get("uid") is None:

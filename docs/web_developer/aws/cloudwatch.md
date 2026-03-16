@@ -94,8 +94,10 @@ chart labels.
 | `account` | yes | — | Resource type: `ec2`, `rds`, or `redis` |
 | `category` | yes | — | Metric shortname (see tables below) |
 | `slugs` | no | all instances | Comma-separated friendly names or AWS IDs to target |
-| `dt_start` | no | 24 hours ago | Start of range (UTC ISO-8601) |
-| `dt_end` | no | now | End of range (UTC ISO-8601) |
+| `dr_start` | no | 24 hours ago | Start of range as Unix timestamp (preferred) |
+| `dr_end` | no | now | End of range as Unix timestamp (preferred) |
+| `dt_start` | no | 24 hours ago | Alias for `dr_start`, accepts ISO-8601 datetime |
+| `dt_end` | no | now | Alias for `dr_end`, accepts ISO-8601 datetime |
 | `granularity` | no | `hours` | `minutes`, `hours`, or `days` |
 | `stat` | no | `avg` | `avg`, `max`, `min`, or `sum` |
 
@@ -118,34 +120,19 @@ GET /api/aws/cloudwatch/fetch?account=ec2&category=cpu&slugs=web-server-1&stat=m
 GET /api/aws/cloudwatch/fetch?account=rds&category=cpu&stat=max
 ```
 
-### Response — multiple instances (slugs omitted or multiple slugs)
+### Response
 
-```json
-{
-  "data": {
-    "data": [
-      {"slug": "web-server-1", "values": [12.4, 15.1, 9.8]},
-      {"slug": "api-server-2", "values": [8.2,  9.1,  7.3]}
-    ],
-    "periods": ["10:00", "11:00", "12:00"]
-  },
-  "status": true
-}
-```
-
-### Response — single instance (one slug)
-
-When exactly one slug is provided the inner `data` is unwrapped to a plain dict,
-matching the metrics app single-slug behavior:
+The response shape is identical to the metrics app — `data` is a dict of
+`{slug: [values]}` and `labels` is the shared time axis.
 
 ```json
 {
   "data": {
     "data": {
-      "slug": "web-server-1",
-      "values": [12.4, 15.1, 9.8]
+      "web-server-1": [12.4, 15.1, 9.8],
+      "api-server-2": [8.2,  9.1,  7.3]
     },
-    "periods": ["10:00", "11:00", "12:00"]
+    "labels": ["10:00", "11:00", "12:00"]
   },
   "status": true
 }
@@ -205,7 +192,7 @@ The `disk` category always targets the root filesystem (`path="/"`).
 
 ---
 
-## Granularity and Period Labels
+## Granularity and Labels
 
 | `granularity` | Bucket size | Label format | Example |
 |---|---|---|---|
@@ -213,8 +200,8 @@ The `disk` category always targets the root filesystem (`path="/"`).
 | `hours` (default) | 3600 s | `HH:MM` | `14:00` |
 | `days` | 86400 s | `YYYY-MM-DD` | `2025-06-01` |
 
-Buckets with no CloudWatch data are filled with `0.0`. The `periods` and `values`
-arrays are always the same length and span the full requested range.
+Buckets with no CloudWatch data are filled with `0.0`. The `labels` array and each
+`data` values array are always the same length and span the full requested range.
 
 AWS CloudWatch enforces a minimum period of 60 seconds and may restrict finer
 granularities for data older than 15 days. Use `granularity=days` for ranges

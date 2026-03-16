@@ -32,20 +32,20 @@ class JWToken:
         is_valid = self.is_token_valid(token)
         return is_valid, payload
 
-    def create(self, **kwargs):
+    def create(self, token_type="access", **kwargs):
         package = objict()
-        package.access_token = self.create_access_token(**kwargs)
+        package.access_token = self.create_access_token(token_type=token_type, **kwargs)
         package.refresh_token = self.create_refresh_token(**kwargs)
         return package
 
-    def create_access_token(self, **kwargs):
+    def create_access_token(self, token_type="access", **kwargs):
         payload = dict(kwargs)
         payload['exp'] = self._get_exp_time(self.access_token_expiry)
-        payload['token_type'] = "access"
+        payload['token_type'] = token_type
         payload["iat"] = int(time.time())
         payload["jti"] = secrets.token_hex(4)
         token = jwt.encode(payload, self.key, algorithm=self.alg)
-        self.payload = payload
+        self.payload = objict.fromdict(payload)
         self.token = token
         return token
 

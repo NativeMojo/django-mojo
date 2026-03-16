@@ -242,3 +242,4 @@ class ApiKey(MojoSecrets, MojoModel):
         """Generate token, store hash for lookup, store raw token encrypted."""
         self._raw_token = self.generate_token()
         self.save()
+        self.log(f"API Key '{self.name}' created for group {self.group_id}", "api_key:generated")

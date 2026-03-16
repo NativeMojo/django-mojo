@@ -363,14 +363,17 @@ def on_invite_accept(request):
 @md.requires_params("email")
 def on_email_change_request(request):
     """
-    Begin a self-service email change. Requires current_password.
+    Begin a self-service email change. current_password is optional.
+    If provided and non-empty, it is validated; otherwise the password check
+    is skipped (supports OAuth/passkey-only users).
 
     Optional body param:
       method: "link" (default) — send a confirmation link (ec: token) to the new address
       method: "code"           — send a 6-digit OTP to the new address instead
 
-    In both cases a notification is sent to the OLD address.
-    The current email is NOT changed until the confirm step is completed.
+    In both cases a notification is sent to the OLD address alerting them of
+    the change request. The current email is NOT changed until the confirm
+    step is completed.
     """
     if not settings.get("ALLOW_EMAIL_CHANGE", True):
         raise merrors.PermissionDeniedException("Email change is not allowed")
@@ -382,11 +385,10 @@ def on_email_change_request(request):
     new_email = request.DATA.get("email", "").lower().strip()
     current_password = request.DATA.get("current_password", "")
 
-    if not current_password:
-        raise merrors.ValueException("current_password is required to change your email")
-    if not user.check_password(current_password):
-        user.report_incident("Invalid password on email change request", "email_change:bad_password")
-        raise merrors.PermissionDeniedException("Incorrect password", 401, 401)
+    if current_password:
+        if not user.check_password(current_password):
+            user.report_incident("Invalid password on email change request", "email_change:bad_password")
+            raise merrors.PermissionDeniedException("Incorrect password", 401, 401)
     if not new_email or not re.match(r"[^@]+@[^@]+\.[^@]+", new_email):
         raise merrors.ValueException("Invalid email address")
     if new_email == str(user.email).lower():
@@ -715,7 +717,8 @@ def on_email_change_cancel(request):
 @md.requires_params("phone_number")
 def on_phone_change_request(request):
     """
-    Begin a self-service phone number change. Requires current_password.
+    Begin a self-service phone number change. current_password is optional.
+    If provided and non-empty, it is validated; otherwise the password check is skipped.
     Sends a 6-digit OTP to the NEW number via SMS.
     The phone number is NOT changed until the user submits the correct OTP in /confirm.
     """
@@ -727,11 +730,10 @@ def on_phone_change_request(request):
 
     user = request.user
     current_password = request.DATA.get("current_password")
-    if not current_password:
-        raise merrors.ValueException("current_password is required to change your phone number")
-    if not user.check_password(current_password):
-        user.report_incident("Invalid password on phone change request", "phone_change:bad_password")
-        raise merrors.PermissionDeniedException("Incorrect password", 401, 401)
+    if current_password:
+        if not user.check_password(current_password):
+            user.report_incident("Invalid password on phone change request", "phone_change:bad_password")
+            raise merrors.PermissionDeniedException("Incorrect password", 401, 401)
 
     new_phone_raw = request.DATA.get("phone_number", "").strip()
     normalized = user.normalize_phone(new_phone_raw)
@@ -754,6 +756,13 @@ def on_phone_change_request(request):
         user.set_secret("phone_change_otp_ts", None)
         user.save(update_fields=["mojo_secrets", "modified"])
         raise merrors.ValueException("Failed to send SMS to the new number — check the number and try again")
+
+    # Notify the OLD phone number so the real owner knows a change was requested
+    if user.phone_number:
+        try:
+            phonehub.send_sms(user.phone_number, "A request was made to change your phone number. If this wasn't you, secure your account immediately.")
+        except Exception:
+            pass
 
     user.report_incident(
         f"{user.username} requested phone number change to {normalized}",
@@ -840,39 +849,6 @@ def on_phone_change_cancel(request):
         f"{user.username} cancelled pending phone change to {pending}",
         "phone_change:cancelled")
     return JsonResponse({"status": True, "message": "Pending phone number change has been cancelled."})
-
-
-@md.POST("auth/generate_api_key")
-@md.requires_auth()
-@md.requires_params("allowed_ips")
-def generate_api_key(request):
-    allowed_ips = request.DATA.get_typed("allowed_ips", typed=list)
-    if len(allowed_ips) == 0:
-        raise merrors.ValueException("Requires allowed_ips")
-    expire_days = request.DATA.get_typed("expire_days", 360, typed=int)
-    if expire_days > 360:
-        raise merrors.ValueException("Invalid expire_days")
-    token = request.user.generate_api_token(allowed_ips=allowed_ips, expire_days=expire_days)
-    request.user.log(f"API Key Generated {token.jti} expire {expire_days} days", "api_key:generated")
-    return dict(status=True, data=token)
-
-
-@md.POST("auth/manage/generate_api_key")
-@md.requires_perms("manage_users")
-@md.requires_params("allowed_ips", "uid")
-def generate_user_api_key(request):
-    allowed_ips = request.DATA.get_typed("allowed_ips", typed=list)
-    if len(allowed_ips) == 0:
-        raise merrors.ValueException("Requires allowed_ips")
-    expire_days = request.DATA.get_typed("expire_days", 360, typed=int)
-    if expire_days > 360:
-        raise merrors.ValueException("Invalid expire_days")
-    user = User.objects.filter(pk=request.DATA.uid).last()
-    if user is None:
-        raise merrors.ValueException("Invalid User")
-    token = user.generate_api_token(allowed_ips=allowed_ips, expire_days=expire_days)
-    user.log(f"API Key Generated {token.jti} expire {expire_days} days by {request.user.username}", "api_key:generated")
-    return dict(status=True, data=token)
 
 
 # -----------------------------------------------------------------
@@ -1024,35 +1000,6 @@ def on_account_deactivate_confirm(request):
 # Security events log
 # -----------------------------------------------------------------
 
-_SECURITY_KIND_SUMMARIES = {
-    "login": "Successful login",
-    "login:unknown": "Login attempt with unknown account",
-    "invalid_password": "Failed login — incorrect password",
-    "password_reset": "Password reset requested",
-    "totp:confirm_failed": "TOTP setup — invalid confirmation code",
-    "totp:login_failed": "Failed login — incorrect TOTP code",
-    "totp:login_unknown": "TOTP login attempt with unknown account",
-    "totp:recovery_used": "TOTP recovery code used",
-    "email_change:requested": "Email change requested",
-    "email_change:requested_code": "Email change requested (code flow)",
-    "email_change:cancelled": "Email change cancelled",
-    "email_change:invalid": "Email change — invalid token",
-    "email_change:expired": "Email change — expired token",
-    "email_verify:confirmed": "Email address verified",
-    "email_verify:confirmed_code": "Email address verified via code",
-    "phone_change:requested": "Phone number change requested",
-    "phone_change:confirmed": "Phone number changed",
-    "phone_change:cancelled": "Phone number change cancelled",
-    "phone_verify:confirmed": "Phone number verified",
-    "username:changed": "Username changed",
-    "oauth": "Signed in with social account",
-    "passkey:login_failed": "Failed passkey login",
-    "account:deactivated": "Account deactivated",
-    "account:deactivate_requested": "Account deactivation requested",
-    "sessions:revoked": "All sessions revoked",
-    "sessions:revoke_failed": "Session revoke — incorrect password",
-}
-
 _SECURITY_CATEGORY_PREFIXES = [
     "login",
     "invalid_password",
@@ -1078,41 +1025,28 @@ def on_account_security_events(request):
     """
     Return auth-relevant audit events for the authenticated user.
     Scoped unconditionally to request.user — no cross-user access.
+    Uses the Event model's 'security' graph for serialization and the
+    framework's built-in date-range filtering, sorting, and pagination.
     """
     from django.db.models import Q
     from mojo.apps.incident.models.event import Event
 
-    size = min(int(request.DATA.get("size", 25) or 25), 100)
+    # Cap page size at 100
+    raw_size = request.DATA.get("size", 25)
+    capped = min(int(raw_size or 25), 100)
+    request.DATA["size"] = capped
 
-    # Build category filter
+    # Force the restricted security graph and default sort
+    request.DATA["graph"] = "security"
+    if not request.DATA.get("sort"):
+        request.DATA["sort"] = "-created"
+
+    # Build category filter scoped to the authenticated user
     q = Q()
     for prefix in _SECURITY_CATEGORY_PREFIXES:
         q |= Q(category__startswith=prefix)
 
     qs = Event.objects.filter(q, uid=request.user.pk)
 
-    # Optional date range
-    dr_start = request.DATA.get("dr_start")
-    dr_end = request.DATA.get("dr_end")
-    if dr_start:
-        qs = qs.filter(created__gte=dr_start)
-    if dr_end:
-        qs = qs.filter(created__lte=dr_end)
-
-    qs = qs.order_by("-created")[:size]
-
-    results = []
-    for event in qs:
-        summary = _SECURITY_KIND_SUMMARIES.get(event.category, event.category)
-        results.append({
-            "created": event.created.isoformat() if event.created else None,
-            "kind": event.category,
-            "summary": summary,
-            "ip": event.source_ip,
-        })
-
-    return JsonResponse({
-        "status": True,
-        "count": len(results),
-        "results": results,
-    })
+    # Delegate to framework — handles date range, sorting, pagination, serialization
+    return Event.on_rest_list(request, qs)
