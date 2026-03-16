@@ -1233,6 +1233,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#metadataprotected" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        metadata.protected
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#protected-field-setters" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4030,6 +4041,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#metadataprotected" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        metadata.protected
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#protected-field-setters" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4270,7 +4292,7 @@
 <tr>
 <td><code>metadata</code></td>
 <td>JSONField</td>
-<td>Arbitrary user metadata</td>
+<td>Arbitrary user metadata. The <code>metadata["protected"]</code> sub-key is system-only — see below.</td>
 </tr>
 <tr>
 <td><code>org</code></td>
@@ -4345,55 +4367,71 @@
 <p>Uses a lowered block threshold (<code>text_block_threshold=50</code>) since short strings carry proportionally more weight.</p>
 <h3 id="superuser-bypass">Superuser Bypass<a class="headerlink" href="#superuser-bypass" title="Permanent link">&para;</a></h3>
 <p>Both <code>validate_username()</code> and <code>validate_name_fields()</code> are bypassed entirely when <code>request.user.is_superuser</code>. This allows superusers to create accounts with reserved names like <code>admin</code>, <code>support</code>, or <code>root</code>.</p>
+<h2 id="metadataprotected">metadata.protected<a class="headerlink" href="#metadataprotected" title="Permanent link">&para;</a></h2>
+<p><code>metadata["protected"]</code> is a system-controlled sub-key within the <code>metadata</code> JSON field. Writes to it via REST are blocked by <code>on_rest_update_jsonfield</code> in <code>mojo/models/rest.py</code> for any user who is not a superuser or does not have a permission listed in <code>PROTECTED_JSON_PERMS</code> (RestMeta prop, defaults to empty — superuser only).</p>
+<p>Use it to record immutable system context that should never be overwritten by the user:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">user</span><span class="o">.</span><span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;protected&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>    <span class="s2">&quot;registration_source&quot;</span><span class="p">:</span> <span class="s2">&quot;google&quot;</span><span class="p">,</span>   <span class="c1"># how the account was created</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>    <span class="s2">&quot;invited_by_id&quot;</span><span class="p">:</span> <span class="mi">42</span><span class="p">,</span>               <span class="c1"># User.id of the person who sent the invite</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>    <span class="s2">&quot;invited_to_group_id&quot;</span><span class="p">:</span> <span class="mi">7</span><span class="p">,</span>          <span class="c1"># Group.id of the first group invite</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="p">}</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="n">user</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="n">update_fields</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;metadata&quot;</span><span class="p">])</span>
+</code></pre></div>
+<p>Only write these at creation time. Check <code>"protected" not in (user.metadata or {})</code> before writing to avoid overwriting existing context.</p>
+<p>To allow a specific permission to write protected metadata:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">RestMeta</span><span class="p">:</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>    <span class="n">PROTECTED_JSON_PERMS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;manage_users&quot;</span><span class="p">]</span>
+</code></pre></div>
+<hr />
 <h2 id="protected-field-setters">Protected Field Setters<a class="headerlink" href="#protected-field-setters" title="Permanent link">&para;</a></h2>
 <p>The REST framework calls <code>set_&lt;field&gt;()</code> before saving if the method exists. These setters enforce permission checks:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># Only a superuser can grant superuser or staff status</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="n">user</span><span class="o">.</span><span class="n">set_is_superuser</span><span class="p">(</span><span class="kc">True</span><span class="p">)</span>   <span class="c1"># raises PermissionDeniedException if not superuser</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">user</span><span class="o">.</span><span class="n">set_is_staff</span><span class="p">(</span><span class="kc">True</span><span class="p">)</span>       <span class="c1"># raises PermissionDeniedException if not superuser</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># Only a superuser can grant superuser or staff status</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="n">user</span><span class="o">.</span><span class="n">set_is_superuser</span><span class="p">(</span><span class="kc">True</span><span class="p">)</span>   <span class="c1"># raises PermissionDeniedException if not superuser</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="n">user</span><span class="o">.</span><span class="n">set_is_staff</span><span class="p">(</span><span class="kc">True</span><span class="p">)</span>       <span class="c1"># raises PermissionDeniedException if not superuser</span>
 </code></pre></div>
 <h2 id="permission-system">Permission System<a class="headerlink" href="#permission-system" title="Permanent link">&para;</a></h2>
 <p>Permissions are stored as a JSON dict on <code>user.permissions</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># Check single permission</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="n">user</span><span class="o">.</span><span class="n">has_permission</span><span class="p">(</span><span class="s2">&quot;manage_users&quot;</span><span class="p">)</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="c1"># Check any of multiple permissions</span>
-<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="n">user</span><span class="o">.</span><span class="n">has_permission</span><span class="p">([</span><span class="s2">&quot;manage_users&quot;</span><span class="p">,</span> <span class="s2">&quot;view_users&quot;</span><span class="p">])</span>
-<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>
-<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="c1"># Add / remove</span>
-<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="n">user</span><span class="o">.</span><span class="n">add_permission</span><span class="p">(</span><span class="s2">&quot;manage_reports&quot;</span><span class="p">)</span>
-<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="n">user</span><span class="o">.</span><span class="n">remove_permission</span><span class="p">(</span><span class="s2">&quot;manage_reports&quot;</span><span class="p">)</span>
-<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="n">user</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># Check single permission</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="n">user</span><span class="o">.</span><span class="n">has_permission</span><span class="p">(</span><span class="s2">&quot;manage_users&quot;</span><span class="p">)</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="c1"># Check any of multiple permissions</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="n">user</span><span class="o">.</span><span class="n">has_permission</span><span class="p">([</span><span class="s2">&quot;manage_users&quot;</span><span class="p">,</span> <span class="s2">&quot;view_users&quot;</span><span class="p">])</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="c1"># Add / remove</span>
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="n">user</span><span class="o">.</span><span class="n">add_permission</span><span class="p">(</span><span class="s2">&quot;manage_reports&quot;</span><span class="p">)</span>
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="n">user</span><span class="o">.</span><span class="n">remove_permission</span><span class="p">(</span><span class="s2">&quot;manage_reports&quot;</span><span class="p">)</span>
+<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="n">user</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
 </code></pre></div>
 <p><strong>Protected permissions</strong> — Certain permissions (e.g., <code>manage_users</code>) can only be granted by a user who themselves has <code>manage_users</code>. This is enforced via <code>USER_PERMS_PROTECTION</code> in settings.</p>
 <h2 id="jwt-authentication">JWT Authentication<a class="headerlink" href="#jwt-authentication" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.utils.jwtoken</span><span class="w"> </span><span class="kn">import</span> <span class="n">JWToken</span>
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>
-<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="c1"># Create token pair</span>
-<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="n">token_package</span> <span class="o">=</span> <span class="n">JWToken</span><span class="p">(</span><span class="n">user</span><span class="o">.</span><span class="n">get_auth_key</span><span class="p">())</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="n">uid</span><span class="o">=</span><span class="n">user</span><span class="o">.</span><span class="n">id</span><span class="p">)</span>
-<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="c1"># Returns: {&quot;access_token&quot;: &quot;...&quot;, &quot;refresh_token&quot;: &quot;...&quot;, &quot;expires_in&quot;: 21600}</span>
-<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>
-<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="c1"># Validate token</span>
-<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="n">user</span><span class="p">,</span> <span class="n">error</span> <span class="o">=</span> <span class="n">User</span><span class="o">.</span><span class="n">validate_jwt</span><span class="p">(</span><span class="n">token_string</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.utils.jwtoken</span><span class="w"> </span><span class="kn">import</span> <span class="n">JWToken</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="c1"># Create token pair</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="n">token_package</span> <span class="o">=</span> <span class="n">JWToken</span><span class="p">(</span><span class="n">user</span><span class="o">.</span><span class="n">get_auth_key</span><span class="p">())</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="n">uid</span><span class="o">=</span><span class="n">user</span><span class="o">.</span><span class="n">id</span><span class="p">)</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="c1"># Returns: {&quot;access_token&quot;: &quot;...&quot;, &quot;refresh_token&quot;: &quot;...&quot;, &quot;expires_in&quot;: 21600}</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="c1"># Validate token</span>
+<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="n">user</span><span class="p">,</span> <span class="n">error</span> <span class="o">=</span> <span class="n">User</span><span class="o">.</span><span class="n">validate_jwt</span><span class="p">(</span><span class="n">token_string</span><span class="p">)</span>
 </code></pre></div>
 <p>Token expiry is configured via settings:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="n">JWT_TOKEN_EXPIRY</span> <span class="o">=</span> <span class="mi">21600</span>          <span class="c1"># access token: 6 hours (seconds)</span>
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="n">JWT_REFRESH_TOKEN_EXPIRY</span> <span class="o">=</span> <span class="mi">604800</span> <span class="c1"># refresh token: 7 days (seconds)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="n">JWT_TOKEN_EXPIRY</span> <span class="o">=</span> <span class="mi">21600</span>          <span class="c1"># access token: 6 hours (seconds)</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="n">JWT_REFRESH_TOKEN_EXPIRY</span> <span class="o">=</span> <span class="mi">604800</span> <span class="c1"># refresh token: 7 days (seconds)</span>
 </code></pre></div>
 <h2 id="api-key-generation">API Key Generation<a class="headerlink" href="#api-key-generation" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="n">token</span> <span class="o">=</span> <span class="n">user</span><span class="o">.</span><span class="n">generate_api_token</span><span class="p">(</span>
-<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>    <span class="n">allowed_ips</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;1.2.3.4&quot;</span><span class="p">,</span> <span class="s2">&quot;5.6.7.8&quot;</span><span class="p">],</span>
-<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>    <span class="n">expire_days</span><span class="o">=</span><span class="mi">360</span>
-<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="n">token</span> <span class="o">=</span> <span class="n">user</span><span class="o">.</span><span class="n">generate_api_token</span><span class="p">(</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>    <span class="n">allowed_ips</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;1.2.3.4&quot;</span><span class="p">,</span> <span class="s2">&quot;5.6.7.8&quot;</span><span class="p">],</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>    <span class="n">expire_days</span><span class="o">=</span><span class="mi">360</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="p">)</span>
 </code></pre></div>
 <p>API keys are long-lived JWTs restricted to specific IPs.</p>
 <h2 id="activity-tracking">Activity Tracking<a class="headerlink" href="#activity-tracking" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="n">user</span><span class="o">.</span><span class="n">touch</span><span class="p">()</span>   <span class="c1"># updates last_activity (rate-limited by USER_LAST_ACTIVITY_FREQ)</span>
-<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="n">user</span><span class="o">.</span><span class="n">track</span><span class="p">()</span>   <span class="c1"># touch() + track device from active request</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="n">user</span><span class="o">.</span><span class="n">touch</span><span class="p">()</span>   <span class="c1"># updates last_activity (rate-limited by USER_LAST_ACTIVITY_FREQ)</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="n">user</span><span class="o">.</span><span class="n">track</span><span class="p">()</span>   <span class="c1"># touch() + track device from active request</span>
 </code></pre></div>
 <h2 id="group-membership">Group Membership<a class="headerlink" href="#group-membership" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="n">groups</span> <span class="o">=</span> <span class="n">user</span><span class="o">.</span><span class="n">get_groups</span><span class="p">()</span>                    <span class="c1"># all groups</span>
-<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="n">groups</span> <span class="o">=</span> <span class="n">user</span><span class="o">.</span><span class="n">get_groups</span><span class="p">(</span><span class="n">include_children</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>  <span class="c1"># direct memberships only</span>
-<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="n">groups_with_perm</span> <span class="o">=</span> <span class="n">user</span><span class="o">.</span><span class="n">get_groups_with_permission</span><span class="p">([</span><span class="s2">&quot;manage_users&quot;</span><span class="p">])</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="n">groups</span> <span class="o">=</span> <span class="n">user</span><span class="o">.</span><span class="n">get_groups</span><span class="p">()</span>                    <span class="c1"># all groups</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="n">groups</span> <span class="o">=</span> <span class="n">user</span><span class="o">.</span><span class="n">get_groups</span><span class="p">(</span><span class="n">include_children</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>  <span class="c1"># direct memberships only</span>
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="n">groups_with_perm</span> <span class="o">=</span> <span class="n">user</span><span class="o">.</span><span class="n">get_groups_with_permission</span><span class="p">([</span><span class="s2">&quot;manage_users&quot;</span><span class="p">])</span>
 </code></pre></div>
 <h2 id="password-reset-flow">Password Reset Flow<a class="headerlink" href="#password-reset-flow" title="Permanent link">&para;</a></h2>
 <ol>
@@ -4403,16 +4441,16 @@
 <li>Reset via <code>POST /api/auth/password/reset/code</code> or <code>POST /api/auth/password/reset/token</code></li>
 </ol>
 <h2 id="email-verification-flow">Email Verification Flow<a class="headerlink" href="#email-verification-flow" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>POST /api/auth/verify/email/send     → sends email_verify template to user&#39;s address
-<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>GET  /api/auth/verify/email/confirm  → public, token in query string (click-through link)
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>POST /api/auth/verify/email/send     → sends email_verify template to user&#39;s address
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>GET  /api/auth/verify/email/confirm  → public, token in query string (click-through link)
 </code></pre></div>
 <p><code>is_email_verified</code> is set to <code>True</code> on confirm. Both endpoints require the user to be authenticated except the confirm link which is public so it works directly from an email client.</p>
 <h3 id="auto-verify-via-invite">Auto-Verify via Invite<a class="headerlink" href="#auto-verify-via-invite" title="Permanent link">&para;</a></h3>
 <p>When a user accepts an invite link (<code>POST /api/auth/password/reset/token</code>) and <code>last_login is None</code> (i.e. they have never logged in — this is their first access), <code>is_email_verified</code> is set automatically. The act of receiving and clicking the invite link is sufficient proof of email ownership.</p>
 <p>Magic login (<code>POST /api/auth/magic/login</code>) also auto-verifies email on use, since the magic link itself proves inbox access.</p>
 <h2 id="phone-verification-flow">Phone Verification Flow<a class="headerlink" href="#phone-verification-flow" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>POST /api/auth/verify/phone/send     → sends 6-digit SMS code via phonehub
-<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>POST /api/auth/verify/phone/confirm  → user submits code, sets is_phone_verified=True
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>POST /api/auth/verify/phone/send     → sends 6-digit SMS code via phonehub
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>POST /api/auth/verify/phone/confirm  → user submits code, sets is_phone_verified=True
 </code></pre></div>
 <p>The phone number is normalized via <code>phonehub.normalize()</code> before the SMS is sent. An invalid or un-normalizable number returns a <code>ValueException</code> before any Twilio call is made.</p>
 <p>Code TTL is configurable via <code>PHONE_VERIFY_CODE_TTL</code> (default 600 seconds). Codes are single-use and consumed on successful verification.</p>
