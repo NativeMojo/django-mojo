@@ -204,14 +204,25 @@ class PasskeyService:
     # -----------------------------------------------------------------
     # Authentication
     # -----------------------------------------------------------------
-    def authenticate_begin(self, user) -> Tuple[dict, str]:
+    def authenticate_begin(self, user=None) -> Tuple[dict, str]:
         """
         Begin passkey authentication.
+
+        Pass user=None for a discoverable-credential flow (no username hint).
+        The browser will present all stored passkeys and the user selects one.
+        Pass a User instance to restrict the challenge to that user's passkeys.
+
         Returns (publicKey_options, challenge_id).
         """
-        credentials = self._load_user_credentials(user)
-        if not credentials:
-            raise ValueError("No passkeys registered for this portal")
+        if user is not None:
+            credentials = self._load_user_credentials(user)
+            if not credentials:
+                raise ValueError("No passkeys registered for this portal")
+            user_id = str(user.uuid)
+        else:
+            # Discoverable flow — empty list lets the browser present all stored credentials
+            credentials = []
+            user_id = ""
 
         options, state = self.server.authenticate_begin(credentials)
 
@@ -220,7 +231,7 @@ class PasskeyService:
 
         # Store challenge in Redis
         challenge_id = self._save_challenge(
-            user_id=str(user.uuid),
+            user_id=user_id,
             purpose="authenticate",
             state=self._normalize(state),
             challenge=public_key.get("challenge"),

@@ -21,7 +21,13 @@ OAuth allows users to log in with a third-party provider (Google, etc.) without 
 
 ## Step 1 — Get Authorization URL
 
-**GET** `/api/auth/oauth/google/begin`
+**GET** `/api/oauth/google/begin`
+
+**Optional query parameter:**
+
+| Parameter | Description |
+|---|---|
+| `redirect_uri` | Override the default callback URL. Must be on the server's allowlist (`ALLOWED_REDIRECT_URLS`). Returns `400` if provided but not allowed. |
 
 **Response:**
 
@@ -37,12 +43,20 @@ OAuth allows users to log in with a third-party provider (Google, etc.) without 
 
 Redirect the user to `auth_url`. Store `state` if you need it client-side (the server validates it automatically).
 
+If your app has a custom callback URL, pass it as `redirect_uri`:
+
+```javascript
+const resp = await fetch('/api/oauth/google/begin?redirect_uri=' + encodeURIComponent('https://portal.example.com/auth/callback'));
+```
+
+The server binds the `redirect_uri` to the state token — you do not need to re-send it in the complete step.
+
 ---
 
 ## Step 2 — Redirect User
 
 ```javascript
-const { data } = await fetch('/api/auth/oauth/google/begin').then(r => r.json());
+const { data } = await fetch('/api/oauth/google/begin').then(r => r.json());
 window.location.href = data.auth_url;
 ```
 
@@ -133,7 +147,7 @@ Requiring an additional local second factor after a trusted provider assertion i
 ```javascript
 // Begin — call on "Login with Google" button click
 async function startGoogleLogin() {
-  const resp = await fetch('/api/auth/oauth/google/begin');
+  const resp = await fetch('/api/oauth/google/begin');
   const { data } = await resp.json();
   window.location.href = data.auth_url;
 }
@@ -141,7 +155,7 @@ async function startGoogleLogin() {
 // Complete — call in your OAuth callback page
 async function completeGoogleLogin() {
   const params = new URLSearchParams(window.location.search);
-  const resp = await fetch('/api/auth/oauth/google/complete', {
+  const resp = await fetch('/api/oauth/google/complete', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -166,10 +180,10 @@ GOOGLE_CLIENT_SECRET = "your-client-secret"
 
 # The URL Google redirects back to after login
 # Must match one of the authorised redirect URIs in Google Console
-OAUTH_REDIRECT_URI = "https://your-app.example.com/auth/oauth/google/complete"
+OAUTH_REDIRECT_URI = "https://your-app.example.com/oauth/google/complete"
 ```
 
-If `OAUTH_REDIRECT_URI` is not set, the server builds it from the request `Origin` header as `<origin>/auth/oauth/<provider>/complete`.
+If `OAUTH_REDIRECT_URI` is not set, the server builds it from the request `Origin` header as `<origin>/oauth/<provider>/complete`.
 
 ### Optional Settings
 
@@ -177,6 +191,7 @@ If `OAUTH_REDIRECT_URI` is not set, the server builds it from the request `Origi
 |---|---|---|
 | `GOOGLE_SCOPES` | `"openid email profile"` | OAuth scopes requested from Google |
 | `OAUTH_STATE_TTL` | `600` | Seconds a CSRF state token is valid before it expires |
+| `ALLOWED_REDIRECT_URLS` | `[]` | URL prefixes permitted as `redirect_uri` on the `begin` endpoint |
 
 ---
 
@@ -255,6 +270,6 @@ Admins with `manage_users` bypass the lockout guard and can always delete any co
 
 | Status | Cause |
 |--------|-------|
-| `400` | Unknown provider or missing params |
+| `400` | Unknown provider, missing params, or `redirect_uri` not on the allowlist |
 | `401` | Invalid or expired OAuth state token |
 | `403` | Account is disabled |

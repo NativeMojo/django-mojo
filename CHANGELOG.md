@@ -1,5 +1,10 @@
 ## v1.0.59 - (current)
 
+## v1.0.52 - March 16, 2026
+
+BUGFIX passkeys required username
+
+
 ## v1.0.51 - March 15, 2026
 
 pretty big changes for security
