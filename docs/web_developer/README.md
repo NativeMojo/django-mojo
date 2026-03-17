@@ -15,7 +15,7 @@ Companion track for framework developers: [docs/django_developer/README.md](../d
 
 | Section | Description |
 |---|---|
-| [account/](account/README.md) | Login, users, groups, API keys |
+| [account/](account/README.md) | Login, users, groups, API keys, push notifications |
 | [logging/](logging/README.md) | Log queries, incident management |
 | [files/](files/README.md) | File uploads, downloads, management |
 | [email/](email/README.md) | Email templates, mailboxes, sent messages |

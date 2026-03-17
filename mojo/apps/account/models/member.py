@@ -150,6 +150,10 @@ class GroupMember(models.Model, MojoModel):
         return {'status': True }
 
     def send_invite(self, context=None):
+        # User has never logged in — send account-setup invite with token link.
+        if self.user.last_login is None:
+            self.user.send_invite(group=self.group)
+            return {'status': True}
         if context is None:
             context = {}
         context['group'] = self.group.to_dict("basic")
@@ -158,4 +162,4 @@ class GroupMember(models.Model, MojoModel):
         self.user.send_template_email(
             email_template, context=context,
             template_prefix=template_prefix)
-        return {'status': True }
+        return {'status': True}

@@ -15,6 +15,12 @@ Use this file as a lightweight running log between AI threads.
 
 - No active items.
 
+## Recent Completions (this session)
+
+- **Apple OAuth** — `services/oauth/apple.py` + registered in `__init__.py`; ES256 client_secret, id_token decode, same flow as Google.
+- **Invite token fix** — `POST /api/auth/password/reset/token` now accepts `iv:` tokens; `User.check_password_strength()` extracted and used by all reset paths.
+- **Member.send_invite routing** — new users (no `last_login`) get account-setup invite with token; existing users get `group_invite` notification.
+
 ## Key Decisions
 
 - `REQUIRE_VERIFIED_EMAIL` / `REQUIRE_VERIFIED_PHONE` default to `False` — opt-in only.

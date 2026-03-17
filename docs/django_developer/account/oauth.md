@@ -4,7 +4,7 @@
 
 OAuth2 social login is built into the framework. The full flow — CSRF state management, provider token exchange, user resolution, and JWT issuance — is handled by the framework. Your project only needs to configure credentials and (optionally) register additional providers.
 
-**Current providers:** `google`
+**Current providers:** `google`, `apple`
 
 ---
 
@@ -29,6 +29,7 @@ Key files:
 | `mojo/apps/account/models/oauth.py` | `OAuthConnection` model |
 | `mojo/apps/account/services/oauth/base.py` | `OAuthProvider` base class |
 | `mojo/apps/account/services/oauth/google.py` | Google implementation |
+| `mojo/apps/account/services/oauth/apple.py` | Apple implementation |
 | `mojo/apps/account/services/oauth/__init__.py` | Provider registry |
 
 ---
@@ -45,6 +46,17 @@ GOOGLE_CLIENT_SECRET = "your-client-secret"
 # Must match an authorised redirect URI in Google Cloud Console.
 OAUTH_REDIRECT_URI = "https://your-app.example.com/api/oauth/google/complete"
 ```
+
+### Apple Settings
+
+```python
+APPLE_CLIENT_ID    = "com.example.web"           # Service ID from Apple Developer portal
+APPLE_TEAM_ID      = "ABCD1234EF"                # 10-character Team ID
+APPLE_KEY_ID       = "ABCD123456"                # Key ID from the .p8 file
+APPLE_PRIVATE_KEY  = "-----BEGIN PRIVATE KEY-----\n..."  # Full PEM content of the .p8 file
+```
+
+Apple does not use a static client secret. The framework generates a short-lived ES256 JWT from these four values on every token exchange. The `.p8` private key content should be stored as a multiline string (or loaded from an environment variable) — never committed to source control.
 
 If `OAUTH_REDIRECT_URI` is not set, the server builds it from the request `Origin` header as `<origin>/auth/oauth/<provider>/complete`. This works for single-origin SPAs but is less reliable for server-rendered or multi-origin setups — prefer the explicit setting in production.
 

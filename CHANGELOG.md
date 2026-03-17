@@ -1,5 +1,20 @@
 ## v1.0.59 - (current)
 
+## v1.0.56 - March 17, 2026
+
+bug fixes for memeber invites
+
+
+### New Features
+
+- account: added Apple Sign In OAuth provider (`services/oauth/apple.py`); ES256 client_secret JWT generated per-request from `APPLE_CLIENT_ID`, `APPLE_TEAM_ID`, `APPLE_KEY_ID`, `APPLE_PRIVATE_KEY`; profile extracted from `id_token` (no separate userinfo endpoint); frontend flow identical to Google — `GET /api/auth/oauth/apple/begin` + `POST /api/auth/oauth/apple/complete`
+
+### Bug Fixes
+
+- account: `POST /api/auth/password/reset/token` now accepts `iv:` (invite) tokens in addition to `pr:` (password reset) tokens; `iv:` path verifies via `verify_invite_token`, sets `is_email_verified=True`, and issues JWT
+- account: extracted `User.check_password_strength(password)` from `set_new_password`; both token-based and code-based password reset endpoints now enforce strength requirements; `set_new_password` unchanged for CRUD flows
+- account: `Member.send_invite()` now sends account-setup invite (with `iv:` token link) when `user.last_login is None`; existing users continue to receive the `group_invite` notification
+
 ## v1.0.55 - March 16, 2026
 
 BUG FIX for iv tokens used in password reset
