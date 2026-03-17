@@ -3716,6 +3716,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#apple-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Apple Settings
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#optional-settings" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3820,7 +3831,7 @@
 
 <h1 id="oauth-social-login-rest-api-reference">OAuth / Social Login — REST API Reference<a class="headerlink" href="#oauth-social-login-rest-api-reference" title="Permanent link">&para;</a></h1>
 <p>OAuth allows users to log in with a third-party provider (Google, etc.) without a password. The server handles the token exchange — your frontend only needs to redirect the user and handle the callback.</p>
-<p><strong>Supported providers:</strong> <code>google</code></p>
+<p><strong>Supported providers:</strong> <code>google</code>, <code>apple</code></p>
 <blockquote>
 <p><strong>Trusted second factor.</strong> OAuth is treated as a strong, trusted authentication event. Completing an OAuth login automatically confirms the user's email address and bypasses any local MFA requirement — see <a href="#security-behaviour">Security Behaviour</a> below.</p>
 </blockquote>
@@ -3974,6 +3985,16 @@
 <a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="n">OAUTH_REDIRECT_URI</span> <span class="o">=</span> <span class="s2">&quot;https://your-app.example.com/oauth/google/complete&quot;</span>
 </code></pre></div>
 <p>If <code>OAUTH_REDIRECT_URI</code> is not set, the server builds it from the request <code>Origin</code> header as <code>&lt;origin&gt;/oauth/&lt;provider&gt;/complete</code>.</p>
+<h3 id="apple-settings">Apple Settings<a class="headerlink" href="#apple-settings" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="n">APPLE_CLIENT_ID</span>   <span class="o">=</span> <span class="s2">&quot;com.example.web&quot;</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="n">APPLE_TEAM_ID</span>     <span class="o">=</span> <span class="s2">&quot;ABCD1234EF&quot;</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="n">APPLE_KEY_ID</span>      <span class="o">=</span> <span class="s2">&quot;ABCD123456&quot;</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="n">APPLE_PRIVATE_KEY</span> <span class="o">=</span> <span class="s2">&quot;-----BEGIN PRIVATE KEY-----</span><span class="se">\n</span><span class="s2">...&quot;</span>  <span class="c1"># .p8 file contents</span>
+</code></pre></div>
+<p>Apple Sign In uses the same flow as Google. Replace <code>google</code> with <code>apple</code> in all endpoint URLs.</p>
+<blockquote>
+<p><strong>Note:</strong> Apple only provides the user's name on the very first Sign In. The framework does not rely on the name field, so this has no impact on account creation.</p>
+</blockquote>
 <h3 id="optional-settings">Optional Settings<a class="headerlink" href="#optional-settings" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
@@ -4013,27 +4034,27 @@
 <p><strong>GET</strong> <code>/api/account/oauth_connection</code></p>
 <p>Returns the authenticated user's OAuth connections. Admins with <code>manage_users</code> permission see all connections.</p>
 <p><strong>Response:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="p">{</span>
-<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">  </span><span class="nt">&quot;count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
-<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="w">    </span><span class="p">{</span>
-<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="w">      </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">7</span><span class="p">,</span>
-<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="w">      </span><span class="nt">&quot;provider&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;google&quot;</span><span class="p">,</span>
-<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="w">      </span><span class="nt">&quot;email&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;alice@example.com&quot;</span><span class="p">,</span>
-<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="w">      </span><span class="nt">&quot;is_active&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a><span class="w">      </span><span class="nt">&quot;created&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2025-01-15T10:30:00Z&quot;</span>
-<a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a><span class="w">    </span><span class="p">}</span>
-<a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a><span class="w">  </span><span class="p">]</span>
-<a id="__codelineno-9-13" name="__codelineno-9-13" href="#__codelineno-9-13"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="p">{</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">  </span><span class="nt">&quot;count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="w">    </span><span class="p">{</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="w">      </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">7</span><span class="p">,</span>
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="w">      </span><span class="nt">&quot;provider&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;google&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="w">      </span><span class="nt">&quot;email&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;alice@example.com&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="w">      </span><span class="nt">&quot;is_active&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a><span class="w">      </span><span class="nt">&quot;created&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2025-01-15T10:30:00Z&quot;</span>
+<a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a><span class="w">  </span><span class="p">]</span>
+<a id="__codelineno-10-13" name="__codelineno-10-13" href="#__codelineno-10-13"></a><span class="p">}</span>
 </code></pre></div>
 <h3 id="unlink-a-connection">Unlink a Connection<a class="headerlink" href="#unlink-a-connection" title="Permanent link">&para;</a></h3>
 <p><strong>DELETE</strong> <code>/api/account/oauth_connection/&lt;id&gt;</code></p>
 <p>Removes an OAuth connection. Admins with <code>manage_users</code> can delete any connection. Regular users can only delete their own.</p>
 <p><strong>Response (success):</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="p">{</span>
-<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
-<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="p">{</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="p">}</span>
 </code></pre></div>
 <h4 id="lockout-guard">Lockout Guard<a class="headerlink" href="#lockout-guard" title="Permanent link">&para;</a></h4>
 <p>To prevent users from locking themselves out, the server blocks the delete if <strong>both</strong> of the following are true:</p>
@@ -4042,10 +4063,10 @@
 <li>This is the user's <strong>only active</strong> OAuth connection</li>
 </ol>
 <p>In that case the server returns <code>400</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="p">{</span>
-<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
-<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">  </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Cannot unlink your only login method. Set a password first.&quot;</span>
-<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="p">{</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">  </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Cannot unlink your only login method. Set a password first.&quot;</span>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="p">}</span>
 </code></pre></div>
 <p>To unlink, the user must first set a password (via the password-reset or set-password flow) or link a second OAuth provider.</p>
 <p>Admins with <code>manage_users</code> bypass the lockout guard and can always delete any connection.</p>
