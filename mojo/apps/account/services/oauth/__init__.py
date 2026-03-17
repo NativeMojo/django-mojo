@@ -1,8 +1,10 @@
 from .base import OAuthProvider
 from .google import GoogleOAuthProvider
+from .apple import AppleOAuthProvider
 
 PROVIDERS = {
     "google": GoogleOAuthProvider,
+    "apple": AppleOAuthProvider,
 }
 
 

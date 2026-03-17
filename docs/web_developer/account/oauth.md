@@ -2,7 +2,7 @@
 
 OAuth allows users to log in with a third-party provider (Google, etc.) without a password. The server handles the token exchange — your frontend only needs to redirect the user and handle the callback.
 
-**Supported providers:** `google`
+**Supported providers:** `google`, `apple`
 
 > **Trusted second factor.** OAuth is treated as a strong, trusted authentication event. Completing an OAuth login automatically confirms the user's email address and bypasses any local MFA requirement — see [Security Behaviour](#security-behaviour) below.
 
@@ -203,6 +203,19 @@ OAUTH_REDIRECT_URI = "https://your-app.example.com/oauth/google/complete"
 ```
 
 If `OAUTH_REDIRECT_URI` is not set, the server builds it from the request `Origin` header as `<origin>/oauth/<provider>/complete`.
+
+### Apple Settings
+
+```python
+APPLE_CLIENT_ID   = "com.example.web"
+APPLE_TEAM_ID     = "ABCD1234EF"
+APPLE_KEY_ID      = "ABCD123456"
+APPLE_PRIVATE_KEY = "-----BEGIN PRIVATE KEY-----\n..."  # .p8 file contents
+```
+
+Apple Sign In uses the same flow as Google. Replace `google` with `apple` in all endpoint URLs.
+
+> **Note:** Apple only provides the user's name on the very first Sign In. The framework does not rely on the name field, so this has no impact on account creation.
 
 ### Optional Settings
 
