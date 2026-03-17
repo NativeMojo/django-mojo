@@ -161,7 +161,7 @@ def publish(
             )
 
     except Exception as e:
-        if 'UNIQUE constraint' in str(e) and idempotency_key:
+        if idempotency_key and ('UNIQUE constraint' in str(e) or 'duplicate key' in str(e)):
             # Idempotent request - return existing job ID
             try:
                 existing = Job.objects.get(idempotency_key=idempotency_key)

@@ -6,6 +6,12 @@ called with an iv: token. Frontends that use a single "set password" flow for
 invite emails are broken.
 
 Issue: planning/issues/password_reset_token_rejects_invite_token.md
+
+Also covers:
+  - get_or_generate_invite_token reuses valid token across multiple group invites
+  - get_or_generate_invite_token generates fresh token after consumption or expiry
+  - Distinct error messages: "Token already used", "Expired token",
+    "Invalid token signature", "Invalid token format"
 """
 from testit import helpers as th
 from testit.helpers import assert_eq, assert_true
@@ -121,3 +127,164 @@ def test_unknown_token_prefix_rejected(opts):
     })
     assert_eq(resp.status_code, 400,
               f"unknown token kind should return 400, got {resp.status_code}")
+
+
+# ---------------------------------------------------------------------------
+# get_or_generate_invite_token: token reuse across multiple group invites
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test("invite_flow: get_or_generate reuses valid token (multi-group invite)")
+def test_get_or_generate_reuses_valid_token(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+
+    user = User.objects.get(pk=opts.user_id)
+    User.objects.filter(pk=user.pk).update(last_login=None)
+    user.refresh_from_db()
+
+    tok1 = tokens.get_or_generate_invite_token(user)
+    tok2 = tokens.get_or_generate_invite_token(user)
+
+    assert_eq(tok1, tok2,
+              "get_or_generate_invite_token should return the same token while still valid")
+
+
+@th.django_unit_test("invite_flow: get_or_generate generates fresh token after consumption")
+def test_get_or_generate_fresh_after_consumption(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+
+    user = User.objects.get(pk=opts.user_id)
+    User.objects.filter(pk=user.pk).update(last_login=None)
+    user.refresh_from_db()
+
+    tok1 = tokens.get_or_generate_invite_token(user)
+
+    # Simulate consumption — clear the JTI as _verify does
+    user.set_secret("invite_jti", None)
+    user.set_secret("invite_token", None)
+    user.save()
+
+    tok2 = tokens.get_or_generate_invite_token(user)
+
+    assert_true(tok1 != tok2,
+                "get_or_generate_invite_token should generate a new token after the old one is consumed")
+    assert_true(tok2.startswith("iv:"), f"new token should be an iv: token, got {tok2[:5]}")
+
+
+@th.django_unit_test("invite_flow: get_or_generate generates fresh token after expiry")
+def test_get_or_generate_fresh_after_expiry(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+    from unittest.mock import patch
+    from mojo.helpers import dates
+    import datetime
+
+    user = User.objects.get(pk=opts.user_id)
+    user.refresh_from_db()
+
+    tok1 = tokens.get_or_generate_invite_token(user)
+
+    # Backdate invite_ts in secrets so get_or_generate sees it as expired
+    expired_ts = int(__import__('time').time()) - (604800 + 1)
+    user.set_secret("invite_ts", expired_ts)
+    user.save()
+
+    tok2 = tokens.get_or_generate_invite_token(user)
+
+    assert_true(tok1 != tok2,
+                "get_or_generate_invite_token should generate a new token after the old one expires")
+
+
+# ---------------------------------------------------------------------------
+# Distinct error messages from _verify
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test("invite_flow: consumed token returns 'Token already used'")
+def test_consumed_token_error_message(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+
+    user = User.objects.get(pk=opts.user_id)
+    User.objects.filter(pk=user.pk).update(last_login=None)
+    user.refresh_from_db()
+
+    tok = tokens.generate_invite_token(user)
+
+    # Overwrite the JTI — simulates a second invite being sent
+    user.set_secret("invite_jti", "differentjti00")
+    user.save()
+
+    resp = opts.client.post("/api/auth/password/reset/token", {
+        "token": tok,
+        "new_password": "NewPass##99",
+    })
+    assert_eq(resp.status_code, 400,
+              f"overwritten JTI should return 400, got {resp.status_code}")
+    assert_eq(resp.response.error, "Token already used",
+              f"expected 'Token already used', got '{resp.response.error}'")
+
+
+@th.django_unit_test("invite_flow: expired token raises 'Expired token'")
+def test_expired_token_error_message(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+    from unittest.mock import patch
+    from mojo import errors as merrors
+    import datetime
+    import pytz
+
+    user = User.objects.get(pk=opts.user_id)
+    User.objects.filter(pk=user.pk).update(last_login=None)
+    user.refresh_from_db()
+
+    tok = tokens.generate_invite_token(user)
+
+    # Call verify_invite_token directly in this process so the patch takes effect
+    future = datetime.datetime.now(tz=pytz.UTC) + datetime.timedelta(days=8)
+    error_msg = None
+    with patch("mojo.apps.account.utils.tokens.dates.utcnow", return_value=future):
+        try:
+            tokens.verify_invite_token(tok)
+        except merrors.ValueException as e:
+            error_msg = str(e)
+
+    assert_eq(error_msg, "Expired token",
+              f"expected 'Expired token', got '{error_msg}'")
+
+
+@th.django_unit_test("invite_flow: tampered signature returns 'Invalid token signature'")
+def test_tampered_signature_error_message(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+
+    user = User.objects.get(pk=opts.user_id)
+    User.objects.filter(pk=user.pk).update(last_login=None)
+    user.refresh_from_db()
+
+    tok = tokens.generate_invite_token(user)
+
+    # Flip the last character of the 6-char signature to corrupt it
+    last = tok[-1]
+    corrupted = tok[:-1] + ('a' if last != 'a' else 'b')
+
+    resp = opts.client.post("/api/auth/password/reset/token", {
+        "token": corrupted,
+        "new_password": "NewPass##99",
+    })
+    assert_eq(resp.status_code, 400,
+              f"tampered token should return 400, got {resp.status_code}")
+    assert_eq(resp.response.error, "Invalid token signature",
+              f"expected 'Invalid token signature', got '{resp.response.error}'")
+
+
+@th.django_unit_test("invite_flow: garbage token returns 'Invalid token format'")
+def test_garbage_token_error_message(opts):
+    resp = opts.client.post("/api/auth/password/reset/token", {
+        "token": "iv:thisiscompletelygarbageandcannotdecode",
+        "new_password": "NewPass##99",
+    })
+    assert_eq(resp.status_code, 400,
+              f"garbage token should return 400, got {resp.status_code}")
+    assert_eq(resp.response.error, "Invalid token format",
+              f"expected 'Invalid token format', got '{resp.response.error}'")

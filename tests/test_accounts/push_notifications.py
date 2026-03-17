@@ -741,6 +741,128 @@ def test_comprehensive_test_mode_verification(opts):
 
 
 @th.django_unit_test()
+def test_unregister_device_api(opts):
+    """Test POST /api/account/devices/push/unregister deactivates a device."""
+    resp = opts.client.login(TEST_USER, TEST_PWORD)
+    assert opts.client.is_authenticated, "User authentication failed"
+
+    # Register a fresh device to unregister
+    device_data = {
+        "device_token": "unregister_test_token_789",
+        "device_id": "unregister_test_device",
+        "platform": "ios",
+        "device_name": "Device to Unregister"
+    }
+    resp = opts.client.post("/api/account/devices/push/register", json=device_data)
+    assert resp.status_code == 200, f"Register failed: {resp.status_code} {resp.response.data}"
+
+    # Unregister it
+    unregister_data = {
+        "device_token": "unregister_test_token_789",
+        "device_id": "unregister_test_device",
+        "platform": "ios"
+    }
+    resp = opts.client.post("/api/account/devices/push/unregister", json=unregister_data)
+    assert resp.status_code == 200, f"Unregister failed: {resp.status_code} {resp.response.data}"
+
+    # Verify device is inactive in database
+    from mojo.apps.account.models import RegisteredDevice
+    device = RegisteredDevice.objects.get(device_id="unregister_test_device")
+    assert device.is_active == False, f"Expected device to be inactive after unregister, got is_active={device.is_active}"
+
+
+@th.django_unit_test()
+def test_push_config_fcm_test_api(opts):
+    """Test POST /api/account/devices/push/config/<pk>/test validates FCM credentials."""
+    resp = opts.client.login(ADMIN_USER, ADMIN_PWORD)
+    assert opts.client.is_authenticated, "Admin authentication failed"
+
+    from mojo.apps.account.models import PushConfig
+    config = PushConfig.objects.filter(name="test_api_config").first()
+    assert config is not None, "Expected test_api_config to exist (created in test_push_config_api)"
+
+    resp = opts.client.post(f"/api/account/devices/push/config/{config.id}/test")
+    assert resp.status_code == 200, f"Config test failed: {resp.status_code} {resp.response.data}"
+
+    data = resp.response.data
+    assert 'success' in data, "Response should include success field"
+    assert 'message' in data, "Response should include message field"
+
+
+@th.django_unit_test()
+def test_send_to_device_service(opts):
+    """Test services/push.send_to_device() sends to a specific device by pk."""
+    from mojo.apps.account.models import User, RegisteredDevice
+    from mojo.apps.account.services.push import send_to_device
+
+    user = User.objects.get(username=TEST_USER)
+    device = RegisteredDevice.objects.filter(user=user, is_active=True).first()
+    assert device is not None, "Expected at least one active device for test user"
+
+    delivery = send_to_device(
+        device_id=device.id,
+        title="Service Layer Test",
+        body="Testing send_to_device service function",
+        category="system",
+        data={"test": True}
+    )
+
+    assert delivery is not None, "send_to_device should return a delivery record"
+    assert delivery.status == 'sent', f"Expected status 'sent' in test mode, got '{delivery.status}'"
+    assert delivery.device_id == device.id, f"Delivery should be linked to device {device.id}"
+
+
+@th.django_unit_test()
+def test_send_to_user_ids_api(opts):
+    """Test POST /api/account/devices/push/send with user_ids sends to multiple users."""
+    resp = opts.client.login(ADMIN_USER, ADMIN_PWORD)
+    assert opts.client.is_authenticated, "Admin authentication failed"
+
+    from mojo.apps.account.models import User
+    test_user = User.objects.get(username=TEST_USER)
+    admin_user = User.objects.get(username=ADMIN_USER)
+
+    # Ensure admin has send_notifications permission
+    admin_user.add_permission("send_notifications")
+    admin_user.save()
+
+    notification_data = {
+        "title": "Multi-User Test",
+        "body": "Sent to specific user IDs",
+        "category": "system",
+        "user_ids": [test_user.id, admin_user.id]
+    }
+
+    resp = opts.client.post("/api/account/devices/push/send", json=notification_data)
+    assert resp.status_code == 200, f"Multi-user send failed: {resp.status_code} {resp.response.data}"
+
+    data = resp.response.data
+    assert data.success == True, "Multi-user send should succeed"
+    assert data.sent_count >= 1, f"Should have sent to at least one device, got {data.sent_count}"
+
+
+@th.django_unit_test()
+def test_send_notification_missing_content_returns_400(opts):
+    """Test POST /api/account/devices/push/send with no title, body, or data returns 400."""
+    resp = opts.client.login(TEST_USER, TEST_PWORD)
+    assert opts.client.is_authenticated, "User authentication failed"
+
+    # Restore send_notifications permission (removed in test_unauthorized_push_operations)
+    from mojo.apps.account.models import User
+    user = User.objects.get(username=TEST_USER)
+    user.add_permission("send_notifications")
+    user.save()
+
+    # Send with no title, body, or data — should be rejected
+    notification_data = {
+        "category": "system"
+    }
+
+    resp = opts.client.post("/api/account/devices/push/send", json=notification_data)
+    assert resp.status_code == 400, f"Expected 400 for empty notification content, got {resp.status_code}"
+
+
+@th.django_unit_test()
 def test_cleanup_test_data(opts):
     """Clean up test data created during testing."""
     from mojo.apps.account.models import User, Group, RegisteredDevice, PushConfig, NotificationTemplate, NotificationDelivery

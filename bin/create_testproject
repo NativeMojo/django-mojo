@@ -1,0 +1,291 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+TESTPROJECT="$REPO_ROOT/testproject"
+
+# Use venv Python if available
+if [ -f "$REPO_ROOT/.venv/bin/python" ]; then
+    PYTHON="$REPO_ROOT/.venv/bin/python"
+else
+    PYTHON="python3"
+fi
+
+echo "==> Creating testproject in $TESTPROJECT"
+
+# Wipe if exists
+if [ -d "$TESTPROJECT" ]; then
+    echo "    Removing existing testproject/"
+    rm -rf "$TESTPROJECT"
+fi
+
+# Create directory structure
+mkdir -p "$TESTPROJECT/bin"
+mkdir -p "$TESTPROJECT/config/settings/local"
+mkdir -p "$TESTPROJECT/apps/tests"
+mkdir -p "$TESTPROJECT/var/logs"
+
+# ---------- testproject/bin/paths.py ----------
+cat > "$TESTPROJECT/bin/paths.py" << 'PYEOF'
+import sys
+import os
+from pathlib import Path
+
+FILE = Path(__file__).resolve()
+TESTPROJECT_ROOT = FILE.parent.parent        # django-mojo/testproject/
+REPO_ROOT = TESTPROJECT_ROOT.parent          # django-mojo/
+
+# mojo package + testit package both live at repo root
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+# settings module lives at testproject/config/
+CONFIG_ROOT = TESTPROJECT_ROOT / "config"
+if str(CONFIG_ROOT) not in sys.path:
+    sys.path.insert(0, str(CONFIG_ROOT))
+
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "settings")
+PYEOF
+
+# ---------- testproject/bin/_asgi.py ----------
+cat > "$TESTPROJECT/bin/_asgi.py" << 'PYEOF'
+import paths  # testproject/bin/paths.py — bootstraps sys.path
+
+from mojo.apps.realtime.routing import create_application
+application = create_application()
+PYEOF
+
+# ---------- testproject/config/settings/__init__.py ----------
+cat > "$TESTPROJECT/config/settings/__init__.py" << 'PYEOF'
+from mojo.helpers import paths, modules, settings
+
+paths.configure_paths(__file__, 1)
+modules.load_module_to_globals(paths, globals())
+settings.load_settings_profile(globals())   # reads var/profile -> imports settings.local
+settings.load_settings_config(globals())    # reads var/django.conf -> overrides (SECRET_KEY)
+PYEOF
+
+# ---------- testproject/config/settings/defaults.py ----------
+cat > "$TESTPROJECT/config/settings/defaults.py" << 'PYEOF'
+# Empty defaults — all settings come from settings.local
+PYEOF
+
+# ---------- testproject/config/settings/local/__init__.py ----------
+cat > "$TESTPROJECT/config/settings/local/__init__.py" << 'PYEOF'
+from .db import *
+
+DEBUG = True
+SECRET_KEY = "set-in-var-django-conf"
+
+AUTH_USER_MODEL = "account.User"
+ROOT_URLCONF = "settings.urls"
+ALLOWED_HOSTS = ["*"]
+APPEND_SLASH = False
+SITE_ID = 1
+
+USE_TZ = True
+TIME_ZONE = "UTC"
+USE_I18N = True
+USE_L10N = True
+
+DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+ALLOW_ADMIN_SITE = False
+
+INSTALLED_APPS = [
+    "mojo.apps.account",
+    "mojo.apps.logit",
+    "mojo.apps.metrics",
+    "mojo.apps.fileman",
+    "mojo.apps.incident",
+    "mojo.apps.aws",
+    "mojo.apps.jobs",
+    "mojo.apps.docit",
+    "mojo.apps.realtime",
+    "mojo.apps.phonehub",
+    "mojo.apps.filevault",
+    "mojo.apps.shortlink",
+    "django.contrib.humanize",
+    "django.contrib.auth",
+    "django.contrib.contenttypes",
+    "django.contrib.sessions",
+    "django.contrib.messages",
+    "django.contrib.staticfiles",
+]
+
+MIDDLEWARE = [
+    "mojo.middleware.cors.CORSMiddleware",
+    "django.middleware.security.SecurityMiddleware",
+    "django.contrib.sessions.middleware.SessionMiddleware",
+    "django.middleware.common.CommonMiddleware",
+    "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "django.contrib.messages.middleware.MessageMiddleware",
+    "mojo.middleware.mojo.MojoMiddleware",
+    "mojo.middleware.auth.AuthenticationMiddleware",
+    "mojo.middleware.logging.LoggerMiddleware",
+]
+
+TEMPLATES = [
+    {
+        "BACKEND": "django.template.backends.django.DjangoTemplates",
+        "DIRS": [],
+        "APP_DIRS": True,
+        "OPTIONS": {
+            "context_processors": [
+                "django.template.context_processors.debug",
+                "django.template.context_processors.request",
+                "django.contrib.auth.context_processors.auth",
+                "django.contrib.messages.context_processors.messages",
+            ],
+        },
+    },
+]
+
+STATIC_URL = "/static/"
+
+EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+
+CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOW_HEADERS = [
+    "authorization",
+    "content-type",
+    "accept",
+    "origin",
+    "x-requested-with",
+    "x-mojo-bouncer-token",
+    "x-mojo-bouncer-duid",
+]
+
+LOGIT_DB_ALL = True
+LOGIT_FILE_ALL = False
+LOGIT_RETURN_REAL_ERROR = True
+LOGIT_ASYNC_LOGGING = False   # synchronous in tests — no background thread surprises
+
+LOGGING = {"version": 1, "disable_existing_loggers": False}
+
+INCIDENT_EVENT_METRICS = False  # no metrics processing needed in tests
+
+JOBS_CHANNELS = ["default", "email"]
+JOBS_DEFAULT_MAX_RETRIES = 0
+JOBS_ENGINE_MAX_WORKERS = 2
+JOBS_RUNNER_HEARTBEAT_SEC = 5
+
+AUTH_BEARER_HANDLERS = {}
+AUTH_BEARER_NAME_MAP = {
+    "bearer": "user",
+    "apikey": "user",
+}
+
+ALLOW_SELF_DEACTIVATION = True
+
+REST_AUTO_PREFIX = True
+
+# Fake Twilio number so phonehub.send_sms() reaches the +1555 test-number shortcut
+# instead of failing with "No from_number configured".
+TWILIO_NUMBER = "+15550000000"
+PYEOF
+
+# ---------- testproject/config/settings/local/db.py ----------
+cat > "$TESTPROJECT/config/settings/local/db.py" << 'PYEOF'
+DATABASES = {
+    "default": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": "mojo_test",
+        "USER": "mojo_test",
+        "PASSWORD": "mojo_test",
+        "HOST": "localhost",
+        "PORT": "5432",
+    }
+}
+
+REDIS_DB = {"host": "localhost", "port": "6379"}
+
+CACHES = {
+    "default": {
+        "BACKEND": "mojo.cache.MojoRedisCache",
+        "TIMEOUT": 300,
+        "KEY_PREFIX": "mojot",
+        "LOCATION": "localhost:6379",
+    }
+}
+PYEOF
+
+# ---------- testproject/config/settings/urls.py ----------
+cat > "$TESTPROJECT/config/settings/urls.py" << 'PYEOF'
+from mojo.helpers.response import JsonResponse, HttpResponse
+from django.urls import path, include
+
+urlpatterns = [
+    path("", lambda request: HttpResponse("<html><body><h1>django-mojo test server</h1></body></html>", content_type="text/html")),
+    path("", include("mojo.urls")),
+]
+
+def handler404(request, exception):
+    return JsonResponse({"error": "Not found", "code": 404, "status": False}, status=404)
+PYEOF
+
+# ---------- testproject/config/dev_server.conf ----------
+cat > "$TESTPROJECT/config/dev_server.conf" << 'EOF'
+host=127.0.0.1
+port=5555
+EOF
+
+# ---------- testproject/manage.py ----------
+cat > "$TESTPROJECT/manage.py" << 'PYEOF'
+#!/usr/bin/env python
+import sys
+import os
+from pathlib import Path
+
+TESTPROJECT = Path(__file__).resolve().parent
+REPO_ROOT = TESTPROJECT.parent
+
+sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(TESTPROJECT / "config"))
+
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "settings")
+
+from django.core.management import execute_from_command_line
+execute_from_command_line(sys.argv)
+PYEOF
+chmod +x "$TESTPROJECT/manage.py"
+
+# ---------- var/profile ----------
+echo -n "local" > "$TESTPROJECT/var/profile"
+
+# ---------- var/django.conf (with generated SECRET_KEY) ----------
+SECRET_KEY=$($PYTHON -c "import secrets, string; print(''.join(secrets.choice(string.ascii_letters + string.digits + '!@#\$%^&*') for _ in range(50)))")
+echo "SECRET_KEY = '${SECRET_KEY}'" > "$TESTPROJECT/var/django.conf"
+
+echo "==> Setting up PostgreSQL database"
+# Find psql
+PSQL=$(command -v psql 2>/dev/null)
+if [ -z "$PSQL" ]; then
+    for v in 17 16 15 14; do
+        if [ -x "/opt/homebrew/opt/postgresql@${v}/bin/psql" ]; then
+            PSQL="/opt/homebrew/opt/postgresql@${v}/bin/psql"
+            break
+        fi
+    done
+fi
+if [ -z "$PSQL" ]; then
+    echo "ERROR: psql not found. Install PostgreSQL: brew install postgresql@17"
+    exit 1
+fi
+
+# Create role and database (idempotent — drops and recreates DB each time)
+$PSQL -d postgres -tc "SELECT 1 FROM pg_roles WHERE rolname='mojo_test'" | grep -q 1 \
+    || $PSQL -d postgres -c "CREATE ROLE mojo_test WITH LOGIN PASSWORD 'mojo_test';"
+$PSQL -d postgres -tc "SELECT 1 FROM pg_database WHERE datname='mojo_test'" | grep -q 1 \
+    && $PSQL -d postgres -c "DROP DATABASE mojo_test;"
+$PSQL -d postgres -c "CREATE DATABASE mojo_test OWNER mojo_test;"
+
+echo "==> Running migrations"
+$PYTHON "$TESTPROJECT/manage.py" migrate --run-syncdb 2>&1
+
+echo ""
+echo "==> testproject/ created successfully"
+echo "    Run ./bin/asgi_local to start the dev server"
+echo "    Run ./bin/testit.py to run the test suite"

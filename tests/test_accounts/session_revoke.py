@@ -48,6 +48,8 @@ def setup_session_revoke(opts):
 @th.django_unit_test("session revoke: happy path — fresh JWT returned")
 def test_session_revoke_happy(opts):
     from mojo.apps.account.models import User
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1")
 
     user = User.objects.get(pk=opts.user_id)
     old_auth_key = user.auth_key
@@ -71,6 +73,9 @@ def test_session_revoke_happy(opts):
 
 @th.django_unit_test("session revoke: fresh JWT is valid for /api/user/me")
 def test_session_revoke_fresh_jwt_valid(opts):
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1")
+
     opts.client.login(TEST_USER, TEST_PWORD)
     resp = opts.client.post("/api/auth/sessions/revoke", {
         "current_password": TEST_PWORD,
@@ -90,6 +95,8 @@ def test_session_revoke_fresh_jwt_valid(opts):
 @th.django_unit_test("session revoke: wrong password returns 401, auth_key unchanged")
 def test_session_revoke_wrong_password(opts):
     from mojo.apps.account.models import User
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1")
 
     user = User.objects.get(pk=opts.user_id)
     old_auth_key = user.auth_key
@@ -125,6 +132,8 @@ def test_session_revoke_unauth(opts):
 
 @th.django_unit_test("session revoke: incident logged on success")
 def test_session_revoke_incident_logged(opts):
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1")
     from mojo.apps.incident.models.event import Event
 
     before_count = Event.objects.filter(
@@ -147,6 +156,8 @@ def test_session_revoke_incident_logged(opts):
 
 @th.django_unit_test("session revoke: incident logged on failed attempt")
 def test_session_revoke_failed_incident(opts):
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1")
     from mojo.apps.incident.models.event import Event
 
     before_count = Event.objects.filter(

@@ -19,6 +19,7 @@ Recovery login (consumes mfa_token + recovery code):
 Standalone login (no password):
   POST /api/auth/totp/login       -> username + code -> JWT
 """
+from django.db import transaction
 from django.db.models import Q
 
 from mojo import decorators as md
@@ -182,13 +183,14 @@ def on_totp_recover(request):
     if not user or not user.is_active:
         raise merrors.PermissionDeniedException()
 
-    totp = UserTOTP.objects.filter(user=user, is_enabled=True).select_for_update().first()
-    if not totp:
-        raise merrors.PermissionDeniedException("TOTP not enabled for this account")
+    with transaction.atomic():
+        totp = UserTOTP.objects.filter(user=user, is_enabled=True).select_for_update().first()
+        if not totp:
+            raise merrors.PermissionDeniedException("TOTP not enabled for this account")
 
-    recovery_code = request.DATA.get("recovery_code", "").strip()
-    if not totp.verify_and_consume_recovery_code(recovery_code):
-        raise merrors.PermissionDeniedException("Invalid recovery code", 403, 403)
+        recovery_code = request.DATA.get("recovery_code", "").strip()
+        if not totp.verify_and_consume_recovery_code(recovery_code):
+            raise merrors.PermissionDeniedException("Invalid recovery code", 403, 403)
 
     user.report_incident("TOTP recovery code used", "totp:recovery_used")
     remaining = len(totp.get_secret("recovery_codes") or [])

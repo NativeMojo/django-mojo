@@ -110,7 +110,7 @@ def _verify(raw_token, expected_kind=None):
             user.report_incident(
                 details=f"{user.username} invalid token signature (kind={kind})",
                 event_type="invalid_token")
-            raise merrors.ValueException("Invalid token")
+            raise merrors.ValueException("Invalid token signature")
 
         now_ts = int(dates.utcnow().timestamp())
         ttl = _TTL[kind]
@@ -123,9 +123,9 @@ def _verify(raw_token, expected_kind=None):
         expected_jti = user.get_secret(_JTI_KEYS[kind])
         if not expected_jti or expected_jti != obj["jti"]:
             user.report_incident(
-                details=f"{user.username} token jti mismatch or reused (kind={kind})",
+                details=f"{user.username} token already used or superseded (kind={kind})",
                 event_type="invalid_token")
-            raise merrors.ValueException("Invalid token")
+            raise merrors.ValueException("Token already used")
 
         # Consume — single use
         user.set_secret(_JTI_KEYS[kind], None)
@@ -137,17 +137,17 @@ def _verify(raw_token, expected_kind=None):
     except Exception as err:
         if user:
             user.report_incident(
-                details=f"{user.username} invalid token",
+                details=f"{user.username} invalid token format (kind={kind})",
                 event_type="token:unknown",
                 error=str(err),
                 level=8, token=orig_token)
         else:
             User.class_report_incident(
-                details="token error",
+                details="invalid token format",
                 event_type="token:unknown",
                 error=str(err),
                 level=8, token=orig_token)
-        raise merrors.ValueException("Invalid token")
+        raise merrors.ValueException("Invalid token format")
 
 
 # -----------------------------------------------------------------
@@ -267,7 +267,26 @@ def verify_phone_verify_code(user, code):
 
 def generate_invite_token(user):
     """Generate an invite token (kind=iv). TTL defaults to 7 days."""
-    return _generate(user, KIND_INVITE)
+    token = _generate(user, KIND_INVITE)
+    # Cache the full token so get_or_generate_invite_token can reuse it
+    user.set_secret("invite_token", token)
+    user.save(update_fields=["mojo_secrets", "modified"])
+    return token
+
+
+def get_or_generate_invite_token(user):
+    """
+    Return the existing invite token if still valid, otherwise generate a fresh one.
+    Allows inviting the same user to multiple groups without overwriting the JTI
+    and invalidating already-sent invite emails.
+    """
+    existing_ts = int(user.get_secret("invite_ts") or 0)
+    existing_token = user.get_secret("invite_token")
+    if existing_ts and existing_token:
+        now_ts = int(dates.utcnow().timestamp())
+        if now_ts - existing_ts < int(INVITE_TOKEN_TTL):
+            return existing_token
+    return generate_invite_token(user)
 
 
 def verify_invite_token(token):

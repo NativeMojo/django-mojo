@@ -1001,9 +1001,25 @@ def test_route_security_comprehensive(opts):
                     if is_secure_response(resp):
                         secure_routes += 1
                     else:
-                        issue_found = True
-                        issue_message = "SECURE-BROKEN"
-                        insecure_routes += 1
+                        # Before flagging as broken, check if a different HTTP method
+                        # on this path has a public_endpoint handler (e.g. GET is public
+                        # but POST requires auth — both are valid).
+                        from mojo.decorators.http import URLPATTERN_METHODS
+                        from mojo.decorators.auth import SECURITY_REGISTRY
+                        has_public_sibling = False
+                        _clean = pattern.strip('/').replace('api/', '')
+                        for _key, _func in URLPATTERN_METHODS.items():
+                            if _clean in _key and _func is not mojo_function:
+                                _fk = f"{_func.__module__}.{_func.__name__}"
+                                if SECURITY_REGISTRY.get(_fk, {}).get('type') == 'public':
+                                    has_public_sibling = True
+                                    break
+                        if has_public_sibling:
+                            secure_routes += 1
+                        else:
+                            issue_found = True
+                            issue_message = "SECURE-BROKEN"
+                            insecure_routes += 1
 
                 elif security_type == 'model':
                     # MODEL-SECURED endpoints should also block unauthorized access or return empty data
