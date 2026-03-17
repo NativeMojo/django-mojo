@@ -17,9 +17,7 @@ Use this file as a lightweight running log between AI threads.
 
 ## Recent Completions (this session)
 
-- **Apple OAuth** — `services/oauth/apple.py` + registered in `__init__.py`; ES256 client_secret, id_token decode, same flow as Google.
-- **Invite token fix** — `POST /api/auth/password/reset/token` now accepts `iv:` tokens; `User.check_password_strength()` extracted and used by all reset paths.
-- **Member.send_invite routing** — new users (no `last_login`) get account-setup invite with token; existing users get `group_invite` notification.
+- **Local test scaffold** — `bin/create_testproject` (PostgreSQL), `bin/asgi_local`, `bin/testit.py` (flushes DB+Redis). 925 tests, 886 pass, 39 skip, 0 fail. Also fixed: totp `select_for_update` atomic, jobs idempotency key PG compat, security scanner public sibling, session_revoke rate limits.
 
 ## Key Decisions
 

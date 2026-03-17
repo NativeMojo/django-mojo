@@ -909,7 +909,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         from mojo.apps.account.utils.webapp_url import build_token_url
         from mojo.apps.shortlink import maybe_shorten_url
 
-        token = tokens.generate_invite_token(self)
+        token = tokens.get_or_generate_invite_token(self)
         token_url = build_token_url("invite", token, request=request, user=self, group=group)
         token_url = maybe_shorten_url(token_url, source="invite", user=self, expire_days=7)
 

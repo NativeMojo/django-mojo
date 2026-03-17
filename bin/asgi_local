@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+TESTPROJECT="$REPO_ROOT/testproject"
+
+# Use venv Python if available
+if [ -f "$REPO_ROOT/.venv/bin/python" ]; then
+    PYTHON="$REPO_ROOT/.venv/bin/python"
+else
+    PYTHON="python3"
+fi
+
+if [ ! -d "$TESTPROJECT" ]; then
+    echo "ERROR: testproject/ not found. Run ./bin/create_testproject first."
+    exit 1
+fi
+
+# Check Redis
+if ! redis-cli ping > /dev/null 2>&1; then
+    echo "==> Starting redis-server in background"
+    redis-server --daemonize yes
+fi
+
+# Read host/port from dev_server.conf
+HOST="127.0.0.1"
+PORT="5555"
+CONF="$TESTPROJECT/config/dev_server.conf"
+if [ -f "$CONF" ]; then
+    while IFS='=' read -r key value; do
+        key=$(echo "$key" | tr -d '[:space:]')
+        value=$(echo "$value" | tr -d '[:space:]')
+        case "$key" in
+            host) HOST="$value" ;;
+            port) PORT="$value" ;;
+        esac
+    done < "$CONF"
+fi
+
+export DJANGO_SETTINGS_MODULE=settings
+export PYTHONUNBUFFERED=1
+
+echo "==> Starting uvicorn on http://$HOST:$PORT"
+exec $PYTHON -m uvicorn _asgi:application \
+    --app-dir "$TESTPROJECT/bin" \
+    --host "$HOST" \
+    --port "$PORT" \
+    --reload
