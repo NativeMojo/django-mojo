@@ -3,7 +3,12 @@ from objict import objict
 UNKNOWN = Ellipsis
 
 
-ALLOW_DB_SETTINGS = False
+def _django_ready():
+    try:
+        from django.apps import apps
+        return apps.ready
+    except Exception:
+        return False
 
 def load_settings_profile(context):
     from mojo.helpers import modules, paths
@@ -123,7 +128,7 @@ class SettingsHelper:
                 return self._convert_value(value, kind, default)
             return value if value is not UNKNOWN else self.get_default(name, default)
 
-        if ALLOW_DB_SETTINGS:
+        if _django_ready():
             # DB-backed settings: Redis cache -> DB (group parent chain -> global)
             db_value = self._get_db_setting(name, group)
             if db_value is not UNKNOWN:
