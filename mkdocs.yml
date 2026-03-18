@@ -111,6 +111,7 @@ nav:
                 - Authentication: web_developer/account/authentication.md
                 - Users: web_developer/account/user.md
                 - Groups: web_developer/account/group.md
+                - Admin Portal Guide: web_developer/account/admin_portal.md
                 - API Keys: web_developer/account/api_keys.md
           - Logging:
                 - Overview: web_developer/logging/README.md

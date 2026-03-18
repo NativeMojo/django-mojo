@@ -1,5 +1,15 @@
 ## v1.0.59 - (current)
 
+## v1.0.57 - March 17, 2026
+
+new db redis backed secure django settings
+new apple oauth
+
+
+### Docs
+
+- docs: added `docs/web_developer/account/admin_portal.md` — admin-portal integration guide for REST APIs (auth flow, permission model, group context, common admin endpoints, and secure settings API usage via `/api/settings`); updated `docs/web_developer/account/README.md` and `mkdocs.yml` nav
+
 ## v1.0.56 - March 17, 2026
 
 bug fixes for memeber invites
