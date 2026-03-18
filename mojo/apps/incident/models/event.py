@@ -7,8 +7,8 @@ from mojo.apps import metrics
 from mojo.apps.account.models import GeoLocatedIP
 
 
-INCIDENT_LEVEL_THRESHOLD = settings.get('INCIDENT_LEVEL_THRESHOLD', 7)
-INCIDENT_METRICS_MIN_GRANULARITY = settings.get("INCIDENT_METRICS_MIN_GRANULARITY", "hours")
+INCIDENT_LEVEL_THRESHOLD = settings.get_static('INCIDENT_LEVEL_THRESHOLD', 7)
+INCIDENT_METRICS_MIN_GRANULARITY = settings.get_static("INCIDENT_METRICS_MIN_GRANULARITY", "hours")
 
 class Event(models.Model, MojoModel):
     id = models.BigAutoField(primary_key=True)

@@ -34,13 +34,13 @@ from mojo.helpers import dates
 logger = logit.get_logger("jobs", "jobs.log", debug=True)
 
 
-JOBS_ENGINE_CLAIM_BATCH = settings.get('JOBS_ENGINE_CLAIM_BATCH', 5)
-JOBS_CHANNELS = settings.get('JOBS_CHANNELS', ['default'])
-JOBS_ENGINE_MAX_WORKERS = settings.get('JOBS_ENGINE_MAX_WORKERS', 10)
-JOBS_ENGINE_CLAIM_BUFFER = settings.get('JOBS_ENGINE_CLAIM_BUFFER', 2)
-JOBS_RUNNER_HEARTBEAT_SEC = settings.get('JOBS_RUNNER_HEARTBEAT_SEC', 5)
-JOBS_VISIBILITY_TIMEOUT_MS = settings.get('JOBS_VISIBILITY_TIMEOUT_MS', 30000)
-JOBS_DEBUG = settings.get('JOBS_DEBUG', False)
+JOBS_ENGINE_CLAIM_BATCH = settings.get_static('JOBS_ENGINE_CLAIM_BATCH', 5)
+JOBS_CHANNELS = settings.get_static('JOBS_CHANNELS', ['default'])
+JOBS_ENGINE_MAX_WORKERS = settings.get_static('JOBS_ENGINE_MAX_WORKERS', 10)
+JOBS_ENGINE_CLAIM_BUFFER = settings.get_static('JOBS_ENGINE_CLAIM_BUFFER', 2)
+JOBS_RUNNER_HEARTBEAT_SEC = settings.get_static('JOBS_RUNNER_HEARTBEAT_SEC', 5)
+JOBS_VISIBILITY_TIMEOUT_MS = settings.get_static('JOBS_VISIBILITY_TIMEOUT_MS', 30000)
+JOBS_DEBUG = settings.get_static('JOBS_DEBUG', False)
 
 
 def load_job_function(func_path: str) -> Callable:

@@ -12,13 +12,6 @@ from mojo.helpers import dates, crypto
 from mojo import errors as merrors
 from mojo.helpers.settings import settings
 
-JWT_REFRESH_TOKEN_EXPIRY = settings.get("JWT_REFRESH_TOKEN_EXPIRY", 604800, kind="int")
-PASSWORD_RESET_TOKEN_TTL = settings.get("PASSWORD_RESET_TOKEN_TTL", 3600, kind="int")
-PASSWORD_RESET_CODE_TTL = settings.get("PASSWORD_RESET_CODE_TTL", 600, kind="int")
-ALLOW_PHONE_LOGIN = settings.get("ALLOW_PHONE_LOGIN", False, kind="bool")
-REQUIRE_VERIFIED_EMAIL = settings.get("REQUIRE_VERIFIED_EMAIL", False, kind="bool")
-REQUIRE_VERIFIED_PHONE = settings.get("REQUIRE_VERIFIED_PHONE", False, kind="bool")
-ALLOW_EMAIL_CHANGE = settings.get("ALLOW_EMAIL_CHANGE", True, kind="bool")
 
 @md.URL('user')
 @md.URL('user/<int:pk>')
@@ -74,7 +67,7 @@ def on_user_login(request):
     username = request.DATA.username
     password = request.DATA.password
 
-    user, source = User.lookup_from_request_with_source(request, phone_as_username=ALLOW_PHONE_LOGIN)
+    user, source = User.lookup_from_request_with_source(request, phone_as_username=settings.get("ALLOW_PHONE_LOGIN", False, kind="bool"))
     if user is None:
         User.class_report_incident(
             f"login attempt with unknown username {username}",
@@ -152,10 +145,10 @@ def jwt_login(request, user, legacy=False, source=None, extra=None):
     if request.device:
         keys['device'] = request.device.id
     access_token_expiry = settings.get("JWT_TOKEN_EXPIRY", 21600, kind="int")
-    refresh_token_expiry = JWT_REFRESH_TOKEN_EXPIRY
+    refresh_token_expiry = settings.get("JWT_REFRESH_TOKEN_EXPIRY", 604800, kind="int")
     if user.org:
         access_token_expiry = user.org.metadata.get("access_token_expiry", access_token_expiry)
-        refresh_token_expiry = user.org.metadata.get("refresh_token_expiry", JWT_REFRESH_TOKEN_EXPIRY)
+        refresh_token_expiry = user.org.metadata.get("refresh_token_expiry", refresh_token_expiry)
     if legacy:
         keys.update(dict(user_id=user.id, device_id=request.DATA.get(["device_id", "deviceID"], request.device.id)))
     token_package = JWToken(
@@ -236,7 +229,7 @@ def on_user_password_reset_code(request):
     if len(code or "") != 6 or code != (sec_code or ""):
         user.report_incident(f"{user.username} invalid password reset code", "password_reset")
         raise merrors.ValueException("Invalid code")
-    if now_ts - code_ts > int(PASSWORD_RESET_CODE_TTL):
+    if now_ts - code_ts > settings.get("PASSWORD_RESET_CODE_TTL", 600, kind="int"):
         user.report_incident(f"{user.username} expired password reset code", "password_reset")
         raise merrors.ValueException("Expired code")
     user.check_password_strength(new_password)

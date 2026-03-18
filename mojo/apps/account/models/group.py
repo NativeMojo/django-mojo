@@ -6,9 +6,9 @@ from mojo.helpers.settings import settings
 import uuid
 
 
-GROUP_LAST_ACTIVITY_FREQ = settings.get("GROUP_LAST_ACTIVITY_FREQ", 300)
-METRICS_TIMEZONE = settings.get("METRICS_TIMEZONE", "America/Los_Angeles")
-MOJO_REST_LIST_PERM_DENY = settings.get("MOJO_REST_LIST_PERM_DENY", True)
+GROUP_LAST_ACTIVITY_FREQ = settings.get_static("GROUP_LAST_ACTIVITY_FREQ", 300)
+METRICS_TIMEZONE = settings.get_static("METRICS_TIMEZONE", "America/Los_Angeles")
+MOJO_REST_LIST_PERM_DENY = settings.get_static("MOJO_REST_LIST_PERM_DENY", True)
 
 
 class Group(MojoSecrets, MojoModel):

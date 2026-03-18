@@ -8,7 +8,7 @@ logger = logit.get_logger("error", "error.log")
 
 # Global security registry - stores security metadata for all decorated functions
 SECURITY_REGISTRY = {}
-REQUIRES_PERMS_IS_GROUP = settings.get('REQUIRES_PERMS_IS_GROUP', True)
+REQUIRES_PERMS_IS_GROUP = settings.get_static('REQUIRES_PERMS_IS_GROUP', True)
 
 
 def requires_perms(*required_perms):

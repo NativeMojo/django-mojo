@@ -1,7 +1,7 @@
 from django.http import HttpResponse
 from mojo.helpers.settings import settings
 
-DUID_HEADER = settings.get('DUID_HEADER', 'X-Mojo-UID')
+DUID_HEADER = settings.get_static('DUID_HEADER', 'X-Mojo-UID')
 
 # middleware/cors.py
 class CORSMiddleware:

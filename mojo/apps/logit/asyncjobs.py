@@ -4,7 +4,7 @@ from datetime import timedelta
 from mojo.helpers.settings import settings
 
 # Default: check once an hour at minute 0 (can be overridden in settings)
-LOGIT_PRUNE_DAYS = settings.get("LOGIT_PRUNE_DAYS", 90)
+LOGIT_PRUNE_DAYS = settings.get_static("LOGIT_PRUNE_DAYS", 90)
 PRUNE_KINDS = ["request", "response"]
 
 def prune_logit_logs(job):

@@ -4,7 +4,7 @@ https://ipinfo.io/
 """
 import requests
 from mojo.helpers.location.countries import get_country_name
-from .config import IPINFO_API_KEY
+from .config import get_api_key
 
 
 def fetch(ip_address, api_key=None):
@@ -19,7 +19,7 @@ def fetch(ip_address, api_key=None):
         dict: Normalized geolocation data, or None on failure
     """
     if api_key is None:
-        api_key = IPINFO_API_KEY
+        api_key = get_api_key('ipinfo')
 
     try:
         url = f"https://ipinfo.io/{ip_address}"

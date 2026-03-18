@@ -5,7 +5,7 @@ from mojo.models import MojoModel
 from mojo.helpers import dates, request as rhelper
 from .geolocated_ip import GeoLocatedIP
 
-GEOLOCATION_DEVICE_LOCATION_AGE = settings.get('GEOLOCATION_DEVICE_LOCATION_AGE', 300)
+GEOLOCATION_DEVICE_LOCATION_AGE = settings.get_static('GEOLOCATION_DEVICE_LOCATION_AGE', 300)
 
 
 

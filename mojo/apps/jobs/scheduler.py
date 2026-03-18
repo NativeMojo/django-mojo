@@ -26,10 +26,10 @@ from .adapters import get_adapter
 from .models import Job, JobEvent
 
 # Module-level settings (readability)
-JOBS_CHANNELS = settings.get('JOBS_CHANNELS', ['default'])
-JOBS_SCHEDULER_LOCK_TTL_MS = settings.get('JOBS_SCHEDULER_LOCK_TTL_MS', 5000)
-JOBS_STREAM_MAXLEN = settings.get('JOBS_STREAM_MAXLEN', 100000)
-JOBS_DEBUG = settings.get('JOBS_DEBUG', False)
+JOBS_CHANNELS = settings.get_static('JOBS_CHANNELS', ['default'])
+JOBS_SCHEDULER_LOCK_TTL_MS = settings.get_static('JOBS_SCHEDULER_LOCK_TTL_MS', 5000)
+JOBS_STREAM_MAXLEN = settings.get_static('JOBS_STREAM_MAXLEN', 100000)
+JOBS_DEBUG = settings.get_static('JOBS_DEBUG', False)
 
 
 

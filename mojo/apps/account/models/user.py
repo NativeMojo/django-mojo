@@ -26,10 +26,10 @@ SYS_USER_PERMS_PROTECTION = {
     "manage_aws": "manage_users"
 }
 
-USER_PERMS_PROTECTION = settings.get("USER_PERMS_PROTECTION", {})
+USER_PERMS_PROTECTION = settings.get_static("USER_PERMS_PROTECTION", {})
 USER_PERMS_PROTECTION.update(SYS_USER_PERMS_PROTECTION)
 
-USER_LAST_ACTIVITY_FREQ = settings.get("USER_LAST_ACTIVITY_FREQ", 300)
+USER_LAST_ACTIVITY_FREQ = settings.get_static("USER_LAST_ACTIVITY_FREQ", 300)
 
 # Fields that only a superuser may write via REST, on both create and update paths.
 #   is_email_verified / is_phone_verified  — set only by internal token flows
@@ -51,8 +51,8 @@ SUPERUSER_ONLY_FIELDS = frozenset((
 #                     changed_fields as the attrib name ("org") when set via
 #                     setattr, but REST may also pass "org_id" directly
 MANAGE_USERS_ONLY_FIELDS = frozenset(("is_active", "org", "org_id"))
-METRICS_TIMEZONE = settings.get("METRICS_TIMEZONE", "America/Los_Angeles")
-METRICS_TRACK_USER_ACTIVITY = settings.get("METRICS_TRACK_USER_ACTIVITY", False)
+METRICS_TIMEZONE = settings.get_static("METRICS_TIMEZONE", "America/Los_Angeles")
+METRICS_TRACK_USER_ACTIVITY = settings.get_static("METRICS_TRACK_USER_ACTIVITY", False)
 
 class CustomUserManager(BaseUserManager):
     def create_user(self, email, password=None, **extra_fields):

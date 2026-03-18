@@ -33,7 +33,7 @@ Implemented 2026-03-17. Three scripts in `bin/` generate and run a local test pr
 - `testit.py` flushes PostgreSQL (TRUNCATE CASCADE) + Redis (`flushdb`) before each run
 - route_security (1): security audit finding actual code issues
 
-**To validate**: `./bin/create_testproject && ./bin/asgi_local &` then `./bin/testit.py`
+**To validate**: `./bin/create_testproject && ./bin/asgi_local start` then `./bin/testit.py`, then `./bin/asgi_local stop`
 
 ---
 
@@ -389,15 +389,26 @@ echo "SECRET_KEY = '${SECRET_KEY}'" > "$TESTPROJECT/var/django.conf"
 
 ### `bin/asgi_local`
 
-Bash script.
+Bash script. Supports `start`, `stop`, `restart`, `status` subcommands.
 
-Logic:
+Usage:
+```bash
+./bin/asgi_local            # foreground (Ctrl-C to stop)
+./bin/asgi_local start      # background daemon (PID in testproject/var/asgi.pid)
+./bin/asgi_local stop       # stop the daemon (graceful, then force after 5s)
+./bin/asgi_local restart    # stop + start
+./bin/asgi_local status     # check if running
+```
+
+Logic (shared by all modes):
 1. Resolve `REPO_ROOT`
 2. Confirm `testproject/` exists (exit with message if not — run `create_testproject` first)
 3. Check Redis with `redis-cli ping`; if not running, start `redis-server` in background
 4. Read `host` and `port` from `testproject/config/dev_server.conf`
 5. Set `DJANGO_SETTINGS_MODULE=settings`, `PYTHONUNBUFFERED=1`
 6. Run: `uvicorn _asgi:application --app-dir testproject/bin --host $HOST --port $PORT --reload`
+
+Daemon mode writes PID to `testproject/var/asgi.pid` and logs to `testproject/var/asgi.log`.
 
 ---
 
@@ -447,7 +458,8 @@ testproject/
 ## Acceptance Criteria
 
 - `./bin/create_testproject` runs cleanly on a fresh checkout (with deps installed)
-- `./bin/asgi_local` starts Redis if needed and serves on `http://127.0.0.1:5555`
+- `./bin/asgi_local` (or `./bin/asgi_local start`) starts Redis if needed and serves on `http://127.0.0.1:5555`
+- `./bin/asgi_local stop` cleanly shuts down the daemon
 - `./bin/testit.py` discovers and runs all tests in `tests/` and reports pass/fail
 - Re-running `./bin/create_testproject` wipes and recreates cleanly
 - Works in a headless CI environment (no interactive prompts)

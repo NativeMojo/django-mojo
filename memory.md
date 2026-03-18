@@ -21,7 +21,7 @@ Use this file as a lightweight running log between AI threads.
 - **Settings runtime hardening + docs** — converted remaining runtime/import-time settings constants across jobs/logging/incident/account/geoip/serializer paths to call-time reads; added names-only framework settings reference `docs/django_developer/helpers/settings_reference.md` and wired docs nav.
 - **Web admin portal docs** — Added web-developer guide for admin portal REST integration: auth + permissions model, group context, common admin endpoints, and secure settings endpoint usage (`/api/settings`). Updated account docs index + MkDocs nav + changelog.
 - **Secure Settings** — `Setting` model (DB-backed, encrypted, group-scoped). `SettingsHelper.get(name, group=)` lookup chain: Redis → DB (group parent chain → global) → `django.conf.settings`. REST CRUD with masked secrets. 15 new tests, 940 total, 0 fail.
-- **Local test scaffold** — `bin/create_testproject` (PostgreSQL), `bin/asgi_local`, `bin/testit.py` (flushes DB+Redis). Also fixed: totp `select_for_update` atomic, jobs idempotency key PG compat, security scanner public sibling, session_revoke rate limits.
+- **Local test scaffold** — `bin/create_testproject` (PostgreSQL), `bin/asgi_local` (supports `start`/`stop`/`restart`/`status` or foreground), `bin/testit.py` (flushes DB+Redis). Also fixed: totp `select_for_update` atomic, jobs idempotency key PG compat, security scanner public sibling, session_revoke rate limits.
 
 ## Key Decisions
 

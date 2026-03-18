@@ -4,7 +4,7 @@ https://ipstack.com/
 """
 import requests
 from mojo.helpers.location.countries import get_country_name
-from .config import IPSTACK_API_KEY
+from .config import get_api_key
 
 
 def fetch(ip_address, api_key=None):
@@ -19,7 +19,7 @@ def fetch(ip_address, api_key=None):
         dict: Normalized geolocation data, or None on failure
     """
     if api_key is None:
-        api_key = IPSTACK_API_KEY
+        api_key = get_api_key('ipstack')
 
     if not api_key:
         print("[GeoIP Error] ipstack provider requires an API key (GEOIP_API_KEY_IPSTACK).")

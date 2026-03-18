@@ -42,10 +42,10 @@ GRANULARITY_END_MAP = {
 }
 
 
-DEFAULT_MIN_GRANULARITY = settings.get("METRICS_DEFAULT_MIN_GRANULARITY", "hours")
-DEFAULT_MAX_GRANULARITY = settings.get("METRICS_DEFAULT_MAX_GRANULARITY", "years")
+DEFAULT_MIN_GRANULARITY = settings.get_static("METRICS_DEFAULT_MIN_GRANULARITY", "hours")
+DEFAULT_MAX_GRANULARITY = settings.get_static("METRICS_DEFAULT_MAX_GRANULARITY", "years")
 
-METRICS_TIMEZONE = settings.get("METRICS_TIMEZONE", "America/Los_Angeles")
+METRICS_TIMEZONE = settings.get_static("METRICS_TIMEZONE", "America/Los_Angeles")
 
 def generate_granularities(min_granularity=DEFAULT_MIN_GRANULARITY,
                            max_granularity=DEFAULT_MAX_GRANULARITY):

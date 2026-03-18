@@ -2,7 +2,7 @@ from django.db import models
 from mojo.models import MojoModel
 from mojo.helpers.settings import settings
 
-SMS_FAKE_MAPPINGS = settings.get("SMS_FAKE_MAPPINGS", {})
+SMS_FAKE_MAPPINGS = settings.get_static("SMS_FAKE_MAPPINGS", {})
 
 
 class SMS(models.Model, MojoModel):

@@ -1,9 +1,6 @@
 from mojo.helpers.settings import settings
 from objict import objict
 
-ACCOUNT_SID = settings.get('TWILIO_ACCOUNT_SID')
-AUTH_TOKEN = settings.get('TWILIO_AUTH_TOKEN')
-FROM_NUMBER = settings.get('TWILIO_NUMBER')
 PROVIDER = "twilio"
 
 
@@ -13,13 +10,17 @@ def get_from_number():
 
 def lookup(phone_number):
     try:
-        resp = _lookup(phone_number, ACCOUNT_SID, AUTH_TOKEN)
+        resp = _lookup(phone_number, settings.get('TWILIO_ACCOUNT_SID'), settings.get('TWILIO_AUTH_TOKEN'))
     except Exception as e:
         resp = objict(error=str(e))
     return resp
 
 
-def send_sms(body, to_number, from_number=None, account_sid=ACCOUNT_SID, auth_token=AUTH_TOKEN):
+def send_sms(body, to_number, from_number=None, account_sid=None, auth_token=None):
+    if account_sid is None:
+        account_sid = settings.get('TWILIO_ACCOUNT_SID')
+    if auth_token is None:
+        auth_token = settings.get('TWILIO_AUTH_TOKEN')
     return _send_sms(body, to_number, from_number, account_sid, auth_token)
 
 
@@ -29,11 +30,12 @@ def validate_webhook_signature(request):
     Returns True if valid, False otherwise.
     See: https://www.twilio.com/docs/usage/webhooks/webhooks-security
     """
-    if not AUTH_TOKEN:
+    auth_token = settings.get('TWILIO_AUTH_TOKEN')
+    if not auth_token:
         return False
     try:
         from twilio.request_validator import RequestValidator
-        validator = RequestValidator(AUTH_TOKEN)
+        validator = RequestValidator(auth_token)
         url = request.build_absolute_uri()
         signature = request.META.get('HTTP_X_TWILIO_SIGNATURE', '')
         params = dict(request.POST)

@@ -2,7 +2,7 @@ from objict import objict, nobjict
 from .request_parser import RequestDataParser
 from mojo.helpers.settings import settings
 
-DUID_HEADER = settings.get('DUID_HEADER', 'X-Mojo-UID').replace('-', '_').upper()
+DUID_HEADER = settings.get_static('DUID_HEADER', 'X-Mojo-UID').replace('-', '_').upper()
 DUID_HEADER = f"HTTP_{DUID_HEADER}"
 
 REQUEST_PARSER = RequestDataParser()
