@@ -10,3 +10,4 @@ from .totp import UserTOTP
 from .user_api_key import UserAPIKey
 from .oauth import OAuthConnection
 from .notification import Notification
+from .setting import Setting

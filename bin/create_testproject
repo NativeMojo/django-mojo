@@ -282,7 +282,8 @@ $PSQL -d postgres -tc "SELECT 1 FROM pg_database WHERE datname='mojo_test'" | gr
     && $PSQL -d postgres -c "DROP DATABASE mojo_test;"
 $PSQL -d postgres -c "CREATE DATABASE mojo_test OWNER mojo_test;"
 
-echo "==> Running migrations"
+echo "==> Generating and running migrations"
+$PYTHON "$TESTPROJECT/manage.py" makemigrations 2>&1
 $PYTHON "$TESTPROJECT/manage.py" migrate --run-syncdb 2>&1
 
 echo ""

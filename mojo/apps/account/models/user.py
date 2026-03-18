@@ -174,6 +174,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
                     "is_email_verified",
                     "is_phone_verified",
                     "is_dob_verified",
+                    "is_online",
                     "dob"
                 ],
                 "graphs": {
@@ -235,6 +236,11 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
     @property
     def has_passkey(self):
         return self.passkeys.filter(is_enabled=True).count() > 0
+
+    @property
+    def is_online(self):
+        from mojo.apps import realtime
+        return realtime.is_online("user", self.id)
 
     @property
     def full_name(self):

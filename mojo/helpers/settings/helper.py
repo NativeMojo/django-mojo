@@ -59,16 +59,38 @@ class SettingsHelper:
         self._app_cache[key] = SettingsHelper(self.get(key, {}), app_defaults)
         return self._app_cache[key]
 
-    def get(self, name, default=UNKNOWN):
+    def get(self, name, default=UNKNOWN, group=None):
         # When root is an explicit dict (app-settings sub-helper), read from it
         # directly — no Django settings involved.
         if self.root is not None and isinstance(self.root, dict):
             value = self.root.get(name, UNKNOWN)
             return value if value is not UNKNOWN else self.get_default(name, default)
-        # For all other cases always read from the live Django settings object
-        # rather than a cached reference so that override_settings works in tests.
+
+        # DB-backed settings: Redis cache -> DB (group parent chain -> global)
+        db_value = self._get_db_setting(name, group)
+        if db_value is not UNKNOWN:
+            return db_value
+
+        # Fallback: live Django settings (file-based)
         value = getattr(self._live_django_settings(), name, UNKNOWN)
         return value if value is not UNKNOWN else self.get_default(name, default)
+
+    def _get_db_setting(self, name, group=None):
+        """Lookup a setting from the DB-backed store (via Redis cache).
+
+        Returns UNKNOWN if not found so callers can fall through.
+        """
+        try:
+            from mojo.apps.account.models.setting import Setting
+        except Exception:
+            return UNKNOWN
+        try:
+            value = Setting.resolve(name, group=group)
+        except Exception:
+            return UNKNOWN
+        if value is None:
+            return UNKNOWN
+        return value
 
     def get_default(self, name, default=None):
         if default is UNKNOWN:

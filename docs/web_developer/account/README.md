@@ -12,6 +12,7 @@
 - [User Self-Management](user_self_management.md) — Everything a logged-in user can do for their own account (profile, avatar, password, email, phone, passkeys, TOTP, files, notifications, activity log)
 - [User API](user.md) — User profile, registration, password reset
 - [Group API](group.md) — Groups, membership, permissions
+- [Admin Portal API Guide](admin_portal.md) — Building admin consoles (users, groups, secure settings)
 - [API Keys](api_keys.md) — Long-lived tokens for programmatic access
 - [Custom Auth Models](custom_auth_models.md) — JWT, OAuth, and passkeys for non-User models (e.g. game.Player)
 - [Notifications](notifications.md) — Inbox, mark read, WebSocket delivery
