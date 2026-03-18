@@ -10,13 +10,13 @@
       
       
       
-        <link rel="canonical" href="https://NativeMojo.github.io/django-mojo/django_developer/realtime/architecture/">
+        <link rel="canonical" href="https://NativeMojo.github.io/django-mojo/django_developer/helpers/settings_reference/">
       
       
-        <link rel="prev" href="../">
+        <link rel="prev" href="../settings/">
       
       
-        <link rel="next" href="../publishing/">
+        <link rel="next" href="../crypto/">
       
       
         
@@ -27,7 +27,7 @@
     
     
       
-        <title>Architecture - Django-MOJO</title>
+        <title>Settings Reference - Django-MOJO</title>
       
     
     
@@ -78,7 +78,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#realtime-architecture-setup-django-developer-reference" class="md-skip">
+        <a href="#framework-settings-reference" class="md-skip">
           Skip to content
         </a>
       
@@ -112,7 +112,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Architecture
+              Settings Reference
             
           </span>
         </div>
@@ -674,8 +674,10 @@
                 
   
   
+    
   
   
+  
     
     
     
@@ -689,13 +691,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_3" checked>
         
           
           <label class="md-nav__link" for="__nav_2_3" id="__nav_2_3_label" tabindex="">
@@ -716,7 +716,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_3_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_3_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_2_3">
             <span class="md-nav__icon md-icon"></span>
             
@@ -734,7 +734,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../helpers/" class="md-nav__link">
+      <a href="../" class="md-nav__link">
         
   
   
@@ -762,7 +762,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../helpers/logit/" class="md-nav__link">
+      <a href="../logit/" class="md-nav__link">
         
   
   
@@ -790,7 +790,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../helpers/dates/" class="md-nav__link">
+      <a href="../dates/" class="md-nav__link">
         
   
   
@@ -818,7 +818,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../helpers/settings/" class="md-nav__link">
+      <a href="../settings/" class="md-nav__link">
         
   
   
@@ -843,10 +843,37 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../../helpers/settings_reference/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Settings Reference
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -862,6 +889,670 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#startupbootstrap-keys-restart-required" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Startup/Bootstrap Keys (Restart Required)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#runtime-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Runtime Keys
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Runtime Keys">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#allow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ALLOW
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#allowed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ALLOWED
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#api" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        API
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#apple" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        APPLE
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#auth" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AUTH
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#aws" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AWS
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#base" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        BASE
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deactivate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DEACTIVATE
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#duid" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DUID
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#email" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        EMAIL
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#events" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        EVENTS
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#geoip" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GEOIP
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#geolocation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GEOLOCATION
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#google" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GOOGLE
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#group" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GROUP
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#incident" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        INCIDENT
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#info" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        INFO
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#installed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        INSTALLED
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#invite" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        INVITE
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ipverify" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        IPVERIFY
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#jobs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        JOBS
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#jwt" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        JWT
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#kms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        KMS
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#log" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        LOG
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#logit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        LOGIT
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#magic" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MAGIC
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#maxmind" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MAXMIND
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#media" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MEDIA
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#member" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MEMBER
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        METRICS
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#mfa" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MFA
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#misc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MISC
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#mojo" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MOJO
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#notification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        NOTIFICATION
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#oauth" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OAUTH
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#openapi" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OPENAPI
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#passkeys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PASSKEYS
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#password" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PASSWORD
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PHONE
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#redis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        REDIS
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#require" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        REQUIRE
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#requires" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        REQUIRES
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#secret" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SECRET
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#serialize" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SERIALIZE
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortlink" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SHORTLINK
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SMS
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SNS
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#threat" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        THREAT
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TOR
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#totp" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TOTP
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#twilio" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TWILIO
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#use" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        USE
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#user" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        USER
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#usps" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        USPS
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#webapp" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WEBAPP
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Notes
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -874,7 +1565,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../helpers/crypto/" class="md-nav__link">
+      <a href="../crypto/" class="md-nav__link">
         
   
   
@@ -902,7 +1593,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../helpers/request/" class="md-nav__link">
+      <a href="../request/" class="md-nav__link">
         
   
   
@@ -930,7 +1621,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../helpers/response/" class="md-nav__link">
+      <a href="../response/" class="md-nav__link">
         
   
   
@@ -958,7 +1649,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../helpers/other/" class="md-nav__link">
+      <a href="../other/" class="md-nav__link">
         
   
   
@@ -1969,8 +2660,6 @@
                 
   
   
-    
-  
   
   
     
@@ -1986,11 +2675,13 @@
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_10" checked>
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2_10" >
         
           
           <label class="md-nav__link" for="__nav_2_10" id="__nav_2_10_label" tabindex="">
@@ -2011,7 +2702,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_10_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_10_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_2_10">
             <span class="md-nav__icon md-icon"></span>
             
@@ -2029,7 +2720,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../" class="md-nav__link">
+      <a href="../../realtime/" class="md-nav__link">
         
   
   
@@ -2054,37 +2745,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Architecture
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../realtime/architecture/" class="md-nav__link">
         
   
   
@@ -2100,142 +2764,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#overview" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Overview
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#requirements" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Requirements
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#setup" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Setup
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Setup">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#1-install-the-app" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        1. Install the App
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#2-asgi-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        2. ASGI Configuration
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#3-channel-layers-redis" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        3. Channel Layers (Redis)
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#authentication-flow" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Authentication Flow
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#message-handlers" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Message Handlers
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#topics" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Topics
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Settings
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -2248,7 +2776,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../publishing/" class="md-nav__link">
+      <a href="../../realtime/publishing/" class="md-nav__link">
         
   
   
@@ -2276,7 +2804,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../hooks/" class="md-nav__link">
+      <a href="../../realtime/hooks/" class="md-nav__link">
         
   
   
@@ -3820,10 +4348,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#overview" class="md-nav__link">
+  <a href="#startupbootstrap-keys-restart-required" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Overview
+        Startup/Bootstrap Keys (Restart Required)
       
     </span>
   </a>
@@ -3831,33 +4359,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#requirements" class="md-nav__link">
+  <a href="#runtime-keys" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Requirements
+        Runtime Keys
       
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#setup" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Setup
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Setup">
+    <nav class="md-nav" aria-label="Runtime Keys">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#1-install-the-app" class="md-nav__link">
+  <a href="#allow" class="md-nav__link">
     <span class="md-ellipsis">
       
-        1. Install the App
+        ALLOW
       
     </span>
   </a>
@@ -3865,10 +4382,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#2-asgi-configuration" class="md-nav__link">
+  <a href="#allowed" class="md-nav__link">
     <span class="md-ellipsis">
       
-        2. ASGI Configuration
+        ALLOWED
       
     </span>
   </a>
@@ -3876,10 +4393,582 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#3-channel-layers-redis" class="md-nav__link">
+  <a href="#api" class="md-nav__link">
     <span class="md-ellipsis">
       
-        3. Channel Layers (Redis)
+        API
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#apple" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        APPLE
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#auth" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AUTH
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#aws" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AWS
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#base" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        BASE
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deactivate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DEACTIVATE
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#duid" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DUID
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#email" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        EMAIL
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#events" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        EVENTS
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#geoip" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GEOIP
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#geolocation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GEOLOCATION
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#google" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GOOGLE
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#group" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GROUP
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#incident" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        INCIDENT
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#info" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        INFO
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#installed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        INSTALLED
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#invite" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        INVITE
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ipverify" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        IPVERIFY
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#jobs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        JOBS
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#jwt" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        JWT
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#kms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        KMS
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#log" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        LOG
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#logit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        LOGIT
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#magic" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MAGIC
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#maxmind" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MAXMIND
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#media" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MEDIA
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#member" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MEMBER
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        METRICS
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#mfa" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MFA
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#misc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MISC
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#mojo" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MOJO
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#notification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        NOTIFICATION
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#oauth" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OAUTH
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#openapi" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OPENAPI
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#passkeys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PASSKEYS
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#password" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PASSWORD
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PHONE
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#redis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        REDIS
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#require" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        REQUIRE
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#requires" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        REQUIRES
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#secret" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SECRET
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#serialize" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SERIALIZE
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortlink" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SHORTLINK
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SMS
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SNS
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#threat" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        THREAT
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TOR
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#totp" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TOTP
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#twilio" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TWILIO
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#use" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        USE
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#user" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        USER
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#usps" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        USPS
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#webapp" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WEBAPP
       
     </span>
   </a>
@@ -3892,43 +4981,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#authentication-flow" class="md-nav__link">
+  <a href="#notes" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Authentication Flow
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#message-handlers" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Message Handlers
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#topics" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Topics
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Settings
+        Notes
       
     </span>
   </a>
@@ -3955,102 +5011,357 @@
   
 
 
-<h1 id="realtime-architecture-setup-django-developer-reference">Realtime Architecture &amp; Setup — Django Developer Reference<a class="headerlink" href="#realtime-architecture-setup-django-developer-reference" title="Permanent link">&para;</a></h1>
-<h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
-<p>The realtime system provides a single generic WebSocket endpoint (<code>ws/realtime/</code>) using Django Channels. It shares the same bearer authentication as HTTP middleware.</p>
-<p><strong>Key concepts:</strong>
-- One endpoint for all apps
-- Message-based authentication (same JWT as HTTP)
-- Topic-based pub/sub (<code>user:123</code>, <code>general_announcements</code>)
-- Auto-subscription to own topic after auth
-- Pluggable message handlers via settings or model hooks</p>
-<h2 id="requirements">Requirements<a class="headerlink" href="#requirements" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>channels&gt;=4.0
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>channels_redis&gt;=4.0
-</code></pre></div>
-<h2 id="setup">Setup<a class="headerlink" href="#setup" title="Permanent link">&para;</a></h2>
-<h3 id="1-install-the-app">1. Install the App<a class="headerlink" href="#1-install-the-app" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">INSTALLED_APPS</span> <span class="o">=</span> <span class="p">[</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>    <span class="o">...</span>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    <span class="s2">&quot;channels&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    <span class="s2">&quot;mojo.apps.realtime&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="p">]</span>
-</code></pre></div>
-<h3 id="2-asgi-configuration">2. ASGI Configuration<a class="headerlink" href="#2-asgi-configuration" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># asgi.py</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django.core.asgi</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_asgi_application</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="kn">from</span><span class="w"> </span><span class="nn">channels.routing</span><span class="w"> </span><span class="kn">import</span> <span class="n">ProtocolTypeRouter</span><span class="p">,</span> <span class="n">URLRouter</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.realtime.routing</span><span class="w"> </span><span class="kn">import</span> <span class="n">websocket_urlpatterns</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">setdefault</span><span class="p">(</span><span class="s2">&quot;DJANGO_SETTINGS_MODULE&quot;</span><span class="p">,</span> <span class="s2">&quot;myproject.settings&quot;</span><span class="p">)</span>
-<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>
-<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="n">application</span> <span class="o">=</span> <span class="n">ProtocolTypeRouter</span><span class="p">({</span>
-<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>    <span class="s2">&quot;http&quot;</span><span class="p">:</span> <span class="n">get_asgi_application</span><span class="p">(),</span>
-<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>    <span class="s2">&quot;websocket&quot;</span><span class="p">:</span> <span class="n">URLRouter</span><span class="p">(</span><span class="n">websocket_urlpatterns</span><span class="p">),</span>
-<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="p">})</span>
-</code></pre></div>
-<h3 id="3-channel-layers-redis">3. Channel Layers (Redis)<a class="headerlink" href="#3-channel-layers-redis" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># settings.py</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">CHANNEL_LAYERS</span> <span class="o">=</span> <span class="p">{</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>    <span class="s2">&quot;default&quot;</span><span class="p">:</span> <span class="p">{</span>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>        <span class="s2">&quot;BACKEND&quot;</span><span class="p">:</span> <span class="s2">&quot;channels_redis.core.RedisChannelLayer&quot;</span><span class="p">,</span>
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>        <span class="s2">&quot;CONFIG&quot;</span><span class="p">:</span> <span class="p">{</span>
-<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>            <span class="s2">&quot;hosts&quot;</span><span class="p">:</span> <span class="p">[(</span><span class="s2">&quot;localhost&quot;</span><span class="p">,</span> <span class="mi">6379</span><span class="p">)],</span>
-<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>        <span class="p">},</span>
-<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>    <span class="p">},</span>
-<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="p">}</span>
-</code></pre></div>
-<h2 id="authentication-flow">Authentication Flow<a class="headerlink" href="#authentication-flow" title="Permanent link">&para;</a></h2>
-<ol>
-<li>Client connects to <code>ws://host/ws/realtime/</code></li>
-<li>Server sends: <code>{"type": "auth_required", "timeout_seconds": 30}</code></li>
-<li>Client sends: <code>{"type": "authenticate", "token": "&lt;jwt&gt;", "prefix": "bearer"}</code></li>
-<li>On success: <code>{"type": "auth_success", "instance_kind": "user", "instance_id": 42, "available_topics": [...]}</code></li>
-<li>Client is auto-subscribed to <code>user:42</code></li>
-</ol>
-<p>The auth system reuses <code>AUTH_BEARER_HANDLERS</code> from HTTP middleware — no separate config.</p>
-<h2 id="message-handlers">Message Handlers<a class="headerlink" href="#message-handlers" title="Permanent link">&para;</a></h2>
-<p>Register custom message types in settings:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># settings.py</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="n">REALTIME_MESSAGE_HANDLERS</span> <span class="o">=</span> <span class="p">{</span>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>    <span class="s2">&quot;refresh_dashboard&quot;</span><span class="p">:</span> <span class="s2">&quot;myapp.realtime.refresh_dashboard_handler&quot;</span><span class="p">,</span>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>    <span class="s2">&quot;send_team_message&quot;</span><span class="p">:</span> <span class="s2">&quot;myapp.realtime.send_team_message_handler&quot;</span><span class="p">,</span>
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="p">}</span>
-</code></pre></div>
-<p>Handler signature:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">refresh_dashboard_handler</span><span class="p">(</span><span class="n">consumer</span><span class="p">,</span> <span class="n">instance</span><span class="p">,</span> <span class="n">instance_kind</span><span class="p">,</span> <span class="n">data</span><span class="p">):</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>    <span class="c1"># instance = the authenticated User (or other model)</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>    <span class="c1"># data = the message payload dict</span>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>    <span class="c1"># Return a dict to send back to the client (optional)</span>
-<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>    <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;dashboard_refreshed&quot;</span><span class="p">,</span> <span class="s2">&quot;data&quot;</span><span class="p">:</span> <span class="n">get_dashboard</span><span class="p">(</span><span class="n">instance</span><span class="p">)}</span>
-</code></pre></div>
-<h2 id="topics">Topics<a class="headerlink" href="#topics" title="Permanent link">&para;</a></h2>
+<h1 id="framework-settings-reference">Framework Settings Reference<a class="headerlink" href="#framework-settings-reference" title="Permanent link">&para;</a></h1>
+<p>This reference lists framework-recognized setting keys (names only, no values).</p>
+<h2 id="startupbootstrap-keys-restart-required">Startup/Bootstrap Keys (Restart Required)<a class="headerlink" href="#startupbootstrap-keys-restart-required" title="Permanent link">&para;</a></h2>
+<p>These are read while URL/module bootstrap happens, so changes require a process restart.</p>
 <ul>
-<li>External topic names: <code>user:123</code>, <code>group:7</code>, <code>general_announcements</code></li>
-<li>Internally normalized to Channels-safe names (<code>user_123</code>)</li>
-<li>Authorization: each consumer's <code>get_available_topics()</code> determines allowed subscriptions</li>
-<li>Default available topics: <code>general_announcements</code>, <code>admin_alerts</code> (staff only), own <code>instance_kind:id</code></li>
+<li><code>MOJO_API_MODULE</code></li>
+<li><code>MOJO_APPEND_SLASH</code></li>
+<li><code>MOJO_PREFIX</code></li>
+<li><code>REST_AUTO_PREFIX</code></li>
 </ul>
-<h2 id="settings">Settings<a class="headerlink" href="#settings" title="Permanent link">&para;</a></h2>
-<table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>REALTIME_MESSAGE_HANDLERS</code></td>
-<td>Dict mapping message_type → handler path</td>
-</tr>
-<tr>
-<td><code>CHANNEL_LAYERS</code></td>
-<td>Django Channels Redis config</td>
-</tr>
-</tbody>
-</table>
+<h2 id="runtime-keys">Runtime Keys<a class="headerlink" href="#runtime-keys" title="Permanent link">&para;</a></h2>
+<p>These are read through <code>mojo.helpers.settings.settings</code> during normal runtime.</p>
+<h3 id="allow">ALLOW<a class="headerlink" href="#allow" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>ALLOW_EMAIL_CHANGE</code></li>
+<li><code>ALLOW_PHONE_CHANGE</code></li>
+<li><code>ALLOW_PHONE_LOGIN</code></li>
+<li><code>ALLOW_SELF_DEACTIVATION</code></li>
+<li><code>ALLOW_USERNAME_CHANGE</code></li>
+</ul>
+<h3 id="allowed">ALLOWED<a class="headerlink" href="#allowed" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>ALLOWED_REDIRECT_URLS</code></li>
+</ul>
+<h3 id="api">API<a class="headerlink" href="#api" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>API_METRICS</code></li>
+<li><code>API_METRICS_GRANULARITY</code></li>
+</ul>
+<h3 id="apple">APPLE<a class="headerlink" href="#apple" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>APPLE_CLIENT_ID</code></li>
+<li><code>APPLE_KEY_ID</code></li>
+<li><code>APPLE_PRIVATE_KEY</code></li>
+<li><code>APPLE_TEAM_ID</code></li>
+</ul>
+<h3 id="auth">AUTH<a class="headerlink" href="#auth" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>AUTH_BEARER_HANDLERS</code></li>
+<li><code>AUTH_BEARER_NAME_MAP</code></li>
+</ul>
+<h3 id="aws">AWS<a class="headerlink" href="#aws" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>AWS_DEFAULT_REGION</code></li>
+<li><code>AWS_KEY</code></li>
+<li><code>AWS_REGION</code></li>
+<li><code>AWS_SECRET</code></li>
+</ul>
+<h3 id="base">BASE<a class="headerlink" href="#base" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>BASE_URL</code></li>
+</ul>
+<h3 id="deactivate">DEACTIVATE<a class="headerlink" href="#deactivate" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>DEACTIVATE_TOKEN_TTL</code></li>
+</ul>
+<h3 id="duid">DUID<a class="headerlink" href="#duid" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>DUID_HEADER</code></li>
+</ul>
+<h3 id="email">EMAIL<a class="headerlink" href="#email" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>EMAIL_CHANGE_CODE_TTL</code></li>
+<li><code>EMAIL_CHANGE_TOKEN_TTL</code></li>
+<li><code>EMAIL_TASK_CHANNEL</code></li>
+<li><code>EMAIL_VERIFY_CODE_TTL</code></li>
+<li><code>EMAIL_VERIFY_TOKEN_TTL</code></li>
+</ul>
+<h3 id="events">EVENTS<a class="headerlink" href="#events" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>EVENTS_ON_ERRORS</code></li>
+</ul>
+<h3 id="geoip">GEOIP<a class="headerlink" href="#geoip" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>GEOIP_ADDITIONAL_PROVIDERS</code></li>
+<li><code>GEOIP_API_KEY_IP-API</code></li>
+<li><code>GEOIP_API_KEY_IPINFO</code></li>
+<li><code>GEOIP_API_KEY_IPSTACK</code></li>
+<li><code>GEOIP_ENABLE_CLOUD_DETECTION</code></li>
+<li><code>GEOIP_ENABLE_TOR_DETECTION</code></li>
+<li><code>GEOIP_ENABLE_VPN_DETECTION</code></li>
+<li><code>GEOIP_FALLBACK_PROVIDER</code></li>
+<li><code>GEOIP_PRIMARY_PROVIDER</code></li>
+</ul>
+<h3 id="geolocation">GEOLOCATION<a class="headerlink" href="#geolocation" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>GEOLOCATION_ALLOW_SUBNET_LOOKUP</code></li>
+<li><code>GEOLOCATION_CACHE_DURATION_DAYS</code></li>
+<li><code>GEOLOCATION_DEVICE_LOCATION_AGE</code></li>
+<li><code>GEOLOCATION_ENABLE_BLOCKLIST_CHECK</code></li>
+<li><code>GEOLOCATION_ENABLE_INTERNAL_THREAT_CHECK</code></li>
+<li><code>GEOLOCATION_INTERNAL_ATTACKER_LEVEL_THRESHOLD</code></li>
+<li><code>GEOLOCATION_INTERNAL_THREAT_EVENT_THRESHOLD</code></li>
+<li><code>GEOLOCATION_INTERNAL_THREAT_LOOKBACK_DAYS</code></li>
+</ul>
+<h3 id="google">GOOGLE<a class="headerlink" href="#google" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>GOOGLE_CLIENT_ID</code></li>
+<li><code>GOOGLE_CLIENT_SECRET</code></li>
+<li><code>GOOGLE_MAPS_API_KEY</code></li>
+<li><code>GOOGLE_SCOPES</code></li>
+<li><code>GOOGLE_SERVICE_ACCOUNT_FILE</code></li>
+</ul>
+<h3 id="group">GROUP<a class="headerlink" href="#group" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>GROUP_LAST_ACTIVITY_FREQ</code></li>
+</ul>
+<h3 id="incident">INCIDENT<a class="headerlink" href="#incident" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>INCIDENT_EVENT_METRICS</code></li>
+<li><code>INCIDENT_EVENT_PRUNE_DAYS</code></li>
+<li><code>INCIDENT_LEVEL_THRESHOLD</code></li>
+<li><code>INCIDENT_METRICS_MIN_GRANULARITY</code></li>
+</ul>
+<h3 id="info">INFO<a class="headerlink" href="#info" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>INFO_KEY</code></li>
+</ul>
+<h3 id="installed">INSTALLED<a class="headerlink" href="#installed" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>INSTALLED_APPS</code></li>
+</ul>
+<h3 id="invite">INVITE<a class="headerlink" href="#invite" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>INVITE_TOKEN_TTL</code></li>
+</ul>
+<h3 id="ipverify">IPVERIFY<a class="headerlink" href="#ipverify" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>IPVERIFY_API_KEY</code></li>
+<li><code>IPVERIFY_HOST</code></li>
+</ul>
+<h3 id="jobs">JOBS<a class="headerlink" href="#jobs" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>JOBS_CHANNELS</code></li>
+<li><code>JOBS_DAEMON_WORKDIR</code></li>
+<li><code>JOBS_DEBUG</code></li>
+<li><code>JOBS_DEFAULT_BACKOFF_BASE</code></li>
+<li><code>JOBS_DEFAULT_BACKOFF_MAX</code></li>
+<li><code>JOBS_DEFAULT_CHANNEL</code></li>
+<li><code>JOBS_DEFAULT_EXPIRES_SEC</code></li>
+<li><code>JOBS_DEFAULT_MAX_RETRIES</code></li>
+<li><code>JOBS_ENGINE_CLAIM_BATCH</code></li>
+<li><code>JOBS_ENGINE_CLAIM_BUFFER</code></li>
+<li><code>JOBS_ENGINE_LOGFILE</code></li>
+<li><code>JOBS_ENGINE_MAX_WORKERS</code></li>
+<li><code>JOBS_ENGINE_READ_TIMEOUT</code></li>
+<li><code>JOBS_IDLE_TIMEOUT_MS</code></li>
+<li><code>JOBS_LOCAL_QUEUE_MAXSIZE</code></li>
+<li><code>JOBS_PAYLOAD_MAX_BYTES</code></li>
+<li><code>JOBS_REDIS_PREFIX</code></li>
+<li><code>JOBS_REDIS_URL</code></li>
+<li><code>JOBS_RUNNER_HEARTBEAT_SEC</code></li>
+<li><code>JOBS_SCHEDULER_LOCK_TTL_MS</code></li>
+<li><code>JOBS_SCHEDULER_LOGFILE</code></li>
+<li><code>JOBS_STREAM_MAXLEN</code></li>
+<li><code>JOBS_VISIBILITY_TIMEOUT_MS</code></li>
+<li><code>JOBS_WEBHOOK_DEFAULT_TIMEOUT</code></li>
+<li><code>JOBS_WEBHOOK_MAX_RETRIES</code></li>
+<li><code>JOBS_WEBHOOK_MAX_TIMEOUT</code></li>
+<li><code>JOBS_XPENDING_IDLE_MS</code></li>
+</ul>
+<h3 id="jwt">JWT<a class="headerlink" href="#jwt" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>JWT_ALGORITHM</code></li>
+<li><code>JWT_REFRESH_TOKEN_EXPIRY</code></li>
+<li><code>JWT_TOKEN_EXPIRY</code></li>
+</ul>
+<h3 id="kms">KMS<a class="headerlink" href="#kms" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>KMS_KEY_ID</code></li>
+</ul>
+<h3 id="log">LOG<a class="headerlink" href="#log" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>LOG_PUSH_MESSAGES</code></li>
+</ul>
+<h3 id="logit">LOGIT<a class="headerlink" href="#logit" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>LOGIT_ALWAYS_LOG_PREFIX</code></li>
+<li><code>LOGIT_DB_ALL</code></li>
+<li><code>LOGIT_DEBUG_ALL</code></li>
+<li><code>LOGIT_FILE_ALL</code></li>
+<li><code>LOGIT_MAX_RESPONSE_SIZE</code></li>
+<li><code>LOGIT_NO_LOG_PREFIX</code></li>
+<li><code>LOGIT_PRUNE_DAYS</code></li>
+<li><code>LOGIT_REQUEST_BODY</code></li>
+<li><code>LOGIT_RETURN_REAL_ERROR</code></li>
+</ul>
+<h3 id="magic">MAGIC<a class="headerlink" href="#magic" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>MAGIC_LOGIN_TOKEN_TTL</code></li>
+</ul>
+<h3 id="maxmind">MAXMIND<a class="headerlink" href="#maxmind" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>MAXMIND_ACCOUNT_ID</code></li>
+<li><code>MAXMIND_LICENSE_KEY</code></li>
+</ul>
+<h3 id="media">MEDIA<a class="headerlink" href="#media" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>MEDIA_HOST</code></li>
+<li><code>MEDIA_URL</code></li>
+</ul>
+<h3 id="member">MEMBER<a class="headerlink" href="#member" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>MEMBER_PERMS_PROTECTION</code></li>
+</ul>
+<h3 id="metrics">METRICS<a class="headerlink" href="#metrics" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>METRICS_DEFAULT_MAX_GRANULARITY</code></li>
+<li><code>METRICS_DEFAULT_MIN_GRANULARITY</code></li>
+<li><code>METRICS_TIMEZONE</code></li>
+<li><code>METRICS_TRACK_USER_ACTIVITY</code></li>
+</ul>
+<h3 id="mfa">MFA<a class="headerlink" href="#mfa" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>MFA_TOKEN_TTL</code></li>
+</ul>
+<h3 id="misc">MISC<a class="headerlink" href="#misc" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>DEBUG</code></li>
+<li><code>VERSION</code></li>
+</ul>
+<h3 id="mojo">MOJO<a class="headerlink" href="#mojo" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>MOJO_APP_STATUS_200_ON_ERROR</code></li>
+<li><code>MOJO_CUSTOM_SERIALIZERS</code></li>
+<li><code>MOJO_DEFAULT_SERIALIZER</code></li>
+<li><code>MOJO_REST_LIST_PERM_DENY</code></li>
+<li><code>MOJO_SERIALIZER_CACHE</code></li>
+<li><code>MOJO_TEMP_DIR</code></li>
+</ul>
+<h3 id="notification">NOTIFICATION<a class="headerlink" href="#notification" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>NOTIFICATION_DEFAULT_EXPIRY</code></li>
+</ul>
+<h3 id="oauth">OAUTH<a class="headerlink" href="#oauth" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>OAUTH_ALLOW_REGISTRATION</code></li>
+<li><code>OAUTH_REDIRECT_URI</code></li>
+<li><code>OAUTH_STATE_TTL</code></li>
+</ul>
+<h3 id="openapi">OPENAPI<a class="headerlink" href="#openapi" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>OPENAPI_DOCS_KEY</code></li>
+</ul>
+<h3 id="passkeys">PASSKEYS<a class="headerlink" href="#passkeys" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>PASSKEYS_RP_NAME</code></li>
+</ul>
+<h3 id="password">PASSWORD<a class="headerlink" href="#password" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>PASSWORD_RESET_CODE_TTL</code></li>
+<li><code>PASSWORD_RESET_TOKEN_TTL</code></li>
+</ul>
+<h3 id="phone">PHONE<a class="headerlink" href="#phone" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>PHONE_CHANGE_TOKEN_TTL</code></li>
+<li><code>PHONE_VERIFY_CODE_TTL</code></li>
+</ul>
+<h3 id="redis">REDIS<a class="headerlink" href="#redis" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>REDIS_CONNECT_TIMEOUT</code></li>
+<li><code>REDIS_DB_INDEX</code></li>
+<li><code>REDIS_MAX_CONN</code></li>
+<li><code>REDIS_PASSWORD</code></li>
+<li><code>REDIS_PORT</code></li>
+<li><code>REDIS_READ_FROM_REPLICAS</code></li>
+<li><code>REDIS_SCHEME</code></li>
+<li><code>REDIS_SERVER</code></li>
+<li><code>REDIS_SOCKET_TIMEOUT</code></li>
+<li><code>REDIS_URL</code></li>
+<li><code>REDIS_USERNAME</code></li>
+</ul>
+<h3 id="require">REQUIRE<a class="headerlink" href="#require" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>REQUIRE_VERIFIED_EMAIL</code></li>
+<li><code>REQUIRE_VERIFIED_PHONE</code></li>
+</ul>
+<h3 id="requires">REQUIRES<a class="headerlink" href="#requires" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>REQUIRES_PERMS_IS_GROUP</code></li>
+</ul>
+<h3 id="secret">SECRET<a class="headerlink" href="#secret" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>SECRET_KEY</code></li>
+</ul>
+<h3 id="serialize">SERIALIZE<a class="headerlink" href="#serialize" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>SERIALIZE_DATETIME_TO_FLOAT</code></li>
+</ul>
+<h3 id="shortlink">SHORTLINK<a class="headerlink" href="#shortlink" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>SHORTLINK_BASE_URL</code></li>
+<li><code>SHORTLINK_FALLBACK_URL</code></li>
+</ul>
+<h3 id="sms">SMS<a class="headerlink" href="#sms" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>SMS_FAKE_MAPPINGS</code></li>
+<li><code>SMS_INBOUND_HANDLER</code></li>
+<li><code>SMS_OTP_TTL</code></li>
+</ul>
+<h3 id="sns">SNS<a class="headerlink" href="#sns" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>SNS_CERT_TTL_SECONDS</code></li>
+<li><code>SNS_VALIDATION_BYPASS_DEBUG</code></li>
+</ul>
+<h3 id="threat">THREAT<a class="headerlink" href="#threat" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>THREAT_INTEL_ABUSEIPDB_API_KEY</code></li>
+<li><code>THREAT_INTEL_ABUSEIPDB_ENABLED</code></li>
+<li><code>THREAT_INTEL_BLOCKLIST_DE_ENABLED</code></li>
+<li><code>THREAT_INTEL_SPAMHAUS_ENABLED</code></li>
+</ul>
+<h3 id="tor">TOR<a class="headerlink" href="#tor" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>TOR_EXIT_NODE_LIST_URL</code></li>
+</ul>
+<h3 id="totp">TOTP<a class="headerlink" href="#totp" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>TOTP_ISSUER</code></li>
+</ul>
+<h3 id="twilio">TWILIO<a class="headerlink" href="#twilio" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>TWILIO_ACCOUNT_SID</code></li>
+<li><code>TWILIO_AUTH_TOKEN</code></li>
+<li><code>TWILIO_NUMBER</code></li>
+</ul>
+<h3 id="use">USE<a class="headerlink" href="#use" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>USE_TZ</code></li>
+</ul>
+<h3 id="user">USER<a class="headerlink" href="#user" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>USER_LAST_ACTIVITY_FREQ</code></li>
+<li><code>USER_PERMS_PROTECTION</code></li>
+</ul>
+<h3 id="usps">USPS<a class="headerlink" href="#usps" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>USPS_CLIENT_ID</code></li>
+<li><code>USPS_CLIENT_SECRET</code></li>
+<li><code>USPS_USE_TEST_ENVIRONMENT</code></li>
+</ul>
+<h3 id="webapp">WEBAPP<a class="headerlink" href="#webapp" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>WEBAPP_AUTH_PATH</code></li>
+<li><code>WEBAPP_BASE_URL</code></li>
+</ul>
+<h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Source: static scan of <code>settings.get(...)</code>, <code>getattr(settings, ...)</code>, and <code>settings.KEY</code> across <code>mojo/</code> (excluding migrations).</li>
+<li>Keys here are framework-known knobs only; project-specific settings may exist in your Django project and are not listed unless referenced by framework code.</li>
+</ul>
 
 
 
