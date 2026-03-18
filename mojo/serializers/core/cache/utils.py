@@ -239,7 +239,7 @@ def get_cache_info() -> Dict[str, Any]:
     :return: Dictionary with cache information
     """
     try:
-        from django.conf import settings
+        from mojo.helpers.settings import settings
         from .backends import get_cache_backend
 
         # Get backend info

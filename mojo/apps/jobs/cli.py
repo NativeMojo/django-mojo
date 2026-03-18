@@ -141,8 +141,8 @@ def start_engine_daemon(verbose=False, logfile_override: Optional[str] = None):
 
     # Get channels from settings
     try:
-        from django.conf import settings
-        channels = getattr(settings, 'JOBS_CHANNELS', ['default'])
+        from mojo.helpers.settings import settings
+        channels = settings.get("JOBS_CHANNELS", ['default'])
         if isinstance(channels, str):
             channels = [channels]
     except:
@@ -192,8 +192,8 @@ def start_scheduler_daemon(verbose=False):
 
     # Get channels from settings
     try:
-        from django.conf import settings
-        channels = getattr(settings, 'JOBS_CHANNELS', ['default'])
+        from mojo.helpers.settings import settings
+        channels = settings.get("JOBS_CHANNELS", ['default'])
         if isinstance(channels, str):
             channels = [channels]
     except:
@@ -236,8 +236,8 @@ def start_engine_foreground(verbose=False):
 
     # Get channels from settings
     try:
-        from django.conf import settings
-        channels = getattr(settings, 'JOBS_CHANNELS', ['default'])
+        from mojo.helpers.settings import settings
+        channels = settings.get("JOBS_CHANNELS", ['default'])
         if isinstance(channels, str):
             channels = [channels]
     except:
@@ -278,8 +278,8 @@ def start_scheduler_foreground(verbose=False):
 
     # Get channels from settings
     try:
-        from django.conf import settings
-        channels = getattr(settings, 'JOBS_CHANNELS', ['default'])
+        from mojo.helpers.settings import settings
+        channels = settings.get("JOBS_CHANNELS", ['default'])
         if isinstance(channels, str):
             channels = [channels]
     except:

@@ -181,7 +181,8 @@ def map_field_type(field):
 
 
 def openapi_schema_view(request):
-    if settings.OPENAPI_DOCS_KEY is None:
+    docs_key = settings.get("OPENAPI_DOCS_KEY", None)
+    if docs_key is None:
         return JsonResponse(dict(status=False, error="disabled"), status=404)
     if settings.OPENAPI_DOCS_KEY != request.GET.get("key", ""):
         return JsonResponse(dict(status=False, error="permission denied"), status=403)

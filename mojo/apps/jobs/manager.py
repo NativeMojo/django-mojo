@@ -10,7 +10,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime, timedelta
 
-from django.conf import settings
+from mojo.helpers.settings import settings
 from django.utils import timezone
 
 from mojo.helpers import logit
@@ -1108,8 +1108,8 @@ class JobManager:
             dict with per-channel sizes and DB status counts
         """
         try:
-            from django.conf import settings as dj_settings
-            channels = channels or self.get_registered_channels() or getattr(dj_settings, 'JOBS_CHANNELS', ['default'])
+            from mojo.helpers.settings import settings as dj_settings
+            channels = channels or self.get_registered_channels() or dj_settings.get('JOBS_CHANNELS', ['default'])
             sizes: Dict[str, Any] = {}
             for channel in channels:
                 stream_key = self.keys.stream(channel)
@@ -1163,7 +1163,7 @@ def _jobmanager_cleanup_consumer_groups(self, channel: Optional[str] = None, des
     try:
         # Determine channels to process
         try:
-            from django.conf import settings as dj_settings
+            from mojo.helpers.settings import settings as dj_settings
         except Exception:
             dj_settings = None
 
@@ -1305,8 +1305,8 @@ def _jobmanager_rebuild_scheduled(self, channel: Optional[str] = None, limit: Op
             channels = self.get_registered_channels()
             if not channels:
                 try:
-                    from django.conf import settings as dj_settings
-                    channels = getattr(dj_settings, 'JOBS_CHANNELS', ['default'])
+                    from mojo.helpers.settings import settings as dj_settings
+                    channels = dj_settings.get('JOBS_CHANNELS', ['default'])
                 except Exception:
                     channels = ['default']
 
@@ -1389,8 +1389,8 @@ def _jobmanager_recover_stale_running(self, channel: Optional[str] = None, max_a
                 channels = []
             if not channels:
                 try:
-                    from django.conf import settings as dj_settings
-                    channels = getattr(dj_settings, 'JOBS_CHANNELS', ['default'])
+                    from mojo.helpers.settings import settings as dj_settings
+                    channels = dj_settings.get('JOBS_CHANNELS', ['default'])
                 except Exception:
                     channels = ['default']
 

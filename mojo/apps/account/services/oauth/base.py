@@ -10,7 +10,6 @@ import uuid
 from mojo.helpers.redis import get_connection
 from mojo.helpers.settings import settings
 
-OAUTH_STATE_TTL = settings.get("OAUTH_STATE_TTL", 600)  # 10 minutes
 _STATE_PREFIX = "oauth:state:"
 
 
@@ -36,7 +35,8 @@ class OAuthProvider:
         """
         state = uuid.uuid4().hex
         data = json.dumps(extra or {})
-        get_connection().setex(f"{_STATE_PREFIX}{state}", OAUTH_STATE_TTL, data)
+        oauth_state_ttl = settings.get("OAUTH_STATE_TTL", 600)  # 10 minutes
+        get_connection().setex(f"{_STATE_PREFIX}{state}", oauth_state_ttl, data)
         return state
 
     def consume_state(self, state):

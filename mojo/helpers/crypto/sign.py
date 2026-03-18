@@ -1,7 +1,7 @@
 import hmac
 import hashlib
 import json
-from django.conf import settings
+from mojo.helpers.settings import settings
 
 
 def generate_signature(data, secret_key=None):
@@ -13,7 +13,6 @@ def generate_signature(data, secret_key=None):
     :return: str - the hex signature
     """
     if secret_key is None:
-        from django.conf import settings
         secret_key = settings.SECRET_KEY
     if isinstance(data, dict):
         data = json.dumps(data, separators=(',', ':'), sort_keys=True)
@@ -36,7 +35,6 @@ def verify_signature(data, signature, secret_key=None):
     :return: bool - True if valid, False otherwise
     """
     if secret_key is None:
-        from django.conf import settings
         secret_key = settings.SECRET_KEY
     expected_signature = generate_signature(data, secret_key)
     return hmac.compare_digest(expected_signature, signature)

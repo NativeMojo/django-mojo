@@ -11,8 +11,6 @@ except:
 
 from mojo.helpers.settings import settings
 
-TOTP_ISSUER = settings.get("TOTP_ISSUER", "MOJO")
-
 
 def generate_secret():
     """Generate a new base32 TOTP secret."""
@@ -25,7 +23,8 @@ def get_provisioning_uri(secret, username):
     Compatible with Google Authenticator, Authy, etc.
     """
     totp = pyotp.TOTP(secret)
-    return totp.provisioning_uri(name=username, issuer_name=TOTP_ISSUER)
+    totp_issuer = settings.get("TOTP_ISSUER", "MOJO")
+    return totp.provisioning_uri(name=username, issuer_name=totp_issuer)
 
 
 def verify_code(secret, code):

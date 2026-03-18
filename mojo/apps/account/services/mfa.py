@@ -15,7 +15,6 @@ import uuid
 from mojo.helpers.redis import get_connection
 from mojo.helpers.settings import settings
 
-MFA_TOKEN_TTL = settings.get("MFA_TOKEN_TTL", 300)
 _KEY_PREFIX = "mfa:"
 
 
@@ -32,7 +31,8 @@ def create_mfa_token(user, methods):
     """
     token = uuid.uuid4().hex
     data = json.dumps({"uid": user.id, "methods": methods})
-    get_connection().setex(f"{_KEY_PREFIX}{token}", MFA_TOKEN_TTL, data)
+    mfa_token_ttl = settings.get("MFA_TOKEN_TTL", 300)
+    get_connection().setex(f"{_KEY_PREFIX}{token}", mfa_token_ttl, data)
     return token
 
 

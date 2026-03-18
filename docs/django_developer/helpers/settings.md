@@ -67,3 +67,9 @@ settings.get("MY_APP_API_KEY", "")
 
 - Always use `settings.get()` rather than importing directly from `django.conf` — it provides defaults and avoids `AttributeError` on missing keys.
 - App-specific settings are cached after first load.
+
+## Framework Keys
+
+For the framework-recognized setting names (without values), see:
+
+- [settings_reference.md](settings_reference.md)

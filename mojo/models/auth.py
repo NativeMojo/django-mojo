@@ -22,9 +22,6 @@ import uuid as _uuid
 from mojo.apps.account.utils.jwtoken import JWToken
 from mojo.helpers.settings import settings
 
-JWT_TOKEN_EXPIRY = settings.get("JWT_TOKEN_EXPIRY", 21600)
-JWT_REFRESH_TOKEN_EXPIRY = settings.get("JWT_REFRESH_TOKEN_EXPIRY", 604800)
-
 
 class MojoAuthMixin:
     """
@@ -60,8 +57,8 @@ class MojoAuthMixin:
             keys.update(extra)
         token_package = JWToken(
             self.get_auth_key(),
-            access_token_expiry=JWT_TOKEN_EXPIRY,
-            refresh_token_expiry=JWT_REFRESH_TOKEN_EXPIRY,
+            access_token_expiry=settings.get("JWT_TOKEN_EXPIRY", 21600),
+            refresh_token_expiry=settings.get("JWT_REFRESH_TOKEN_EXPIRY", 604800),
         ).create(**keys)
         return token_package
 

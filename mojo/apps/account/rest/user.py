@@ -12,14 +12,13 @@ from mojo.helpers import dates, crypto
 from mojo import errors as merrors
 from mojo.helpers.settings import settings
 
-JWT_TOKEN_EXPIRY = settings.get("JWT_TOKEN_EXPIRY", 21600)
-JWT_REFRESH_TOKEN_EXPIRY = settings.get("JWT_REFRESH_TOKEN_EXPIRY", 604800)
-PASSWORD_RESET_TOKEN_TTL = settings.get("PASSWORD_RESET_TOKEN_TTL", 3600)
-PASSWORD_RESET_CODE_TTL = settings.get("PASSWORD_RESET_CODE_TTL", 600)
-ALLOW_PHONE_LOGIN = settings.get("ALLOW_PHONE_LOGIN", False)
-REQUIRE_VERIFIED_EMAIL = settings.get("REQUIRE_VERIFIED_EMAIL", False)
-REQUIRE_VERIFIED_PHONE = settings.get("REQUIRE_VERIFIED_PHONE", False)
-ALLOW_EMAIL_CHANGE = settings.get("ALLOW_EMAIL_CHANGE", True)
+JWT_REFRESH_TOKEN_EXPIRY = settings.get("JWT_REFRESH_TOKEN_EXPIRY", 604800, kind="int")
+PASSWORD_RESET_TOKEN_TTL = settings.get("PASSWORD_RESET_TOKEN_TTL", 3600, kind="int")
+PASSWORD_RESET_CODE_TTL = settings.get("PASSWORD_RESET_CODE_TTL", 600, kind="int")
+ALLOW_PHONE_LOGIN = settings.get("ALLOW_PHONE_LOGIN", False, kind="bool")
+REQUIRE_VERIFIED_EMAIL = settings.get("REQUIRE_VERIFIED_EMAIL", False, kind="bool")
+REQUIRE_VERIFIED_PHONE = settings.get("REQUIRE_VERIFIED_PHONE", False, kind="bool")
+ALLOW_EMAIL_CHANGE = settings.get("ALLOW_EMAIL_CHANGE", True, kind="bool")
 
 @md.URL('user')
 @md.URL('user/<int:pk>')
@@ -118,7 +117,7 @@ def mfa_required_response(user, methods):
             "mfa_required": True,
             "mfa_token": token,
             "mfa_methods": methods,
-            "expires_in": mfa_service.MFA_TOKEN_TTL,
+            "expires_in": settings.get("MFA_TOKEN_TTL", 300, kind="int"),
         },
     })
 
@@ -152,10 +151,10 @@ def jwt_login(request, user, legacy=False, source=None, extra=None):
     keys = dict(uid=user.id, ip=request.ip)
     if request.device:
         keys['device'] = request.device.id
-    access_token_expiry = JWT_TOKEN_EXPIRY
+    access_token_expiry = settings.get("JWT_TOKEN_EXPIRY", 21600, kind="int")
     refresh_token_expiry = JWT_REFRESH_TOKEN_EXPIRY
     if user.org:
-        access_token_expiry = user.org.metadata.get("access_token_expiry", JWT_TOKEN_EXPIRY)
+        access_token_expiry = user.org.metadata.get("access_token_expiry", access_token_expiry)
         refresh_token_expiry = user.org.metadata.get("refresh_token_expiry", JWT_REFRESH_TOKEN_EXPIRY)
     if legacy:
         keys.update(dict(user_id=user.id, device_id=request.DATA.get(["device_id", "deviceID"], request.device.id)))

@@ -9,7 +9,7 @@ Companion track for REST integrators: [docs/web_developer/README.md](../web_deve
 | Section | Description |
 |---|---|
 | [core/](core/README.md) | MojoModel, REST framework, decorators, middleware, serialization |
-| [helpers/](helpers/README.md) | logit, dates, settings, crypto, request, response, redis, and other utilities |
+| [helpers/](helpers/README.md) | logit, dates, settings, settings reference keys, crypto, request, response, redis, and other utilities |
 
 ## Built-in Apps
 

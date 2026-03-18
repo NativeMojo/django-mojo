@@ -6,6 +6,11 @@ AUTH_TOKEN = settings.get('TWILIO_AUTH_TOKEN')
 FROM_NUMBER = settings.get('TWILIO_NUMBER')
 PROVIDER = "twilio"
 
+
+def get_from_number():
+    return settings.get('TWILIO_NUMBER')
+
+
 def lookup(phone_number):
     try:
         resp = _lookup(phone_number, ACCOUNT_SID, AUTH_TOKEN)
@@ -14,7 +19,7 @@ def lookup(phone_number):
     return resp
 
 
-def send_sms(body, to_number, from_number=FROM_NUMBER, account_sid=ACCOUNT_SID, auth_token=AUTH_TOKEN):
+def send_sms(body, to_number, from_number=None, account_sid=ACCOUNT_SID, auth_token=AUTH_TOKEN):
     return _send_sms(body, to_number, from_number, account_sid, auth_token)
 
 
@@ -100,6 +105,9 @@ def _send_sms(body, to_number, from_number, account_sid, auth_token):
     """
     from twilio.rest import Client
     from twilio.base.exceptions import TwilioRestException
+
+    if from_number is None:
+        from_number = get_from_number()
 
     client = Client(account_sid, auth_token)
 

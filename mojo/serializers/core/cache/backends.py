@@ -32,7 +32,7 @@ Configuration via Django Settings:
 
 import threading
 from typing import Dict, Any, Optional
-from django.conf import settings
+from mojo.helpers.settings import settings
 
 # Use logit with graceful fallback
 try:

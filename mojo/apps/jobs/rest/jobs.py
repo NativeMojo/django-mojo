@@ -145,10 +145,9 @@ def on_channel_health(request, channel):
 def on_health_overview(request):
     """Get health overview for all configured channels."""
     try:
-        from django.conf import settings
         manager = get_manager()
 
-        channels = getattr(settings, 'JOBS_CHANNELS', ['default'])
+        channels = settings.get('JOBS_CHANNELS', ['default'])
         health_data = {}
 
         for channel in channels:

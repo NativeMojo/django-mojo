@@ -21,12 +21,22 @@ REGISTERED_URLS = {}
 URLPATTERN_METHODS = {}
 # Global list for absolute URLs (those starting with "/") that bypass app prefixes
 ABSOLUTE_URLPATTERNS = []
-MOJO_API_MODULE = settings.get("MOJO_API_MODULE", "api")
-MOJO_APPEND_SLASH = settings.get("MOJO_APPEND_SLASH", False)
 
-API_METRICS = settings.get("API_METRICS", False)
-API_METRICS_GRANULARITY = settings.get("API_METRICS_GRANULARITY", "days")
-EVENTS_ON_ERRORS = settings.get("EVENTS_ON_ERRORS", True)
+
+def _mojo_append_slash():
+    return settings.get("MOJO_APPEND_SLASH", False)
+
+
+def _api_metrics_enabled():
+    return settings.get("API_METRICS", False)
+
+
+def _api_metrics_granularity():
+    return settings.get("API_METRICS_GRANULARITY", "days")
+
+
+def _events_on_errors():
+    return settings.get("EVENTS_ON_ERRORS", True)
 
 
 def dispatcher(request, *args, **kwargs):
@@ -43,7 +53,7 @@ def dispatcher(request, *args, **kwargs):
             if api_key and request.group and not api_key.is_group_allowed(request.group):
                 return JsonResponse({"error": "Group not accessible with this API key", "code": 403}, status=403)
         except ValueError:
-            if EVENTS_ON_ERRORS:
+            if _events_on_errors():
                 rest.MojoModel.class_report_incident(
                     details=f"Permission denied: Invalid group ID -> '{request.DATA.group}'",
                     event_type="rest_error",
@@ -68,8 +78,8 @@ def dispatch_error_handler(func):
     @wraps(func)
     def wrapper(request, *args, **kwargs):
         try:
-            if API_METRICS:
-                metrics.record("api_calls", category="mojo_api", min_granularity=API_METRICS_GRANULARITY)
+            if _api_metrics_enabled():
+                metrics.record("api_calls", category="mojo_api", min_granularity=_api_metrics_granularity())
             resp = func(request, *args, **kwargs)
             if isinstance(resp, HttpResponse):
                 return resp
@@ -83,9 +93,9 @@ def dispatch_error_handler(func):
                 return JsonResponse({"status": True, "code": 200, "data": resp})
             return resp
         except mojo.errors.MojoException as err:
-            if API_METRICS:
-                metrics.record("api_errors", category="mojo_api", min_granularity=API_METRICS_GRANULARITY)
-            if EVENTS_ON_ERRORS:
+            if _api_metrics_enabled():
+                metrics.record("api_errors", category="mojo_api", min_granularity=_api_metrics_granularity())
+            if _events_on_errors():
                 rest.MojoModel.class_report_incident_for_user(
                     details=f"Rest Mojo Error: {err.reason}",
                     event_type="rest_error",
@@ -97,9 +107,9 @@ def dispatch_error_handler(func):
                 )
             return JsonResponse({"error": err.reason, "code": err.code, "status": False }, status=err.status)
         except PermissionError as err:
-            if API_METRICS:
-                metrics.record("api_denied", category="mojo_api", min_granularity=API_METRICS_GRANULARITY)
-            if EVENTS_ON_ERRORS:
+            if _api_metrics_enabled():
+                metrics.record("api_denied", category="mojo_api", min_granularity=_api_metrics_granularity())
+            if _events_on_errors():
                 rest.MojoModel.class_report_incident_for_user(
                     details=f"Permission Denied: {err}",
                     event_type="api_denied",
@@ -110,10 +120,10 @@ def dispatch_error_handler(func):
                 )
             return JsonResponse({"error": str(err), "code": 403, "status": False }, status=403)
         except ValueError as err:
-            if API_METRICS:
-                metrics.record("api_errors", category="mojo_api", min_granularity=API_METRICS_GRANULARITY)
+            if _api_metrics_enabled():
+                metrics.record("api_errors", category="mojo_api", min_granularity=_api_metrics_granularity())
             logger.exception(f"ValueErrror: {str(err)}, Path: {request.path}, IP: {request.META.get('REMOTE_ADDR')}")
-            if EVENTS_ON_ERRORS:
+            if _events_on_errors():
                 rest.MojoModel.class_report_incident_for_user(
                     details=f"Rest Value Error: {err}",
                     event_type="rest_error",
@@ -125,11 +135,11 @@ def dispatch_error_handler(func):
                 )
             return JsonResponse({"error": str(err), "code": 400, "status": False  }, status=400)
         except Exception as err:
-            if API_METRICS:
-                metrics.record("api_errors", category="mojo_api", min_granularity=API_METRICS_GRANULARITY)
+            if _api_metrics_enabled():
+                metrics.record("api_errors", category="mojo_api", min_granularity=_api_metrics_granularity())
             # logger.exception(f"Unhandled REST Exception: {request.path}")
             logger.exception(f"Error: {str(err)}, Path: {request.path}, IP: {request.META.get('REMOTE_ADDR')}")
-            if EVENTS_ON_ERRORS:
+            if _events_on_errors():
                 rest.MojoModel.class_report_incident_for_user(
                     details=f"Rest Exception: {err}",
                     event_type="rest_error",
@@ -180,7 +190,7 @@ def _register_route(method="ALL"):
             if is_absolute:
                 pattern_used = pattern_used.lstrip("/")
 
-            if MOJO_APPEND_SLASH:
+            if _mojo_append_slash():
                 pattern_used = pattern if pattern_used.endswith("/") else f"{pattern_used}/"
 
             # Register view in URL mapping

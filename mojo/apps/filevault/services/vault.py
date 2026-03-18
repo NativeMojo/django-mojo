@@ -8,14 +8,14 @@ import json
 import uuid
 import mimetypes
 from io import BytesIO
-from django.conf import settings as django_settings
+from mojo.helpers.settings import settings
 
 from mojo.helpers import logit
 from mojo.helpers.crypto import vault as crypto_vault
 
 
 def _get_secret_key():
-    return django_settings.SECRET_KEY
+    return settings.get("SECRET_KEY", "")
 
 
 # ---------------------------------------------------------------------------

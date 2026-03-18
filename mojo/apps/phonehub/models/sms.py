@@ -167,15 +167,15 @@ class SMS(models.Model, MojoModel):
     @classmethod
     def send(cls, body, to_number, metadata=None, group=None, user=None, from_number=None):
         """Send an outbound SMS and return the saved SMS instance."""
-        from mojo.apps.phonehub.services.twilio import send_sms, FROM_NUMBER, PROVIDER
+        from mojo.apps.phonehub.services import twilio
         from .phone import PhoneNumber
         to_number = PhoneNumber.normalize(to_number)
-        resolved_from = from_number or FROM_NUMBER
+        resolved_from = from_number or twilio.get_from_number()
         if not resolved_from or not isinstance(resolved_from, str):
             sms = cls.objects.create(
                 user=user, group=group, direction='outbound',
                 from_number='', to_number=to_number, body=body,
-                status='failed', provider=PROVIDER, metadata=metadata or {},
+                status='failed', provider=twilio.PROVIDER, metadata=metadata or {},
             )
             sms.mark_failed(error_code='config_error', error_message='No from_number configured (set TWILIO_NUMBER in settings)')
             return sms
@@ -187,7 +187,7 @@ class SMS(models.Model, MojoModel):
             to_number=to_number,
             body=body,
             status='queued',
-            provider=PROVIDER,
+            provider=twilio.PROVIDER,
             metadata=metadata or {},
         )
         # handle fake/test numbers
@@ -198,7 +198,7 @@ class SMS(models.Model, MojoModel):
                 sms.mark_sent(f"test{to_number}")
                 return sms
             to_number = fake_mapping
-        resp = send_sms(body, to_number, from_number=resolved_from)
+        resp = twilio.send_sms(body, to_number, from_number=resolved_from)
         if resp.sent:
             sms.mark_sent(resp.id)
         else:

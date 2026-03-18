@@ -3,18 +3,6 @@ from mojo import errors as merrors
 from mojo.helpers.settings import settings
 from mojo.apps.account.models.user import User
 
-PASSWORD_RESET_TOKEN_TTL = settings.get("PASSWORD_RESET_TOKEN_TTL", 3600)
-PASSWORD_RESET_CODE_TTL = settings.get("PASSWORD_RESET_CODE_TTL", 600)
-MAGIC_LOGIN_TOKEN_TTL = settings.get("MAGIC_LOGIN_TOKEN_TTL", 3600)
-EMAIL_VERIFY_TOKEN_TTL = settings.get("EMAIL_VERIFY_TOKEN_TTL", 86400)
-EMAIL_VERIFY_CODE_TTL = settings.get("EMAIL_VERIFY_CODE_TTL", 600)      # 10 minutes — matches phone verify
-PHONE_VERIFY_CODE_TTL = settings.get("PHONE_VERIFY_CODE_TTL", 600)
-INVITE_TOKEN_TTL = settings.get("INVITE_TOKEN_TTL", 604800)
-EMAIL_CHANGE_TOKEN_TTL = settings.get("EMAIL_CHANGE_TOKEN_TTL", 3600)   # 1 hour
-EMAIL_CHANGE_CODE_TTL = settings.get("EMAIL_CHANGE_CODE_TTL", 600)      # 10 minutes — OTP path
-PHONE_CHANGE_TOKEN_TTL = settings.get("PHONE_CHANGE_TOKEN_TTL", 600)    # 10 minutes — matches OTP lifetime
-DEACTIVATE_TOKEN_TTL = settings.get("DEACTIVATE_TOKEN_TTL", 900)        # 15 minutes
-
 # Token kind prefixes — visible to the webapp before any decoding
 KIND_PASSWORD_RESET = "pr"
 KIND_MAGIC_LOGIN = "ml"
@@ -43,15 +31,38 @@ _TS_KEYS = {
     KIND_PHONE_CHANGE: "phone_change_ts",
     KIND_DEACTIVATE: "deactivate_ts",
 }
+
+# Backward-compat override hooks for tests:
+# - `_TTL[kind] = -1` forces immediate token expiry.
+# - `EMAIL_VERIFY_CODE_TTL` / `EMAIL_CHANGE_CODE_TTL` can be patched directly.
+# Keep values `None` by default so runtime reads still come from settings.
 _TTL = {
-    KIND_PASSWORD_RESET: PASSWORD_RESET_TOKEN_TTL,
-    KIND_MAGIC_LOGIN: MAGIC_LOGIN_TOKEN_TTL,
-    KIND_EMAIL_VERIFY: EMAIL_VERIFY_TOKEN_TTL,
-    KIND_INVITE: INVITE_TOKEN_TTL,
-    KIND_EMAIL_CHANGE: EMAIL_CHANGE_TOKEN_TTL,
-    KIND_PHONE_CHANGE: PHONE_CHANGE_TOKEN_TTL,
-    KIND_DEACTIVATE: DEACTIVATE_TOKEN_TTL,
+    KIND_PASSWORD_RESET: None,
+    KIND_MAGIC_LOGIN: None,
+    KIND_EMAIL_VERIFY: None,
+    KIND_INVITE: None,
+    KIND_EMAIL_CHANGE: None,
+    KIND_PHONE_CHANGE: None,
+    KIND_DEACTIVATE: None,
 }
+EMAIL_VERIFY_CODE_TTL = None
+EMAIL_CHANGE_CODE_TTL = None
+
+
+def _token_ttl(kind):
+    override = _TTL.get(kind, None)
+    if override is not None:
+        return override
+    ttl_map = {
+        KIND_PASSWORD_RESET: settings.get("PASSWORD_RESET_TOKEN_TTL", 3600),
+        KIND_MAGIC_LOGIN: settings.get("MAGIC_LOGIN_TOKEN_TTL", 3600),
+        KIND_EMAIL_VERIFY: settings.get("EMAIL_VERIFY_TOKEN_TTL", 86400),
+        KIND_INVITE: settings.get("INVITE_TOKEN_TTL", 604800),
+        KIND_EMAIL_CHANGE: settings.get("EMAIL_CHANGE_TOKEN_TTL", 3600),
+        KIND_PHONE_CHANGE: settings.get("PHONE_CHANGE_TOKEN_TTL", 600),
+        KIND_DEACTIVATE: settings.get("DEACTIVATE_TOKEN_TTL", 900),
+    }
+    return ttl_map.get(kind, 3600)
 
 
 # -----------------------------------------------------------------
@@ -113,7 +124,7 @@ def _verify(raw_token, expected_kind=None):
             raise merrors.ValueException("Invalid token signature")
 
         now_ts = int(dates.utcnow().timestamp())
-        ttl = _TTL[kind]
+        ttl = _token_ttl(kind)
         if now_ts - int(obj["ts"]) > int(ttl):
             user.report_incident(
                 details=f"{user.username} expired token (kind={kind})",
@@ -217,7 +228,8 @@ def verify_email_verify_code(user, code):
             details=f"{user.username} invalid email verify code",
             event_type="email_verify:invalid")
         raise merrors.ValueException("Invalid code")
-    if now_ts - stored_ts > int(EMAIL_VERIFY_CODE_TTL):
+    verify_ttl = EMAIL_VERIFY_CODE_TTL if EMAIL_VERIFY_CODE_TTL is not None else settings.get("EMAIL_VERIFY_CODE_TTL", 600)
+    if now_ts - stored_ts > int(verify_ttl):
         user.report_incident(
             details=f"{user.username} expired email verify code",
             event_type="email_verify:expired")
@@ -254,7 +266,7 @@ def verify_phone_verify_code(user, code):
             details=f"{user.username} invalid phone verify code",
             event_type="phone_verify:invalid")
         raise merrors.ValueException("Invalid code")
-    if now_ts - stored_ts > int(PHONE_VERIFY_CODE_TTL):
+    if now_ts - stored_ts > int(settings.get("PHONE_VERIFY_CODE_TTL", 600)):
         user.report_incident(
             details=f"{user.username} expired phone verify code",
             event_type="phone_verify:expired")
@@ -284,7 +296,7 @@ def get_or_generate_invite_token(user):
     existing_token = user.get_secret("invite_token")
     if existing_ts and existing_token:
         now_ts = int(dates.utcnow().timestamp())
-        if now_ts - existing_ts < int(INVITE_TOKEN_TTL):
+        if now_ts - existing_ts < int(settings.get("INVITE_TOKEN_TTL", 604800)):
             return existing_token
     return generate_invite_token(user)
 
@@ -371,7 +383,8 @@ def verify_email_change_otp(user, code):
         raise merrors.ValueException("No pending email change")
 
     now_ts = int(dates.utcnow().timestamp())
-    if now_ts - stored_ts > int(EMAIL_CHANGE_CODE_TTL):
+    change_ttl = EMAIL_CHANGE_CODE_TTL if EMAIL_CHANGE_CODE_TTL is not None else settings.get("EMAIL_CHANGE_CODE_TTL", 600)
+    if now_ts - stored_ts > int(change_ttl):
         user.set_secret("pending_email", None)
         user.set_secret("email_change_otp", None)
         user.set_secret("email_change_otp_ts", None)
@@ -453,7 +466,7 @@ def verify_phone_change_token(token, code):
     # Check OTP expiry independently (belt-and-suspenders: the pc: token TTL
     # already enforces the window, but this makes the intent explicit)
     now_ts = int(dates.utcnow().timestamp())
-    if now_ts - stored_ts > int(PHONE_CHANGE_TOKEN_TTL):
+    if now_ts - stored_ts > int(settings.get("PHONE_CHANGE_TOKEN_TTL", 600)):
         user.set_secret("pending_phone", None)
         user.set_secret("phone_change_otp", None)
         user.set_secret("phone_change_otp_ts", None)

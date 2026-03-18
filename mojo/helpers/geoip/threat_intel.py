@@ -28,7 +28,6 @@ BLOCKLISTS = {
         'enabled': settings.get('THREAT_INTEL_SPAMHAUS_ENABLED', False),
         # Spamhaus requires DNS-based lookup or paid API
     }
-}
 
 
 def check_internal_threats(ip_address):
