@@ -2,6 +2,9 @@ import importlib
 from objict import objict
 UNKNOWN = Ellipsis
 
+
+ALLOW_DB_SETTINGS = False
+
 def load_settings_profile(context):
     from mojo.helpers import modules, paths
     # Set default profile
@@ -120,12 +123,13 @@ class SettingsHelper:
                 return self._convert_value(value, kind, default)
             return value if value is not UNKNOWN else self.get_default(name, default)
 
-        # DB-backed settings: Redis cache -> DB (group parent chain -> global)
-        db_value = self._get_db_setting(name, group)
-        if db_value is not UNKNOWN:
-            if kind:
-                return self._convert_value(db_value, kind, default)
-            return db_value
+        if ALLOW_DB_SETTINGS:
+            # DB-backed settings: Redis cache -> DB (group parent chain -> global)
+            db_value = self._get_db_setting(name, group)
+            if db_value is not UNKNOWN:
+                if kind:
+                    return self._convert_value(db_value, kind, default)
+                return db_value
 
         # Fallback: live Django settings (file-based)
         value = getattr(self._live_django_settings(), name, UNKNOWN)

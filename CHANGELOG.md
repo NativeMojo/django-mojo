@@ -1,5 +1,10 @@
 ## v1.0.59 - (current)
 
+## v1.0.59 - March 18, 2026
+
+hot fix for db settigns issues
+
+
 ## v1.0.58 - March 18, 2026
 
 new dynamic settings that do not read from db at import
