@@ -12,38 +12,137 @@ else
     PYTHON="python3"
 fi
 
-if [ ! -d "$TESTPROJECT" ]; then
-    echo "ERROR: testproject/ not found. Run ./bin/create_testproject first."
-    exit 1
-fi
+PIDFILE="$TESTPROJECT/var/asgi.pid"
+LOGFILE="$TESTPROJECT/var/asgi.log"
 
-# Check Redis
-if ! redis-cli ping > /dev/null 2>&1; then
-    echo "==> Starting redis-server in background"
-    redis-server --daemonize yes
-fi
+_check_project() {
+    if [ ! -d "$TESTPROJECT" ]; then
+        echo "ERROR: testproject/ not found. Run ./bin/create_testproject first."
+        exit 1
+    fi
+    mkdir -p "$TESTPROJECT/var"
+}
 
-# Read host/port from dev_server.conf
-HOST="127.0.0.1"
-PORT="5555"
-CONF="$TESTPROJECT/config/dev_server.conf"
-if [ -f "$CONF" ]; then
-    while IFS='=' read -r key value; do
-        key=$(echo "$key" | tr -d '[:space:]')
-        value=$(echo "$value" | tr -d '[:space:]')
-        case "$key" in
-            host) HOST="$value" ;;
-            port) PORT="$value" ;;
-        esac
-    done < "$CONF"
-fi
+_ensure_redis() {
+    if ! redis-cli ping > /dev/null 2>&1; then
+        echo "==> Starting redis-server in background"
+        redis-server --daemonize yes
+    fi
+}
 
-export DJANGO_SETTINGS_MODULE=settings
-export PYTHONUNBUFFERED=1
+_read_conf() {
+    HOST="127.0.0.1"
+    PORT="5555"
+    CONF="$TESTPROJECT/config/dev_server.conf"
+    if [ -f "$CONF" ]; then
+        while IFS='=' read -r key value; do
+            key=$(echo "$key" | tr -d '[:space:]')
+            value=$(echo "$value" | tr -d '[:space:]')
+            case "$key" in
+                host) HOST="$value" ;;
+                port) PORT="$value" ;;
+            esac
+        done < "$CONF"
+    fi
+    export DJANGO_SETTINGS_MODULE=settings
+    export PYTHONUNBUFFERED=1
+}
 
-echo "==> Starting uvicorn on http://$HOST:$PORT"
-exec $PYTHON -m uvicorn _asgi:application \
-    --app-dir "$TESTPROJECT/bin" \
-    --host "$HOST" \
-    --port "$PORT" \
-    --reload
+_is_running() {
+    if [ -f "$PIDFILE" ]; then
+        pid=$(cat "$PIDFILE")
+        if kill -0 "$pid" 2>/dev/null; then
+            return 0
+        fi
+        # stale pid file
+        rm -f "$PIDFILE"
+    fi
+    return 1
+}
+
+do_start() {
+    _check_project
+    _ensure_redis
+    _read_conf
+
+    if _is_running; then
+        echo "Already running (PID $(cat "$PIDFILE"))"
+        exit 0
+    fi
+
+    echo "==> Starting uvicorn on http://$HOST:$PORT (daemon)"
+    nohup $PYTHON -m uvicorn _asgi:application \
+        --app-dir "$TESTPROJECT/bin" \
+        --host "$HOST" \
+        --port "$PORT" \
+        --reload \
+        > "$LOGFILE" 2>&1 &
+
+    echo $! > "$PIDFILE"
+    echo "Started (PID $!, log: $LOGFILE)"
+}
+
+do_stop() {
+    if ! _is_running; then
+        echo "Not running"
+        return 0
+    fi
+    pid=$(cat "$PIDFILE")
+    echo "==> Stopping uvicorn (PID $pid)"
+    kill "$pid" 2>/dev/null || true
+    # wait up to 5s for graceful shutdown
+    for i in $(seq 1 10); do
+        if ! kill -0 "$pid" 2>/dev/null; then
+            break
+        fi
+        sleep 0.5
+    done
+    # force kill if still alive
+    if kill -0 "$pid" 2>/dev/null; then
+        kill -9 "$pid" 2>/dev/null || true
+    fi
+    rm -f "$PIDFILE"
+    echo "Stopped"
+}
+
+do_status() {
+    if _is_running; then
+        echo "Running (PID $(cat "$PIDFILE"))"
+    else
+        echo "Not running"
+    fi
+}
+
+do_foreground() {
+    _check_project
+    _ensure_redis
+    _read_conf
+
+    if _is_running; then
+        echo "WARNING: daemon already running (PID $(cat "$PIDFILE")), starting foreground anyway"
+    fi
+
+    echo "==> Starting uvicorn on http://$HOST:$PORT"
+    exec $PYTHON -m uvicorn _asgi:application \
+        --app-dir "$TESTPROJECT/bin" \
+        --host "$HOST" \
+        --port "$PORT" \
+        --reload
+}
+
+case "${1:-}" in
+    start)   do_start ;;
+    stop)    do_stop ;;
+    restart) do_stop; do_start ;;
+    status)  do_status ;;
+    "")      do_foreground ;;
+    *)
+        echo "Usage: asgi_local [start|stop|restart|status]"
+        echo "  (no args)  Run in foreground"
+        echo "  start      Run as background daemon"
+        echo "  stop       Stop the daemon"
+        echo "  restart    Restart the daemon"
+        echo "  status     Check if running"
+        exit 1
+        ;;
+esac

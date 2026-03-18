@@ -9,14 +9,14 @@ from mojo.helpers import modules
 from objict import objict
 from mojo.helpers import logit
 
-AUTH_BEARER_HANDLER_PATHS = settings.get("AUTH_BEARER_HANDLERS", {})
+AUTH_BEARER_HANDLER_PATHS = settings.get_static("AUTH_BEARER_HANDLERS", {})
 
 AUTH_BEARER_HANDLERS_CACHE = {
     "bearer": User.validate_jwt,
     "apikey": ApiKey.validate_token,
 }
 
-AUTH_BEARER_NAME_MAP = settings.get("AUTH_BEARER_NAME_MAP", {"bearer": "user", "apikey": "user"})
+AUTH_BEARER_NAME_MAP = settings.get_static("AUTH_BEARER_NAME_MAP", {"bearer": "user", "apikey": "user"})
 
 class AuthenticationMiddleware(MiddlewareMixin):
     def process_request(self, request):

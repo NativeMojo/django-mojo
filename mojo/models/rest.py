@@ -17,7 +17,7 @@ logger = logit.get_logger("debug", "debug.log")
 ACTIVE_REQUEST = ContextVar("ACTIVE_REQUEST", default=None)
 LOGGING_CLASS = None
 MOJO_APP_STATUS_200_ON_ERROR = settings.MOJO_APP_STATUS_200_ON_ERROR
-MOJO_REST_LIST_PERM_DENY = settings.get("MOJO_REST_LIST_PERM_DENY", True)
+MOJO_REST_LIST_PERM_DENY = settings.get_static("MOJO_REST_LIST_PERM_DENY", True)
 
 # use this when there is no ACTIVE_REQUEST
 SYSTEM_REQUEST = objict.objict()

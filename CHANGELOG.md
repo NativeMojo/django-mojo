@@ -1,5 +1,10 @@
 ## v1.0.59 - (current)
 
+## v1.0.58 - March 18, 2026
+
+new dynamic settings that do not read from db at import
+
+
 ### Improvements
 
 - settings/runtime: completed broad settings hardening pass to avoid frozen import-time settings in runtime paths (jobs engine/scheduler/public API, logging middleware, incident/log async jobs, incident metrics, account activity/permission/geolocation/notification model knobs, serializer datetime mode, geoip providers/config, OpenAPI prefix). Runtime behavior now reads via `mojo.helpers.settings.settings` at call-time in these modules.

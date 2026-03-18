@@ -3,7 +3,7 @@ MaxMind GeoIP2 provider for GeoIP lookups.
 https://www.maxmind.com/en/geoip2-precision-services
 """
 from mojo.helpers.location.countries import get_country_name
-from .config import MAXMIND_ACCOUNT_ID, MAXMIND_LICENSE_KEY
+from .config import get_api_key
 
 
 def fetch(ip_address, api_key=None):
@@ -26,8 +26,8 @@ def fetch(ip_address, api_key=None):
         print("[GeoIP Error] MaxMind provider requires the 'geoip2' package. Install with: pip install geoip2")
         return None
 
-    account_id = MAXMIND_ACCOUNT_ID
-    license_key = MAXMIND_LICENSE_KEY
+    account_id = get_api_key('maxmind_account_id')
+    license_key = get_api_key('maxmind_license_key')
 
     if not account_id or not license_key:
         print("[GeoIP Error] MaxMind provider requires GEOIP_API_KEY_MAXMIND_ACCOUNT_ID and "

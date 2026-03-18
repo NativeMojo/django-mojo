@@ -6,16 +6,16 @@ from mojo.helpers.settings import settings
 from mojo.helpers import logit
 from mojo.helpers.response import JsonResponse
 
-API_PREFIX = "/".join([settings.get("MOJO_PREFIX", "api/").rstrip("/"), ""])
-LOGIT_DEBUG_ALL = settings.get("LOGIT_DEBUG_ALL", False)
-LOGIT_DB_ALL = settings.get("LOGIT_DB_ALL", False)
-LOGIT_FILE_ALL = settings.get("LOGIT_FILE_ALL", False)
-LOGIT_RETURN_REAL_ERROR = settings.get("LOGIT_RETURN_REAL_ERROR", True)
-LOGIT_MAX_RESPONSE_SIZE = settings.get("LOGIT_MAX_RESPONSE_SIZE", 1024)  # 1KB default
+API_PREFIX = "/".join([settings.get_static("MOJO_PREFIX", "api/").rstrip("/"), ""])
+LOGIT_DEBUG_ALL = settings.get_static("LOGIT_DEBUG_ALL", False)
+LOGIT_DB_ALL = settings.get_static("LOGIT_DB_ALL", False)
+LOGIT_FILE_ALL = settings.get_static("LOGIT_FILE_ALL", False)
+LOGIT_RETURN_REAL_ERROR = settings.get_static("LOGIT_RETURN_REAL_ERROR", True)
+LOGIT_MAX_RESPONSE_SIZE = settings.get_static("LOGIT_MAX_RESPONSE_SIZE", 1024)  # 1KB default
 LOGGER = logit.get_logger("requests", "requests.log")
 ERROR_LOGGER = logit.get_logger("error", "error.log")
-LOGIT_NO_LOG_PREFIX = settings.get("LOGIT_NO_LOG_PREFIX", ['GET:/api/user'])
-LOGIT_ALWAYS_LOG_PREFIX = settings.get("LOGIT_ALWAYS_LOG_PREFIX", ['POST:/api/user', 'GET:/api/user/'])
+LOGIT_NO_LOG_PREFIX = settings.get_static("LOGIT_NO_LOG_PREFIX", ['GET:/api/user'])
+LOGIT_ALWAYS_LOG_PREFIX = settings.get_static("LOGIT_ALWAYS_LOG_PREFIX", ['POST:/api/user', 'GET:/api/user/'])
 
 # Async logging setup
 log_queue = Queue()

@@ -2,7 +2,7 @@ from django.urls import path, include
 from mojo.helpers.settings import settings
 from mojo.helpers import modules
 
-MOJO_API_MODULE = settings.get("MOJO_API_MODULE", "rest")
+MOJO_API_MODULE = settings.get_static("MOJO_API_MODULE", "rest")
 
 # REST_AUTO_PREFIX controls how MOJO_PREFIX is applied:
 # - False (default): Django project must handle MOJO_PREFIX (old way)
@@ -12,8 +12,8 @@ MOJO_API_MODULE = settings.get("MOJO_API_MODULE", "rest")
 #     Django: path("", include('mojo.urls'))
 #     Result: /api/myapp/endpoint (app routes)
 #     Result: /absolute/endpoint (absolute routes starting with "/")
-REST_AUTO_PREFIX = settings.get("REST_AUTO_PREFIX", False)
-MOJO_PREFIX = settings.get("MOJO_PREFIX", "api").strip("/")
+REST_AUTO_PREFIX = settings.get_static("REST_AUTO_PREFIX", False)
+MOJO_PREFIX = settings.get_static("MOJO_PREFIX", "api").strip("/")
 
 urlpatterns = []
 

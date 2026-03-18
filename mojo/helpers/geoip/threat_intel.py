@@ -7,26 +7,28 @@ from mojo.helpers.settings import settings
 from mojo.helpers import dates
 
 # Threat checking settings
-ENABLE_BLOCKLIST_CHECK = settings.get('GEOLOCATION_ENABLE_BLOCKLIST_CHECK', True)
-ENABLE_INTERNAL_THREAT_CHECK = settings.get('GEOLOCATION_ENABLE_INTERNAL_THREAT_CHECK', True)
-INTERNAL_THREAT_LOOKBACK_DAYS = settings.get('GEOLOCATION_INTERNAL_THREAT_LOOKBACK_DAYS', 90)
-INTERNAL_THREAT_EVENT_THRESHOLD = settings.get('GEOLOCATION_INTERNAL_THREAT_EVENT_THRESHOLD', 5)
-INTERNAL_ATTACKER_LEVEL_THRESHOLD = settings.get('GEOLOCATION_INTERNAL_ATTACKER_LEVEL_THRESHOLD', 8)
+ENABLE_BLOCKLIST_CHECK = settings.get_static('GEOLOCATION_ENABLE_BLOCKLIST_CHECK', True)
+ENABLE_INTERNAL_THREAT_CHECK = settings.get_static('GEOLOCATION_ENABLE_INTERNAL_THREAT_CHECK', True)
+INTERNAL_THREAT_LOOKBACK_DAYS = settings.get_static('GEOLOCATION_INTERNAL_THREAT_LOOKBACK_DAYS', 90)
+INTERNAL_THREAT_EVENT_THRESHOLD = settings.get_static('GEOLOCATION_INTERNAL_THREAT_EVENT_THRESHOLD', 5)
+INTERNAL_ATTACKER_LEVEL_THRESHOLD = settings.get_static('GEOLOCATION_INTERNAL_ATTACKER_LEVEL_THRESHOLD', 8)
 
-# Public blocklists (free services)
-BLOCKLISTS = {
-    'abuseipdb': {
-        'enabled': settings.get('THREAT_INTEL_ABUSEIPDB_ENABLED', False),
-        'api_key': settings.get('THREAT_INTEL_ABUSEIPDB_API_KEY', None),
-        'url': 'https://api.abuseipdb.com/api/v2/check',
-    },
-    'blocklist_de': {
-        'enabled': settings.get('THREAT_INTEL_BLOCKLIST_DE_ENABLED', True),
-        'url': 'https://lists.blocklist.de/lists/all.txt',  # Updated periodically
-    },
-    'spamhaus': {
-        'enabled': settings.get('THREAT_INTEL_SPAMHAUS_ENABLED', False),
-        # Spamhaus requires DNS-based lookup or paid API
+
+def _get_blocklist_config():
+    """Build blocklist config at call time so API keys come from DB."""
+    return {
+        'abuseipdb': {
+            'enabled': settings.get('THREAT_INTEL_ABUSEIPDB_ENABLED', False),
+            'api_key': settings.get('THREAT_INTEL_ABUSEIPDB_API_KEY', None),
+            'url': 'https://api.abuseipdb.com/api/v2/check',
+        },
+        'blocklist_de': {
+            'enabled': settings.get_static('THREAT_INTEL_BLOCKLIST_DE_ENABLED', True),
+            'url': 'https://lists.blocklist.de/lists/all.txt',
+        },
+        'spamhaus': {
+            'enabled': settings.get_static('THREAT_INTEL_SPAMHAUS_ENABLED', False),
+        }
     }
 
 
@@ -115,7 +117,7 @@ def check_abuseipdb(ip_address):
     Check IP against AbuseIPDB service.
     Free tier: 1,000 checks per day
     """
-    config = BLOCKLISTS['abuseipdb']
+    config = _get_blocklist_config()['abuseipdb']
     if not config['enabled'] or not config['api_key']:
         return None
 
@@ -163,7 +165,7 @@ def check_blocklist_de(ip_address):
     Check IP against blocklist.de
     This is a simple text file check - in production you'd cache this list.
     """
-    config = BLOCKLISTS['blocklist_de']
+    config = _get_blocklist_config()['blocklist_de']
     if not config['enabled']:
         return None
 

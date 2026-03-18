@@ -17,14 +17,14 @@ from .keys import JobKeys
 from .adapters import get_adapter
 
 # Module-level settings for readability
-JOB_CHANNELS = settings.get('JOBS_CHANNELS', ['default'])
-JOBS_PAYLOAD_MAX_BYTES = settings.get('JOBS_PAYLOAD_MAX_BYTES', 16384)
-JOBS_DEFAULT_EXPIRES_SEC = settings.get('JOBS_DEFAULT_EXPIRES_SEC', 900)
-JOBS_DEFAULT_MAX_RETRIES = settings.get('JOBS_DEFAULT_MAX_RETRIES', 0)
-JOBS_DEFAULT_BACKOFF_BASE = settings.get('JOBS_DEFAULT_BACKOFF_BASE', 2.0)
-JOBS_DEFAULT_BACKOFF_MAX = settings.get('JOBS_DEFAULT_BACKOFF_MAX', 3600)
-JOBS_STREAM_MAXLEN = settings.get('JOBS_STREAM_MAXLEN', 100000)
-JOBS_WEBHOOK_MAX_RETRIES = settings.get("JOBS_WEBHOOK_MAX_RETRIES", 5, kind="int")
+JOB_CHANNELS = settings.get_static('JOBS_CHANNELS', ['default'])
+JOBS_PAYLOAD_MAX_BYTES = settings.get_static('JOBS_PAYLOAD_MAX_BYTES', 16384)
+JOBS_DEFAULT_EXPIRES_SEC = settings.get_static('JOBS_DEFAULT_EXPIRES_SEC', 900)
+JOBS_DEFAULT_MAX_RETRIES = settings.get_static('JOBS_DEFAULT_MAX_RETRIES', 0)
+JOBS_DEFAULT_BACKOFF_BASE = settings.get_static('JOBS_DEFAULT_BACKOFF_BASE', 2.0)
+JOBS_DEFAULT_BACKOFF_MAX = settings.get_static('JOBS_DEFAULT_BACKOFF_MAX', 3600)
+JOBS_STREAM_MAXLEN = settings.get_static('JOBS_STREAM_MAXLEN', 100000)
+JOBS_WEBHOOK_MAX_RETRIES = settings.get_static("JOBS_WEBHOOK_MAX_RETRIES", 5, kind="int")
 
 __all__ = [
     'publish',

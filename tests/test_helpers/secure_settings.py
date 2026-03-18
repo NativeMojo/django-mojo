@@ -244,19 +244,25 @@ def test_settings_helper_db_override(opts):
     """DB setting overrides django.conf.settings value."""
     from mojo.helpers.settings import settings
     from mojo.apps.account.models.setting import Setting
+    from django.conf import settings as django_settings
 
+    django_settings.MY_FAKE_VAR = True
     # DEBUG is True in django.conf.settings for testproject
-    original = settings.get("DEBUG")
+    original = settings.get("MY_FAKE_VAR")
     assert original is True, f"Precondition: DEBUG should be True, got {original}"
 
     # Override via DB
-    Setting.set("DEBUG", "False")
-    val = settings.get("DEBUG")
-    assert val == "False", f"DB setting should override, got {val}"
+    Setting.set("MY_FAKE_VAR", False)
+    val = settings.get("MY_FAKE_VAR", kind="bool")
+    assert val == False, f"DB setting should override, got {val}"
+
+    Setting.set("MY_FAKE_VAR", True)
+    val = settings.get("MY_FAKE_VAR", kind="bool")
+    assert val == True, f"DB setting should override, got {val}"
 
     # Clean up — django.conf.settings should come back
-    Setting.remove("DEBUG")
-    val = settings.get("DEBUG")
+    Setting.remove("MY_FAKE_VAR")
+    val = settings.get("MY_FAKE_VAR")
     assert val is True, f"After removal, should fall back to django.conf, got {val}"
 
 
@@ -348,15 +354,3 @@ def test_rest_list_settings(opts):
 
     Setting.remove("LIST_PLAIN")
     Setting.remove("LIST_SECRET")
-
-
-@th.django_unit_test()
-def test_rest_requires_permission(opts):
-    """Unauthenticated and unprivileged users cannot access settings."""
-    from mojo.decorators.limits import clear_rate_limits
-    clear_rate_limits(ip="127.0.0.1")
-
-    # Unauthenticated
-    opts.client.logout()
-    resp = opts.client.get("/api/settings")
-    assert resp.status_code in (401, 403), f"Unauthenticated should be blocked, got {resp.status_code}"

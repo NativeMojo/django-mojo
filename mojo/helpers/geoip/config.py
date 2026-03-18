@@ -4,24 +4,32 @@ Configuration and constants for GeoIP services.
 from mojo.helpers.settings import settings
 
 # Provider configuration
-PRIMARY_PROVIDER = settings.get('GEOIP_PRIMARY_PROVIDER', 'maxmind')
-FALLBACK_PROVIDER = settings.get('GEOIP_FALLBACK_PROVIDER', 'ipinfo')
+PRIMARY_PROVIDER = settings.get_static('GEOIP_PRIMARY_PROVIDER', 'maxmind')
+FALLBACK_PROVIDER = settings.get_static('GEOIP_FALLBACK_PROVIDER', 'ipinfo')
 
 # Additional fallback providers (tried in order if primary and fallback fail)
-ADDITIONAL_PROVIDERS = settings.get('GEOIP_ADDITIONAL_PROVIDERS', ['ipstack', 'ip-api'])
+ADDITIONAL_PROVIDERS = settings.get_static('GEOIP_ADDITIONAL_PROVIDERS', ['ipstack', 'ip-api'])
 
 # Detection settings
-ENABLE_TOR_DETECTION = settings.get('GEOIP_ENABLE_TOR_DETECTION', True)
-ENABLE_VPN_DETECTION = settings.get('GEOIP_ENABLE_VPN_DETECTION', True)
-ENABLE_CLOUD_DETECTION = settings.get('GEOIP_ENABLE_CLOUD_DETECTION', True)
-TOR_EXIT_NODE_LIST_URL = settings.get('TOR_EXIT_NODE_LIST_URL', 'https://check.torproject.org/exit-addresses')
+ENABLE_TOR_DETECTION = settings.get_static('GEOIP_ENABLE_TOR_DETECTION', True)
+ENABLE_VPN_DETECTION = settings.get_static('GEOIP_ENABLE_VPN_DETECTION', True)
+ENABLE_CLOUD_DETECTION = settings.get_static('GEOIP_ENABLE_CLOUD_DETECTION', True)
+TOR_EXIT_NODE_LIST_URL = settings.get_static('TOR_EXIT_NODE_LIST_URL', 'https://check.torproject.org/exit-addresses')
 
-# API Keys for providers
-IPINFO_API_KEY = settings.get('GEOIP_API_KEY_IPINFO', None)
-IPSTACK_API_KEY = settings.get('GEOIP_API_KEY_IPSTACK', None)
-IPAPI_API_KEY = settings.get('GEOIP_API_KEY_IP-API', None)
-MAXMIND_ACCOUNT_ID = settings.get('MAXMIND_ACCOUNT_ID', None)
-MAXMIND_LICENSE_KEY = settings.get('MAXMIND_LICENSE_KEY', None)
+
+def get_api_key(provider):
+    """Get API key/credentials for a provider at call time (may be DB-backed)."""
+    key_map = {
+        'ipinfo': 'GEOIP_API_KEY_IPINFO',
+        'ipstack': 'GEOIP_API_KEY_IPSTACK',
+        'ip-api': 'GEOIP_API_KEY_IP-API',
+        'maxmind_account_id': 'MAXMIND_ACCOUNT_ID',
+        'maxmind_license_key': 'MAXMIND_LICENSE_KEY',
+    }
+    setting_name = key_map.get(provider)
+    if not setting_name:
+        return None
+    return settings.get(setting_name)
 
 # Cloud provider IP ranges (ASN-based detection is more reliable, but these help)
 CLOUD_PROVIDERS = {

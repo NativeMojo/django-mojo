@@ -43,7 +43,7 @@ from mojo.helpers.settings import settings
 from .cache import get_cache_backend, get_cache_key, get_model_cache_ttl
 
 # Load setting once at module import time for performance
-SERIALIZE_DATETIME_TO_FLOAT = settings.get('SERIALIZE_DATETIME_TO_FLOAT', False)
+SERIALIZE_DATETIME_TO_FLOAT = settings.get_static('SERIALIZE_DATETIME_TO_FLOAT', False)
 
 
 class OptimizedGraphSerializer:

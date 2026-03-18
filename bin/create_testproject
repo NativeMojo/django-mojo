@@ -288,5 +288,7 @@ $PYTHON "$TESTPROJECT/manage.py" migrate --run-syncdb 2>&1
 
 echo ""
 echo "==> testproject/ created successfully"
-echo "    Run ./bin/asgi_local to start the dev server"
-echo "    Run ./bin/testit.py to run the test suite"
+echo "    Run ./bin/asgi_local start   to start the dev server (daemon)"
+echo "    Run ./bin/asgi_local stop    to stop the dev server"
+echo "    Run ./bin/asgi_local         to run in foreground (Ctrl-C to stop)"
+echo "    Run ./bin/testit.py          to run the test suite"

@@ -4,7 +4,7 @@ from datetime import timedelta
 from mojo.helpers.settings import settings
 
 # Default: check once an hour at minute 0 (can be overridden in settings)
-INCIDENT_EVENT_PRUNE_DAYS = settings.get("INCIDENT_EVENT_PRUNE_DAYS", 30)
+INCIDENT_EVENT_PRUNE_DAYS = settings.get_static("INCIDENT_EVENT_PRUNE_DAYS", 30)
 
 
 def prune_events(job):

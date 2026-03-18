@@ -18,7 +18,7 @@ logger = logit.get_logger("email", "email.log")
 # Simple in-memory cache for SNS signing certificates
 # Key: SigningCertURL, Value: (fetched_at_epoch_seconds, pem_bytes)
 _SNS_CERT_CACHE: Dict[str, tuple[float, bytes]] = {}
-_SNS_CERT_TTL_SECONDS = settings.get('SNS_CERT_TTL_SECONDS', 3600)  # default 1 hour
+_SNS_CERT_TTL_SECONDS = settings.get_static('SNS_CERT_TTL_SECONDS', 3600)  # default 1 hour
 
 
 def _json_loads_safe(data: str) -> Optional[Dict[str, Any]]:
