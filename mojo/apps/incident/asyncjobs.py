@@ -1,10 +1,10 @@
 from mojo.apps.incident.models import Event
 from django.utils import timezone
 from datetime import timedelta
-from django.conf import settings
+from mojo.helpers.settings import settings
 
 # Default: check once an hour at minute 0 (can be overridden in settings)
-INCIDENT_EVENT_PRUNE_DAYS = getattr(settings, "INCIDENT_EVENT_PRUNE_DAYS", 30)
+INCIDENT_EVENT_PRUNE_DAYS = settings.get("INCIDENT_EVENT_PRUNE_DAYS", 30)
 
 
 def prune_events(job):

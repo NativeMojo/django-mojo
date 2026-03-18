@@ -8,6 +8,7 @@ from mojo.apps.account.models import GeoLocatedIP
 
 
 INCIDENT_LEVEL_THRESHOLD = settings.get('INCIDENT_LEVEL_THRESHOLD', 7)
+INCIDENT_METRICS_MIN_GRANULARITY = settings.get("INCIDENT_METRICS_MIN_GRANULARITY", "hours")
 
 class Event(models.Model, MojoModel):
     id = models.BigAutoField(primary_key=True)
@@ -248,22 +249,22 @@ class Event(models.Model, MojoModel):
     def record_event_metrics(self):
         if settings.INCIDENT_EVENT_METRICS:
             metrics.record('incident_events', account="incident",
-                min_granularity=settings.get("INCIDENT_METRICS_MIN_GRANULARITY", "hours"))
+                min_granularity=INCIDENT_METRICS_MIN_GRANULARITY)
             if self.country_code:
                 metrics.record(f'incident_events:country:{self.country_code}',
                     account="incident",
                     category="incident_events_by_country",
-                    min_granularity=settings.get("INCIDENT_METRICS_MIN_GRANULARITY", "hours"))
+                    min_granularity=INCIDENT_METRICS_MIN_GRANULARITY)
 
     def record_incident_metrics(self):
         if settings.INCIDENT_EVENT_METRICS:
             metrics.record('incidents', account="incident",
-                min_granularity=settings.get("INCIDENT_METRICS_MIN_GRANULARITY", "hours"))
+                min_granularity=INCIDENT_METRICS_MIN_GRANULARITY)
             if self.country_code:
                 metrics.record(f'incident:country:{self.country_code}',
                     account="incident",
                     category="incidents_by_country",
-                    min_granularity=settings.get("INCIDENT_METRICS_MIN_GRANULARITY", "hours"))
+                    min_granularity=INCIDENT_METRICS_MIN_GRANULARITY)
 
     def get_or_create_incident(self, rule_set=None):
         """

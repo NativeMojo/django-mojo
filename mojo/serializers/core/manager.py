@@ -28,7 +28,7 @@ import importlib
 from typing import Dict, Any, Optional, Type, Union, List
 from threading import RLock
 
-from django.conf import settings
+from mojo.helpers.settings import settings
 from django.db.models import QuerySet, Model
 from django.http import HttpResponse
 
@@ -195,12 +195,14 @@ class SerializerManager:
     def _load_configuration(self):
         """Load configuration from Django settings."""
         # Get default serializer from settings
-        default_from_settings = getattr(settings, 'MOJO_DEFAULT_SERIALIZER', None)
+        default_from_settings = settings.get('MOJO_DEFAULT_SERIALIZER', None)
         if default_from_settings and not self.default_serializer:
             self.default_serializer = default_from_settings
 
         # Register custom serializers from settings
-        custom_serializers = getattr(settings, 'MOJO_CUSTOM_SERIALIZERS', {})
+        custom_serializers = settings.get('MOJO_CUSTOM_SERIALIZERS', {}) or {}
+        if not isinstance(custom_serializers, dict):
+            custom_serializers = {}
         for name, config in custom_serializers.items():
             if isinstance(config, str):
                 # Simple string path

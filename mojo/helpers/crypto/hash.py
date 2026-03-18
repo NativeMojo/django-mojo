@@ -13,7 +13,7 @@ def hash(value, salt=None):
     :return: str - the hex digest of the hash
     """
     if salt is None:
-        from django.conf import settings
+        from mojo.helpers.settings import settings
         salt = settings.SECRET_KEY
     if isinstance(value, dict):
         # Sort the dictionary and prepare a string representation

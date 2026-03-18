@@ -6,6 +6,7 @@ from django.utils import timezone
 from django.db.models import Q
 from mojo.apps.jobs.adapters import get_adapter
 from mojo.apps.jobs.keys import JobKeys
+from mojo.helpers.settings import settings
 
 from datetime import datetime
 
@@ -15,36 +16,34 @@ from datetime import datetime
 @md.requires_perms('manage_jobs')
 def on_get_config(request):
     """Get current jobs system configuration."""
-    from django.conf import settings
-
     config = {
-        'redis_url': getattr(settings, 'JOBS_REDIS_URL', 'redis://localhost:6379/0'),
-        'redis_prefix': getattr(settings, 'JOBS_REDIS_PREFIX', 'mojo:jobs'),
+        'redis_url': settings.get('JOBS_REDIS_URL', 'redis://localhost:6379/0'),
+        'redis_prefix': settings.get('JOBS_REDIS_PREFIX', 'mojo:jobs'),
         'engine': {
-            'max_workers': getattr(settings, 'JOBS_ENGINE_MAX_WORKERS', 10),
-            'claim_buffer': getattr(settings, 'JOBS_ENGINE_CLAIM_BUFFER', 2),
-            'claim_batch': getattr(settings, 'JOBS_ENGINE_CLAIM_BATCH', 5),
-            'read_timeout': getattr(settings, 'JOBS_ENGINE_READ_TIMEOUT', 100),
+            'max_workers': settings.get('JOBS_ENGINE_MAX_WORKERS', 10),
+            'claim_buffer': settings.get('JOBS_ENGINE_CLAIM_BUFFER', 2),
+            'claim_batch': settings.get('JOBS_ENGINE_CLAIM_BATCH', 5),
+            'read_timeout': settings.get('JOBS_ENGINE_READ_TIMEOUT', 100),
         },
         'defaults': {
-            'channel': getattr(settings, 'JOBS_DEFAULT_CHANNEL', 'default'),
-            'expires_sec': getattr(settings, 'JOBS_DEFAULT_EXPIRES_SEC', 900),
-            'max_retries': getattr(settings, 'JOBS_DEFAULT_MAX_RETRIES', 3),
-            'backoff_base': getattr(settings, 'JOBS_DEFAULT_BACKOFF_BASE', 2.0),
-            'backoff_max': getattr(settings, 'JOBS_DEFAULT_BACKOFF_MAX', 3600),
+            'channel': settings.get('JOBS_DEFAULT_CHANNEL', 'default'),
+            'expires_sec': settings.get('JOBS_DEFAULT_EXPIRES_SEC', 900),
+            'max_retries': settings.get('JOBS_DEFAULT_MAX_RETRIES', 3),
+            'backoff_base': settings.get('JOBS_DEFAULT_BACKOFF_BASE', 2.0),
+            'backoff_max': settings.get('JOBS_DEFAULT_BACKOFF_MAX', 3600),
         },
         'limits': {
-            'payload_max_bytes': getattr(settings, 'JOBS_PAYLOAD_MAX_BYTES', 1048576),
-            'stream_maxlen': getattr(settings, 'JOBS_STREAM_MAXLEN', 100000),
-            'local_queue_maxsize': getattr(settings, 'JOBS_LOCAL_QUEUE_MAXSIZE', 1000),
+            'payload_max_bytes': settings.get('JOBS_PAYLOAD_MAX_BYTES', 1048576),
+            'stream_maxlen': settings.get('JOBS_STREAM_MAXLEN', 100000),
+            'local_queue_maxsize': settings.get('JOBS_LOCAL_QUEUE_MAXSIZE', 1000),
         },
         'timeouts': {
-            'idle_timeout_ms': getattr(settings, 'JOBS_IDLE_TIMEOUT_MS', 60000),
-            'xpending_idle_ms': getattr(settings, 'JOBS_XPENDING_IDLE_MS', 60000),
-            'runner_heartbeat_sec': getattr(settings, 'JOBS_RUNNER_HEARTBEAT_SEC', 5),
-            'scheduler_lock_ttl_ms': getattr(settings, 'JOBS_SCHEDULER_LOCK_TTL_MS', 5000),
+            'idle_timeout_ms': settings.get('JOBS_IDLE_TIMEOUT_MS', 60000),
+            'xpending_idle_ms': settings.get('JOBS_XPENDING_IDLE_MS', 60000),
+            'runner_heartbeat_sec': settings.get('JOBS_RUNNER_HEARTBEAT_SEC', 5),
+            'scheduler_lock_ttl_ms': settings.get('JOBS_SCHEDULER_LOCK_TTL_MS', 5000),
         },
-        'channels': getattr(settings, 'JOBS_CHANNELS', ['default'])
+        'channels': settings.get('JOBS_CHANNELS', ['default'])
     }
 
     return JsonResponse({

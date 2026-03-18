@@ -3,7 +3,7 @@ Redis key builder for jobs system.
 Centralized, prefix-aware key management.
 """
 from typing import Optional
-from django.conf import settings
+from mojo.helpers.settings import settings
 
 
 QUEUE_TAG = "{jobs}"  # same slot for all queues (cluster-safe)

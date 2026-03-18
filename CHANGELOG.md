@@ -1,5 +1,13 @@
 ## v1.0.59 - (current)
 
+### Improvements
+
+- settings/runtime: completed broad settings hardening pass to avoid frozen import-time settings in runtime paths (jobs engine/scheduler/public API, logging middleware, incident/log async jobs, incident metrics, account activity/permission/geolocation/notification model knobs, serializer datetime mode, geoip providers/config, OpenAPI prefix). Runtime behavior now reads via `mojo.helpers.settings.settings` at call-time in these modules.
+
+### Docs
+
+- docs: added `docs/django_developer/helpers/settings_reference.md` — names-only framework settings key reference generated from framework usage; includes startup/bootstrap keys (restart required) and runtime keys. Updated `docs/django_developer/helpers/README.md`, `docs/django_developer/helpers/settings.md`, `docs/django_developer/README.md`, and `mkdocs.yml` nav.
+
 ## v1.0.57 - March 17, 2026
 
 new db redis backed secure django settings

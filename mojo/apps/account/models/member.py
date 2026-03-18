@@ -4,10 +4,21 @@ from mojo import errors as merrors
 from mojo.helpers.settings import settings
 from mojo.helpers import dates
 
-MEMBER_PERMS_PROTECTION = settings.get("MEMBER_PERMS_PROTECTION", {})
-USER_LAST_ACTIVITY_FREQ = settings.get("USER_LAST_ACTIVITY_FREQ", 300)
-METRICS_TIMEZONE = settings.get("METRICS_TIMEZONE", "America/Los_Angeles")
-METRICS_TRACK_USER_ACTIVITY = settings.get("METRICS_TRACK_USER_ACTIVITY", False)
+
+def _member_perms_protection():
+    return settings.get("MEMBER_PERMS_PROTECTION", {})
+
+
+def _user_last_activity_freq():
+    return settings.get("USER_LAST_ACTIVITY_FREQ", 300)
+
+
+def _metrics_timezone():
+    return settings.get("METRICS_TIMEZONE", "America/Los_Angeles")
+
+
+def _metrics_track_user_activity():
+    return settings.get("METRICS_TRACK_USER_ACTIVITY", False)
 
 class GroupMember(models.Model, MojoModel):
     """
@@ -75,8 +86,9 @@ class GroupMember(models.Model, MojoModel):
             return True
         req_member = self.group.get_member_for_user(request.user, check_parents=True)
         if req_member is not None:
-            if perm in MEMBER_PERMS_PROTECTION:
-                return req_member.has_permission(MEMBER_PERMS_PROTECTION[perm])
+            member_perms_protection = _member_perms_protection()
+            if perm in member_perms_protection:
+                return req_member.has_permission(member_perms_protection[perm])
             return req_member.has_permission(["manage_group", "manage_members", "manage_users", "manage_groups"])
         return False
 
@@ -132,8 +144,8 @@ class GroupMember(models.Model, MojoModel):
     def touch(self):
         from mojo.apps import metrics
         # can't subtract offset-naive and offset-aware datetimes
-        if self.last_activity is None or dates.has_time_elsapsed(self.last_activity, seconds=USER_LAST_ACTIVITY_FREQ):
-            if self.last_activity and not dates.is_today(self.last_activity, METRICS_TIMEZONE):
+        if self.last_activity is None or dates.has_time_elsapsed(self.last_activity, seconds=_user_last_activity_freq()):
+            if self.last_activity and not dates.is_today(self.last_activity, _metrics_timezone()):
                 metrics.record(
                     "member_activity_day",
                     min_granularity="days",
@@ -141,7 +153,7 @@ class GroupMember(models.Model, MojoModel):
                 )
             self.last_activity = dates.utcnow()
             self.save(update_fields=['last_activity'])
-        if METRICS_TRACK_USER_ACTIVITY:
+        if _metrics_track_user_activity():
             metrics.record(f"member_activity:{self.pk}", category="member", min_granularity="minutes")
 
     def on_action_resend_invite(self, value):

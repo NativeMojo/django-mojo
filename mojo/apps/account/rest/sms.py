@@ -25,8 +25,6 @@ from mojo.helpers import crypto, dates, logit
 from mojo.helpers.response import JsonResponse
 from mojo.helpers.settings import settings
 
-SMS_OTP_TTL = settings.get("SMS_OTP_TTL", 600)  # 10 minutes
-
 
 def _send_otp(user):
     """Generate a 6-digit code, store it on the user, and send via SMS."""
@@ -53,8 +51,9 @@ def _verify_otp(user, code):
     stored_code = user.get_secret("sms_otp_code")
     stored_ts = int(user.get_secret("sms_otp_ts") or 0)
     now_ts = int(dates.utcnow().timestamp())
+    sms_otp_ttl = settings.get("SMS_OTP_TTL", 600)  # 10 minutes
 
-    if not stored_code or now_ts - stored_ts > SMS_OTP_TTL:
+    if not stored_code or now_ts - stored_ts > sms_otp_ttl:
         return False
     return code == stored_code
 
@@ -91,7 +90,7 @@ def on_sms_send(request):
         "status": True,
         "data": {
             "mfa_token": new_token,
-            "expires_in": mfa_service.MFA_TOKEN_TTL,
+            "expires_in": settings.get("MFA_TOKEN_TTL", 300),
         },
     })
 

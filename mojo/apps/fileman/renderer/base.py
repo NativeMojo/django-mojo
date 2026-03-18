@@ -2,7 +2,7 @@ import os
 import logging
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Tuple, Any, Union
-from django.conf import settings
+from mojo.helpers.settings import settings
 from mojo.apps.fileman.models import File, FileRendition
 
 logger = logging.getLogger(__name__)

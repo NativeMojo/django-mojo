@@ -12,7 +12,7 @@ from typing import Any, Callable, Optional
 from dataclasses import dataclass
 from datetime import datetime
 
-from django.conf import settings
+from mojo.helpers.settings import settings
 from django.utils import timezone
 
 from mojo.helpers import logit
@@ -44,7 +44,13 @@ class LocalQueue:
             maxsize: Maximum queue size (default from settings or 1000)
         """
         if maxsize is None:
-            maxsize = getattr(settings, 'JOBS_LOCAL_QUEUE_MAXSIZE', 1000)
+            maxsize = settings.get('JOBS_LOCAL_QUEUE_MAXSIZE', 1000)
+        try:
+            if maxsize is None:
+                maxsize = 1000
+            maxsize = int(maxsize)
+        except Exception:
+            maxsize = 1000
 
         self.queue = queue.Queue(maxsize=maxsize)
         self.worker_thread = None

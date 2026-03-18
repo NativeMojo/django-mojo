@@ -24,7 +24,7 @@ JOBS_DEFAULT_MAX_RETRIES = settings.get('JOBS_DEFAULT_MAX_RETRIES', 0)
 JOBS_DEFAULT_BACKOFF_BASE = settings.get('JOBS_DEFAULT_BACKOFF_BASE', 2.0)
 JOBS_DEFAULT_BACKOFF_MAX = settings.get('JOBS_DEFAULT_BACKOFF_MAX', 3600)
 JOBS_STREAM_MAXLEN = settings.get('JOBS_STREAM_MAXLEN', 100000)
-
+JOBS_WEBHOOK_MAX_RETRIES = settings.get("JOBS_WEBHOOK_MAX_RETRIES", 5, kind="int")
 
 __all__ = [
     'publish',
@@ -382,10 +382,10 @@ def publish_webhook(
 
     # Set webhook-specific defaults
     if max_retries is None:
-        max_retries = getattr(settings, 'JOBS_WEBHOOK_MAX_RETRIES', 5)
+        max_retries = JOBS_WEBHOOK_MAX_RETRIES
 
     # Validate timeout limits
-    max_allowed_timeout = getattr(settings, 'JOBS_WEBHOOK_MAX_TIMEOUT', 300)
+    max_allowed_timeout = int(settings.get('JOBS_WEBHOOK_MAX_TIMEOUT', 300))
     if timeout > max_allowed_timeout:
         raise ValueError(f"Timeout cannot exceed {max_allowed_timeout} seconds")
 

@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 from urllib.parse import urlparse
 
-from django.conf import settings
+from mojo.helpers.settings import settings
 
 from mojo.helpers import logit
 from mojo.apps.jobs.models import Job

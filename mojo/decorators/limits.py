@@ -9,8 +9,6 @@ from mojo.apps import metrics
 
 logger = logit.get_logger("error", "error.log")
 
-API_METRICS = settings.get("API_METRICS", False)
-
 __all__ = ["rate_limit", "strict_rate_limit", "endpoint_metrics", "clear_rate_limits"]
 
 
@@ -327,7 +325,7 @@ def endpoint_metrics(slug, by=None, min_granularity="hours", category="endpoint_
         category:        Category passed to metrics.record() (default "endpoint_metrics")
     """
     def decorator(func):
-        if not API_METRICS:
+        if not settings.get("API_METRICS", False):
             return func  # no-op passthrough — no wrapper overhead
 
         by_list = [by] if isinstance(by, str) else (list(by) if by else [])

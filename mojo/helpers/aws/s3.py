@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 import io
 import tempfile
 import json
+import threading
 from typing import Optional, Union, BinaryIO, Dict, List, Any, Tuple
 
 logger = logit.get_logger(__name__)

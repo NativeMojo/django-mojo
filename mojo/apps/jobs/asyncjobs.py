@@ -1,7 +1,7 @@
 from mojo.apps.jobs.models import Job
 from django.utils import timezone
 from datetime import timedelta
-from django.conf import settings
+from mojo.helpers.settings import settings
 
 
 def prune_jobs(job):

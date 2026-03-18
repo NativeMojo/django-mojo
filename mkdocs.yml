@@ -58,6 +58,7 @@ nav:
                 - logit: django_developer/helpers/logit.md
                 - Dates: django_developer/helpers/dates.md
                 - Settings: django_developer/helpers/settings.md
+                - Settings Reference: django_developer/helpers/settings_reference.md
                 - Crypto: django_developer/helpers/crypto.md
                 - Request: django_developer/helpers/request.md
                 - Response: django_developer/helpers/response.md

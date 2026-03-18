@@ -5,8 +5,9 @@ from mojo.models import MojoModel
 from mojo.helpers import dates
 from mojo.apps import jobs
 
-GEOLOCATION_ALLOW_SUBNET_LOOKUP = settings.get('GEOLOCATION_ALLOW_SUBNET_LOOKUP', False)
-GEOLOCATION_CACHE_DURATION_DAYS = settings.get('GEOLOCATION_CACHE_DURATION_DAYS', 90)
+
+GEOLOCATION_ALLOW_SUBNET_LOOKUP = settings.get('GEOLOCATION_ALLOW_SUBNET_LOOKUP', False, kind='bool')
+GEOLOCATION_CACHE_DURATION_DAYS = settings.get('GEOLOCATION_CACHE_DURATION_DAYS', 90, kind='int')
 
 
 class GeoLocatedIP(models.Model, MojoModel):

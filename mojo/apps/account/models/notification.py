@@ -3,7 +3,11 @@ from mojo.models import MojoModel
 from mojo.helpers import dates
 from mojo.helpers.settings import settings
 
-NOTIFICATION_DEFAULT_EXPIRY = settings.get("NOTIFICATION_DEFAULT_EXPIRY", 3600)
+
+def _notification_default_expiry():
+    return settings.get("NOTIFICATION_DEFAULT_EXPIRY", 3600)
+
+_DEFAULT_EXPIRES_IN = object()
 
 
 class Notification(models.Model, MojoModel):
@@ -64,7 +68,7 @@ class Notification(models.Model, MojoModel):
 
     @classmethod
     def send(cls, title, body="", user=None, group=None, kind="general",
-             data=None, action_url=None, expires_in=NOTIFICATION_DEFAULT_EXPIRY,
+             data=None, action_url=None, expires_in=_DEFAULT_EXPIRES_IN,
              push=True, ws=True):
         """
         Create inbox notification(s) and deliver via WebSocket + device push.
@@ -83,6 +87,8 @@ class Notification(models.Model, MojoModel):
         """
         if data is None:
             data = {}
+        if expires_in is _DEFAULT_EXPIRES_IN:
+            expires_in = _notification_default_expiry()
 
         expires_at = None
         if expires_in is not None:

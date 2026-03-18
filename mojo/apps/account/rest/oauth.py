@@ -17,13 +17,11 @@ from mojo.helpers import logit
 from mojo.helpers.response import JsonResponse
 from mojo.helpers.settings import settings
 
-OAUTH_REDIRECT_URI = settings.get("OAUTH_REDIRECT_URI", "")
-
-
 def _get_redirect_uri(request, provider_name):
     """Use configured redirect URI or build one from the request origin."""
-    if OAUTH_REDIRECT_URI:
-        return OAUTH_REDIRECT_URI
+    oauth_redirect_uri = settings.get("OAUTH_REDIRECT_URI", "")
+    if oauth_redirect_uri:
+        return oauth_redirect_uri
     origin = request.META.get("HTTP_ORIGIN") or request.DATA.get("origin", "")
     return f"{origin}/auth/oauth/{provider_name}/complete"
 

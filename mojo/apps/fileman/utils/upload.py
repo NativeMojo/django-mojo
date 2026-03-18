@@ -1,6 +1,6 @@
 from django.http import JsonResponse, HttpResponseRedirect
 from django.shortcuts import get_object_or_404
-from django.conf import settings
+from mojo.helpers.settings import settings
 import json
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Tuple, Union

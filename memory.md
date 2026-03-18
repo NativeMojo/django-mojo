@@ -13,11 +13,12 @@ Use this file as a lightweight running log between AI threads.
 
 ## Current Focus
 
-- No active items.
+- **Settings helper adoption audit** — runtime bypass remediation largely complete; only URL/bootstrap settings remain restart-required (`mojo/urls.py`).
 
 
 ## Recent Completions (this session)
 
+- **Settings runtime hardening + docs** — converted remaining runtime/import-time settings constants across jobs/logging/incident/account/geoip/serializer paths to call-time reads; added names-only framework settings reference `docs/django_developer/helpers/settings_reference.md` and wired docs nav.
 - **Web admin portal docs** — Added web-developer guide for admin portal REST integration: auth + permissions model, group context, common admin endpoints, and secure settings endpoint usage (`/api/settings`). Updated account docs index + MkDocs nav + changelog.
 - **Secure Settings** — `Setting` model (DB-backed, encrypted, group-scoped). `SettingsHelper.get(name, group=)` lookup chain: Redis → DB (group parent chain → global) → `django.conf.settings`. REST CRUD with masked secrets. 15 new tests, 940 total, 0 fail.
 - **Local test scaffold** — `bin/create_testproject` (PostgreSQL), `bin/asgi_local`, `bin/testit.py` (flushes DB+Redis). Also fixed: totp `select_for_update` atomic, jobs idempotency key PG compat, security scanner public sibling, session_revoke rate limits.
@@ -27,6 +28,7 @@ Use this file as a lightweight running log between AI threads.
 - `REQUIRE_VERIFIED_EMAIL` / `REQUIRE_VERIFIED_PHONE` default to `False` — opt-in only.
 - **OAuth is a trusted second factor** — bypasses MFA gate entirely.
 - **Never use `override_settings` in testit tests.** Mutate `django.conf.settings` directly and restore in `finally`. `SettingsHelper.get()` re-reads live settings every call.
+- **Startup-only settings policy** — URL topology settings (`MOJO_API_MODULE`, `MOJO_PREFIX`, `REST_AUTO_PREFIX`, `MOJO_APPEND_SLASH`) remain bootstrap-time and require restart; runtime behavior/security settings must read at call-time via `settings.get(...)`.
 - FK assignments in `on_rest_save_related_field` must call `_set_field_change` before `setattr`.
 - **Notification preferences default is allow** — only suppress on explicit opt-out. System/transactional emails never suppressed.
 - **`metadata.protected` is framework-protected.** `on_rest_update_jsonfield` in `mojo/models/rest.py` blocks writes to the `protected` sub-key for non-superusers. Use for system-set fields: `registration_source`, `invited_by_id`, `invited_to_group_id`.
