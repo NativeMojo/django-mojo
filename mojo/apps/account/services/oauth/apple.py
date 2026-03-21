@@ -67,7 +67,7 @@ class AppleOAuthProvider(OAuthProvider):
             "client_id": client_id,
             "redirect_uri": redirect_uri,
             "response_type": "code",
-            "response_mode": "query",
+            "response_mode": "form_post",
             "scope": "openid email",
             "state": state,
         }

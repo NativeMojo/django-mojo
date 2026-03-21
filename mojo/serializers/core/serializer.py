@@ -44,6 +44,7 @@ from .cache import get_cache_backend, get_cache_key, get_model_cache_ttl
 
 # Load setting once at module import time for performance
 SERIALIZE_DATETIME_TO_FLOAT = settings.get_static('SERIALIZE_DATETIME_TO_FLOAT', False)
+SERIALIZE_DATETIME_TO_ISO = settings.get_static('SERIALIZE_DATETIME_TO_ISO', False)
 
 
 class OptimizedGraphSerializer:
@@ -231,8 +232,6 @@ class OptimizedGraphSerializer:
             else:
                 method_name, alias = field_spec, field_spec
 
-
-
             try:
                 if hasattr(obj, method_name):
                     attr = getattr(obj, method_name)
@@ -364,7 +363,9 @@ class OptimizedGraphSerializer:
         # Handle datetime objects (common case first for speed)
         if isinstance(value, datetime.datetime):
             # Check if we should serialize to float (with microsecond precision) or int
-            if SERIALIZE_DATETIME_TO_FLOAT:
+            if SERIALIZE_DATETIME_TO_ISO:
+                return value.isoformat()  # Returns ISO 8601 string
+            elif SERIALIZE_DATETIME_TO_FLOAT:
                 return value.timestamp()  # Returns float with microsecond precision
             else:
                 return int(value.timestamp())  # Returns int (seconds only)

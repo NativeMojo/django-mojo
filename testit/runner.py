@@ -81,10 +81,8 @@ def apply_config_defaults(parser, config):
         "verbose": ("verbose", bool),
         "nomojo": ("nomojo", bool),
         "onlymojo": ("onlymojo", bool),
-        "module": ("module", str),
         "extra": ("extra", str),
         "host": ("host", str),
-        "setup": ("setup", bool),
         "quick": ("quick", bool),
         "force": ("force", bool),
         "user": ("user", str),
@@ -133,26 +131,18 @@ def setup_parser(argv=None):
                         help="Force the test to run now")
     parser.add_argument("-u", "--user", type=str, default="nobody",
                         help="Specify the user the test should run as")
-    parser.add_argument("-m", "--module", type=str, default=None,
-                        help="Run only this app/module")
-    parser.add_argument("--method", type=str, default=None,
-                        help="Run only a specific test method")
     parser.add_argument("-t", "--test", action="append", dest="test_modules",
-                        help="Specify test modules or specific tests (can be used multiple times)")
+                        help="Run specific module or test file: -t module or -t module.testfile (repeatable)")
     parser.add_argument("-q", "--quick", action="store_true",
                         help="Run only tests flagged as critical/quick")
     parser.add_argument("-x", "--extra", type=str, default=None,
                         help="Specify extra data to pass to test")
-    parser.add_argument("-l", "--list", action="store_true",
-                        help="List available tests instead of running them")
     parser.add_argument("-s", "--stop", action="store_true",
                         help="Stop on errors")
     parser.add_argument("-e", "--errors", action="store_true",
                         help="Show errors")
     parser.add_argument("--host", type=str, default=get_host(),
                         help="Specify host for API tests")
-    parser.add_argument("--setup", action="store_true",
-                        help="Run setup before executing tests")
     parser.add_argument("--nomojo", action="store_true",
                         help="Do not run Mojo app tests")
     parser.add_argument("--onlymojo", action="store_true",
@@ -477,22 +467,6 @@ def print_extra_flags(extras):
     print("")
 
 
-def setup_modules():
-    """Run setup scripts for all test modules."""
-    logit.color_print("\n[TEST PREFLIGHT SETUP]\n", logit.ConsoleLogger.BLUE)
-
-    test_modules = [d for d in os.listdir(TEST_ROOT) if os.path.isdir(os.path.join(TEST_ROOT, d))]
-
-    for module_name in sorted(test_modules):
-        setup_file = os.path.join(TEST_ROOT, module_name, "setup.py")
-        if os.path.isfile(setup_file):
-            module = import_module_for_testing(module_name, "setup")
-            if module and hasattr(module, "run_setup"):
-                logit.color_print(f"Setting up {module_name}...", logit.ConsoleLogger.YELLOW)
-                module.run_setup(opts)
-                logit.color_print("✔ DONE\n", logit.ConsoleLogger.GREEN)
-
-
 def main(opts):
     """Main function to run tests."""
     helpers.reset_test_run()
@@ -500,22 +474,7 @@ def main(opts):
     helpers.VERBOSE = opts.verbose or opts.errors
     helpers.TEST_RUN.started_at = time.time()
 
-    if opts.setup and not opts.list_extras:
-        setup_modules()
-
-    if opts.list:
-        print("\n------------------------")
-        print("Listing available test modules & tests")
-        print("[module]")
-        print("  [test1]")
-        print("  [test2]")
-        print("------------------------")
-        return
-
     opts.logger = logit.get_logger("testit", "testit.log")
-
-    if opts.module and '.' in opts.module:
-        opts.module, opts.test = opts.module.split('.', 1)
 
     parent_test_root = os.path.join(os.path.dirname(os.path.dirname(__file__)), "tests")
     parent_test_modules = None
@@ -551,10 +510,6 @@ def main(opts):
                     add_from_module(module_name, test_name)
                 else:
                     add_from_directory(test_spec, TEST_ROOT)
-        elif opts.module and opts.test:
-            add_from_module(opts.module, opts.test)
-        elif opts.module:
-            add_from_directory(opts.module, TEST_ROOT)
         else:
             test_root = os.path.join(paths.APPS_ROOT, "tests")
             test_modules = sorted([d for d in os.listdir(test_root) if os.path.isdir(os.path.join(test_root, d))])
@@ -572,7 +527,6 @@ def main(opts):
         print_extra_flags(extras)
         return
 
-    # Handle multiple --test arguments
     if opts.test_modules:
         for test_spec in opts.test_modules:
             if '.' in test_spec:
@@ -580,15 +534,9 @@ def main(opts):
                 run_module_tests_by_name(opts, module_name, test_name)
             else:
                 run_tests_for_module(opts, test_spec, TEST_ROOT, parent_test_root)
-    elif opts.module and opts.test:
-        run_module_tests_by_name(opts, opts.module, opts.test)
-    elif opts.module:
-        run_tests_for_module(opts, opts.module, TEST_ROOT, parent_test_root)
     else:
         test_root = os.path.join(paths.APPS_ROOT, "tests")
         test_modules = sorted([d for d in os.listdir(test_root) if os.path.isdir(os.path.join(test_root, d))])
-
-        # Filter out ignored modules
         ignored_modules = opts.ignore_modules or []
 
         if parent_test_modules and not opts.nomojo:

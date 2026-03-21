@@ -1,0 +1,16 @@
+[tool.poetry]
+name = "django-nativemojo"
+version = "1.0.60"
+description = "Deprecated compatibility package. Use django-mojo instead."
+authors = ["MOJO Dev Team <gotmojo@mojo.com>"]
+readme = "README.md"
+license = "MIT"
+packages = [{include = "django_nativemojo"}]
+
+[tool.poetry.dependencies]
+python = ">=3.10,<4.0"
+django-mojo = ">=1.0.60"
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
