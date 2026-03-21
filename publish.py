@@ -74,40 +74,15 @@ def run_command(command: str, capture_output: bool = True) -> Optional[str]:
         raise PublishError(f"Failed to execute command '{command}': {str(e)}")
 
 
-def validate_poetry_environment() -> None:
-    """Validate that we're in a poetry environment and poetry is available."""
-    # Check if poetry is installed
+def validate_uv_environment() -> None:
+    """Validate that uv is available and pyproject.toml exists."""
     try:
-        run_command("poetry --version")
+        run_command("uv --version")
     except PublishError:
-        raise PublishError("Poetry is not installed or not in PATH")
+        raise PublishError("uv is not installed or not in PATH")
 
-    # Check if we're in a poetry project
     if not PYPROJECT_FILE.exists():
-        raise PublishError("Not in a poetry project (pyproject.toml not found)")
-
-    # Check if pyproject.toml has poetry configuration
-    try:
-        content = PYPROJECT_FILE.read_text(encoding='utf-8')
-        if '[tool.poetry]' not in content:
-            raise PublishError("pyproject.toml does not contain poetry configuration")
-    except Exception as e:
-        raise PublishError(f"Failed to read pyproject.toml: {str(e)}")
-
-    # Check if we're in the poetry virtual environment
-    try:
-        env_info = run_command("poetry env info --path")
-        current_env = run_command("echo $VIRTUAL_ENV")
-
-        # If we're not in any virtual env, or not in the poetry env
-        if not current_env or env_info not in current_env:
-            logger.warning("Not currently in poetry virtual environment")
-            logger.info("You can activate it with: poetry shell")
-            # Don't fail here, as poetry commands will still work
-    except PublishError:
-        # If poetry env info fails, we might not have a virtual env set up
-        logger.warning("Poetry virtual environment may not be set up")
-        logger.info("Consider running: poetry install")
+        raise PublishError("pyproject.toml not found")
 
 
 def validate_files_exist() -> None:
@@ -145,15 +120,16 @@ def get_current_version() -> str:
 
 
 def bump_version() -> str:
-    """
-    Bump the version using poetry.
-
-    Returns:
-        The new version string
-    """
+    """Bump the patch version in pyproject.toml and return the new version string."""
     logger.info("Bumping version...")
-    run_command("poetry version patch", capture_output=False)
-    return get_current_version()
+    current = get_current_version()
+    major, minor, patch = current.split(".")
+    new_version = f"{major}.{minor}.{int(patch) + 1}"
+    content = PYPROJECT_FILE.read_text(encoding='utf-8')
+    new_content = re.sub(r'^version\s*=\s*"[^"]+"', f'version = "{new_version}"', content, count=1, flags=re.MULTILINE)
+    PYPROJECT_FILE.write_text(new_content, encoding='utf-8')
+    logger.info(f"Version bumped: {current} -> {new_version}")
+    return new_version
 
 
 def get_release_notes() -> List[str]:
@@ -248,10 +224,10 @@ def update_init_version(version: str) -> None:
 def build_and_publish() -> None:
     """Build and publish the package to PyPI."""
     logger.info("Building package...")
-    run_command("poetry build", capture_output=False)
+    run_command("uv build", capture_output=False)
 
     logger.info("Publishing to PyPI...")
-    run_command("poetry publish", capture_output=False)
+    run_command("uv publish", capture_output=False)
 
 
 def commit_changes(version: str, notes: List[str]) -> None:
@@ -352,7 +328,7 @@ def main() -> None:
             return
 
         # Validate environment
-        validate_poetry_environment()
+        validate_uv_environment()
         validate_files_exist()
 
         # Version handling
