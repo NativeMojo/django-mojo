@@ -1,8 +1,8 @@
 [project]
-name = "django-nativemojo"
+name = "django-mojo"
 version = "1.0.60"
-description = "A REST framework for DJANGO with some extra apps that make it easy to provide a secure robust graph like REST API."
-authors = [{ name = "MOJO Dev Team", email = "gotmojo@nativemojo.com" }]
+description = "A REST framework for Django with secure DB-backed settings, REST/WebSocket support, jobs, auth, and more."
+authors = [{ name = "MOJO Dev Team", email = "gotmojo@mojo.com" }]
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10,<4.0"

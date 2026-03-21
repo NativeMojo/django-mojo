@@ -47,6 +47,28 @@ def test_auth_url_params(opts):
         del django_settings.APPLE_CLIENT_ID
 
 
+@th.django_unit_test("apple oauth: get_auth_url uses response_mode=form_post (VERIFY-003)")
+def test_auth_url_uses_form_post(opts):
+    """
+    Regression for VERIFY-003:
+    Apple rejects response_mode=query when email scope is requested.
+    Must use form_post so Apple POSTs code+state back to redirect_uri.
+    """
+    from mojo.apps.account.services.oauth.apple import AppleOAuthProvider
+    from django.conf import settings as django_settings
+
+    django_settings.APPLE_CLIENT_ID = "com.example.web"
+    try:
+        svc = AppleOAuthProvider()
+        url = svc.get_auth_url(state="teststate", redirect_uri="https://example.com/callback")
+        assert_true("response_mode=form_post" in url,
+                    f"Apple requires response_mode=form_post when email scope is requested, got: {url}")
+        assert_true("response_mode=query" not in url,
+                    f"response_mode=query must not appear in Apple auth URL, got: {url}")
+    finally:
+        del django_settings.APPLE_CLIENT_ID
+
+
 # ---------------------------------------------------------------------------
 # Client secret JWT
 # ---------------------------------------------------------------------------
