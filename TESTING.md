@@ -18,7 +18,34 @@ uv sync
 
 This generates `testproject/`, creates a `mojo_test` PostgreSQL database, and runs migrations. Safe to re-run — it wipes and recreates cleanly each time.
 
-## Starting the Test Server
+## Running Tests
+
+Use `bin/run_tests` — it starts the server, runs the suite, and stops the server automatically:
+
+```bash
+./bin/run_tests                        # run all tests
+./bin/run_tests -t test_accounts       # run one module
+./bin/run_tests -t test_accounts.login # run one test file
+./bin/run_tests -q                     # quick tests only
+./bin/run_tests -v                     # verbose output
+./bin/run_tests -s                     # stop on first failure
+./bin/run_tests -s --continue          # resume from last failure
+```
+
+If the server is already running (e.g. during active development), `bin/run_tests` leaves it running after the tests finish.
+
+The test runner flushes the PostgreSQL database and Redis before each run for a clean state. The `--continue` flag skips the flush and resumes from the last failed test file.
+
+## First-Time Workflow
+
+```bash
+./bin/create_testproject     # first time, or after schema changes
+./bin/run_tests
+```
+
+## Managing the Test Server Manually
+
+If you need to control the server directly:
 
 ```bash
 ./bin/asgi_local start       # start in background
@@ -29,28 +56,6 @@ This generates `testproject/`, creates a `mojo_test` PostgreSQL database, and ru
 ```
 
 Server runs on `http://127.0.0.1:5555`. Redis is started automatically if not already running.
-
-## Running Tests
-
-```bash
-./bin/testit.py                        # run all tests
-./bin/testit.py -t test_accounts       # run one module
-./bin/testit.py -t test_accounts.login # run one test file
-./bin/testit.py -q                     # quick tests only
-./bin/testit.py -v                     # verbose output
-./bin/testit.py -s                     # stop on first failure
-```
-
-The test runner flushes the PostgreSQL database and Redis before each run for a clean state.
-
-## Full Test Workflow
-
-```bash
-./bin/create_testproject     # first time, or after schema changes
-./bin/asgi_local start
-./bin/testit.py
-./bin/asgi_local stop
-```
 
 ## Test Layout
 

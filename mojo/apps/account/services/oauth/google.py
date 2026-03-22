@@ -8,6 +8,8 @@ Required settings:
 Optional:
     GOOGLE_SCOPES  (default: openid email profile)
 """
+from urllib.parse import urlencode, quote
+
 import requests
 
 from mojo.helpers import logit
@@ -36,8 +38,7 @@ class GoogleOAuthProvider(OAuthProvider):
             "access_type": "offline",
             "prompt": "consent",
         }
-        query = "&".join(f"{k}={requests.utils.quote(str(v))}" for k, v in params.items())
-        return f"{GOOGLE_AUTH_URL}?{query}"
+        return f"{GOOGLE_AUTH_URL}?{urlencode(params, quote_via=quote)}"
 
     def exchange_code(self, code, redirect_uri):
         resp = requests.post(GOOGLE_TOKEN_URL, data={

@@ -12,6 +12,7 @@ Flow is identical to Google:
     POST /api/auth/oauth/apple/complete -> exchange code, issue JWT
 """
 import time
+from urllib.parse import urlencode, quote
 
 import jwt
 import requests
@@ -71,8 +72,7 @@ class AppleOAuthProvider(OAuthProvider):
             "scope": "openid email",
             "state": state,
         }
-        query = "&".join(f"{k}={requests.utils.quote(str(v))}" for k, v in params.items())
-        return f"{APPLE_AUTH_URL}?{query}"
+        return f"{APPLE_AUTH_URL}?{urlencode(params, quote_via=quote)}"
 
     def exchange_code(self, code, redirect_uri):
         resp = requests.post(APPLE_TOKEN_URL, data={

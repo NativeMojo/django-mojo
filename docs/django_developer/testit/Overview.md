@@ -42,21 +42,27 @@ docs/
 
 ## Running TestIt
 
-- Run everything (Mojo apps + local project):  
-  `./bin/testit.py`
-- Target a module or a specific file:  
-  `./bin/testit.py -m test_accounts`  
-  `./bin/testit.py -m test_accounts.1_test_models`
-- Append multiple modules:  
-  `./bin/testit.py -t test_accounts.1_test_models -t test_billing.3_test_flows`
-- Verbose output and early exit:  
-  `./bin/testit.py -v -s`
-- Show tracebacks without verbosity:  
-  `./bin/testit.py -e`
-- Toggle app scopes:  
-  `./bin/testit.py --onlymojo` · `./bin/testit.py --nomojo`
-- See every declared `@requires_extra` flag (respects filters like `-m` and `-t`; static scan only, no tests executed):  
-  `./bin/testit.py --list-extras`
+Use `bin/run_tests` — it handles starting and stopping the test server automatically:
+
+- Run everything:
+  `./bin/run_tests`
+- Target a module or a specific file:
+  `./bin/run_tests -t test_accounts`
+  `./bin/run_tests -t test_accounts.1_test_models`
+- Multiple modules:
+  `./bin/run_tests -t test_accounts.1_test_models -t test_billing.3_test_flows`
+- Verbose output and stop on first failure:
+  `./bin/run_tests -v -s`
+- Resume from the last failed test file (skips DB flush, picks up where `-s` stopped):
+  `./bin/run_tests -s --continue`
+- Show tracebacks without verbosity:
+  `./bin/run_tests -e`
+- Toggle app scopes:
+  `./bin/run_tests --onlymojo` · `./bin/run_tests --nomojo`
+- See every declared `@requires_extra` flag (static scan only, no tests executed):
+  `./bin/run_tests --list-extras`
+
+All arguments are passed directly to `bin/testit.py`. If the server is already running, `bin/run_tests` will not stop it after the suite completes.
 
 ### JSON Config
 CLI flags always win, but you can seed defaults through a JSON file:
@@ -226,6 +232,6 @@ All other keys (e.g. `periods`, `slug`, `status`, `data`, `id`) are safe to acce
 5. **Every `assert` must include a descriptive failure message string.** No bare asserts.
 6. **Use `obj["values"]` not `obj.values` for any key that shadows a dict built-in.**
 7. Before implementing workarounds, question the upstream API — document friction for follow-up.
-8. Run with `./bin/testit.py -v -e` (or via config) when validating locally.
+8. Run with `./bin/run_tests -v -e` (or via config) when validating locally.
 
 Keeping these habits makes the suite predictable for both humans and models, highlights design gaps early, and keeps TestIt simple.
