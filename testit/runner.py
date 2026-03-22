@@ -13,7 +13,36 @@ from testit import helpers
 import testit.client
 
 from mojo.helpers import paths
+from objict import objict
 TEST_ROOT = paths.APPS_ROOT / "tests"
+
+_resume = objict(active=False, module=None, test_name=None, reached=False)
+
+
+def _checkpoint_path():
+    return os.path.join(paths.VAR_ROOT, "testit_checkpoint.json")
+
+
+def save_checkpoint(module_name, test_name):
+    path = _checkpoint_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump({"module": module_name, "test_name": test_name}, handle)
+
+
+def load_checkpoint():
+    try:
+        with open(_checkpoint_path(), "r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+
+
+def clear_checkpoint():
+    try:
+        os.remove(_checkpoint_path())
+    except FileNotFoundError:
+        pass
 
 def get_host():
     """Extract host and port from dev_server.conf."""
@@ -139,6 +168,8 @@ def setup_parser(argv=None):
                         help="Specify extra data to pass to test")
     parser.add_argument("-s", "--stop", action="store_true",
                         help="Stop on errors")
+    parser.add_argument("--continue", dest="resume", action="store_true",
+                        help="Continue from last checkpoint (saved by -s on failure)")
     parser.add_argument("-e", "--errors", action="store_true",
                         help="Show errors")
     parser.add_argument("--host", type=str, default=get_host(),
@@ -185,6 +216,7 @@ def run_test(opts, module, func_name, module_name, test_name):
             print(f"⚠️ Test Error: {err}")
             traceback.print_exc()
         if opts.stop:
+            save_checkpoint(module_name, test_name)
             sys.exit(1)
 
 
@@ -295,6 +327,10 @@ def run_tests_for_module(opts, module_name, test_root, parent_test_root=None):
         if test_file.startswith("_"):
             continue
         test_name = test_file.rsplit('.', 1)[0]  # Remove .py extension
+        if _resume.active and not _resume.reached:
+            if module_name != _resume.module or test_name != _resume.test_name:
+                continue
+            _resume.reached = True
         run_module_tests_by_name(opts, module_name, test_name)
 
 
@@ -474,6 +510,20 @@ def main(opts):
     helpers.VERBOSE = opts.verbose or opts.errors
     helpers.TEST_RUN.started_at = time.time()
 
+    # Set up resume state
+    _resume.active = False
+    _resume.reached = False
+    if getattr(opts, "resume", False):
+        checkpoint = load_checkpoint()
+        if checkpoint:
+            _resume.active = True
+            _resume.reached = False
+            _resume.module = checkpoint["module"]
+            _resume.test_name = checkpoint["test_name"]
+            print(f"==> Resuming from: {_resume.module}.{_resume.test_name}")
+        else:
+            print("==> No checkpoint found, running all tests")
+
     opts.logger = logit.get_logger("testit", "testit.log")
 
     parent_test_root = os.path.join(os.path.dirname(os.path.dirname(__file__)), "tests")
@@ -542,11 +592,19 @@ def main(opts):
         if parent_test_modules and not opts.nomojo:
             for module_name in parent_test_modules:
                 if module_name not in ignored_modules:
+                    if _resume.active and not _resume.reached and module_name != _resume.module:
+                        continue
                     run_tests_for_module(opts, module_name, parent_test_root)
         if not opts.onlymojo:
             for module_name in test_modules:
                 if module_name not in ignored_modules:
+                    if _resume.active and not _resume.reached and module_name != _resume.module:
+                        continue
                     run_tests_for_module(opts, module_name, test_root)
+
+    # Clear checkpoint on clean completion (no failures or failures without -s)
+    if helpers.TEST_RUN.failed == 0:
+        clear_checkpoint()
 
     # Summary Output
     print("\n" + "=" * 80)
