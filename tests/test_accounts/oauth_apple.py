@@ -73,12 +73,12 @@ def test_auth_url_encoding(opts):
         del django_settings.APPLE_CLIENT_ID
 
 
-@th.django_unit_test("apple oauth: get_auth_url uses response_mode=form_post (VERIFY-003)")
-def test_auth_url_uses_form_post(opts):
+@th.django_unit_test("apple oauth: get_auth_url uses response_mode=query for JS frontend compatibility")
+def test_auth_url_uses_query_mode(opts):
     """
-    Regression for VERIFY-003:
-    Apple rejects response_mode=query when email scope is requested.
-    Must use form_post so Apple POSTs code+state back to redirect_uri.
+    Apple must use response_mode=query so code+state come back as URL params
+    that a static JS frontend can read. form_post sends them as a POST body
+    which is inaccessible to browser JS.
     """
     from mojo.apps.account.services.oauth.apple import AppleOAuthProvider
     from django.conf import settings as django_settings
@@ -87,10 +87,10 @@ def test_auth_url_uses_form_post(opts):
     try:
         svc = AppleOAuthProvider()
         url = svc.get_auth_url(state="teststate", redirect_uri="https://example.com/callback")
-        assert_true("response_mode=form_post" in url,
-                    f"Apple requires response_mode=form_post when email scope is requested, got: {url}")
-        assert_true("response_mode=query" not in url,
-                    f"response_mode=query must not appear in Apple auth URL, got: {url}")
+        assert_true("response_mode=query" in url,
+                    f"Apple must use response_mode=query for JS frontend compatibility, got: {url}")
+        assert_true("response_mode=form_post" not in url,
+                    f"response_mode=form_post is inaccessible to browser JS, got: {url}")
     finally:
         del django_settings.APPLE_CLIENT_ID
 

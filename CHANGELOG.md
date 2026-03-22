@@ -1,5 +1,10 @@
 ## v1.0.59 - (current)
 
+## v1.0.70 - March 21, 2026
+
+apple oauth fix take 35
+
+
 ## v1.0.69 - March 21, 2026
 
 fix in correct inclusion of postgres binary
