@@ -10,7 +10,7 @@
       
       
       
-        <link rel="canonical" href="https://NativeMojo.github.io/django-mojo/web_developer/account/oauth/">
+        <link rel="canonical" href="https://NativeMojo.github.io/django-mojo/web_developer/account/auth_pages/">
       
       
       
@@ -23,7 +23,7 @@
     
     
       
-        <title>OAuth / Social Login — REST API Reference - Django-MOJO</title>
+        <title>Auth Pages — Web Developer Reference - Django-MOJO</title>
       
     
     
@@ -74,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#oauth-social-login-rest-api-reference" class="md-skip">
+        <a href="#auth-pages-web-developer-reference" class="md-skip">
           Skip to content
         </a>
       
@@ -108,7 +108,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              OAuth / Social Login — REST API Reference
+              Auth Pages — Web Developer Reference
             
           </span>
         </div>
@@ -3621,10 +3621,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#flow-overview" class="md-nav__link">
+  <a href="#page-urls" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Flow Overview
+        Page URLs
       
     </span>
   </a>
@@ -3632,44 +3632,33 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#step-1-get-authorization-url" class="md-nav__link">
+  <a href="#login-page-auth" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Step 1 — Get Authorization URL
+        Login Page (/auth)
       
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#step-2-redirect-user" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Step 2 — Redirect User
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#step-3-complete-login" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Step 3 — Complete Login
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Step 3 — Complete Login">
+    <nav class="md-nav" aria-label="Login Page (/auth)">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#new-user-flag" class="md-nav__link">
+  <a href="#url-parameters" class="md-nav__link">
     <span class="md-ellipsis">
       
-        New User Flag
+        URL Parameters
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#after-login" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        After Login
       
     </span>
   </a>
@@ -3682,22 +3671,88 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#auto-link-behaviour" class="md-nav__link">
+  <a href="#registration-page-register" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Auto-Link Behaviour
+        Registration Page (/register)
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Auto-Link Behaviour">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#oauth-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OAuth Flow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#linking-to-auth-pages" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Linking to Auth Pages
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#customization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Customization
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Customization">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#email-verification-on-auto-link" class="md-nav__link">
+  <a href="#branding-via-admin-portal" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Email Verification on Auto-Link
+        Branding — via admin portal
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#features-enabledisable-per-provider" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Features — enable/disable per provider
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Layout
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#theme-colors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Theme colors
       
     </span>
   </a>
@@ -3710,49 +3765,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#security-behaviour" class="md-nav__link">
+  <a href="#static-assets" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Security Behaviour
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Security Behaviour">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#email-verification" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Email Verification
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#mfa-bypass" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        MFA Bypass
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#javascript-example" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        JavaScript Example
+        Static Assets
       
     </span>
   </a>
@@ -3760,105 +3776,21 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#configuration" class="md-nav__link">
+  <a href="#honeypot-decoy-pages" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Configuration
+        Honeypot Decoy Pages
       
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Configuration">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#apple-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Apple Settings
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#optional-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Optional Settings
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#managing-connections" class="md-nav__link">
+  <a href="#bouncer-challenge" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Managing Connections
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Managing Connections">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#list-linked-providers" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        List Linked Providers
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#unlink-a-connection" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Unlink a Connection
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Unlink a Connection">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#lockout-guard" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Lockout Guard
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#error-responses" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Error Responses
+        Bouncer Challenge
       
     </span>
   </a>
@@ -3885,308 +3817,307 @@
   
 
 
-<h1 id="oauth-social-login-rest-api-reference">OAuth / Social Login — REST API Reference<a class="headerlink" href="#oauth-social-login-rest-api-reference" title="Permanent link">&para;</a></h1>
-<p>OAuth allows users to log in with a third-party provider (Google, etc.) without a password. The server handles the token exchange — your frontend only needs to redirect the user and handle the callback.</p>
-<p><strong>Supported providers:</strong> <code>google</code>, <code>apple</code></p>
-<blockquote>
-<p><strong>Trusted second factor.</strong> OAuth is treated as a strong, trusted authentication event. Completing an OAuth login automatically confirms the user's email address and bypasses any local MFA requirement — see <a href="#security-behaviour">Security Behaviour</a> below.</p>
-</blockquote>
+<h1 id="auth-pages-web-developer-reference">Auth Pages — Web Developer Reference<a class="headerlink" href="#auth-pages-web-developer-reference" title="Permanent link">&para;</a></h1>
+<p>Django-served login and registration pages. These are fully functional out of
+the box — no frontend app required. The pages handle all auth flows including
+OAuth, passkeys, password reset, and magic login links.</p>
 <hr />
-<h2 id="flow-overview">Flow Overview<a class="headerlink" href="#flow-overview" title="Permanent link">&para;</a></h2>
-<p><strong>Google</strong> — standard redirect flow:
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>1. GET  /api/auth/oauth/google/begin        → get authorization URL
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>2. Redirect user to authorization URL
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>3. Google redirects back → your page ?code=...&amp;state=...
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>4. POST /api/auth/oauth/google/complete     → exchange code, get JWT
-</code></pre></div></p>
-<p><strong>Apple</strong> — backend relay required (Apple prohibits query-param redirects when email scope is requested):
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>1. GET  /api/auth/oauth/apple/begin         → get authorization URL
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>2. Redirect user to authorization URL
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>3. Apple POSTs code+state to backend       → /api/auth/oauth/apple/callback
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>4. Backend redirects browser               → your page ?code=...&amp;state=...
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>5. POST /api/auth/oauth/apple/complete     → exchange code, get JWT
-</code></pre></div></p>
-<p>Steps 3–4 are invisible to your JS — your page still receives <code>?code=</code> and <code>?state=</code> in the URL, identical to Google. <strong>No changes needed to your completion code.</strong></p>
-<hr />
-<h2 id="step-1-get-authorization-url">Step 1 — Get Authorization URL<a class="headerlink" href="#step-1-get-authorization-url" title="Permanent link">&para;</a></h2>
-<p><strong>GET</strong> <code>/api/oauth/google/begin</code></p>
-<p><strong>Optional query parameter:</strong></p>
+<h2 id="page-urls">Page URLs<a class="headerlink" href="#page-urls" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
 <tr>
-<th>Parameter</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>redirect_uri</code></td>
-<td>Override the default callback URL. Must be on the server's allowlist (<code>ALLOWED_REDIRECT_URLS</code>). Returns <code>400</code> if provided but not allowed.</td>
-</tr>
-</tbody>
-</table>
-<p><strong>Response:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span><span class="nt">&quot;auth_url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://accounts.google.com/o/oauth2/v2/auth?client_id=...&amp;state=abc123...&quot;</span><span class="p">,</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span><span class="nt">&quot;state&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;abc123...&quot;</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span><span class="p">}</span>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="p">}</span>
-</code></pre></div>
-<p>Redirect the user to <code>auth_url</code>. Store <code>state</code> if you need it client-side (the server validates it automatically).</p>
-<p>If your app has a custom callback URL, pass it as <code>redirect_uri</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kd">const</span><span class="w"> </span><span class="nx">resp</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">fetch</span><span class="p">(</span><span class="s1">&#39;/api/oauth/google/begin?redirect_uri=&#39;</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nb">encodeURIComponent</span><span class="p">(</span><span class="s1">&#39;https://portal.example.com/auth/callback&#39;</span><span class="p">));</span>
-</code></pre></div>
-<p>The server binds the <code>redirect_uri</code> to the state token — you do not need to re-send it in the complete step.</p>
-<hr />
-<h2 id="step-2-redirect-user">Step 2 — Redirect User<a class="headerlink" href="#step-2-redirect-user" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kd">const</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">data</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">fetch</span><span class="p">(</span><span class="s1">&#39;/api/oauth/google/begin&#39;</span><span class="p">).</span><span class="nx">then</span><span class="p">(</span><span class="nx">r</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">json</span><span class="p">());</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="nb">window</span><span class="p">.</span><span class="nx">location</span><span class="p">.</span><span class="nx">href</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">data</span><span class="p">.</span><span class="nx">auth_url</span><span class="p">;</span>
-</code></pre></div>
-<p>The user authenticates with Google and is redirected back to your <code>redirect_uri</code> with <code>?code=...&amp;state=...</code>.</p>
-<hr />
-<h2 id="step-3-complete-login">Step 3 — Complete Login<a class="headerlink" href="#step-3-complete-login" title="Permanent link">&para;</a></h2>
-<p><strong>POST</strong> <code>/api/auth/oauth/google/complete</code></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;code-from-callback&gt;&quot;</span><span class="p">,</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="nt">&quot;state&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;state-from-callback&gt;&quot;</span>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="p">}</span>
-</code></pre></div>
-<p><strong>Response:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">    </span><span class="nt">&quot;access_token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;eyJhbGci...&quot;</span><span class="p">,</span>
-<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">    </span><span class="nt">&quot;refresh_token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;eyJhbGci...&quot;</span><span class="p">,</span>
-<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">    </span><span class="nt">&quot;expires_in&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">21600</span><span class="p">,</span>
-<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">    </span><span class="nt">&quot;user&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">      </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">42</span><span class="p">,</span>
-<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="w">      </span><span class="nt">&quot;username&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;alice&quot;</span><span class="p">,</span>
-<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="w">      </span><span class="nt">&quot;display_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Alice&quot;</span>
-<a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="w">    </span><span class="p">}</span>
-<a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a><span class="w">  </span><span class="p">}</span>
-<a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a><span class="p">}</span>
-</code></pre></div>
-<p>Same JWT response as password login. Store and use tokens as normal.</p>
-<h3 id="new-user-flag">New User Flag<a class="headerlink" href="#new-user-flag" title="Permanent link">&para;</a></h3>
-<p>When a brand-new account is created (auto-link path 3), the response includes an extra field:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span>
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">    </span><span class="nt">&quot;access_token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;eyJhbGci...&quot;</span><span class="p">,</span>
-<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">    </span><span class="nt">&quot;refresh_token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;eyJhbGci...&quot;</span><span class="p">,</span>
-<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">    </span><span class="nt">&quot;expires_in&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">21600</span><span class="p">,</span>
-<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="w">    </span><span class="nt">&quot;user&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="err">...</span><span class="w"> </span><span class="p">},</span>
-<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="w">    </span><span class="nt">&quot;is_new_user&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
-<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="w">  </span><span class="p">}</span>
-<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="p">}</span>
-</code></pre></div>
-<p><code>is_new_user</code> is only present in the response when a new account was just created — it is absent (not <code>false</code>) for existing users logging in. Use it to redirect new users to an onboarding flow.</p>
-<hr />
-<h2 id="auto-link-behaviour">Auto-Link Behaviour<a class="headerlink" href="#auto-link-behaviour" title="Permanent link">&para;</a></h2>
-<p>The server automatically resolves which account to log in to:</p>
-<ol>
-<li><strong>Existing OAuth connection</strong> — a previous login with this provider/account is found → log in that user directly</li>
-<li><strong>Matching email</strong> — no connection but an existing account has the same email → create a connection, mark email as verified, and log in</li>
-<li><strong>New user</strong> — no match → create a new account and connection, mark email as verified</li>
-</ol>
-<p>No manual linking step is required.</p>
-<h3 id="email-verification-on-auto-link">Email Verification on Auto-Link<a class="headerlink" href="#email-verification-on-auto-link" title="Permanent link">&para;</a></h3>
-<p>Because the provider has confirmed ownership of the email address, the framework marks <code>is_email_verified = True</code> on the resolved account in all three cases above:</p>
-<ul>
-<li><strong>Existing connection</strong> — user was already verified when they first connected; flag unchanged</li>
-<li><strong>Email match</strong> — if the matched account was not yet verified, it is marked verified at link time</li>
-<li><strong>New user</strong> — account is created with <code>is_email_verified = True</code></li>
-</ul>
-<p>This means a user who signed up via password but never clicked their verification email will be automatically verified the first time they log in with Google (or another provider) using the same address.</p>
-<hr />
-<h2 id="security-behaviour">Security Behaviour<a class="headerlink" href="#security-behaviour" title="Permanent link">&para;</a></h2>
-<h3 id="email-verification">Email Verification<a class="headerlink" href="#email-verification" title="Permanent link">&para;</a></h3>
-<p>OAuth confirmation is treated as equivalent to clicking an email verification link. The provider vouches for ownership of the address, so no separate verification step is needed.</p>
-<p>If your project has <code>REQUIRE_VERIFIED_EMAIL</code> enabled, users who log in via OAuth are unaffected by the gate — their email is marked verified by the OAuth flow itself.</p>
-<h3 id="mfa-bypass">MFA Bypass<a class="headerlink" href="#mfa-bypass" title="Permanent link">&para;</a></h3>
-<p>A user with MFA enabled (<code>requires_mfa = True</code>) is <strong>not</strong> challenged for TOTP or SMS after a successful OAuth login. The JWT is issued directly.</p>
-<p><strong>Why:</strong> OAuth is itself a trusted second factor:</p>
-<ul>
-<li>The user has authenticated to an external identity provider</li>
-<li>The provider may have enforced its own MFA (Google Workspace policies, Advanced Protection, etc.)</li>
-<li>The CSRF <code>state</code> token is single-use and Redis-backed — replay and CSRF attacks are prevented</li>
-<li>The authorization <code>code</code> is exchanged server-side only</li>
-</ul>
-<p>Requiring an additional local second factor after a trusted provider assertion is redundant for most applications. If your project has a strict policy requiring local MFA regardless of OAuth, contact your backend developer to configure a project-level override.</p>
-<hr />
-<h2 id="javascript-example">JavaScript Example<a class="headerlink" href="#javascript-example" title="Permanent link">&para;</a></h2>
-<p>The begin/complete pattern is identical for Google and Apple:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1">// Begin — call on &quot;Login with Google&quot; or &quot;Login with Apple&quot; button click</span>
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="k">async</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">startOAuthLogin</span><span class="p">(</span><span class="nx">provider</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">resp</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">fetch</span><span class="p">(</span><span class="sb">`/api/auth/oauth/</span><span class="si">${</span><span class="nx">provider</span><span class="si">}</span><span class="sb">/begin`</span><span class="p">);</span>
-<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">data</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">resp</span><span class="p">.</span><span class="nx">json</span><span class="p">();</span>
-<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">  </span><span class="nb">window</span><span class="p">.</span><span class="nx">location</span><span class="p">.</span><span class="nx">href</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">data</span><span class="p">.</span><span class="nx">auth_url</span><span class="p">;</span>
-<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="p">}</span>
-<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>
-<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="c1">// Complete — call on your OAuth callback page (handles both Google and Apple)</span>
-<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="k">async</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">completeOAuthLogin</span><span class="p">(</span><span class="nx">provider</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">params</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="ow">new</span><span class="w"> </span><span class="nx">URLSearchParams</span><span class="p">(</span><span class="nb">window</span><span class="p">.</span><span class="nx">location</span><span class="p">.</span><span class="nx">search</span><span class="p">);</span>
-<a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">resp</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">fetch</span><span class="p">(</span><span class="sb">`/api/auth/oauth/</span><span class="si">${</span><span class="nx">provider</span><span class="si">}</span><span class="sb">/complete`</span><span class="p">,</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a><span class="w">    </span><span class="nx">method</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;POST&#39;</span><span class="p">,</span>
-<a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a><span class="w">    </span><span class="nx">headers</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="s1">&#39;Content-Type&#39;</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;application/json&#39;</span><span class="w"> </span><span class="p">},</span>
-<a id="__codelineno-8-14" name="__codelineno-8-14" href="#__codelineno-8-14"></a><span class="w">    </span><span class="nx">body</span><span class="o">:</span><span class="w"> </span><span class="nb">JSON</span><span class="p">.</span><span class="nx">stringify</span><span class="p">({</span>
-<a id="__codelineno-8-15" name="__codelineno-8-15" href="#__codelineno-8-15"></a><span class="w">      </span><span class="nx">code</span><span class="o">:</span><span class="w"> </span><span class="nx">params</span><span class="p">.</span><span class="nx">get</span><span class="p">(</span><span class="s1">&#39;code&#39;</span><span class="p">),</span>
-<a id="__codelineno-8-16" name="__codelineno-8-16" href="#__codelineno-8-16"></a><span class="w">      </span><span class="nx">state</span><span class="o">:</span><span class="w"> </span><span class="nx">params</span><span class="p">.</span><span class="nx">get</span><span class="p">(</span><span class="s1">&#39;state&#39;</span><span class="p">),</span>
-<a id="__codelineno-8-17" name="__codelineno-8-17" href="#__codelineno-8-17"></a><span class="w">    </span><span class="p">}),</span>
-<a id="__codelineno-8-18" name="__codelineno-8-18" href="#__codelineno-8-18"></a><span class="w">  </span><span class="p">});</span>
-<a id="__codelineno-8-19" name="__codelineno-8-19" href="#__codelineno-8-19"></a><span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">data</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">resp</span><span class="p">.</span><span class="nx">json</span><span class="p">();</span>
-<a id="__codelineno-8-20" name="__codelineno-8-20" href="#__codelineno-8-20"></a><span class="w">  </span><span class="c1">// data.access_token, data.refresh_token, data.user</span>
-<a id="__codelineno-8-21" name="__codelineno-8-21" href="#__codelineno-8-21"></a><span class="p">}</span>
-</code></pre></div>
-<p>For Apple, the backend relay (step 3–4 above) delivers <code>?code=</code> and <code>?state=</code> to your page exactly as Google does — <code>completeOAuthLogin</code> works unchanged.</p>
-<hr />
-<h2 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">&para;</a></h2>
-<p>Add to your Django settings:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="n">GOOGLE_CLIENT_ID</span> <span class="o">=</span> <span class="s2">&quot;your-client-id.apps.googleusercontent.com&quot;</span>
-<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="n">GOOGLE_CLIENT_SECRET</span> <span class="o">=</span> <span class="s2">&quot;your-client-secret&quot;</span>
-<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>
-<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="c1"># The URL Google redirects back to after login</span>
-<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="c1"># Must match one of the authorised redirect URIs in Google Console</span>
-<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="n">OAUTH_REDIRECT_URI</span> <span class="o">=</span> <span class="s2">&quot;https://your-app.example.com/oauth/google/complete&quot;</span>
-</code></pre></div>
-<p>If <code>OAUTH_REDIRECT_URI</code> is not set, the server builds it from the request <code>Origin</code> header as <code>&lt;origin&gt;/oauth/&lt;provider&gt;/complete</code>.</p>
-<h3 id="apple-settings">Apple Settings<a class="headerlink" href="#apple-settings" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="n">APPLE_CLIENT_ID</span>   <span class="o">=</span> <span class="s2">&quot;com.example.web&quot;</span>
-<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="n">APPLE_TEAM_ID</span>     <span class="o">=</span> <span class="s2">&quot;ABCD1234EF&quot;</span>
-<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="n">APPLE_KEY_ID</span>      <span class="o">=</span> <span class="s2">&quot;ABCD123456&quot;</span>
-<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="n">APPLE_PRIVATE_KEY</span> <span class="o">=</span> <span class="s2">&quot;-----BEGIN PRIVATE KEY-----</span><span class="se">\n</span><span class="s2">...&quot;</span>  <span class="c1"># .p8 file contents</span>
-</code></pre></div>
-<p>Apple Sign In uses the same flow as Google. Replace <code>google</code> with <code>apple</code> in all endpoint URLs.</p>
-<blockquote>
-<p><strong>Note:</strong> Apple only provides the user's name on the very first Sign In. The framework does not rely on the name field, so this has no impact on account creation.</p>
-</blockquote>
-<h3 id="optional-settings">Optional Settings<a class="headerlink" href="#optional-settings" title="Permanent link">&para;</a></h3>
-<table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Default</th>
+<th>URL</th>
 <th>Purpose</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>GOOGLE_SCOPES</code></td>
-<td><code>"openid email profile"</code></td>
-<td>OAuth scopes requested from Google</td>
+<td><code>/auth</code></td>
+<td>Login page (default, configurable via <code>BOUNCER_LOGIN_PATH</code>)</td>
 </tr>
 <tr>
-<td><code>OAUTH_STATE_TTL</code></td>
-<td><code>600</code></td>
-<td>Seconds a CSRF state token is valid before it expires</td>
-</tr>
-<tr>
-<td><code>ALLOWED_REDIRECT_URLS</code></td>
-<td><code>[]</code></td>
-<td>URL prefixes permitted as <code>redirect_uri</code> on the <code>begin</code> endpoint</td>
-</tr>
-<tr>
-<td><code>OAUTH_ALLOW_REGISTRATION</code></td>
-<td><code>True</code></td>
-<td>Allow new accounts to be created via OAuth. Set to <code>False</code> for invite-only or closed deployments — the complete endpoint returns <code>403</code> if no existing account matches.</td>
+<td><code>/register</code></td>
+<td>Registration page (configurable via <code>BOUNCER_REGISTER_PATH</code>)</td>
 </tr>
 </tbody>
 </table>
+<p>Both pages are protected by the bouncer bot detection gate. On first visit,
+users see a brief verification challenge. After passing, they receive an
+HttpOnly pass cookie that skips the challenge on subsequent visits.</p>
 <hr />
-<h2 id="managing-connections">Managing Connections<a class="headerlink" href="#managing-connections" title="Permanent link">&para;</a></h2>
-<p>Once a user has linked one or more OAuth providers, they can list and unlink connections via the REST API.</p>
-<h3 id="list-linked-providers">List Linked Providers<a class="headerlink" href="#list-linked-providers" title="Permanent link">&para;</a></h3>
-<p><strong>GET</strong> <code>/api/account/oauth_connection</code></p>
-<p>Returns the authenticated user's OAuth connections. Admins with <code>manage_users</code> permission see all connections.</p>
-<p><strong>Response:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="p">{</span>
-<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">  </span><span class="nt">&quot;count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
-<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="w">    </span><span class="p">{</span>
-<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="w">      </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">7</span><span class="p">,</span>
-<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="w">      </span><span class="nt">&quot;provider&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;google&quot;</span><span class="p">,</span>
-<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a><span class="w">      </span><span class="nt">&quot;email&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;alice@example.com&quot;</span><span class="p">,</span>
-<a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a><span class="w">      </span><span class="nt">&quot;is_active&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a><span class="w">      </span><span class="nt">&quot;created&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2025-01-15T10:30:00Z&quot;</span>
-<a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a><span class="w">    </span><span class="p">}</span>
-<a id="__codelineno-11-12" name="__codelineno-11-12" href="#__codelineno-11-12"></a><span class="w">  </span><span class="p">]</span>
-<a id="__codelineno-11-13" name="__codelineno-11-13" href="#__codelineno-11-13"></a><span class="p">}</span>
-</code></pre></div>
-<h3 id="unlink-a-connection">Unlink a Connection<a class="headerlink" href="#unlink-a-connection" title="Permanent link">&para;</a></h3>
-<p><strong>DELETE</strong> <code>/api/account/oauth_connection/&lt;id&gt;</code></p>
-<p>Removes an OAuth connection. Admins with <code>manage_users</code> can delete any connection. Regular users can only delete their own.</p>
-<p><strong>Response (success):</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="p">{</span>
-<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
-<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="p">}</span>
-</code></pre></div>
-<h4 id="lockout-guard">Lockout Guard<a class="headerlink" href="#lockout-guard" title="Permanent link">&para;</a></h4>
-<p>To prevent users from locking themselves out, the server blocks the delete if <strong>both</strong> of the following are true:</p>
+<h2 id="login-page-auth">Login Page (<code>/auth</code>)<a class="headerlink" href="#login-page-auth" title="Permanent link">&para;</a></h2>
+<p>Supports all auth flows:</p>
+<ul>
+<li><strong>Email/password</strong> — standard sign-in form</li>
+<li><strong>Google OAuth</strong> — redirects to Google, returns to <code>/auth?code=...&amp;state=...</code></li>
+<li><strong>Apple OAuth</strong> — same flow</li>
+<li><strong>Passkeys</strong> — WebAuthn discoverable credential flow</li>
+<li><strong>Forgot password</strong> — choose code (6-digit OTP) or link method</li>
+<li><strong>Magic login link</strong> — sends a one-click sign-in email</li>
+<li><strong>Session check</strong> — auto-redirects if user is already authenticated</li>
+</ul>
+<h3 id="url-parameters">URL Parameters<a class="headerlink" href="#url-parameters" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Param</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>?token=ml:...</code></td>
+<td>Magic login token — auto-consumed on page load</td>
+</tr>
+<tr>
+<td><code>?token=pr:...</code></td>
+<td>Password reset token — opens "Set New Password" view</td>
+</tr>
+<tr>
+<td><code>?code=...&amp;state=...</code></td>
+<td>OAuth callback — auto-completes the OAuth flow</td>
+</tr>
+<tr>
+<td><code>?redirect=/path</code></td>
+<td>Custom redirect after login (also <code>?next=</code> or <code>?returnTo=</code>)</td>
+</tr>
+<tr>
+<td><code>?title=My+App</code></td>
+<td>Override brand title (URL param overrides settings)</td>
+</tr>
+<tr>
+<td><code>?subtitle=Welcome</code></td>
+<td>Override subtitle text</td>
+</tr>
+<tr>
+<td><code>?logo=/logo.png</code></td>
+<td>Override logo URL</td>
+</tr>
+</tbody>
+</table>
+<h3 id="after-login">After Login<a class="headerlink" href="#after-login" title="Permanent link">&para;</a></h3>
+<p>On successful authentication:
+1. Access and refresh tokens are stored in <code>localStorage</code>
+2. An overlay shows "Signed in! Taking you there now..."
+3. User is redirected to <code>AUTH_SUCCESS_REDIRECT</code> (default <code>/</code>)</p>
+<hr />
+<h2 id="registration-page-register">Registration Page (<code>/register</code>)<a class="headerlink" href="#registration-page-register" title="Permanent link">&para;</a></h2>
+<p>Fields:
+- First name / Last name (optional, side-by-side)
+- Email (required)
+- Password (required, with visibility toggle)
+- Terms &amp; Conditions checkbox</p>
+<p>Also supports Google/Apple OAuth sign-up (same buttons, same flow — the
+backend auto-creates the account on first OAuth login).</p>
+<p>After registration, the user is automatically logged in and redirected.</p>
+<hr />
+<h2 id="oauth-flow">OAuth Flow<a class="headerlink" href="#oauth-flow" title="Permanent link">&para;</a></h2>
 <ol>
-<li>The user has <strong>no usable password</strong> (account was created via OAuth and no password has been set)</li>
-<li>This is the user's <strong>only active</strong> OAuth connection</li>
+<li>User clicks "Google" or "Apple" button</li>
+<li><code>MojoAuth.startGoogleLogin()</code> / <code>MojoAuth.startAppleLogin()</code> redirects to provider</li>
+<li>Provider redirects back to <code>/auth?code=xxx&amp;state=yyy</code></li>
+<li>The page JS detects the <code>code</code> + <code>state</code> params and calls <code>MojoAuth.completeOAuthLogin()</code></li>
+<li>Backend exchanges code for tokens, creates/links user</li>
+<li>User is redirected to success page</li>
 </ol>
-<p>In that case the server returns <code>400</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="p">{</span>
-<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
-<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="w">  </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Cannot unlink your only login method. Set a password first.&quot;</span>
-<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="p">}</span>
-</code></pre></div>
-<p>To unlink, the user must first set a password (via the password-reset or set-password flow) or link a second OAuth provider.</p>
-<p>Admins with <code>manage_users</code> bypass the lockout guard and can always delete any connection.</p>
-<table>
-<thead>
-<tr>
-<th>Status</th>
-<th>Cause</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>200</code></td>
-<td>Connection deleted successfully</td>
-</tr>
-<tr>
-<td><code>400</code></td>
-<td>Lockout guard — only login method</td>
-</tr>
-<tr>
-<td><code>403</code></td>
-<td>Not authenticated or not permitted</td>
-</tr>
-<tr>
-<td><code>404</code></td>
-<td>Connection not found or not owned by user</td>
-</tr>
-</tbody>
-</table>
+<p>The <code>mbp</code> pass cookie uses <code>SameSite=Lax</code> so it's included when the browser
+navigates back from the OAuth provider. This means the user lands on the full
+login page (not the bouncer challenge) after the OAuth redirect.</p>
 <hr />
-<h2 id="error-responses">Error Responses<a class="headerlink" href="#error-responses" title="Permanent link">&para;</a></h2>
+<h2 id="linking-to-auth-pages">Linking to Auth Pages<a class="headerlink" href="#linking-to-auth-pages" title="Permanent link">&para;</a></h2>
+<p>From your application, link to the login and registration pages:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="p">&lt;</span><span class="nt">a</span> <span class="na">href</span><span class="o">=</span><span class="s">&quot;/auth&quot;</span><span class="p">&gt;</span>Sign In<span class="p">&lt;/</span><span class="nt">a</span><span class="p">&gt;</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="p">&lt;</span><span class="nt">a</span> <span class="na">href</span><span class="o">=</span><span class="s">&quot;/register&quot;</span><span class="p">&gt;</span>Create Account<span class="p">&lt;/</span><span class="nt">a</span><span class="p">&gt;</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="cm">&lt;!-- With redirect back to current page --&gt;</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="p">&lt;</span><span class="nt">a</span> <span class="na">href</span><span class="o">=</span><span class="s">&quot;/auth?redirect=/dashboard&quot;</span><span class="p">&gt;</span>Sign In<span class="p">&lt;/</span><span class="nt">a</span><span class="p">&gt;</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="cm">&lt;!-- With custom branding via URL params --&gt;</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="p">&lt;</span><span class="nt">a</span> <span class="na">href</span><span class="o">=</span><span class="s">&quot;/auth?title=Acme+Corp&amp;logo=/acme-logo.png&quot;</span><span class="p">&gt;</span>Sign In to Acme<span class="p">&lt;/</span><span class="nt">a</span><span class="p">&gt;</span>
+</code></pre></div>
+<hr />
+<h2 id="customization">Customization<a class="headerlink" href="#customization" title="Permanent link">&para;</a></h2>
+<h3 id="branding-via-admin-portal">Branding — via admin portal<a class="headerlink" href="#branding-via-admin-portal" title="Permanent link">&para;</a></h3>
+<p>All branding is configurable from the admin portal using the <code>Setting</code> model:</p>
 <table>
 <thead>
 <tr>
-<th>Status</th>
-<th>Cause</th>
+<th>Setting</th>
+<th>Description</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>400</code></td>
-<td>Unknown provider, missing params, or <code>redirect_uri</code> not on the allowlist</td>
+<td><code>AUTH_APP_TITLE</code></td>
+<td>Brand name in card header</td>
 </tr>
 <tr>
-<td><code>401</code></td>
-<td>Invalid or expired OAuth state token</td>
+<td><code>AUTH_LOGO_URL</code></td>
+<td>Logo image URL</td>
 </tr>
 <tr>
-<td><code>403</code></td>
-<td>Account is disabled</td>
+<td><code>AUTH_FAVICON_URL</code></td>
+<td>Favicon URL (served by nginx)</td>
+</tr>
+<tr>
+<td><code>AUTH_HERO_IMAGE_URL</code></td>
+<td>Left panel background image</td>
+</tr>
+<tr>
+<td><code>AUTH_HERO_HEADLINE</code></td>
+<td>Text over the hero image</td>
+</tr>
+<tr>
+<td><code>AUTH_HERO_SUBHEADLINE</code></td>
+<td>Supporting text below headline</td>
+</tr>
+<tr>
+<td><code>AUTH_BACK_TO_WEBSITE_URL</code></td>
+<td>"Back to website" link in hero panel</td>
+</tr>
+<tr>
+<td><code>AUTH_TERMS_URL</code></td>
+<td>Terms &amp; Conditions link on register page</td>
 </tr>
 </tbody>
 </table>
+<h3 id="features-enabledisable-per-provider">Features — enable/disable per provider<a class="headerlink" href="#features-enabledisable-per-provider" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>AUTH_ENABLE_GOOGLE</code></td>
+<td><code>False</code></td>
+<td>Show Google OAuth button</td>
+</tr>
+<tr>
+<td><code>AUTH_ENABLE_APPLE</code></td>
+<td><code>False</code></td>
+<td>Show Apple OAuth button</td>
+</tr>
+<tr>
+<td><code>AUTH_ENABLE_PASSKEYS</code></td>
+<td><code>False</code></td>
+<td>Show Passkey button</td>
+</tr>
+</tbody>
+</table>
+<p>When all three are disabled, the "or continue with" divider and OAuth button
+row are excluded from the page entirely.</p>
+<h3 id="layout">Layout<a class="headerlink" href="#layout" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Value</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>AUTH_LAYOUT</code></td>
+<td><code>card</code> (default)</td>
+<td>Centered card on page background</td>
+</tr>
+<tr>
+<td><code>AUTH_LAYOUT</code></td>
+<td><code>fullscreen</code></td>
+<td>Edge-to-edge, hero 50% / form 50%</td>
+</tr>
+</tbody>
+</table>
+<h3 id="theme-colors">Theme colors<a class="headerlink" href="#theme-colors" title="Permanent link">&para;</a></h3>
+<p>The CSS uses custom properties. Override in your project's CSS:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">:</span><span class="nd">root</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">    </span><span class="nv">--mat-page-bg</span><span class="p">:</span><span class="w"> </span><span class="mh">#686278</span><span class="p">;</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">    </span><span class="nv">--mat-card-bg</span><span class="p">:</span><span class="w"> </span><span class="mh">#2c2638</span><span class="p">;</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">    </span><span class="nv">--mat-accent</span><span class="p">:</span><span class="w"> </span><span class="mh">#7c5cbf</span><span class="p">;</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">    </span><span class="nv">--mat-accent-hover</span><span class="p">:</span><span class="w"> </span><span class="mh">#6b4eae</span><span class="p">;</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">    </span><span class="nv">--mat-input-bg</span><span class="p">:</span><span class="w"> </span><span class="mh">#353042</span><span class="p">;</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">    </span><span class="nv">--mat-border</span><span class="p">:</span><span class="w"> </span><span class="mh">#433d52</span><span class="p">;</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">    </span><span class="nv">--mat-text</span><span class="p">:</span><span class="w"> </span><span class="mh">#f2eff7</span><span class="p">;</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">    </span><span class="nv">--mat-muted</span><span class="p">:</span><span class="w"> </span><span class="mh">#9e96ad</span><span class="p">;</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="p">}</span>
+</code></pre></div>
+<hr />
+<h2 id="static-assets">Static Assets<a class="headerlink" href="#static-assets" title="Permanent link">&para;</a></h2>
+<p>The auth pages load CSS and JS from these API endpoints:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>GET /api/account/static/mojo-auth-theme.css   → dark premium theme
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>GET /api/account/static/mojo-auth.js          → MojoAuth library
+</code></pre></div>
+<p>These are served by Django with browser caching headers (<code>Cache-Control:
+public, max-age=86400</code> in production, <code>no-store</code> in debug mode).</p>
+<hr />
+<h2 id="honeypot-decoy-pages">Honeypot Decoy Pages<a class="headerlink" href="#honeypot-decoy-pages" title="Permanent link">&para;</a></h2>
+<p>Common bot-scanned paths serve a visually identical login page that submits
+to a dead endpoint:</p>
+<table>
+<thead>
+<tr>
+<th>Path</th>
+<th>GET</th>
+<th>POST</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/login</code></td>
+<td>Decoy login page</td>
+<td>Logs credentials, returns "Invalid credentials"</td>
+</tr>
+<tr>
+<td><code>/signin</code></td>
+<td>Decoy login page</td>
+<td>Same</td>
+</tr>
+<tr>
+<td><code>/signup</code></td>
+<td>Decoy login page</td>
+<td>Same</td>
+</tr>
+</tbody>
+</table>
+<p>The decoy form submits to <code>window.location.pathname</code> (same path the bot
+found). Bots scanning <code>/login</code> see a working login page, submit credentials,
+and get a realistic error. The submission is logged as a security incident.</p>
+<hr />
+<h2 id="bouncer-challenge">Bouncer Challenge<a class="headerlink" href="#bouncer-challenge" title="Permanent link">&para;</a></h2>
+<p>First-time visitors (no pass cookie) see a brief verification challenge before
+the login page. The challenge tier is based on the pre-screen risk score:</p>
+<table>
+<thead>
+<tr>
+<th>Pre-screen score</th>
+<th>Challenge</th>
+<th>Friction</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>&lt; 20</td>
+<td>Static button, centered</td>
+<td>Near-zero</td>
+</tr>
+<tr>
+<td>20–39</td>
+<td>Button shifts between spots</td>
+<td>Low</td>
+</tr>
+<tr>
+<td>&gt;= 40</td>
+<td>Moving target button</td>
+<td>Moderate</td>
+</tr>
+</tbody>
+</table>
+<p>After passing the challenge, an HttpOnly <code>mbp</code> pass cookie is set (24h TTL).
+Subsequent visits within 24h skip the challenge entirely.</p>
 
 
 

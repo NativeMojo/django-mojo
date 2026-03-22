@@ -5,6 +5,10 @@
          <lastmod>2026-03-22</lastmod>
     </url>
     <url>
+         <loc>https://NativeMojo.github.io/django-mojo/testit_guide/</loc>
+         <lastmod>2026-03-22</lastmod>
+    </url>
+    <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/</loc>
          <lastmod>2026-03-22</lastmod>
     </url>
@@ -18,6 +22,14 @@
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/account/auth/</loc>
+         <lastmod>2026-03-22</lastmod>
+    </url>
+    <url>
+         <loc>https://NativeMojo.github.io/django-mojo/django_developer/account/auth_pages/</loc>
+         <lastmod>2026-03-22</lastmod>
+    </url>
+    <url>
+         <loc>https://NativeMojo.github.io/django-mojo/django_developer/account/bouncer/</loc>
          <lastmod>2026-03-22</lastmod>
     </url>
     <url>
@@ -261,7 +273,15 @@
          <lastmod>2026-03-22</lastmod>
     </url>
     <url>
+         <loc>https://NativeMojo.github.io/django-mojo/web_developer/account/auth_pages/</loc>
+         <lastmod>2026-03-22</lastmod>
+    </url>
+    <url>
          <loc>https://NativeMojo.github.io/django-mojo/web_developer/account/authentication/</loc>
+         <lastmod>2026-03-22</lastmod>
+    </url>
+    <url>
+         <loc>https://NativeMojo.github.io/django-mojo/web_developer/account/bouncer/</loc>
          <lastmod>2026-03-22</lastmod>
     </url>
     <url>
