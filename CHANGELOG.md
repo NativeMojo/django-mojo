@@ -1,5 +1,10 @@
 ## v1.0.59 - (current)
 
+## v1.0.71 - March 21, 2026
+
+take 36, apple oauth in prod
+
+
 ## v1.0.70 - March 21, 2026
 
 apple oauth fix take 35

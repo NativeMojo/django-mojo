@@ -73,12 +73,12 @@ def test_auth_url_encoding(opts):
         del django_settings.APPLE_CLIENT_ID
 
 
-@th.django_unit_test("apple oauth: get_auth_url uses response_mode=query for JS frontend compatibility")
-def test_auth_url_uses_query_mode(opts):
+@th.django_unit_test("apple oauth: get_auth_url uses form_post with passed redirect_uri")
+def test_auth_url_uses_form_post(opts):
     """
-    Apple must use response_mode=query so code+state come back as URL params
-    that a static JS frontend can read. form_post sends them as a POST body
-    which is inaccessible to browser JS.
+    Apple requires response_mode=form_post when email scope is requested.
+    The redirect_uri (backend callback) is passed in from on_oauth_begin which
+    derives it from the request origin — no hardcoded settings needed.
     """
     from mojo.apps.account.services.oauth.apple import AppleOAuthProvider
     from django.conf import settings as django_settings
@@ -86,11 +86,14 @@ def test_auth_url_uses_query_mode(opts):
     django_settings.APPLE_CLIENT_ID = "com.example.web"
     try:
         svc = AppleOAuthProvider()
-        url = svc.get_auth_url(state="teststate", redirect_uri="https://example.com/callback")
-        assert_true("response_mode=query" in url,
-                    f"Apple must use response_mode=query for JS frontend compatibility, got: {url}")
-        assert_true("response_mode=form_post" not in url,
-                    f"response_mode=form_post is inaccessible to browser JS, got: {url}")
+        callback = "https://example.com/api/auth/oauth/apple/callback"
+        url = svc.get_auth_url(state="teststate", redirect_uri=callback)
+        assert_true("response_mode=form_post" in url,
+                    f"Apple requires response_mode=form_post for email scope, got: {url}")
+        assert_true("api%2Fauth%2Foauth%2Fapple%2Fcallback" in url,
+                    f"redirect_uri must be the backend callback URL, got: {url}")
+        assert_true("response_mode=query" not in url,
+                    f"response_mode=query is rejected by Apple when email scope is requested, got: {url}")
     finally:
         del django_settings.APPLE_CLIENT_ID
 

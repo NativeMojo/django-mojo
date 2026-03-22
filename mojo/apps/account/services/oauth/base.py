@@ -39,6 +39,16 @@ class OAuthProvider:
         get_connection().setex(f"{_STATE_PREFIX}{state}", oauth_state_ttl, data)
         return state
 
+    def peek_state(self, state):
+        """
+        Read a state token without consuming it.
+        Returns the stored extra data dict, or None if invalid/expired.
+        """
+        raw = get_connection().get(f"{_STATE_PREFIX}{state}")
+        if not raw:
+            return None
+        return json.loads(raw)
+
     def consume_state(self, state):
         """
         Validate and consume (delete) a state token.
