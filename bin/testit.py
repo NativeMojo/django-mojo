@@ -38,23 +38,26 @@ paths.configure_paths(str(TESTPROJECT / "config" / "settings" / "__init__.py"), 
 import django
 django.setup()
 
-# Flush database and Redis before running tests so every run starts clean
-from django.db import connection
-print("==> Flushing database and Redis")
-with connection.cursor() as cursor:
-    cursor.execute("""
-        DO $$ DECLARE r RECORD;
-        BEGIN
-            FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = 'public') LOOP
-                EXECUTE 'TRUNCATE TABLE ' || quote_ident(r.tablename) || ' CASCADE';
-            END LOOP;
-        END $$;
-    """)
+# Skip flush when continuing from a checkpoint so prior test state is preserved
+if "--continue" in sys.argv:
+    print("==> Skipping flush (--continue mode)")
+else:
+    from django.db import connection
+    print("==> Flushing database and Redis")
+    with connection.cursor() as cursor:
+        cursor.execute("""
+            DO $$ DECLARE r RECORD;
+            BEGIN
+                FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = 'public') LOOP
+                    EXECUTE 'TRUNCATE TABLE ' || quote_ident(r.tablename) || ' CASCADE';
+                END LOOP;
+            END $$;
+        """)
 
-from mojo.helpers.redis import get_connection
-r = get_connection()
-if r:
-    r.flushdb()
+    from mojo.helpers.redis import get_connection
+    r = get_connection()
+    if r:
+        r.flushdb()
 
 from testit import runner
 
