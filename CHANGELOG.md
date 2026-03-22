@@ -2,6 +2,11 @@
 
 ## v1.0.72 - March 22, 2026
 
+new bouncer security
+
+
+## v1.0.72 - March 22, 2026
+
 ### New Feature: Bouncer — Server-Gated Bot Detection
 
 Bots are blocked before they ever see the login form, field names, or auth API endpoint URLs.
