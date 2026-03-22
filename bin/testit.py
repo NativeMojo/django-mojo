@@ -11,10 +11,16 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent   # django-mojo/bin/
 REPO_ROOT = SCRIPT_DIR.parent                  # django-mojo/
 
-# Auto-activate venv if present and not already active
-VENV_PYTHON = REPO_ROOT / ".venv" / "bin" / "python"
-if VENV_PYTHON.exists() and sys.prefix == sys.base_prefix:
-    os.execv(str(VENV_PYTHON), [str(VENV_PYTHON)] + sys.argv)
+# Auto-activate venv if not already in one
+if sys.prefix == sys.base_prefix:
+    import shutil
+    uv = shutil.which("uv")
+    if uv:
+        os.execv(uv, [uv, "run", "python"] + sys.argv)
+    else:
+        venv_python = REPO_ROOT / ".venv" / "bin" / "python"
+        if venv_python.exists():
+            os.execv(str(venv_python), [str(venv_python)] + sys.argv)
 TESTPROJECT = REPO_ROOT / "testproject"
 
 if not TESTPROJECT.exists():

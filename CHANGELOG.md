@@ -1,5 +1,25 @@
 ## v1.0.59 - (current)
 
+## v1.0.67 - March 21, 2026
+
+bump
+
+
+## v1.0.66 - March 21, 2026
+
+bump
+
+
+## v1.0.65 - March 21, 2026
+
+again
+
+
+## v1.0.61 - March 21, 2026
+
+testing new deploy process
+
+
 ## v1.0.60 - March 18, 2026
 
 MAJOR FIX, dont allow db settings until django ready

@@ -5,8 +5,10 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 TESTPROJECT="$REPO_ROOT/testproject"
 
-# Use venv Python if available
-if [ -f "$REPO_ROOT/.venv/bin/python" ]; then
+# Use uv if available, fall back to venv python, then system python
+if command -v uv &>/dev/null; then
+    PYTHON="uv run python"
+elif [ -f "$REPO_ROOT/.venv/bin/python" ]; then
     PYTHON="$REPO_ROOT/.venv/bin/python"
 else
     PYTHON="python3"

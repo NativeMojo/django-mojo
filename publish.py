@@ -6,6 +6,7 @@ This script handles version bumping, changelog updates, building, publishing to 
 and creating git commits and releases.
 """
 
+import os
 import argparse
 import logging
 import re
@@ -21,6 +22,15 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Load .env if present
+_env_file = Path(".env")
+if _env_file.exists():
+    for _line in _env_file.read_text().splitlines():
+        _line = _line.strip()
+        if _line and not _line.startswith("#") and "=" in _line:
+            _key, _val = _line.split("=", 1)
+            os.environ.setdefault(_key.strip(), _val.strip())
 
 # Constants
 CHANGELOG_FILE = Path("CHANGELOG.md")
@@ -75,7 +85,10 @@ def run_command(command: str, capture_output: bool = True) -> Optional[str]:
 
 
 def validate_uv_environment() -> None:
-    """Validate that uv is available and pyproject.toml exists."""
+    """Validate that uv is available, pyproject.toml exists, and PyPI token is set."""
+    if not os.environ.get("UV_PUBLISH_TOKEN"):
+        raise PublishError("UV_PUBLISH_TOKEN is not set. Add it to your .env file.")
+
     try:
         run_command("uv --version")
     except PublishError:
@@ -143,17 +156,18 @@ def get_release_notes() -> List[str]:
     notes = []
     empty_lines = 0
 
-    while empty_lines < 2:
-        try:
-            note = input().strip()
-            if not note:
-                empty_lines += 1
-            else:
-                notes.append(note)
-                empty_lines = 0
-        except (KeyboardInterrupt, EOFError):
-            logger.info("\nRelease notes collection cancelled")
-            sys.exit(1)
+    try:
+        with open("/dev/tty") as tty:
+            while empty_lines < 2:
+                note = tty.readline().strip()
+                if not note:
+                    empty_lines += 1
+                else:
+                    notes.append(note)
+                    empty_lines = 0
+    except (KeyboardInterrupt, EOFError):
+        logger.info("\nRelease notes collection cancelled")
+        sys.exit(1)
 
     return notes
 
@@ -223,11 +237,24 @@ def update_init_version(version: str) -> None:
 
 def build_and_publish() -> None:
     """Build and publish the package to PyPI."""
+    logger.info("Cleaning dist/...")
+    run_command("rm -rf dist/", capture_output=False)
+
     logger.info("Building package...")
     run_command("uv build", capture_output=False)
 
     logger.info("Publishing to PyPI...")
-    run_command("uv publish", capture_output=False)
+    token = os.environ.get("UV_PUBLISH_TOKEN")
+    try:
+        result = subprocess.run(
+            ["uv", "publish", "--token", token],
+            text=True,
+            timeout=300,
+        )
+        if result.returncode != 0:
+            raise PublishError("uv publish failed")
+    except subprocess.TimeoutExpired:
+        raise PublishError("uv publish timed out")
 
 
 def commit_changes(version: str, notes: List[str]) -> None:
