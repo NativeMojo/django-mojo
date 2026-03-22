@@ -1,5 +1,10 @@
 ## v1.0.59 - (current)
 
+## v1.0.68 - March 21, 2026
+
+another fix for apple oauth
+
+
 ## v1.0.67 - March 21, 2026
 
 bump

@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Run the test suite, starting and stopping the dev server as needed.
+# All arguments are passed through to testit.py.
+#
+# Usage:
+#   ./bin/run_tests                  # run all tests
+#   ./bin/run_tests -t test_accounts # run a specific module
+#   ./bin/run_tests -s               # stop on first failure
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Start server if not already running; track so we know to stop it after
+STARTED_SERVER=0
+if ! "$SCRIPT_DIR/asgi_local" status | grep -q "Running"; then
+    "$SCRIPT_DIR/asgi_local" start
+    sleep 3
+    STARTED_SERVER=1
+fi
+
+# Run tests — capture exit code so we always stop the server
+EXIT_CODE=0
+uv run "$SCRIPT_DIR/testit.py" "$@" || EXIT_CODE=$?
+
+if [ "$STARTED_SERVER" -eq 1 ]; then
+    "$SCRIPT_DIR/asgi_local" stop
+fi
+
+exit $EXIT_CODE
