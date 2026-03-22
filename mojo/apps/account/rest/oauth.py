@@ -7,6 +7,10 @@ Flow:
 
 Supported providers: google (more can be added to services/oauth/__init__.py)
 """
+from urllib.parse import urlencode, quote
+
+from django.http import HttpResponseRedirect
+
 from mojo import decorators as md
 from mojo import errors as merrors
 from mojo.apps.account.models import User
@@ -137,8 +141,22 @@ def on_oauth_begin(request, provider):
     else:
         redirect_uri = _get_redirect_uri(request, provider)
 
-    state = svc.create_state(extra={"redirect_uri": redirect_uri})
-    auth_url = svc.get_auth_url(state=state, redirect_uri=redirect_uri)
+    if provider == "apple":
+        # Apple requires response_mode=form_post so the callback lands on a
+        # backend endpoint. Derive it from the request origin so multiple
+        # domains work without extra settings. The frontend URI is stored
+        # separately so on_apple_callback knows where to bounce the browser.
+        origin = request.META.get("HTTP_ORIGIN", "").rstrip("/")
+        if not origin:
+            host = request.META.get("HTTP_HOST", "")
+            scheme = "https" if request.is_secure() else "http"
+            origin = f"{scheme}://{host}"
+        apple_redirect_uri = f"{origin}/api/auth/oauth/apple/callback"
+        state = svc.create_state(extra={"redirect_uri": apple_redirect_uri, "frontend_uri": redirect_uri})
+        auth_url = svc.get_auth_url(state=state, redirect_uri=apple_redirect_uri)
+    else:
+        state = svc.create_state(extra={"redirect_uri": redirect_uri})
+        auth_url = svc.get_auth_url(state=state, redirect_uri=redirect_uri)
 
     return JsonResponse({
         "status": True,
@@ -147,6 +165,41 @@ def on_oauth_begin(request, provider):
             "state": state,
         },
     })
+
+
+# -----------------------------------------------------------------
+# Apple callback — receives Apple's form_post, bounces to frontend
+# -----------------------------------------------------------------
+
+@md.POST("auth/oauth/apple/callback")
+@md.public_endpoint()
+def on_apple_callback(request):
+    """
+    Receives Apple's form_post redirect (code + state as POST body).
+    Redirects the browser to the frontend with code + state as query params
+    so the JS flow is identical to Google.
+
+    Requires APPLE_CALLBACK_REDIRECT setting — the frontend URL to redirect to.
+    """
+    code = request.POST.get("code", "")
+    state = request.POST.get("state", "")
+
+    if not code or not state:
+        raise merrors.ValueException("Missing code or state in Apple callback")
+
+    # Peek at state (without consuming) to find the frontend URI to bounce to.
+    # The state is consumed later by on_oauth_complete.
+    svc = get_provider("apple")
+    state_data = svc.peek_state(state)
+    if not state_data:
+        raise merrors.PermissionDeniedException("Invalid or expired OAuth state", 401, 401)
+
+    frontend_uri = state_data.get("frontend_uri", "")
+    if not frontend_uri:
+        raise merrors.ValueException("No frontend_uri in OAuth state")
+
+    params = urlencode({"code": code, "state": state}, quote_via=quote)
+    return HttpResponseRedirect(f"{frontend_uri}?{params}")
 
 
 # -----------------------------------------------------------------

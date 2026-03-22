@@ -7,9 +7,15 @@ Required settings:
     APPLE_KEY_ID       Key ID from the .p8 file
     APPLE_PRIVATE_KEY  Full PEM string of the .p8 private key
 
-Flow is identical to Google:
-    GET  /api/auth/oauth/apple/begin    -> authorization URL
-    POST /api/auth/oauth/apple/complete -> exchange code, issue JWT
+Apple requires response_mode=form_post when email scope is requested, so the
+callback lands on a backend endpoint rather than directly on the frontend.
+The backend callback URL is derived from the request origin at runtime, so
+multiple domains are supported automatically — register each domain's callback
+URL as a Return URL in Apple's developer portal.
+
+    GET  /api/auth/oauth/apple/begin      -> authorization URL
+    POST /api/auth/oauth/apple/callback   -> Apple posts here; redirects to frontend
+    POST /api/auth/oauth/apple/complete   -> exchange code, issue JWT
 """
 import time
 from urllib.parse import urlencode, quote
@@ -63,18 +69,20 @@ class AppleOAuthProvider(OAuthProvider):
         )
 
     def get_auth_url(self, state, redirect_uri):
-        client_id = settings.get("APPLE_CLIENT_ID")
+        # redirect_uri is the backend callback URL, derived from origin in on_oauth_begin.
+        # Apple requires response_mode=form_post when email scope is requested.
         params = {
-            "client_id": client_id,
+            "client_id": settings.get("APPLE_CLIENT_ID"),
             "redirect_uri": redirect_uri,
             "response_type": "code",
-            "response_mode": "query",
+            "response_mode": "form_post",
             "scope": "openid email",
             "state": state,
         }
         return f"{APPLE_AUTH_URL}?{urlencode(params, quote_via=quote)}"
 
     def exchange_code(self, code, redirect_uri):
+        # redirect_uri must match exactly what was sent to Apple's auth endpoint.
         resp = requests.post(APPLE_TOKEN_URL, data={
             "client_id": settings.get("APPLE_CLIENT_ID"),
             "client_secret": self._build_client_secret(),
