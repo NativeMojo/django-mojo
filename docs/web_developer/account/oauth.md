@@ -10,12 +10,24 @@ OAuth allows users to log in with a third-party provider (Google, etc.) without 
 
 ## Flow Overview
 
+**Google** — standard redirect flow:
 ```
-1. GET  /api/auth/oauth/<provider>/begin   → get authorization URL
+1. GET  /api/auth/oauth/google/begin        → get authorization URL
 2. Redirect user to authorization URL
-3. Provider redirects back to your app with ?code=...&state=...
-4. POST /api/auth/oauth/<provider>/complete → exchange code, get JWT
+3. Google redirects back → your page ?code=...&state=...
+4. POST /api/auth/oauth/google/complete     → exchange code, get JWT
 ```
+
+**Apple** — backend relay required (Apple prohibits query-param redirects when email scope is requested):
+```
+1. GET  /api/auth/oauth/apple/begin         → get authorization URL
+2. Redirect user to authorization URL
+3. Apple POSTs code+state to backend       → /api/auth/oauth/apple/callback
+4. Backend redirects browser               → your page ?code=...&state=...
+5. POST /api/auth/oauth/apple/complete     → exchange code, get JWT
+```
+
+Steps 3–4 are invisible to your JS — your page still receives `?code=` and `?state=` in the URL, identical to Google. **No changes needed to your completion code.**
 
 ---
 
@@ -163,18 +175,20 @@ Requiring an additional local second factor after a trusted provider assertion i
 
 ## JavaScript Example
 
+The begin/complete pattern is identical for Google and Apple:
+
 ```javascript
-// Begin — call on "Login with Google" button click
-async function startGoogleLogin() {
-  const resp = await fetch('/api/oauth/google/begin');
+// Begin — call on "Login with Google" or "Login with Apple" button click
+async function startOAuthLogin(provider) {
+  const resp = await fetch(`/api/auth/oauth/${provider}/begin`);
   const { data } = await resp.json();
   window.location.href = data.auth_url;
 }
 
-// Complete — call in your OAuth callback page
-async function completeGoogleLogin() {
+// Complete — call on your OAuth callback page (handles both Google and Apple)
+async function completeOAuthLogin(provider) {
   const params = new URLSearchParams(window.location.search);
-  const resp = await fetch('/api/oauth/google/complete', {
+  const resp = await fetch(`/api/auth/oauth/${provider}/complete`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -186,6 +200,8 @@ async function completeGoogleLogin() {
   // data.access_token, data.refresh_token, data.user
 }
 ```
+
+For Apple, the backend relay (step 3–4 above) delivers `?code=` and `?state=` to your page exactly as Google does — `completeOAuthLogin` works unchanged.
 
 ---
 

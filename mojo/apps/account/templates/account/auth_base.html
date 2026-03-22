@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{% block page_title %}{{ page_title|default:"Sign In" }}{% endblock %}</title>
+    {% if favicon_url %}<link rel="icon" href="{{ favicon_url }}" />{% endif %}
+    <link rel="stylesheet" href="{{ api_base }}/api/account/static/mojo-auth-theme.css" />
+    {% if custom_css_url %}<link rel="stylesheet" href="{{ custom_css_url }}" />{% endif %}
+    {% if custom_css %}<style>{{ custom_css|safe }}</style>{% endif %}
+    {% block extra_css %}{% endblock %}
+</head>
+<body{% if auth_layout == "fullscreen" %} class="mat-fullscreen"{% endif %}>
+    <!-- Overlay — session check + post-auth redirect -->
+    <div class="mat-overlay" id="mat-overlay">
+        <div class="mat-overlay-card">
+            <div class="mat-overlay-spinner"></div>
+            <p class="mat-overlay-title" id="mat-overlay-title">Checking session…</p>
+            <p class="mat-overlay-sub" id="mat-overlay-sub">Please wait</p>
+        </div>
+    </div>
+
+    <div class="mat-page">
+        <div class="mat-card">
+            {% include "account/auth_hero.html" %}
+
+            <div class="mat-main">
+                <div class="mat-header">
+                    {% if logo_url %}
+                    <img class="mat-header-logo" src="{{ logo_url }}" alt="{{ brand_name|default:'App' }}" />
+                    {% elif brand_name %}
+                    <span class="mat-header-brand">{{ brand_name }}</span>
+                    {% endif %}
+                    <h1 class="mat-title">{% block title %}{{ page_title|default:"Sign In" }}{% endblock %}</h1>
+                    <p class="mat-subtitle">{% block subtitle_block %}{% endblock %}</p>
+                </div>
+
+                <div id="mat-message" class="mat-message" role="alert"></div>
+
+                {% block content %}{% endblock %}
+
+                {% block switcher %}{% endblock %}
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ api_base }}/api/account/static/mojo-auth.js"></script>
+    <script>
+    (function () {
+        // API_BASE: use configured value, fall back to current origin (same-origin API)
+        var API_BASE = "{{ api_base }}" || window.location.origin;
+        var ON_SUCCESS = "{{ success_redirect|default:'/' }}";
+        var AUTH_URL = "{{ auth_url|default:'/auth' }}";
+        var REGISTER_URL = "{{ register_url|default:'/register' }}";
+        var ENABLE_GOOGLE = {{ enable_google|yesno:"true,false" }};
+        var ENABLE_APPLE = {{ enable_apple|yesno:"true,false" }};
+        var ENABLE_PASSKEYS = {{ enable_passkeys|yesno:"true,false" }};
+
+        var params = new URLSearchParams(location.search);
+        var paramRedirect = params.get("redirect") || params.get("next") || params.get("returnTo") || "";
+        var redirectTo = paramRedirect && paramRedirect.charAt(0) === "/" ? paramRedirect : ON_SUCCESS;
+
+        // Set up helpers BEFORE MojoAuth.init so page scripts can
+        // reference _mat and _matConfig even if MojoAuth fails to load.
+        var $ = function (id) { return document.getElementById(id); };
+
+        window._matConfig = {
+            apiBase: API_BASE,
+            redirectTo: redirectTo,
+            authUrl: AUTH_URL,
+            registerUrl: REGISTER_URL,
+            enableGoogle: ENABLE_GOOGLE,
+            enableApple: ENABLE_APPLE,
+            enablePasskeys: ENABLE_PASSKEYS,
+            params: params,
+        };
+
+        window._mat = {
+            $: $,
+            showMessage: function (text, type) {
+                var el = $("mat-message");
+                el.textContent = text;
+                el.className = "mat-message is-visible is-" + (type || "info");
+            },
+            hideMessage: function () {
+                var el = $("mat-message");
+                el.className = "mat-message";
+                el.textContent = "";
+            },
+            setLoading: function (btn, loading) {
+                btn.classList.toggle("is-loading", !!loading);
+                btn.disabled = !!loading;
+            },
+            showOverlay: function (title, sub) {
+                $("mat-overlay-title").textContent = title || "Please wait\u2026";
+                $("mat-overlay-sub").textContent = sub || "";
+                $("mat-overlay").classList.add("is-visible");
+            },
+            hideOverlay: function () {
+                $("mat-overlay").classList.remove("is-visible");
+            },
+            redirect: function () { window.location.href = redirectTo; },
+            onAuthSuccess: function () {
+                window._mat.showOverlay("Signed in!", "Taking you there now\u2026");
+                setTimeout(window._mat.redirect, 800);
+            },
+        };
+
+        // Init MojoAuth — API_BASE defaults to current origin (same-server API)
+        MojoAuth.init({ baseURL: API_BASE });
+
+        // Session check
+        if (!params.get("token") && !(params.get("code") && params.get("state"))) {
+            var refreshToken = MojoAuth.getRefreshToken();
+            if (refreshToken) {
+                window._mat.showOverlay("Checking session\u2026", "Verifying your credentials");
+                MojoAuth.refreshToken()
+                    .then(function () {
+                        window._mat.showOverlay("Signed in!", "Taking you there now\u2026");
+                        setTimeout(window._mat.redirect, 800);
+                    })
+                    .catch(function () {
+                        MojoAuth.logout();
+                        window._mat.hideOverlay();
+                    });
+            }
+        }
+
+        // Magic link token
+        var urlToken = params.get("token");
+        if (urlToken && urlToken.indexOf("ml:") === 0) {
+            MojoAuth.loginWithMagicToken(urlToken)
+                .then(function () {
+                    params.delete("token");
+                    history.replaceState({}, "", params.toString() ? location.pathname + "?" + params.toString() : location.pathname);
+                    window._mat.onAuthSuccess();
+                })
+                .catch(function (err) {
+                    params.delete("token");
+                    history.replaceState({}, "", location.pathname);
+                    window._mat.showMessage(MojoAuth.getError(err) || "Invalid or expired login link.", "error");
+                });
+        }
+
+        // OAuth callback
+        if (params.get("code") && params.get("state")) {
+            var provider = sessionStorage.getItem("oauth_provider") || "google";
+            sessionStorage.removeItem("oauth_provider");
+            var oauthBtn = $(provider === "apple" ? "btn-apple" : "btn-google");
+            if (oauthBtn) window._mat.setLoading(oauthBtn, true);
+            window._mat.showMessage("Completing sign-in\u2026", "info");
+            MojoAuth.completeOAuthLogin(provider)
+                .then(window._mat.onAuthSuccess)
+                .catch(function (err) {
+                    if (oauthBtn) window._mat.setLoading(oauthBtn, false);
+                    window._mat.showMessage(MojoAuth.getError(err) || provider + " sign-in failed.", "error");
+                });
+        }
+
+        // Password toggles
+        document.querySelectorAll(".mat-eye").forEach(function (eyeBtn) {
+            eyeBtn.addEventListener("click", function (e) {
+                e.preventDefault();
+                e.stopPropagation();
+                var input = document.getElementById(eyeBtn.dataset.target);
+                if (!input) return;
+                var isHidden = input.type === "password";
+                input.type = isHidden ? "text" : "password";
+                eyeBtn.setAttribute("aria-label", isHidden ? "Hide password" : "Show password");
+                eyeBtn.innerHTML = isHidden
+                    ? '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>'
+                    : '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+            });
+        });
+
+        // Hide disabled OAuth buttons
+        if (!ENABLE_GOOGLE) { var g = $("btn-google"); if (g) g.style.display = "none"; }
+        if (!ENABLE_APPLE) { var a = $("btn-apple"); if (a) a.style.display = "none"; }
+        var passkeysVisible = ENABLE_PASSKEYS && MojoAuth.isPasskeySupported();
+        if (passkeysVisible) { var pk = $("btn-passkey"); if (pk) pk.style.display = ""; }
+
+        // Hide entire OAuth section if no providers are enabled
+        if (!ENABLE_GOOGLE && !ENABLE_APPLE && !passkeysVisible) {
+            document.querySelectorAll(".mat-divider").forEach(function (el) { el.style.display = "none"; });
+            document.querySelectorAll(".mat-oauth-row").forEach(function (el) { el.style.display = "none"; });
+        }
+    })();
+    </script>
+
+    {% block page_script %}{% endblock %}
+</body>
+</html>

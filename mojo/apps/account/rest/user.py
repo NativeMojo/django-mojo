@@ -63,6 +63,7 @@ def on_refresh_token(request):
 @md.strict_rate_limit("login", ip_limit=100, duid_limit=10, duid_window=300)
 @md.endpoint_metrics("login_attempts", by=["ip", "duid"])
 @md.requires_params("password")
+@md.requires_bouncer_token('login')
 def on_user_login(request):
     username = request.DATA.username
     password = request.DATA.password

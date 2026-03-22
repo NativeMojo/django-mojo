@@ -1,5 +1,24 @@
 ## v1.0.59 - (current)
 
+## v1.0.72 - March 22, 2026
+
+### New Feature: Bouncer — Server-Gated Bot Detection
+
+Bots are blocked before they ever see the login form, field names, or auth API endpoint URLs.
+
+- **Server-side gate**: Django pre-screens every request to the login page (IP, headers, GeoIP, device cookie) before rendering anything. Clearly-bot traffic receives a honeypot decoy page; suspicious traffic receives the challenge page; known-good devices (valid pass cookie) receive the login page directly.
+- **Randomized challenge page**: 4 layout variants, 10 button label variants, per-render CSS nonce (class names change every render), randomized honeypot field name, randomized button movement seed. No stable CSS selectors or XPath across sessions — automation breaks.
+- **HMAC-signed bouncer token**: IP-bound, device-bound, single-use Redis nonce, 15-minute TTL, page_type-scoped. Attached to every auth API call by `mojo-auth.js`; validated server-side by `@md.requires_bouncer_token('login')` on the login endpoint.
+- **HttpOnly pass cookie**: Set on allow/monitor decisions. Lets known-good devices skip the interactive challenge for 24h without bypassing IP/header scoring.
+- **Adaptive bot signature learning**: After every high-confidence block (`risk_score >= BOUNCER_LEARN_MIN_SCORE`), `BotLearner` registers the bot's subnet /24, user agent, browser fingerprint, and signal-set campaign hash in `BotSignature`. Redis cache checked at pre-screen — matched signatures serve decoy immediately, before any scoring runs.
+- **Pluggable scoring**: `register_analyzer` decorator, settings-driven `BOUNCER_SCORE_WEIGHTS` and `BOUNCER_THRESHOLDS`, per-page-type threshold overrides. Custom analyzers drop in without touching framework code.
+- **New models**: `BouncerDevice` (pre-auth device reputation), `BouncerSignal` (assess/event audit log), `BotSignature` (adaptive learning registry). Full REST CRUD via operator portal.
+- **Decoy honeypot**: `/login` and `/signin` serve a visually identical login page that POSTs to a dead endpoint returning plausible errors with a 300ms delay. Detection is never revealed.
+- **Gradual rollout**: `BOUNCER_REQUIRE_TOKEN=False` (default) logs missing tokens without blocking. Flip to `True` to enforce. Per-group opt-in via `group.metadata["require_bouncer_token"]`.
+- **MojoVerify branding** on the challenge page: dark navy gradient, `#6384ff` indigo, animated scan line, pulse rings — fixed branding, not overridable. Login page branding (`BOUNCER_LOGO_URL`, `BOUNCER_ACCENT_COLOR`) is configurable.
+- All features opt-in via settings. Existing projects are unaffected.
+- Docs: `docs/django_developer/account/bouncer.md`, `docs/web_developer/account/bouncer.md`
+
 ## v1.0.71 - March 21, 2026
 
 take 36, apple oauth in prod

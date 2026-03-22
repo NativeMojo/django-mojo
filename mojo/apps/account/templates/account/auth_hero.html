@@ -1,0 +1,35 @@
+{% comment %}
+Left hero panel — inside the card, with the image as background.
+Override in your project's templates/account/auth_hero.html to swap
+imagery and messaging.
+
+Variables from the view context (populated from settings):
+  hero_image_url      — background image
+  logo_url            — brand logo (top-left)
+  brand_name          — alt text for logo
+  hero_headline       — text over the image (bottom)
+  hero_subheadline    — optional supporting text
+  back_to_website_url — pill link (top-right)
+{% endcomment %}
+<div class="mat-hero"{% if hero_image_url %} style="background-image:url('{{ hero_image_url }}')"{% endif %}>
+    <div class="mat-hero-top">
+        {% if logo_url %}
+        <img class="mat-hero-logo" src="{{ logo_url }}" alt="{{ brand_name|default:'' }}" />
+        {% elif brand_name %}
+        <span style="font-size:.875rem;font-weight:600;color:rgba(255,255,255,.8);letter-spacing:.5px">{{ brand_name }}</span>
+        {% else %}
+        <span></span>
+        {% endif %}
+        {% if back_to_website_url %}
+        <a class="mat-hero-back" href="{{ back_to_website_url }}">Back to website &rarr;</a>
+        {% endif %}
+    </div>
+    <div class="mat-hero-bottom">
+        {% if hero_headline %}
+        <div class="mat-hero-headline">{{ hero_headline }}</div>
+        {% endif %}
+        {% if hero_subheadline %}
+        <div class="mat-hero-sub">{{ hero_subheadline }}</div>
+        {% endif %}
+    </div>
+</div>

@@ -11,3 +11,6 @@ from .user_api_key import UserAPIKey
 from .oauth import OAuthConnection
 from .notification import Notification
 from .setting import Setting
+from .bouncer_device import BouncerDevice
+from .bouncer_signal import BouncerSignal
+from .bot_signature import BotSignature

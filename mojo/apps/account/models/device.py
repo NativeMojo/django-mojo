@@ -11,10 +11,17 @@ GEOLOCATION_DEVICE_LOCATION_AGE = settings.get_static('GEOLOCATION_DEVICE_LOCATI
 
 class UserDevice(models.Model, MojoModel):
     """
-    Represents a unique device used by a user, tracked via a device ID (duid) or
-    a hash of the user agent string as a fallback.
+    Represents a unique device used by an authenticated user.
+
+    `muid` is the server-controlled device identity (HttpOnly cookie _muid),
+    linking this post-auth record to the pre-auth BouncerDevice. This allows
+    admins to see the full pre-auth bouncer history for any user's device.
+
+    `duid` is the client-claimed device ID from localStorage (kept for backward
+    compat).
     """
     user = models.ForeignKey("account.User", on_delete=models.CASCADE, related_name='devices')
+    muid = models.CharField(max_length=64, db_index=True, default='', blank=True)
     duid = models.CharField(max_length=255, db_index=True)
 
     device_info = models.JSONField(default=dict, blank=True)
@@ -33,14 +40,24 @@ class UserDevice(models.Model, MojoModel):
                 }
             },
             'basic': {
-                "fields": ["duid", "last_ip", "last_seen", "device_info"],
+                "fields": ["muid", "duid", "last_ip", "last_seen", "device_info"],
             },
             'locations': {
-                'fields': ['duid', 'last_ip', 'last_seen'],
+                'fields': ['muid', 'duid', 'last_ip', 'last_seen'],
                 'graphs': {
                     'locations': 'default'
                 }
-            }
+            },
+            'sessions': {
+                'fields': [
+                    'id', 'muid', 'duid', 'last_ip', 'device_info',
+                    'first_seen', 'last_seen',
+                ],
+                'extra': ['bouncer_device', 'active_sessions', 'recent_locations'],
+                'graphs': {
+                    'user': 'basic',
+                },
+            },
         }
 
     class Meta:
@@ -49,6 +66,78 @@ class UserDevice(models.Model, MojoModel):
 
     def __str__(self):
         return f"Device {self.duid} for {self.user.username}"
+
+    @property
+    def bouncer_device(self):
+        """Return BouncerDevice data for this muid (pre-auth reputation)."""
+        if not self.muid:
+            return None
+        from .bouncer_device import BouncerDevice
+        bd = BouncerDevice.objects.filter(muid=self.muid).first()
+        if not bd:
+            return None
+        return {
+            'risk_tier': bd.risk_tier,
+            'event_count': bd.event_count,
+            'block_count': bd.block_count,
+            'fingerprint_id': bd.fingerprint_id or '',
+            'first_seen': bd.first_seen,
+            'last_seen': bd.last_seen,
+        }
+
+    @property
+    def active_sessions(self):
+        """Return recent browser sessions grouped by msid from BouncerSignal."""
+        if not self.muid:
+            return []
+        from .bouncer_signal import BouncerSignal
+        from django.db.models import Min, Max, Count
+        from mojo.helpers import dates
+        from datetime import timedelta
+        cutoff = dates.utcnow() - timedelta(hours=24)
+        qs = BouncerSignal.objects.filter(
+            muid=self.muid, created__gte=cutoff
+        ).exclude(msid='').values('msid').annotate(
+            started=Min('created'),
+            last_activity=Max('created'),
+            ip=Max('ip_address'),
+            signal_count=Count('id'),
+        ).order_by('-last_activity')[:20]
+        sessions = []
+        for row in qs:
+            tabs = list(BouncerSignal.objects.filter(
+                muid=self.muid, msid=row['msid'], created__gte=cutoff
+            ).exclude(mtab='').values('mtab').annotate(
+                started=Min('created'),
+                last_activity=Max('created'),
+                signal_count=Count('id'),
+            ).order_by('-last_activity')[:10])
+            sessions.append({
+                'msid': row['msid'],
+                'started': row['started'],
+                'last_activity': row['last_activity'],
+                'ip': row['ip'],
+                'signal_count': row['signal_count'],
+                'tabs': tabs,
+            })
+        return sessions
+
+    @property
+    def recent_locations(self):
+        """Return recent locations for this device."""
+        locs = self.locations.select_related('geolocation').order_by('-last_seen')[:10]
+        result = []
+        for loc in locs:
+            entry = {
+                'ip_address': loc.ip_address,
+                'first_seen': loc.first_seen,
+                'last_seen': loc.last_seen,
+            }
+            if loc.geolocation:
+                entry['city'] = loc.geolocation.city or ''
+                entry['country'] = loc.geolocation.country_code or ''
+            result.append(entry)
+        return result
 
     @classmethod
     def track(cls, request=None, user=None):
@@ -67,6 +156,8 @@ class UserDevice(models.Model, MojoModel):
         ip_address = request.ip
         user_agent_str = request.user_agent
         duid = request.duid
+        muid = getattr(request, 'muid', None)
+        muid = muid if isinstance(muid, str) else ''
 
         ua_hash = hashlib.sha256(user_agent_str.encode('utf-8')).hexdigest()
         if not duid:
@@ -77,6 +168,7 @@ class UserDevice(models.Model, MojoModel):
             user=user,
             duid=duid,
             defaults={
+                'muid': muid,
                 'last_ip': ip_address,
                 'user_agent_hash': ua_hash,
                 'device_info': rhelper.parse_user_agent(user_agent_str)
@@ -88,14 +180,21 @@ class UserDevice(models.Model, MojoModel):
             now = dates.utcnow()
             age_seconds = (now - device.last_seen).total_seconds()
             is_stale = age_seconds > GEOLOCATION_DEVICE_LOCATION_AGE
+            update_fields = []
             if is_stale or device.last_ip != ip_address:
                 device.last_ip = ip_address
                 device.last_seen = dates.utcnow()
-                # Optionally update device_info if user agent has changed
+                update_fields.extend(['last_ip', 'last_seen'])
                 if device.user_agent_hash != ua_hash:
                     device.user_agent_hash = ua_hash
                     device.device_info = rhelper.parse_user_agent(user_agent_str)
-                device.save()
+                    update_fields.extend(['user_agent_hash', 'device_info'])
+            # Always update muid if we have one and the device doesn't yet
+            if muid and device.muid != muid:
+                device.muid = muid
+                update_fields.append('muid')
+            if update_fields:
+                device.save(update_fields=update_fields)
 
         # Track the location (IP) used by this device
         UserDeviceLocation.track(device, ip_address)
