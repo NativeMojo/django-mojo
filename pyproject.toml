@@ -1,6 +1,6 @@
 [project]
 name = "django-mojo"
-version = "1.0.68"
+version = "1.0.69"
 description = "A REST framework for Django with secure DB-backed settings, REST/WebSocket support, jobs, auth, and more."
 authors = [{ name = "MOJO Dev Team", email = "gotmojo@mojo.com" }]
 readme = "README.md"
@@ -34,14 +34,12 @@ dependencies = [
     "boto3>=1.42.73",
     "pyfcm>=2.1.0",
     "websocket-client>=1.9.0",
-    "psycopg2-binary>=2.9.11",
     "uvicorn>=0.42.0",
 ]
 
 [dependency-groups]
 dev = [
-    "pytest>=8.3.4",
-    "pytest-django>=4.9.0",
+    "psycopg2-binary>=2.9.11",
 ]
 
 [tool.hatch.build.targets.wheel]
