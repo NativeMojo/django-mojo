@@ -3804,23 +3804,27 @@ It is intentionally lightweight so both humans and LLM agents can reason about a
 </ul>
 <hr />
 <h2 id="running-testit">Running TestIt<a class="headerlink" href="#running-testit" title="Permanent link">&para;</a></h2>
+<p>Use <code>bin/run_tests</code> — it handles starting and stopping the test server automatically:</p>
 <ul>
-<li>Run everything (Mojo apps + local project):<br />
-<code>./bin/testit.py</code></li>
-<li>Target a module or a specific file:<br />
-<code>./bin/testit.py -m test_accounts</code><br />
-<code>./bin/testit.py -m test_accounts.1_test_models</code></li>
-<li>Append multiple modules:<br />
-<code>./bin/testit.py -t test_accounts.1_test_models -t test_billing.3_test_flows</code></li>
-<li>Verbose output and early exit:<br />
-<code>./bin/testit.py -v -s</code></li>
-<li>Show tracebacks without verbosity:<br />
-<code>./bin/testit.py -e</code></li>
-<li>Toggle app scopes:<br />
-<code>./bin/testit.py --onlymojo</code> · <code>./bin/testit.py --nomojo</code></li>
-<li>See every declared <code>@requires_extra</code> flag (respects filters like <code>-m</code> and <code>-t</code>; static scan only, no tests executed):<br />
-<code>./bin/testit.py --list-extras</code></li>
+<li>Run everything:
+  <code>./bin/run_tests</code></li>
+<li>Target a module or a specific file:
+  <code>./bin/run_tests -t test_accounts</code>
+  <code>./bin/run_tests -t test_accounts.1_test_models</code></li>
+<li>Multiple modules:
+  <code>./bin/run_tests -t test_accounts.1_test_models -t test_billing.3_test_flows</code></li>
+<li>Verbose output and stop on first failure:
+  <code>./bin/run_tests -v -s</code></li>
+<li>Resume from the last failed test file (skips DB flush, picks up where <code>-s</code> stopped):
+  <code>./bin/run_tests -s --continue</code></li>
+<li>Show tracebacks without verbosity:
+  <code>./bin/run_tests -e</code></li>
+<li>Toggle app scopes:
+  <code>./bin/run_tests --onlymojo</code> · <code>./bin/run_tests --nomojo</code></li>
+<li>See every declared <code>@requires_extra</code> flag (static scan only, no tests executed):
+  <code>./bin/run_tests --list-extras</code></li>
 </ul>
+<p>All arguments are passed directly to <code>bin/testit.py</code>. If the server is already running, <code>bin/run_tests</code> will not stop it after the suite completes.</p>
 <h3 id="json-config">JSON Config<a class="headerlink" href="#json-config" title="Permanent link">&para;</a></h3>
 <p>CLI flags always win, but you can seed defaults through a JSON file:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>./bin/testit.py<span class="w"> </span>--config<span class="w"> </span>docs/testit/examples/testit.config.json<span class="w"> </span>--extra<span class="w"> </span>run-backfill
@@ -3963,7 +3967,7 @@ It is intentionally lightweight so both humans and LLM agents can reason about a
 <li><strong>Every <code>assert</code> must include a descriptive failure message string.</strong> No bare asserts.</li>
 <li><strong>Use <code>obj["values"]</code> not <code>obj.values</code> for any key that shadows a dict built-in.</strong></li>
 <li>Before implementing workarounds, question the upstream API — document friction for follow-up.</li>
-<li>Run with <code>./bin/testit.py -v -e</code> (or via config) when validating locally.</li>
+<li>Run with <code>./bin/run_tests -v -e</code> (or via config) when validating locally.</li>
 </ol>
 <p>Keeping these habits makes the suite predictable for both humans and models, highlights design gaps early, and keeps TestIt simple.</p>
 
