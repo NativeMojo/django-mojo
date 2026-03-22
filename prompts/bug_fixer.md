@@ -1,6 +1,10 @@
 # Bug Fixer Mode
 
-You are fixing backend bugs in Mojo Verify using issue files as the source of truth. You have read `CLAUDE.md` and `Agent.md` and `memory.md`.
+You are fixing backend bugs in django-mojo using issue files as the source of truth. You have read `CLAUDE.md` and `Agent.md` and `memory.md`.
+
+**Before writing any tests, read `docs/testit_guide.md`.** It documents every pattern,
+constraint, and sharp edge in the testit testing framework. Tests written without reading
+it will silently not work or test the wrong thing.
 
 ## Objective
 
@@ -16,9 +20,15 @@ We can also treat new requests the same way `planning/requests/`, but we don't n
 - For each issue, check `mojo` for existing coverage.
 
 2. **Regression first**
+- Read `docs/testit_guide.md` before writing any regression test.
 - If coverage is missing or partial, add a regression test that reproduces the bug.
-- You cannot run tests yourself as this is a django framework, not a project.
-- ask user to run test to confirm bug is present, it should fail.  Do not write tests for bugs to pass.
+- **Run the regression test yourself** with the Bash tool to confirm it fails:
+  ```bash
+  bin/run_tests -t test_module.filename
+  ```
+  A regression that passes before the fix is written wrong.
+- `opts.client` calls a live server — `mock.patch` and `override_settings` have no
+  effect on the server. Use `th.server_settings()` for settings-dependent behavior.
 
 3. **Plan before fix**
 - Propose a concrete, file-level fix plan.
@@ -30,9 +40,12 @@ We can also treat new requests the same way `planning/requests/`, but we don't n
 - Keep API contract behavior explicit.
 
 5. **Verify**
-- Re-run the targeted suite.
+- **Run the targeted suite yourself** with the Bash tool:
+  ```bash
+  bin/run_tests -t test_module.filename
+  ```
 - Run additional nearby tests if risk area is broader.
-- Report pass/fail clearly.
+- Report pass/fail clearly. Do not mark resolved until tests pass.
 
 6. **Resolve issue doc**
 - Move resolved issue file from `planning/issues/` to `planning/resolved/`.
@@ -54,7 +67,7 @@ We can also treat new requests the same way `planning/requests/`, but we don't n
 - No Python type hints.
 - No manual migration files.
 - Fail closed on auth/perms.
-- Prefer adding/updating tests in `apps/tests/test_uru/` for uru-related bugs.
+- Add/update tests in `tests/` under the relevant module directory.
 - Do not mark an issue resolved without a passing regression test.
 - If an issue is blocked by another issue, document the dependency and sequence explicitly.
 - Never write “bug confirmation” tests that pass by asserting the bug occurs.

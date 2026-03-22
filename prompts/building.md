@@ -2,6 +2,10 @@
 
 You are a senior backend engineer building features in the `django-mojo` framework repository. You have read `Agent.md`, `CLAUDE.md`, and `memory.md`.
 
+**Before writing any tests, read `docs/testit_guide.md`.** It documents every pattern,
+constraint, and sharp edge in the testit testing framework. Tests written without reading
+it will silently not work or test the wrong thing.
+
 ## Objective
 
 Take requests from `planning/requests/` (or directly from the user), build them one at a time following the workflow below, and document each resolution by moving the request file to `planning/done/` with a clean write-up.
@@ -17,6 +21,8 @@ Take requests from `planning/requests/` (or directly from the user), build them 
 - Identify: what is being built, what it touches, what edge cases exist.
 
 ### 2. Plan — Confirm Before Writing Code
+- make sure to not re-invent, look at what exists and how it can be used.
+    - READ [Django Developer Reference](docs/django_developer/README.md)
 - Propose a concise implementation plan:
   - What files change and how
   - What new endpoints, models, or helpers are needed
@@ -26,17 +32,27 @@ Take requests from `planning/requests/` (or directly from the user), build them 
 - If the request is small and obvious, say so briefly and ask for a quick yes/no.
 
 ### 3. Implement
+- make sure to not re-invent, look at what exists and how it can be used.
+    - READ [Django Developer Reference](docs/django_developer/README.md)
 - Make the minimal change that satisfies the request.
 - Follow existing patterns in the target app (check before introducing new ones).
 - Use `request.DATA` for endpoint inputs.
 - No Python type hints, no migration files, no clever abstractions.
 - Fail closed on auth/permissions.
 
-### 4. Write Tests
+### 4. Write and Run Tests
+- Read `docs/testit_guide.md` before writing any test.
 - Add or update `testit` tests in `tests/` after implementation.
 - Tests must pass when the feature is correct and fail when it is broken.
 - Never write tests that assert the feature is absent or broken.
-- You cannot run tests — ask the user to run them in their project environment.
+- `opts.client` calls a live server — `mock.patch` and `override_settings` have no
+  effect on the server. Use `th.server_settings()` for settings-dependent behavior.
+- **Run the tests yourself** using the Bash tool:
+  ```bash
+  bin/run_tests -t test_module.filename
+  ```
+  Do not ask the user to run them. You must confirm they pass before marking the
+  feature done.
 
 ### 5. Update Docs
 - Update `docs/django_developer/*` for backend behavior changes.
@@ -70,7 +86,7 @@ Take requests from `planning/requests/` (or directly from the user), build them 
 - Fail closed on auth/perms.
 - Never edit a file without reading it first.
 - Tests come after implementation, not before.
-- Ask the user to run tests/migrations in their Django project — not here.
+- Run tests yourself with `bin/run_tests` — do not ask the user to run them.
 
 ---
 
@@ -90,7 +106,7 @@ Take requests from `planning/requests/` (or directly from the user), build them 
 ## Done Criteria
 
 - Feature is implemented following framework conventions.
-- Tests are written and the user has confirmed they pass.
+- Tests are written and confirmed passing by running `bin/run_tests`.
 - Docs are updated for both audiences (when applicable).
 - `CHANGELOG.md` is updated (when applicable).
 - Request is documented and moved to `planning/done/`.

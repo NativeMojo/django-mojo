@@ -76,6 +76,7 @@ do_start() {
         --host "$HOST" \
         --port "$PORT" \
         --reload \
+        --reload-include '*.conf' \
         > "$LOGFILE" 2>&1 &
 
     echo $! > "$PIDFILE"
@@ -127,7 +128,8 @@ do_foreground() {
         --app-dir "$TESTPROJECT/bin" \
         --host "$HOST" \
         --port "$PORT" \
-        --reload
+        --reload \
+        --reload-include '*.conf'
 }
 
 case "${1:-}" in

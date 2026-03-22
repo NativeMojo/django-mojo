@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sign In</title>
+  {% if accent_color %}
+  <style>:root{--ma-primary:{{ accent_color }};}</style>
+  {% endif %}
+  <link rel="stylesheet" href="{% load static %}{% static 'account/mojo-auth.css' %}">
+</head>
+<body>
+  <div class="ma-page">
+    <div class="ma-card">
+      {% if logo_url %}
+      <div class="ma-logo-wrap">
+        <img src="{{ logo_url }}" alt="Logo" class="ma-logo">
+      </div>
+      {% endif %}
+
+      <div id="view-signin" class="ma-view">
+        <h1 class="ma-title">Sign In</h1>
+        <p id="ma-message" class="ma-message" style="display:none"></p>
+
+        <form id="decoy-form" autocomplete="on">
+          <div class="ma-field">
+            <label class="ma-label" for="username">Username or Email</label>
+            <input class="ma-input" type="text" id="username" name="username"
+                   autocomplete="username" placeholder="Enter your username">
+          </div>
+          <div class="ma-field">
+            <label class="ma-label" for="password">Password</label>
+            <input class="ma-input" type="password" id="password" name="password"
+                   autocomplete="current-password" placeholder="Enter your password">
+          </div>
+          <button type="submit" class="ma-btn ma-btn-primary" id="signin-btn">
+            <span class="ma-btn-text">Sign In</span>
+            <span class="ma-spinner" style="display:none"></span>
+          </button>
+        </form>
+
+        <div class="ma-footer">
+          <a href="#" class="ma-link">Forgot password?</a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+  (function() {
+    var form = document.getElementById('decoy-form');
+    var msg = document.getElementById('ma-message');
+    var btn = document.getElementById('signin-btn');
+    var btnText = btn.querySelector('.ma-btn-text');
+    var spinner = btn.querySelector('.ma-spinner');
+
+    form.addEventListener('submit', function(e) {
+      e.preventDefault();
+      btnText.style.display = 'none';
+      spinner.style.display = '';
+      btn.disabled = true;
+
+      // POST to dead endpoint — same path the bot scanned to find this page
+      fetch(window.location.pathname, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          username: document.getElementById('username').value,
+          password: document.getElementById('password').value,
+          duid: localStorage.getItem('mojo_device_uid') || ''
+        }),
+        credentials: 'include'
+      })
+      .then(function(r) { return r.json(); })
+      .catch(function() { return {status: false, error: 'Invalid credentials'}; })
+      .then(function(data) {
+        btnText.style.display = '';
+        spinner.style.display = 'none';
+        btn.disabled = false;
+        msg.textContent = 'Invalid username or password.';
+        msg.className = 'ma-message ma-message--error';
+        msg.style.display = '';
+      });
+    });
+  })();
+  </script>
+</body>
+</html>

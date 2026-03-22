@@ -1,0 +1,103 @@
+{% extends "account/auth_base.html" %}
+
+{% block page_title %}Create an account{% endblock %}
+
+{% block subtitle_block %}
+Already have an account? <a href="{{ auth_url|default:'/auth' }}">Log in</a>
+{% endblock %}
+
+{% block content %}
+<div id="view-register" class="mat-view is-active">
+    <form id="form-register" novalidate>
+        <div class="mat-field-row">
+            <div class="mat-field">
+                <input class="mat-input" type="text" id="reg-first-name" autocomplete="given-name" placeholder="First name" />
+            </div>
+            <div class="mat-field">
+                <input class="mat-input" type="text" id="reg-last-name" autocomplete="family-name" placeholder="Last name" />
+            </div>
+        </div>
+        <div class="mat-field">
+            <input class="mat-input" type="email" id="reg-email" autocomplete="email" placeholder="Email" required />
+        </div>
+        <div class="mat-field">
+            <div class="mat-input-wrap">
+                <input class="mat-input has-eye" type="password" id="reg-password" autocomplete="new-password" placeholder="Enter your password" required />
+                <button type="button" class="mat-eye" aria-label="Show password" data-target="reg-password">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                </button>
+            </div>
+        </div>
+
+        <div class="mat-checkbox-row">
+            <input type="checkbox" id="reg-terms" />
+            <label for="reg-terms">I agree to the <a href="{{ terms_url|default:'#' }}" target="_blank">Terms &amp; Conditions</a></label>
+        </div>
+
+        <button class="mat-btn mat-btn-primary" type="submit" id="btn-register">
+            <span class="mat-btn-text">Create account</span>
+            <span class="mat-spinner"></span>
+        </button>
+    </form>
+
+    {% if enable_google or enable_apple or enable_passkeys %}
+    <div class="mat-divider">Or register with</div>
+
+    <div class="mat-oauth-row">
+        {% if enable_google %}
+        <button class="mat-btn mat-btn-outline" type="button" id="btn-google">
+            <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true"><path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v8.5h12.7c-.6 3-2.3 5.5-4.8 7.2v6h7.8c4.5-4.2 7.1-10.3 7.1-17.2z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.8-6c-2.1 1.4-4.8 2.3-8.1 2.3-6.2 0-11.5-4.2-13.4-9.9H2.6v6.2C6.5 42.7 14.7 48 24 48z"/><path fill="#FBBC05" d="M10.6 28.6c-.5-1.4-.7-2.9-.7-4.6s.3-3.2.7-4.6v-6.2H2.6C1 16.5 0 20.1 0 24s1 7.5 2.6 10.8l8-6.2z"/><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.5l6.8-6.8C35.9 2.1 30.5 0 24 0 14.7 0 6.5 5.3 2.6 13.2l8 6.2C12.5 13.7 17.8 9.5 24 9.5z"/></svg>
+            <span class="mat-btn-text">Google</span><span class="mat-spinner"></span>
+        </button>
+        {% endif %}
+        {% if enable_apple %}
+        <button class="mat-btn mat-btn-outline" type="button" id="btn-apple">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17.05 20.28c-.98.95-2.05.88-3.08.4-1.09-.5-2.08-.53-3.23 0-1.44.62-2.2.44-3.06-.4C3.79 16.17 4.36 9.04 8.93 8.78c1.27.07 2.16.72 2.91.77.99-.2 1.94-.78 3-.84 1.28-.08 2.24.38 2.87 1.14-2.63 1.56-2.01 4.98.45 5.94-.52 1.4-1.21 2.78-2.11 4.49zM12.03 8.7c-.13-2.28 1.73-4.2 3.93-4.4.31 2.56-2.31 4.5-3.93 4.4z"/></svg>
+            <span class="mat-btn-text">Apple</span><span class="mat-spinner"></span>
+        </button>
+        {% endif %}
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block switcher %}{% endblock %}
+
+{% block page_script %}
+<script>
+(function () {
+    var m = window._mat;
+    var $ = m.$;
+
+    $("form-register").addEventListener("submit", function (e) {
+        e.preventDefault();
+        var email = $("reg-email").value.trim();
+        var password = $("reg-password").value;
+        var firstName = $("reg-first-name").value.trim();
+        var lastName = $("reg-last-name").value.trim();
+        var terms = $("reg-terms");
+        if (!email || !password) { m.showMessage("Please fill in all required fields.", "error"); return; }
+        if (terms && !terms.checked) { m.showMessage("Please agree to the Terms & Conditions.", "error"); return; }
+        var btn = $("btn-register"); m.setLoading(btn, true); m.hideMessage();
+        var payload = { email: email, password: password };
+        if (firstName) payload.first_name = firstName;
+        if (lastName) payload.last_name = lastName;
+        MojoAuth.register(payload)
+            .then(m.onAuthSuccess)
+            .catch(function (err) { m.setLoading(btn, false); m.showMessage(MojoAuth.getError(err) || "Registration failed.", "error"); });
+    });
+
+    function on(id, evt, fn) { var el = $(id); if (el) el.addEventListener(evt, fn); }
+
+    on("btn-google", "click", function () {
+        m.setLoading($("btn-google"), true);
+        MojoAuth.startGoogleLogin().catch(function (err) { m.setLoading($("btn-google"), false); m.showMessage(MojoAuth.getError(err) || "Could not start Google sign-up.", "error"); });
+    });
+
+    on("btn-apple", "click", function () {
+        m.setLoading($("btn-apple"), true);
+        MojoAuth.startAppleLogin().catch(function (err) { m.setLoading($("btn-apple"), false); m.showMessage(MojoAuth.getError(err) || "Could not start Apple sign-up.", "error"); });
+    });
+})();
+</script>
+{% endblock %}

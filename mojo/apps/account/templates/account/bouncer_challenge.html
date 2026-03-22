@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Verifying...</title>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    html,body{width:100%;height:100%;overflow:hidden;background:#0a0e1a;
+      font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    }
+
+    .mbg-{{ render_ctx.css_nonce }}{
+      position:fixed;top:0;left:0;width:100%;height:100%;z-index:99999;
+      display:flex;flex-direction:column;align-items:center;justify-content:center;
+      background:linear-gradient(145deg,#0a0e1a 0%,#121830 40%,#1a1040 100%);
+    }
+
+    /* Scan line */
+    .mbg-scan-{{ render_ctx.css_nonce }}{
+      position:absolute;top:0;left:0;width:100%;height:1px;
+      background:linear-gradient(90deg,transparent 0%,rgba(99,132,255,.08) 40%,rgba(99,132,255,.15) 50%,rgba(99,132,255,.08) 60%,transparent 100%);
+      animation:mbg-scanline-{{ render_ctx.css_nonce }} 3s ease-in-out infinite;
+    }
+    @keyframes mbg-scanline-{{ render_ctx.css_nonce }}{
+      0%{top:0;opacity:0}10%{opacity:1}90%{opacity:1}100%{top:100%;opacity:0}
+    }
+
+    /* Brand */
+    .mbg-brand-{{ render_ctx.css_nonce }}{
+      display:flex;flex-direction:column;align-items:center;
+    }
+    .mbg-logo-wrap-{{ render_ctx.css_nonce }}{position:relative;margin-bottom:28px}
+    .mbg-logo-{{ render_ctx.css_nonce }}{
+      width:72px;height:72px;position:relative;z-index:1;
+      filter:drop-shadow(0 0 20px rgba(99,132,255,.3));
+    }
+    .mbg-ring-{{ render_ctx.css_nonce }}{
+      position:absolute;top:50%;left:50%;width:96px;height:96px;
+      margin:-48px 0 0 -48px;border-radius:50%;
+      border:1.5px solid rgba(99,132,255,.25);
+      animation:mbg-pulse-{{ render_ctx.css_nonce }} 2s ease-in-out infinite;
+    }
+    .mbg-ring2-{{ render_ctx.css_nonce }}{
+      animation-delay:.7s;width:116px;height:116px;margin:-58px 0 0 -58px;
+      border-color:rgba(99,132,255,.12);
+    }
+    @keyframes mbg-pulse-{{ render_ctx.css_nonce }}{
+      0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.08);opacity:.4}
+    }
+    .mbg-wordmark-{{ render_ctx.css_nonce }}{
+      font-size:13px;font-weight:600;letter-spacing:3.5px;text-transform:uppercase;
+      color:rgba(255,255,255,.7);margin-bottom:32px;
+    }
+
+    /* Progress */
+    .mbg-progress-{{ render_ctx.css_nonce }}{
+      width:180px;height:2px;background:rgba(255,255,255,.08);
+      border-radius:1px;overflow:hidden;margin-bottom:16px;
+    }
+    .mbg-bar-{{ render_ctx.css_nonce }}{
+      height:100%;width:0%;
+      background:linear-gradient(90deg,#6384ff,#a78bfa);
+      border-radius:1px;transition:width .15s linear;
+    }
+    .mbg-status-{{ render_ctx.css_nonce }}{
+      font-size:11px;color:rgba(255,255,255,.35);letter-spacing:.5px;
+    }
+
+    /* Honeypot */
+    .mbg-hp-{{ render_ctx.css_nonce }}{
+      position:absolute;left:-9999px;top:-9999px;
+      width:1px;height:1px;overflow:hidden;opacity:0;
+    }
+
+    /* Gate container */
+    .mbg-gate-{{ render_ctx.css_nonce }}{
+      display:flex;flex-direction:column;align-items:center;
+      margin-top:32px;
+      animation:mbg-fadein-{{ render_ctx.css_nonce }} .4s ease;
+    }
+    @keyframes mbg-fadein-{{ render_ctx.css_nonce }}{from{opacity:0}to{opacity:1}}
+
+    /* Question text */
+    .mbg-question-{{ render_ctx.css_nonce }}{
+      font-size:15px;font-weight:500;color:rgba(255,255,255,.5);
+      letter-spacing:.3px;margin-bottom:20px;
+    }
+
+    /* ---- Tier 1: single "I'm human" pill button ---- */
+    .mbg-pill-{{ render_ctx.css_nonce }}{
+      display:inline-flex;align-items:center;justify-content:center;gap:8px;
+      padding:14px 40px;border-radius:28px;
+      border:1.5px solid rgba(99,132,255,.4);
+      background:rgba(99,132,255,.1);
+      color:rgba(255,255,255,.9);font-size:14px;font-weight:600;
+      letter-spacing:.3px;cursor:pointer;outline:none;
+      transition:background .2s,border-color .2s,transform .1s;
+    }
+    .mbg-pill-{{ render_ctx.css_nonce }}:hover{
+      background:rgba(99,132,255,.22);border-color:rgba(99,132,255,.7);
+    }
+    .mbg-pill-{{ render_ctx.css_nonce }}:active{transform:scale(.97)}
+    .mbg-pill-{{ render_ctx.css_nonce }} svg{flex-shrink:0}
+
+    /* ---- Tier 2/3: two circle buttons (check + X) ---- */
+    .mbg-choice-{{ render_ctx.css_nonce }}{
+      display:flex;gap:32px;align-items:center;
+    }
+    .mbg-circle-{{ render_ctx.css_nonce }}{
+      display:inline-flex;align-items:center;justify-content:center;
+      width:64px;height:64px;border-radius:50%;
+      border:2px solid;cursor:pointer;outline:none;
+      transition:background .2s,border-color .2s,transform .15s,left .3s ease,top .3s ease;
+      position:relative;
+    }
+    .mbg-circle-{{ render_ctx.css_nonce }}:active{transform:scale(.92)}
+    .mbg-circle-yes-{{ render_ctx.css_nonce }}{
+      border-color:rgba(72,187,120,.5);background:rgba(72,187,120,.1);color:#48bb78;
+    }
+    .mbg-circle-yes-{{ render_ctx.css_nonce }}:hover{
+      background:rgba(72,187,120,.22);border-color:rgba(72,187,120,.8);
+    }
+    .mbg-circle-no-{{ render_ctx.css_nonce }}{
+      border-color:rgba(245,101,101,.4);background:rgba(245,101,101,.08);color:#f56565;
+    }
+    .mbg-circle-no-{{ render_ctx.css_nonce }}:hover{
+      background:rgba(245,101,101,.18);border-color:rgba(245,101,101,.7);
+    }
+
+    /* Tier 3 moving mode — absolute positioning */
+    .mbg-arena-{{ render_ctx.css_nonce }}{
+      position:relative;width:100%;height:260px;
+    }
+    .mbg-arena-{{ render_ctx.css_nonce }} .mbg-question-{{ render_ctx.css_nonce }}{
+      position:absolute;top:0;left:50%;transform:translateX(-50%);
+    }
+    .mbg-arena-{{ render_ctx.css_nonce }} .mbg-circle-{{ render_ctx.css_nonce }}{
+      position:absolute;transform:translate(-50%,-50%);
+    }
+
+    /* Single centered layout — clean and tested. Layout randomization removed:
+       bots don't care about CSS layout, the tiered button challenge handles
+       anti-automation. The css_nonce on class names still prevents selector
+       caching across renders. */
+  </style>
+</head>
+<body>
+  <div class="mbg-{{ render_ctx.css_nonce }}" id="mbg-root">
+    <div class="mbg-scan-{{ render_ctx.css_nonce }}"></div>
+
+    <div class="mbg-brand-{{ render_ctx.css_nonce }}">
+      <div class="mbg-logo-wrap-{{ render_ctx.css_nonce }}">
+        <div class="mbg-ring-{{ render_ctx.css_nonce }}"></div>
+        <div class="mbg-ring-{{ render_ctx.css_nonce }} mbg-ring2-{{ render_ctx.css_nonce }}"></div>
+        <img class="mbg-logo-{{ render_ctx.css_nonce }}"
+             src="{{ logo_url }}" alt="" loading="eager">
+      </div>
+      <div class="mbg-wordmark-{{ render_ctx.css_nonce }}">MOJO VERIFY</div>
+    </div>
+
+    <div class="mbg-progress-{{ render_ctx.css_nonce }}">
+      <div class="mbg-bar-{{ render_ctx.css_nonce }}" id="mbg-bar"></div>
+    </div>
+    <div class="mbg-status-{{ render_ctx.css_nonce }}" id="mbg-status">Verifying your connection</div>
+
+    <!-- Honeypot: name changes every render -->
+    <div class="mbg-hp-{{ render_ctx.css_nonce }}" aria-hidden="true" tabindex="-1">
+      <input type="text" name="{{ render_ctx.hp_field }}"
+             autocomplete="off" tabindex="-1" id="mbg-hp-field">
+    </div>
+
+    <!-- Gate: populated by JS based on tier -->
+    <div class="mbg-gate-{{ render_ctx.css_nonce }}" id="mbg-gate" style="display:none"></div>
+  </div>
+
+  <script>
+  (function() {
+    var N = "{{ render_ctx.css_nonce }}";
+    var CFG = {
+      assessUrl: ("{{ api_base }}" || window.location.origin) + "/api/account/bouncer/assess",
+      hpField: "{{ render_ctx.hp_field }}",
+      btnSeed: "{{ render_ctx.btn_seed }}",
+      redirectUrl: "{{ login_url }}",
+      pageType: "{{ page_type|default:'login' }}",
+      tier: {{ render_ctx.challenge_tier }}
+    };
+
+    var bar = document.getElementById('mbg-bar');
+    var statusEl = document.getElementById('mbg-status');
+    var gate = document.getElementById('mbg-gate');
+    var startTime = Date.now();
+    var signals = {environment:{},behavior:{mouse_move_count:0,scroll_event_count:0,keystroke_count:0},mouse:{}};
+    var clickTs = null;
+    var hasMouse = false;
+    var honeypotFilled = false;
+    var barPct = 0;
+
+    // Progress animation
+    var statusMsgs = ["Verifying your connection","Analyzing environment","Checking signals","Finalizing"];
+    var statusIdx = 0;
+    var statusTimer = setInterval(function() {
+      if (barPct < 85) {
+        barPct += 12;
+        bar.style.width = barPct + '%';
+        if (statusIdx < statusMsgs.length - 1) statusIdx++;
+        statusEl.textContent = statusMsgs[statusIdx];
+      }
+    }, 350);
+
+    // Behavior collection
+    document.addEventListener('mousemove', function() { signals.behavior.mouse_move_count++; hasMouse = true; });
+    document.addEventListener('scroll', function() { signals.behavior.scroll_event_count++; });
+    document.addEventListener('keydown', function() { signals.behavior.keystroke_count++; });
+
+    // Honeypot
+    var hpEl = document.getElementById('mbg-hp-field');
+    if (hpEl) hpEl.addEventListener('input', function() { honeypotFilled = hpEl.value.length > 0; });
+
+    // ---- Build the gate UI based on tier ----
+
+    function onCorrectClick() {
+      clickTs = Date.now() - startTime;
+      doAssess();
+    }
+
+    function onWrongClick() {
+      // Wrong button = strong bot signal. Still assess but with penalty.
+      clickTs = Date.now() - startTime;
+      signals.behavior.wrong_button = true;
+      doAssess();
+    }
+
+    // SVG icons
+    var checkSvg = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+    var xSvg = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+
+    function showChallenge() {
+      clearInterval(statusTimer);
+      barPct = 90; bar.style.width = '90%';
+      statusEl.textContent = 'Almost there\u2026';
+      gate.style.display = '';
+
+      if (CFG.tier <= 1) {
+        // ---- Tier 1: "Are you human?" + "I'm human" pill button ----
+        gate.innerHTML =
+          '<div class="mbg-question-' + N + '">Are you human?</div>' +
+          '<button type="button" class="mbg-pill-' + N + '" id="mbg-yes">' +
+            checkSvg + " I'm human" +
+          '</button>';
+        document.getElementById('mbg-yes').addEventListener('click', onCorrectClick);
+
+      } else {
+        // ---- Tier 2/3: Green check + Red X ----
+        // Randomize which side the green button is on
+        var greenLeft = (parseInt(CFG.btnSeed.slice(0,2), 16) % 2) === 0;
+
+        var questionHtml = '<div class="mbg-question-' + N + '">Are you human?</div>';
+        var greenBtn = '<button type="button" class="mbg-circle-' + N + ' mbg-circle-yes-' + N + '" id="mbg-yes">' + checkSvg + '</button>';
+        var redBtn = '<button type="button" class="mbg-circle-' + N + ' mbg-circle-no-' + N + '" id="mbg-no">' + xSvg + '</button>';
+
+        if (CFG.tier >= 3) {
+          // Tier 3: arena mode — buttons move
+          gate.classList.add('mbg-arena-' + N);
+          gate.innerHTML = questionHtml + greenBtn + redBtn;
+
+          var yesEl = document.getElementById('mbg-yes');
+          var noEl = document.getElementById('mbg-no');
+
+          // Place buttons
+          var seedVal = parseInt(CFG.btnSeed.slice(0,4), 16) || 0;
+          yesEl.style.left = (30 + (seedVal % 40)) + '%';
+          yesEl.style.top = '55%';
+          noEl.style.left = greenLeft ? '70%' : '30%';
+          noEl.style.top = '55%';
+
+          // Move the green button
+          var moveInterval = setInterval(function() {
+            yesEl.style.left = (25 + Math.random() * 50) + '%';
+            yesEl.style.top = (35 + Math.random() * 45) + '%';
+          }, 1800);
+
+          yesEl.addEventListener('click', function() { clearInterval(moveInterval); onCorrectClick(); });
+          noEl.addEventListener('click', function() { clearInterval(moveInterval); onWrongClick(); });
+
+        } else {
+          // Tier 2: green check + red X side by side, positions randomized per render
+          var choiceHtml = '<div class="mbg-choice-' + N + '">' +
+            (greenLeft ? greenBtn + redBtn : redBtn + greenBtn) +
+          '</div>';
+          gate.innerHTML = questionHtml + choiceHtml;
+
+          var yesEl = document.getElementById('mbg-yes');
+          var noEl = document.getElementById('mbg-no');
+
+          yesEl.addEventListener('click', onCorrectClick);
+          noEl.addEventListener('click', onWrongClick);
+        }
+      }
+    }
+
+    function doAssess() {
+      barPct = 95; bar.style.width = '95%';
+      statusEl.textContent = 'Verifying\u2026';
+      gate.style.display = 'none';
+
+      var mtab = sessionStorage.getItem('_mtab');
+      if (!mtab) {
+        mtab = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+        sessionStorage.setItem('_mtab', mtab);
+      }
+
+      var payload = {
+        duid: (localStorage.getItem('mojo_device_uid') || localStorage.getItem('mojo_duid') || ''),
+        _mtab: mtab,
+        fingerprint_id: '',
+        page_type: CFG.pageType,
+        session_id: Math.random().toString(36).slice(2),
+        signals: {
+          environment: signals.environment,
+          behavior: signals.behavior,
+          gate_challenge: {
+            honeypot_filled: honeypotFilled,
+            time_to_click_ms: clickTs,
+            had_mouse_movement: hasMouse,
+            is_touch_device: ('ontouchstart' in window),
+            wrong_button: signals.behavior.wrong_button || false,
+            attempt_number: 1
+          }
+        }
+      };
+
+      fetch(CFG.assessUrl, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload),
+        credentials: 'include'
+      })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.status && data.data && data.data.token) {
+          localStorage.setItem('mojo_bouncer_token', data.data.token);
+        }
+        barPct = 100; bar.style.width = '100%';
+        statusEl.textContent = 'Verified';
+        setTimeout(function() { window.location.href = CFG.redirectUrl; }, 400);
+      })
+      .catch(function() {
+        window.location.href = CFG.redirectUrl;
+      });
+    }
+
+    // Start challenge after passive signal collection
+    setTimeout(showChallenge, 1200);
+  })();
+  </script>
+</body>
+</html>

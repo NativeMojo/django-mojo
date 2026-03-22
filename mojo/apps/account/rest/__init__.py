@@ -13,3 +13,5 @@ from .verify import *
 from .notification import *
 from .notification_prefs import *
 from .setting import *
+from .bouncer import *
+from .bouncer_admin import *

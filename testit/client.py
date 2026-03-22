@@ -6,17 +6,39 @@ from objict import objict
 class RestClient:
     """
     A simple REST client for making HTTP requests to a specified host.
+
+    Uses requests.Session internally so cookies set by the server (e.g. _muid,
+    _msid, mbp) are automatically persisted and sent on subsequent requests —
+    just like a real browser. This is essential for testing server-controlled
+    identity cookies (bouncer, session tracking, etc.).
     """
+
+    # Default headers that emulate a real browser. Without these, server-side
+    # signal analysis (bouncer EnvironmentService, etc.) flags every test request
+    # as missing Accept/Accept-Language — inflating risk scores and producing
+    # results that don't match production behavior.
+    DEFAULT_HEADERS = {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+    }
 
     def __init__(self, host, logger=None):
         """
-        Initializes the SimpleRestClient with a host URL.
+        Initializes the RestClient with a host URL.
+
+        Uses requests.Session so cookies set by the server (e.g. _muid, _msid,
+        mbp) are automatically persisted and sent on subsequent requests — just
+        like a real browser.
 
         Args:
             host (str): The base URL of the host for making requests.
         """
         self.host = host if host[-1] == "/" else f"{host}/"
         self.logger = logger
+        self.session = requests.Session()
+        self.session.headers.update(self.DEFAULT_HEADERS)
         self.access_token = None
         self.is_authenticated = False
         self.bearer = "bearer"
@@ -37,6 +59,12 @@ class RestClient:
         self.access_token = None
         if "Authorization" in self.headers:
             del self.headers["Authorization"]
+        # Keep cookies (device identity persists across logouts, like a real browser).
+        # Call clear_cookies() to simulate a fresh browser with no history.
+
+    def clear_cookies(self):
+        """Clear all cookies — simulates a fresh browser with no history."""
+        self.session.cookies.clear()
 
     def get_headers(self):
         if self.is_authenticated:
@@ -60,7 +88,7 @@ class RestClient:
             path = path[1:]
         url = f"{self.host}{path}"
         headers = self.get_headers()
-        response = requests.request(method, url, headers=headers, **kwargs)
+        response = self.session.request(method, url, headers=headers, **kwargs)
         if self.logger:
             self.logger.info("REQUEST", f"{method}:{url}", headers)
             self.logger.info("params:",kwargs.get("params", ""), "json:", kwargs.get("json", ""))

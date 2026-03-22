@@ -3,6 +3,7 @@ import os
 import time
 import functools
 import traceback
+import contextlib
 from objict import objict
 from mojo.helpers import logit
 
@@ -424,6 +425,124 @@ def assert_in(item, container, msg):
 
 def expect(value, got, name="field"):
     assert value == got, f"{name} expected {value} got {got}"
+
+
+def _format_conf_value(value):
+    if isinstance(value, bool):
+        return 'True' if value else 'False'
+    if isinstance(value, str):
+        return f"'{value}'"
+    return str(value)
+
+
+def _apply_conf_overrides(original_text, overrides):
+    lines = original_text.splitlines(keepends=True)
+    applied = set()
+    result = []
+    for line in lines:
+        stripped = line.strip()
+        if '=' in stripped and not stripped.startswith('#'):
+            key = stripped.split('=', 1)[0].strip()
+            if key in overrides:
+                result.append(f"{key} = {_format_conf_value(overrides[key])}\n")
+                applied.add(key)
+                continue
+        result.append(line)
+    for key, value in overrides.items():
+        if key not in applied:
+            result.append(f"{key} = {_format_conf_value(value)}\n")
+    return ''.join(result)
+
+
+def _read_dev_server_conf():
+    from mojo.helpers import paths
+    host = '127.0.0.1'
+    port = 5555
+    conf = paths.CONFIG_ROOT / 'dev_server.conf'
+    if conf.exists():
+        for line in conf.read_text().splitlines():
+            if '=' in line:
+                k, v = line.split('=', 1)
+                k, v = k.strip(), v.strip()
+                if k == 'host':
+                    host = v
+                elif k == 'port':
+                    port = int(v)
+    return host, port
+
+
+def _poll_server_up(host, port, timeout=10):
+    import requests as _requests
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            _requests.get(f'http://{host}:{port}/', timeout=1)
+            return True
+        except Exception:
+            time.sleep(0.2)
+    return False
+
+
+@contextlib.contextmanager
+def server_settings(**overrides):
+    """
+    Context manager that temporarily applies Django settings overrides on the
+    running asgi_local test server, then restores the original settings on exit.
+
+    WHY THIS EXISTS — and why override_settings() does NOT work here:
+    ----------------------------------------------------------------
+    opts.client makes real HTTP calls to a separate asgi_local uvicorn process.
+    Django's override_settings() only patches the *test process* — the server
+    process has its own Django settings loaded at startup and never sees the
+    patch. Code like this silently does nothing to the server:
+
+        with override_settings(BOUNCER_REQUIRE_TOKEN=True):   # WRONG
+            resp = opts.client.post('/api/login', ...)
+
+    The correct way is to write the override to var/django.conf and let uvicorn
+    reload. asgi_local is started with --reload-include '*.conf' specifically to
+    support this pattern.
+
+    Usage:
+        with th.server_settings(BOUNCER_REQUIRE_TOKEN=True):
+            resp = opts.client.post('/api/login', {'username': 'x', 'password': 'y'})
+            assert_eq(resp.status_code, 403, ...)
+
+    The context manager:
+      1. Writes the overrides into var/django.conf (merging with existing values)
+      2. Waits for uvicorn to reload and the server to come back up
+      3. Yields — your test runs here against the live server with new settings
+      4. Restores the original var/django.conf
+      5. Waits for the server to reload and come back up again
+
+    Raises RuntimeError if the server does not come back up within the timeout.
+    """
+    from mojo.helpers import paths
+    conf_path = paths.VAR_ROOT / 'django.conf'
+    original = conf_path.read_text()
+    host, port = _read_dev_server_conf()
+
+    conf_path.write_text(_apply_conf_overrides(original, overrides))
+    # Give uvicorn's watchdog time to detect the change and begin reloading,
+    # then wait for the server to come back up.
+    time.sleep(1.5)
+    if not _poll_server_up(host, port, timeout=10):
+        conf_path.write_text(original)
+        raise RuntimeError(
+            f"server_settings: server at {host}:{port} did not come back up "
+            f"after writing overrides {overrides!r}"
+        )
+
+    try:
+        yield
+    finally:
+        conf_path.write_text(original)
+        time.sleep(1.5)
+        if not _poll_server_up(host, port, timeout=10):
+            raise RuntimeError(
+                f"server_settings: server at {host}:{port} did not come back up "
+                f"after restoring original django.conf"
+            )
 
 
 class assert_raises:

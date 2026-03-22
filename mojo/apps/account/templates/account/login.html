@@ -1,0 +1,282 @@
+{% extends "account/auth_base.html" %}
+
+{% block subtitle_block %}{% endblock %}
+
+{% block content %}
+<!-- VIEW: Sign In -->
+<div id="view-signin" class="mat-view is-active">
+    <form id="form-signin" novalidate>
+        <div class="mat-field">
+            <label class="mat-label" for="signin-username">Email or Username</label>
+            <input class="mat-input" type="text" id="signin-username" autocomplete="username" placeholder="you@example.com" required />
+        </div>
+        <div class="mat-field">
+            <label class="mat-label" for="signin-password">Password</label>
+            <div class="mat-input-wrap">
+                <input class="mat-input has-eye" type="password" id="signin-password" autocomplete="current-password" required />
+                <button type="button" class="mat-eye" aria-label="Show password" data-target="signin-password">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                </button>
+            </div>
+        </div>
+        <button class="mat-btn mat-btn-primary" type="submit" id="btn-signin">
+            <span class="mat-btn-text">Sign In</span>
+            <span class="mat-spinner"></span>
+        </button>
+    </form>
+
+    {% if enable_google or enable_apple or enable_passkeys %}
+    <div class="mat-divider">or continue with</div>
+
+    <div class="mat-oauth-row">
+        {% if enable_google %}
+        <button class="mat-btn mat-btn-outline" type="button" id="btn-google">
+            <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true"><path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v8.5h12.7c-.6 3-2.3 5.5-4.8 7.2v6h7.8c4.5-4.2 7.1-10.3 7.1-17.2z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.8-6c-2.1 1.4-4.8 2.3-8.1 2.3-6.2 0-11.5-4.2-13.4-9.9H2.6v6.2C6.5 42.7 14.7 48 24 48z"/><path fill="#FBBC05" d="M10.6 28.6c-.5-1.4-.7-2.9-.7-4.6s.3-3.2.7-4.6v-6.2H2.6C1 16.5 0 20.1 0 24s1 7.5 2.6 10.8l8-6.2z"/><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.5l6.8-6.8C35.9 2.1 30.5 0 24 0 14.7 0 6.5 5.3 2.6 13.2l8 6.2C12.5 13.7 17.8 9.5 24 9.5z"/></svg>
+            <span class="mat-btn-text">Google</span><span class="mat-spinner"></span>
+        </button>
+        {% endif %}
+        {% if enable_apple %}
+        <button class="mat-btn mat-btn-outline" type="button" id="btn-apple">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17.05 20.28c-.98.95-2.05.88-3.08.4-1.09-.5-2.08-.53-3.23 0-1.44.62-2.2.44-3.06-.4C3.79 16.17 4.36 9.04 8.93 8.78c1.27.07 2.16.72 2.91.77.99-.2 1.94-.78 3-.84 1.28-.08 2.24.38 2.87 1.14-2.63 1.56-2.01 4.98.45 5.94-.52 1.4-1.21 2.78-2.11 4.49zM12.03 8.7c-.13-2.28 1.73-4.2 3.93-4.4.31 2.56-2.31 4.5-3.93 4.4z"/></svg>
+            <span class="mat-btn-text">Apple</span><span class="mat-spinner"></span>
+        </button>
+        {% endif %}
+        {% if enable_passkeys %}
+        <button class="mat-btn mat-btn-outline" type="button" id="btn-passkey" style="display:none">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12C2 6.5 6.5 2 12 2a10 10 0 0 1 8 4"/><path d="M5 19.5C5.5 14 8 10 12 10c2.5 0 4.5 1.5 5 4"/><path d="M8 21c.5-3.5 2-6 4-6 1.5 0 2.5 1 2.5 3v4"/><path d="M17.5 15c1.5 1 2.5 3 2.5 6"/><path d="M22 12c0 3-1 5.5-2.5 7.5"/></svg>
+            <span class="mat-btn-text">Passkey</span><span class="mat-spinner"></span>
+        </button>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    <div class="mat-footer-links">
+        <span class="mat-footer-link"><button type="button" id="link-forgot">Forgot password?</button></span>
+        <span class="mat-footer-link"><button type="button" id="link-magic">Email me a link</button></span>
+    </div>
+</div>
+
+<!-- VIEW: Forgot Password -->
+<div id="view-forgot" class="mat-view">
+    <button class="mat-back" type="button" id="btn-back-signin"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg> Back</button>
+    <p class="mat-view-title">Reset Your Password</p>
+    <p class="mat-view-sub">Choose how you'd like to receive your reset instructions.</p>
+    <form id="form-forgot" novalidate>
+        <div class="mat-field">
+            <label class="mat-label" for="forgot-email">Email Address</label>
+            <input class="mat-input" type="email" id="forgot-email" autocomplete="email" placeholder="you@example.com" required />
+        </div>
+        <div class="mat-field">
+            <label class="mat-label">Reset Method</label>
+            <div class="mat-radio-group">
+                <label class="mat-radio-tile"><input type="radio" name="reset-method" value="code" checked /><div class="mat-radio-dot"></div><div><div class="mat-radio-tile-label">Email a code</div><div class="mat-radio-tile-sub">6-digit OTP</div></div></label>
+                <label class="mat-radio-tile"><input type="radio" name="reset-method" value="link" /><div class="mat-radio-dot"></div><div><div class="mat-radio-tile-label">Email a link</div><div class="mat-radio-tile-sub">One-click reset</div></div></label>
+            </div>
+        </div>
+        <button class="mat-btn mat-btn-primary" type="submit" id="btn-forgot" style="margin-top:.5rem"><span class="mat-btn-text">Send Reset</span><span class="mat-spinner"></span></button>
+    </form>
+</div>
+
+<!-- VIEW: Enter Reset Code -->
+<div id="view-reset-code" class="mat-view">
+    <button class="mat-back" type="button" id="btn-back-forgot"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg> Back</button>
+    <p class="mat-view-title">Enter Reset Code</p>
+    <p class="mat-view-sub">We sent a 6-digit code to <strong id="reset-email-display"></strong></p>
+    <form id="form-reset-code" novalidate>
+        <input type="hidden" autocomplete="username" />
+        <div class="mat-field">
+            <label class="mat-label" for="reset-code">Reset Code</label>
+            <input class="mat-input" type="text" id="reset-code" autocomplete="one-time-code" placeholder="123456" inputmode="numeric" pattern="\d*" required />
+        </div>
+        <div class="mat-field">
+            <label class="mat-label" for="reset-password-new">New Password</label>
+            <div class="mat-input-wrap">
+                <input class="mat-input has-eye" type="password" id="reset-password-new" autocomplete="new-password" placeholder="New password" required />
+                <button type="button" class="mat-eye" aria-label="Show password" data-target="reset-password-new"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+            </div>
+        </div>
+        <div class="mat-field">
+            <label class="mat-label" for="reset-password-confirm">Confirm Password</label>
+            <div class="mat-input-wrap">
+                <input class="mat-input has-eye" type="password" id="reset-password-confirm" autocomplete="new-password" placeholder="Confirm password" required />
+                <button type="button" class="mat-eye" aria-label="Show password" data-target="reset-password-confirm"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+            </div>
+        </div>
+        <button class="mat-btn mat-btn-primary" type="submit" id="btn-reset-code"><span class="mat-btn-text">Reset Password</span><span class="mat-spinner"></span></button>
+    </form>
+</div>
+
+<!-- VIEW: Set New Password (from pr: token link) -->
+<div id="view-set-password" class="mat-view">
+    <p class="mat-view-title">Set Your New Password</p>
+    <p class="mat-view-sub">Choose a strong password for your account.</p>
+    <form id="form-set-password" novalidate>
+        <input type="hidden" autocomplete="username" />
+        <div class="mat-field">
+            <label class="mat-label" for="set-password-new">New Password</label>
+            <div class="mat-input-wrap">
+                <input class="mat-input has-eye" type="password" id="set-password-new" autocomplete="new-password" placeholder="New password" required />
+                <button type="button" class="mat-eye" aria-label="Show password" data-target="set-password-new"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+            </div>
+        </div>
+        <div class="mat-field">
+            <label class="mat-label" for="set-password-confirm">Confirm Password</label>
+            <div class="mat-input-wrap">
+                <input class="mat-input has-eye" type="password" id="set-password-confirm" autocomplete="new-password" placeholder="Confirm password" required />
+                <button type="button" class="mat-eye" aria-label="Show password" data-target="set-password-confirm"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+            </div>
+        </div>
+        <button class="mat-btn mat-btn-primary" type="submit" id="btn-set-password"><span class="mat-btn-text">Set Password</span><span class="mat-spinner"></span></button>
+    </form>
+</div>
+
+<!-- VIEW: Magic Login Link -->
+<div id="view-magic" class="mat-view">
+    <button class="mat-back" type="button" id="btn-back-signin-magic"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg> Back</button>
+    <p class="mat-view-title">Email Me a Login Link</p>
+    <p class="mat-view-sub">We'll send a one-click login link to your inbox.</p>
+    <form id="form-magic" novalidate>
+        <div class="mat-field">
+            <label class="mat-label" for="magic-email">Email Address</label>
+            <input class="mat-input" type="email" id="magic-email" autocomplete="email" placeholder="you@example.com" required />
+        </div>
+        <button class="mat-btn mat-btn-primary" type="submit" id="btn-magic"><span class="mat-btn-text">Send Login Link</span><span class="mat-spinner"></span></button>
+    </form>
+</div>
+{% endblock %}
+
+{% block switcher %}
+<div class="mat-switcher">
+    Don't have an account? <a href="{{ register_url|default:'/register' }}">Create one</a>
+</div>
+{% endblock %}
+
+{% block page_script %}
+<script>
+(function () {
+    var m = window._mat;
+    var $ = m.$;
+    var cfg = window._matConfig;
+
+    var views = {
+        signin: $("view-signin"),
+        forgot: $("view-forgot"),
+        resetCode: $("view-reset-code"),
+        setPassword: $("view-set-password"),
+        magic: $("view-magic"),
+    };
+
+    function showView(name) {
+        Object.keys(views).forEach(function (k) { views[k].classList.toggle("is-active", k === name); });
+        m.hideMessage();
+        setTimeout(function () { var f = views[name] && views[name].querySelector("input, button"); if (f) f.focus(); }, 60);
+    }
+
+    var urlToken = cfg.params.get("token");
+    if (urlToken && urlToken.indexOf("pr:") === 0) {
+        sessionStorage.setItem("mat_reset_token", urlToken);
+        cfg.params.delete("token");
+        history.replaceState({}, "", cfg.params.toString() ? location.pathname + "?" + cfg.params.toString() : location.pathname);
+        showView("setPassword");
+        m.showMessage("Please set your new password.", "info");
+    }
+
+    (function () {
+        var email = sessionStorage.getItem("mat_reset_email");
+        if (!email) return;
+        $("reset-email-display").textContent = email;
+        showView("resetCode");
+    })();
+
+    $("form-signin").addEventListener("submit", function (e) {
+        e.preventDefault();
+        var u = $("signin-username").value.trim(), p = $("signin-password").value;
+        if (!u || !p) { m.showMessage("Please enter your username and password.", "error"); return; }
+        var btn = $("btn-signin"); m.setLoading(btn, true); m.hideMessage();
+        MojoAuth.login(u, p)
+            .then(function (data) {
+                if (data && data.mfa_required) { m.showMessage("MFA required — check your authenticator app or phone.", "info"); m.setLoading(btn, false); return; }
+                m.onAuthSuccess();
+            })
+            .catch(function (err) { m.setLoading(btn, false); m.showMessage(MojoAuth.getError(err) || "Invalid credentials.", "error"); });
+    });
+
+    // Safe bind — buttons may not exist if provider is disabled server-side
+    function on(id, evt, fn) { var el = $(id); if (el) el.addEventListener(evt, fn); }
+
+    on("btn-google", "click", function () {
+        m.setLoading($("btn-google"), true);
+        MojoAuth.startGoogleLogin().catch(function (err) { m.setLoading($("btn-google"), false); m.showMessage(MojoAuth.getError(err) || "Could not start Google sign-in.", "error"); });
+    });
+
+    on("btn-apple", "click", function () {
+        m.setLoading($("btn-apple"), true);
+        MojoAuth.startAppleLogin().catch(function (err) { m.setLoading($("btn-apple"), false); m.showMessage(MojoAuth.getError(err) || "Could not start Apple sign-in.", "error"); });
+    });
+
+    on("btn-passkey", "click", function () {
+        var btn = $("btn-passkey"); m.setLoading(btn, true); m.hideMessage();
+        MojoAuth.loginWithPasskeyDiscoverable()
+            .then(m.onAuthSuccess)
+            .catch(function (err) { m.setLoading(btn, false); m.showMessage(MojoAuth.getError(err) || "Passkey authentication failed.", "error"); });
+    });
+
+    $("link-forgot").addEventListener("click", function () { showView("forgot"); });
+    $("link-magic").addEventListener("click", function () { showView("magic"); });
+    $("btn-back-signin").addEventListener("click", function () { showView("signin"); });
+    $("btn-back-forgot").addEventListener("click", function () { showView("forgot"); });
+    $("btn-back-signin-magic").addEventListener("click", function () { showView("signin"); });
+
+    $("form-forgot").addEventListener("submit", function (e) {
+        e.preventDefault();
+        var email = $("forgot-email").value.trim();
+        var method = document.querySelector('input[name="reset-method"]:checked').value;
+        if (!email) { m.showMessage("Please enter your email address.", "error"); return; }
+        var btn = $("btn-forgot"); m.setLoading(btn, true); m.hideMessage();
+        (method === "code" ? MojoAuth.forgotPasswordCode(email) : MojoAuth.forgotPasswordLink(email))
+            .then(function () {
+                m.setLoading(btn, false);
+                if (method === "code") { sessionStorage.setItem("mat_reset_email", email); $("reset-email-display").textContent = email; showView("resetCode"); m.showMessage("Check your email for the reset code.", "success"); }
+                else { m.showMessage("Reset link sent! Check your email.", "success"); }
+            })
+            .catch(function (err) { m.setLoading(btn, false); m.showMessage(MojoAuth.getError(err) || "Something went wrong.", "error"); });
+    });
+
+    $("form-reset-code").addEventListener("submit", function (e) {
+        e.preventDefault();
+        var code = $("reset-code").value.trim(), np = $("reset-password-new").value, cp = $("reset-password-confirm").value;
+        var email = sessionStorage.getItem("mat_reset_email");
+        if (!email) { m.showMessage("Session expired. Please restart.", "error"); showView("forgot"); return; }
+        if (!code || !np) { m.showMessage("Please fill in all fields.", "error"); return; }
+        if (np !== cp) { m.showMessage("Passwords do not match.", "error"); return; }
+        var btn = $("btn-reset-code"); m.setLoading(btn, true); m.hideMessage();
+        MojoAuth.resetWithCode(email, code, np)
+            .then(function () { sessionStorage.removeItem("mat_reset_email"); m.onAuthSuccess(); })
+            .catch(function (err) { m.setLoading(btn, false); m.showMessage(MojoAuth.getError(err) || "Invalid or expired code.", "error"); });
+    });
+
+    $("form-set-password").addEventListener("submit", function (e) {
+        e.preventDefault();
+        var np = $("set-password-new").value, cp = $("set-password-confirm").value;
+        var token = sessionStorage.getItem("mat_reset_token");
+        if (!token) { m.showMessage("Invalid or expired link.", "error"); showView("forgot"); return; }
+        if (!np) { m.showMessage("Please enter a new password.", "error"); return; }
+        if (np !== cp) { m.showMessage("Passwords do not match.", "error"); return; }
+        var btn = $("btn-set-password"); m.setLoading(btn, true); m.hideMessage();
+        MojoAuth.resetWithToken(token, np)
+            .then(function () { sessionStorage.removeItem("mat_reset_token"); m.onAuthSuccess(); })
+            .catch(function (err) { m.setLoading(btn, false); m.showMessage(MojoAuth.getError(err) || "Invalid or expired link.", "error"); });
+    });
+
+    $("form-magic").addEventListener("submit", function (e) {
+        e.preventDefault();
+        var email = $("magic-email").value.trim();
+        if (!email) { m.showMessage("Please enter your email address.", "error"); return; }
+        var btn = $("btn-magic"); m.setLoading(btn, true); m.hideMessage();
+        MojoAuth.sendMagicLink(email)
+            .then(function () { m.setLoading(btn, false); m.showMessage("Check your inbox \u2014 a login link is on its way.", "success"); })
+            .catch(function (err) { m.setLoading(btn, false); m.showMessage(MojoAuth.getError(err) || "Could not send login link.", "error"); });
+    });
+})();
+</script>
+{% endblock %}

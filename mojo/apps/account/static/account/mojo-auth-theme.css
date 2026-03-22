@@ -1,0 +1,655 @@
+/* ============================================================================
+   mojo-auth-theme.css — Dark premium auth theme for django-mojo
+
+   Single unified card: hero image left, auth form right.
+   One large rounded rectangle against the page background.
+   ============================================================================ */
+
+:root {
+    --mat-page-bg: #686278;
+    --mat-card-bg: #2c2638;
+    --mat-deep: #1e1a28;
+    --mat-accent: #7c5cbf;
+    --mat-accent-hover: #6b4eae;
+    --mat-input-bg: #353042;
+    --mat-border: #433d52;
+    --mat-text: #f2eff7;
+    --mat-muted: #9e96ad;
+    --mat-danger: #e57373;
+    --mat-danger-bg: rgba(229, 115, 115, 0.1);
+    --mat-success: #81c784;
+    --mat-success-bg: rgba(129, 199, 132, 0.1);
+    --mat-info: #90caf9;
+    --mat-info-bg: rgba(144, 202, 249, 0.1);
+    --mat-radius: 20px;
+    --mat-field-radius: 10px;
+    --mat-transition: 0.2s ease;
+}
+
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+html,
+body {
+    height: 100%;
+    font-family:
+        -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell,
+        "Helvetica Neue", sans-serif;
+    background: var(--mat-page-bg);
+    color: var(--mat-text);
+    -webkit-font-smoothing: antialiased;
+}
+
+/* ---- Page centering ---- */
+
+.mat-page {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 2rem;
+}
+
+/* ---- The card — one unified rectangle ---- */
+
+.mat-card {
+    display: flex;
+    width: 100%;
+    max-width: 960px;
+    min-height: 580px;
+    background: var(--mat-card-bg);
+    border-radius: var(--mat-radius);
+    overflow: hidden;
+    box-shadow:
+        0 20px 60px rgba(0, 0, 0, 0.35),
+        0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+
+/* ---- Left hero ---- */
+
+.mat-hero {
+    display: none;
+    margin: 14px;
+    border-radius: 10px;
+    position: relative;
+    width: 45%;
+    flex-shrink: 0;
+    background-size: cover;
+    background-position: center;
+    background-color: var(--mat-deep);
+}
+
+.mat-hero-top {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1.5rem;
+    z-index: 2;
+}
+.mat-hero-logo {
+    height: 28px;
+    width: auto;
+}
+.mat-hero-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.4rem 0.875rem;
+    background: rgba(255, 255, 255, 0.12);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 20px;
+    color: rgba(255, 255, 255, 0.9);
+    font-size: 0.75rem;
+    font-weight: 500;
+    text-decoration: none;
+    transition: background var(--mat-transition);
+}
+.mat-hero-back:hover {
+    background: rgba(255, 255, 255, 0.2);
+}
+.mat-hero-bottom {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    padding: 2rem 1.5rem;
+    background: linear-gradient(transparent, rgba(0, 0, 0, 0.65));
+    z-index: 2;
+    border-radius: 10px;
+}
+.mat-hero-headline {
+    font-size: 1.5rem;
+    font-weight: 700;
+    line-height: 1.3;
+    color: #fff;
+}
+.mat-hero-sub {
+    font-size: 0.8125rem;
+    color: rgba(255, 255, 255, 0.6);
+    margin-top: 0.375rem;
+}
+
+@media (min-width: 768px) {
+    .mat-hero {
+        display: block;
+        width: 38%;
+    }
+}
+@media (min-width: 1024px) {
+    .mat-hero {
+        width: 45%;
+    }
+}
+
+/* ---- Right form panel ---- */
+
+.mat-main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 2.5rem;
+}
+
+@media (min-width: 768px) {
+    .mat-main {
+        padding: 3rem 3rem 2.5rem;
+    }
+}
+
+/* ---- Header ---- */
+
+.mat-header {
+    margin-bottom: 1.75rem;
+}
+.mat-header-logo {
+    display: none;
+    height: 32px;
+    width: auto;
+    margin-bottom: 1.5rem;
+    opacity: 0.4;
+}
+.mat-brand-icon {
+    width: 36px;
+    height: 36px;
+    margin-bottom: 0.75rem;
+    color: var(--mat-accent);
+}
+.mat-brand-icon svg {
+    width: 100%;
+    height: 100%;
+    fill: currentColor;
+}
+.mat-header-brand {
+    display: block;
+    font-size: 1.125rem;
+    font-weight: 700;
+    letter-spacing: .5px;
+    color: var(--mat-accent);
+    margin-bottom: 0.5rem;
+}
+.mat-title {
+    font-size: 1.75rem;
+    font-weight: 700;
+    line-height: 1.2;
+    letter-spacing: -0.01em;
+}
+.mat-subtitle {
+    font-size: 0.875rem;
+    color: var(--mat-muted);
+    margin-top: 0.5rem;
+}
+.mat-subtitle a {
+    color: var(--mat-text);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+.mat-subtitle a:hover {
+    color: var(--mat-accent);
+}
+
+/* ---- Messages ---- */
+
+.mat-message {
+    display: none;
+    padding: 0.75rem 1rem;
+    border-radius: var(--mat-field-radius);
+    font-size: 0.8125rem;
+    line-height: 1.5;
+    margin-bottom: 1rem;
+}
+.mat-message.is-visible {
+    display: block;
+}
+.mat-message.is-error {
+    background: var(--mat-danger-bg);
+    color: var(--mat-danger);
+}
+.mat-message.is-success {
+    background: var(--mat-success-bg);
+    color: var(--mat-success);
+}
+.mat-message.is-info {
+    background: var(--mat-info-bg);
+    color: var(--mat-info);
+}
+
+/* ---- Views ---- */
+
+.mat-view {
+    display: none;
+}
+.mat-view.is-active {
+    display: block;
+}
+.mat-view-title {
+    font-size: 1.05rem;
+    font-weight: 600;
+    margin-bottom: 0.25rem;
+}
+.mat-view-sub {
+    font-size: 0.8125rem;
+    color: var(--mat-muted);
+    margin-bottom: 1.25rem;
+}
+
+/* ---- Fields ---- */
+
+.mat-field {
+    margin-bottom: 1rem;
+}
+.mat-field-row {
+    display: flex;
+    gap: 0.75rem;
+}
+.mat-field-row .mat-field {
+    flex: 1;
+}
+
+.mat-label {
+    display: block;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    color: var(--mat-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 0.3rem;
+}
+.mat-input-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+.mat-input {
+    width: 100%;
+    padding: 0.8rem 1rem;
+    background: var(--mat-input-bg);
+    border: 1px solid var(--mat-border);
+    border-radius: var(--mat-field-radius);
+    color: var(--mat-text);
+    font-size: 0.875rem;
+    outline: none;
+    transition:
+        border-color var(--mat-transition),
+        box-shadow var(--mat-transition);
+}
+.mat-input::placeholder {
+    color: var(--mat-muted);
+    opacity: 0.5;
+}
+.mat-input:focus {
+    border-color: var(--mat-accent);
+    box-shadow: 0 0 0 3px rgba(124, 92, 191, 0.15);
+}
+.mat-input.has-eye {
+    padding-right: 2.75rem;
+}
+
+/* Password eye */
+.mat-eye {
+    position: absolute;
+    right: 0.75rem;
+    background: none;
+    border: none;
+    color: var(--mat-muted);
+    cursor: pointer;
+    padding: 0.25rem;
+    display: flex;
+}
+.mat-eye:hover {
+    color: var(--mat-text);
+}
+
+/* ---- Checkbox ---- */
+
+.mat-checkbox-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 1.25rem;
+    font-size: 0.8125rem;
+    color: var(--mat-muted);
+}
+.mat-checkbox-row input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--mat-accent);
+    cursor: pointer;
+    flex-shrink: 0;
+}
+.mat-checkbox-row a {
+    color: var(--mat-accent);
+    text-decoration: underline;
+}
+
+/* ---- Buttons ---- */
+
+.mat-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 0.8rem 1.25rem;
+    border-radius: var(--mat-field-radius);
+    font-size: 0.875rem;
+    font-weight: 600;
+    border: none;
+    cursor: pointer;
+    transition:
+        background var(--mat-transition),
+        transform 0.1s,
+        opacity var(--mat-transition);
+    position: relative;
+}
+.mat-btn:active {
+    transform: scale(0.98);
+}
+.mat-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.mat-btn-primary {
+    background: var(--mat-accent);
+    color: #fff;
+    margin-top: 0.5rem;
+}
+.mat-btn-primary:hover:not(:disabled) {
+    background: var(--mat-accent-hover);
+}
+
+.mat-btn-outline {
+    background: var(--mat-input-bg);
+    color: var(--mat-text);
+    border: 1px solid var(--mat-border);
+}
+.mat-btn-outline:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.06);
+    border-color: var(--mat-muted);
+}
+
+/* Loading */
+.mat-spinner {
+    display: none;
+    width: 16px;
+    height: 16px;
+    border: 2px solid rgba(255, 255, 255, 0.25);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: mat-spin 0.6s linear infinite;
+}
+.mat-btn.is-loading .mat-btn-text {
+    visibility: hidden;
+}
+.mat-btn.is-loading .mat-spinner {
+    display: inline-block;
+    position: absolute;
+}
+@keyframes mat-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* ---- Divider ---- */
+
+.mat-divider {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin: 1.25rem 0;
+    font-size: 0.75rem;
+    color: var(--mat-muted);
+}
+.mat-divider::before,
+.mat-divider::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--mat-border);
+}
+
+/* ---- OAuth row ---- */
+
+.mat-oauth-row {
+    display: flex;
+    gap: 0.75rem;
+}
+.mat-oauth-row .mat-btn {
+    flex: 1;
+}
+
+/* ---- Footer links ---- */
+
+.mat-footer-links {
+    display: flex;
+    justify-content: center;
+    gap: 1.5rem;
+    margin-top: 1.5rem;
+}
+.mat-footer-link button {
+    background: none;
+    border: none;
+    color: var(--mat-muted);
+    font-size: 0.8125rem;
+    cursor: pointer;
+    padding: 0;
+    transition: color var(--mat-transition);
+}
+.mat-footer-link button:hover {
+    color: var(--mat-accent);
+}
+
+/* ---- Back button ---- */
+
+.mat-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    background: none;
+    border: none;
+    color: var(--mat-muted);
+    font-size: 0.8125rem;
+    cursor: pointer;
+    padding: 0;
+    margin-bottom: 1rem;
+    transition: color var(--mat-transition);
+}
+.mat-back:hover {
+    color: var(--mat-text);
+}
+
+/* ---- Radio tiles ---- */
+
+.mat-radio-group {
+    display: flex;
+    gap: 0.5rem;
+}
+.mat-radio-tile {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    padding: 0.75rem;
+    background: var(--mat-input-bg);
+    border: 1px solid var(--mat-border);
+    border-radius: var(--mat-field-radius);
+    cursor: pointer;
+    transition: border-color var(--mat-transition);
+}
+.mat-radio-tile:has(input:checked) {
+    border-color: var(--mat-accent);
+}
+.mat-radio-tile input {
+    display: none;
+}
+.mat-radio-dot {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    border: 2px solid var(--mat-border);
+    flex-shrink: 0;
+    position: relative;
+    transition: border-color var(--mat-transition);
+}
+.mat-radio-tile:has(input:checked) .mat-radio-dot {
+    border-color: var(--mat-accent);
+}
+.mat-radio-tile:has(input:checked) .mat-radio-dot::after {
+    content: "";
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--mat-accent);
+}
+.mat-radio-tile-label {
+    font-size: 0.8125rem;
+    font-weight: 600;
+}
+.mat-radio-tile-sub {
+    font-size: 0.6875rem;
+    color: var(--mat-muted);
+}
+
+/* ---- Overlay ---- */
+
+.mat-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    background: var(--mat-deep);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s ease;
+}
+.mat-overlay.is-visible {
+    opacity: 1;
+    pointer-events: auto;
+}
+.mat-overlay-card {
+    text-align: center;
+}
+.mat-overlay-spinner {
+    width: 36px;
+    height: 36px;
+    margin: 0 auto 1rem;
+    border: 3px solid rgba(255, 255, 255, 0.12);
+    border-top-color: var(--mat-accent);
+    border-radius: 50%;
+    animation: mat-spin 0.8s linear infinite;
+}
+.mat-overlay-title {
+    font-size: 1rem;
+    font-weight: 600;
+    margin-bottom: 0.25rem;
+}
+.mat-overlay-sub {
+    font-size: 0.8125rem;
+    color: var(--mat-muted);
+}
+
+/* ---- Switcher ---- */
+
+.mat-switcher {
+    text-align: center;
+    margin-top: 1.75rem;
+    font-size: 0.8125rem;
+    color: var(--mat-muted);
+}
+.mat-switcher a {
+    color: var(--mat-text);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    font-weight: 500;
+}
+.mat-switcher a:hover {
+    color: var(--mat-accent);
+}
+
+/* ---- Fullscreen layout ---- */
+/* Add class="mat-fullscreen" to <body> or set AUTH_LAYOUT=fullscreen */
+
+.mat-fullscreen .mat-page {
+    padding: 0;
+}
+.mat-fullscreen .mat-card {
+    max-width: none;
+    min-height: 100vh;
+    border-radius: 0;
+    box-shadow: none;
+}
+.mat-fullscreen .mat-hero {
+    width: 50%;
+    margin: 0;
+    border-radius: 0;
+}
+.mat-fullscreen .mat-main {
+    width: 50%;
+}
+
+/* ---- Mobile ---- */
+
+@media (max-width: 767px) {
+    .mat-page {
+        padding: 0;
+    }
+    .mat-card {
+        max-width: none;
+        min-height: 100vh;
+        border-radius: 0;
+        flex-direction: column;
+    }
+    .mat-main {
+        padding: 2rem 1.5rem;
+    }
+    .mat-header-logo {
+        display: inherit;
+    }
+    .mat-oauth-row {
+        flex-direction: column;
+    }
+    .mat-radio-group {
+        flex-direction: column;
+    }
+    .mat-field-row {
+        flex-direction: column;
+        gap: 0;
+    }
+}
