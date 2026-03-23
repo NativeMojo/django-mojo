@@ -8,6 +8,11 @@ login handler calls UserDevice.track() → DB records created with real values.
 No MagicMock for requests. The test client emulates a real browser (persistent
 cookies, realistic headers) so device tracking sees exactly what production sees.
 
+NOTE: Tests that depend on _muid cookie persistence (second_login, fresh_browser)
+require DEBUG=True on the server. When DEBUG=False, _muid is set with Secure flag
+and won't be sent over HTTP (test server is HTTP on localhost). These tests skip
+automatically when DEBUG is off.
+
 Contracts enforced:
   - Login creates a UserDevice with muid from server cookie
   - Login creates a UserDeviceLocation linking device to IP
@@ -20,6 +25,11 @@ from testit.helpers import assert_true, assert_eq
 
 TEST_USER = "testit"
 TEST_PWORD = "testit##mojo"
+
+
+def _is_debug():
+    from mojo.helpers.settings import settings
+    return bool(settings.DEBUG)
 
 
 @th.django_unit_setup()
@@ -88,7 +98,15 @@ def test_login_creates_geolocated_ip(opts):
 
 @th.django_unit_test()
 def test_second_login_updates_device(opts):
-    """Logging in again from the same browser updates the existing device, not creates a new one."""
+    """Logging in again from the same browser updates the existing device, not creates a new one.
+
+    Requires DEBUG=True — _muid cookie is Secure when DEBUG=False and won't
+    persist over HTTP on the test server.
+    """
+    from testit.helpers import TestitSkip
+    if not _is_debug():
+        raise TestitSkip("requires DEBUG=True for _muid cookie persistence over HTTP")
+
     from mojo.apps.account.models.device import UserDevice
 
     opts.client.logout()
@@ -106,12 +124,12 @@ def test_second_login_updates_device(opts):
 def test_fresh_browser_updates_muid(opts):
     """Clearing cookies and logging in from the same UA updates muid on the existing device.
 
-    UserDevice keys on (user, duid). When the duid is a UA hash fallback,
-    the same browser with cleared cookies still matches the same device record.
-    The muid changes (new server cookie) but the device record is updated, not
-    duplicated. This is correct — muid tracks "which server cookie is active",
-    not "which device record to create".
+    Requires DEBUG=True — _muid cookie is Secure when DEBUG=False.
     """
+    from testit.helpers import TestitSkip
+    if not _is_debug():
+        raise TestitSkip("requires DEBUG=True for _muid cookie persistence over HTTP")
+
     from mojo.apps.account.models.device import UserDevice
 
     old_muid = opts.device_muid

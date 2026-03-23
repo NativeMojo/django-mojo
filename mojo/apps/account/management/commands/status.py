@@ -57,8 +57,8 @@ class Command(BaseCommand):
         parser.add_argument(
             '--timeout',
             type=int,
-            default=5,
-            help='Timeout in seconds for connectivity tests (default: 5)'
+            default=3,
+            help='Timeout in seconds for connectivity tests (default: 3)'
         )
         parser.add_argument(
             '--db-only',
@@ -142,6 +142,8 @@ class Command(BaseCommand):
 
     def check_database(self, timeout, verbose):
         """Check database connectivity with timeout."""
+        import signal
+
         result = {
             'status': 'unknown',
             'message': '',
@@ -151,12 +153,20 @@ class Command(BaseCommand):
 
         start_time = time.time()
 
+        def _timeout_handler(signum, frame):
+            raise TimeoutError(f"Database connection timed out after {timeout}s")
+
         try:
-            # Set query timeout
+            # Set OS-level alarm so a hung connection doesn't block forever
+            old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+            signal.alarm(timeout)
+
             with connection.cursor() as cursor:
-                # Use a simple query that should work on all databases
                 cursor.execute("SELECT 1")
                 row = cursor.fetchone()
+
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
 
             end_time = time.time()
             query_time = end_time - start_time
@@ -180,7 +190,18 @@ class Command(BaseCommand):
                 result['status'] = 'error'
                 result['message'] = 'Database query returned unexpected result'
 
+        except TimeoutError as e:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
+            end_time = time.time()
+            result['status'] = 'error'
+            result['message'] = f'Database connection timed out ({timeout}s)'
+            result['timing']['error_time_ms'] = round((end_time - start_time) * 1000, 2)
+            result['error'] = str(e)
+
         except Exception as e:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
             end_time = time.time()
             result['status'] = 'error'
             result['message'] = f'Database connection failed: {str(e)}'
@@ -212,8 +233,10 @@ class Command(BaseCommand):
         start_time = time.time()
 
         try:
-            # Get Redis connection
+            # Get Redis connection with a socket timeout so it doesn't hang
             redis_client = get_redis_connection()
+            redis_client.connection_pool.connection_kwargs['socket_timeout'] = timeout
+            redis_client.connection_pool.connection_kwargs['socket_connect_timeout'] = timeout
 
             # Test basic connectivity with ping
             ping_start = time.time()

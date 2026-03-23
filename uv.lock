@@ -577,7 +577,7 @@ wheels = [
 
 [[package]]
 name = "django-mojo"
-version = "1.0.71"
+version = "1.0.72"
 source = { editable = "." }
 dependencies = [
     { name = "bcrypt" },
