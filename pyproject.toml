@@ -1,6 +1,6 @@
 [project]
 name = "django-mojo"
-version = "1.0.72"
+version = "1.0.73"
 description = "A REST framework for Django with secure DB-backed settings, REST/WebSocket support, jobs, auth, and more."
 authors = [{ name = "MOJO Dev Team", email = "gotmojo@mojo.com" }]
 readme = "README.md"

@@ -1,5 +1,10 @@
 ## v1.0.59 - (current)
 
+## v1.0.73 - March 22, 2026
+
+status command fix
+
+
 ## v1.0.72 - March 22, 2026
 
 new bouncer security
