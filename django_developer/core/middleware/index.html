@@ -667,6 +667,45 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#device-identity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Device Identity
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Device Identity">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#cookie-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cookie configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-identity-connects-pre-auth-and-post-auth" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How identity connects pre-auth and post-auth
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#authmiddleware" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3792,6 +3831,45 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#device-identity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Device Identity
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Device Identity">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#cookie-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cookie configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-identity-connects-pre-auth-and-post-auth" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How identity connects pre-auth and post-auth
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#authmiddleware" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3872,10 +3950,14 @@
 <p><strong>What it does:</strong>
 - Sets <code>request.DATA</code> — unified <code>objict</code> containing all parsed GET params, POST body, and JSON body
 - Sets <code>request.group = None</code> (populated later by auth or decorator if group param present)
-- Sets <code>request.device_id</code> from <code>X-Device-Id</code> header or <code>device_id</code> param
+- Sets <code>request.duid</code> — client-claimed device ID from <code>X-Mojo-UID</code> header or <code>duid</code> param
 - Sets <code>request.ip</code> — real client IP (respects <code>X-Forwarded-For</code>)
-- Sets <code>request.user_agent</code> — parsed UA string
+- Sets <code>request.user_agent</code> — raw UA string
+- Sets <code>request.muid</code> — server-controlled device identity (see Device Identity below)
+- Sets <code>request.msid</code> — server-controlled session identity (see Device Identity below)
+- Sets <code>request.mtab</code> — tab session identity from client JS (<code>request.DATA._mtab</code>)
 - Sets cache-control headers on response (<code>no-cache</code>, <code>no-store</code>)
+- Sets <code>_muid</code> and <code>_msid</code> HttpOnly cookies on the response when missing
 - Sets a <code>ContextVar</code> (<code>ACTIVE_REQUEST</code>) so model methods can access the request without passing it explicitly</p>
 <p><strong>Always use <code>request.DATA</code></strong> — never <code>request.POST.get()</code> or <code>request.GET.get()</code>.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># Correct</span>
@@ -3886,6 +3968,102 @@
 <a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="n">value</span> <span class="o">=</span> <span class="n">request</span><span class="o">.</span><span class="n">POST</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;field_name&quot;</span><span class="p">)</span>
 <a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="n">value</span> <span class="o">=</span> <span class="n">request</span><span class="o">.</span><span class="n">GET</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;field_name&quot;</span><span class="p">)</span>
 </code></pre></div>
+<hr />
+<h2 id="device-identity">Device Identity<a class="headerlink" href="#device-identity" title="Permanent link">&para;</a></h2>
+<p>MojoMiddleware sets three server-controlled identity attributes on every request,
+available to all downstream code without depending on bouncer.</p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Source</th>
+<th>Lifetime</th>
+<th>Forgeable</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>request.muid</code></td>
+<td><code>_muid</code> HttpOnly cookie</td>
+<td>2 years</td>
+<td>No</td>
+</tr>
+<tr>
+<td><code>request.msid</code></td>
+<td><code>_msid</code> HttpOnly session cookie</td>
+<td>Browser session</td>
+<td>No</td>
+</tr>
+<tr>
+<td><code>request.mtab</code></td>
+<td><code>_mtab</code> in <code>request.DATA</code> (sessionStorage, JS)</td>
+<td>Tab close</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>request.duid</code></td>
+<td><code>X-Mojo-UID</code> header or <code>duid</code> param (localStorage, JS)</td>
+<td>Permanent</td>
+<td>Yes</td>
+</tr>
+</tbody>
+</table>
+<p><strong><code>request.muid</code></strong> — Server-generated device identity. Set as an HttpOnly cookie
+(<code>_muid</code>) on the first request, read back on subsequent requests. The client cannot
+forge or rotate it. This is the primary key for device reputation in both
+<code>BouncerDevice</code> (pre-auth) and <code>UserDevice</code> (post-auth).</p>
+<p><strong><code>request.msid</code></strong> — Server-generated browser session identity. Set as an HttpOnly
+session cookie (<code>_msid</code>) with no <code>Expires</code> — the browser deletes it when all windows
+close. Detects fresh browser sessions and long-running bot sessions.</p>
+<p><strong><code>request.mtab</code></strong> — Tab-scoped identity from <code>sessionStorage</code>, generated by
+<code>mojo-bouncer.js</code> and sent in bouncer API call payloads. Detects multi-tab automation
+(many concurrent tabs per device). Only present on requests from pages with bouncer JS.</p>
+<p><strong><code>request.duid</code></strong> — Client-claimed device ID from <code>localStorage</code>. Existed before the
+identity system. Kept for backward compatibility and cross-referenced with <code>muid</code> to
+detect identity rotation (same server cookie, different client claim = suspicious).</p>
+<h3 id="cookie-configuration">Cookie configuration<a class="headerlink" href="#cookie-configuration" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Cookie</th>
+<th>HttpOnly</th>
+<th>Secure</th>
+<th>SameSite</th>
+<th>Max-Age</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>_muid</code></td>
+<td>Yes</td>
+<td>Yes (<code>DEBUG=False</code>)</td>
+<td>Lax</td>
+<td>2 years</td>
+</tr>
+<tr>
+<td><code>_msid</code></td>
+<td>Yes</td>
+<td>Yes (<code>DEBUG=False</code>)</td>
+<td>Lax</td>
+<td>Session (no expiry)</td>
+</tr>
+</tbody>
+</table>
+<p>Both use <code>SameSite=Lax</code> so they're sent on top-level navigations from external sites
+(OAuth redirects from Google/Apple, email links). <code>Secure</code> is only set when
+<code>DEBUG=False</code> so cookies work over HTTP during local development.</p>
+<h3 id="how-identity-connects-pre-auth-and-post-auth">How identity connects pre-auth and post-auth<a class="headerlink" href="#how-identity-connects-pre-auth-and-post-auth" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>Before login:
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>  _muid cookie → MojoMiddleware → request.muid → BouncerDevice.muid (pre-auth reputation)
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>After login:
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>  _muid cookie → MojoMiddleware → request.muid → UserDevice.muid (post-auth tracking)
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>Admin query:
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>  UserDevice.muid → BouncerDevice.muid → full pre-auth bouncer history for this user&#39;s device
+</code></pre></div>
+<p>See <a href="../../account/bouncer/">Bouncer</a> and <a href="../../account/auth_pages/">Auth Pages</a> for
+the full security and auth page documentation.</p>
 <hr />
 <h2 id="authmiddleware">AuthMiddleware<a class="headerlink" href="#authmiddleware" title="Permanent link">&para;</a></h2>
 <p><strong>File:</strong> <code>mojo/middleware/auth.py</code></p>
@@ -3939,22 +4117,22 @@
 </tbody>
 </table>
 <p><strong>Access patterns:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">request</span><span class="o">.</span><span class="n">DATA</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;name&quot;</span><span class="p">)</span>           <span class="c1"># standard dict get with optional default</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">request</span><span class="o">.</span><span class="n">DATA</span><span class="o">.</span><span class="n">name</span>                  <span class="c1"># attribute access</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="n">request</span><span class="o">.</span><span class="n">DATA</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;size&quot;</span><span class="p">,</span> <span class="mi">10</span><span class="p">)</span>       <span class="c1"># with default</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="n">request</span><span class="o">.</span><span class="n">DATA</span><span class="o">.</span><span class="n">get_typed</span><span class="p">(</span><span class="s2">&quot;size&quot;</span><span class="p">,</span> <span class="mi">10</span><span class="p">,</span> <span class="nb">int</span><span class="p">)</span>  <span class="c1"># with type coercion</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">request</span><span class="o">.</span><span class="n">DATA</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;name&quot;</span><span class="p">)</span>           <span class="c1"># standard dict get with optional default</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">request</span><span class="o">.</span><span class="n">DATA</span><span class="o">.</span><span class="n">name</span>                  <span class="c1"># attribute access</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="n">request</span><span class="o">.</span><span class="n">DATA</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;size&quot;</span><span class="p">,</span> <span class="mi">10</span><span class="p">)</span>       <span class="c1"># with default</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="n">request</span><span class="o">.</span><span class="n">DATA</span><span class="o">.</span><span class="n">get_typed</span><span class="p">(</span><span class="s2">&quot;size&quot;</span><span class="p">,</span> <span class="mi">10</span><span class="p">,</span> <span class="nb">int</span><span class="p">)</span>  <span class="c1"># with type coercion</span>
 </code></pre></div>
 <p><strong>Nested data</strong> (dot notation keys are auto-expanded):</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># request with key &quot;user.name&quot; = &quot;Alice&quot;</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">request</span><span class="o">.</span><span class="n">DATA</span><span class="o">.</span><span class="n">user</span><span class="o">.</span><span class="n">name</span>  <span class="c1"># → &quot;Alice&quot;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># request with key &quot;user.name&quot; = &quot;Alice&quot;</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="n">request</span><span class="o">.</span><span class="n">DATA</span><span class="o">.</span><span class="n">user</span><span class="o">.</span><span class="n">name</span>  <span class="c1"># → &quot;Alice&quot;</span>
 </code></pre></div>
 <p><strong>Array notation</strong> (<code>tags[]</code> or <code>tags[0]</code>) is automatically converted to a list.</p>
 <hr />
 <h2 id="active_request-contextvar">ACTIVE_REQUEST ContextVar<a class="headerlink" href="#active_request-contextvar" title="Permanent link">&para;</a></h2>
 <p>The current request is stored in a <code>ContextVar</code> accessible anywhere in the call stack:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.models.rest</span><span class="w"> </span><span class="kn">import</span> <span class="n">ACTIVE_REQUEST</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="n">request</span> <span class="o">=</span> <span class="n">ACTIVE_REQUEST</span><span class="o">.</span><span class="n">get</span><span class="p">()</span>  <span class="c1"># None if outside a request context</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.models.rest</span><span class="w"> </span><span class="kn">import</span> <span class="n">ACTIVE_REQUEST</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">request</span> <span class="o">=</span> <span class="n">ACTIVE_REQUEST</span><span class="o">.</span><span class="n">get</span><span class="p">()</span>  <span class="c1"># None if outside a request context</span>
 </code></pre></div>
 <p>Model methods access it via <code>self.active_request</code> and <code>self.active_user</code> properties — no need to pass the request explicitly through service layers.</p>
 
