@@ -33,18 +33,20 @@ _CLIENT = None  # per-process singleton (thread-safe client; uses a connection p
 
 
 def _build_url() -> str:
+    # Use get_static (file-based only, no DB/Redis) to avoid circular dependency:
+    # Redis connection config can't come from a Redis-backed settings store.
     # 1) Allow an explicit URL override
-    url = settings.get("REDIS_URL", None)
+    url = settings.get_static("REDIS_URL", None)
     if url:
         return url
 
     # 2) Build from individual parts
-    host = settings.get("REDIS_SERVER", "localhost")
-    port = int(settings.get("REDIS_PORT", 6379))
-    db   = int(settings.get("REDIS_DB_INDEX", 0))
-    user = settings.get("REDIS_USERNAME", None)
-    pwd  = settings.get("REDIS_PASSWORD", None)
-    scheme = settings.get("REDIS_SCHEME", "rediss")  # default to TLS
+    host = settings.get_static("REDIS_SERVER", "localhost")
+    port = int(settings.get_static("REDIS_PORT", 6379))
+    db   = int(settings.get_static("REDIS_DB_INDEX", 0))
+    user = settings.get_static("REDIS_USERNAME", None)
+    pwd  = settings.get_static("REDIS_PASSWORD", None)
+    scheme = settings.get_static("REDIS_SCHEME", "rediss")  # default to TLS
 
     if "localhost" in host:
         scheme = "redis"
@@ -77,40 +79,37 @@ def get_connection():
 
     The returned client is thread-safe. Create a new Pipeline per thread
     (prefer transaction=False for metrics/logging to avoid cross-slot).
+
+    Set REDIS_CLUSTER=True/False to skip the auto-detection probe. Without it,
+    the first connection makes a throwaway INFO call to detect cluster mode,
+    which adds a full extra TLS handshake + round-trip in production.
     """
     global _CLIENT
     if _CLIENT is not None:
         return _CLIENT
 
     url = _build_url()
-    max_conn = int(settings.get("REDIS_MAX_CONN", 500))
-    connect_timeout = float(settings.get("REDIS_CONNECT_TIMEOUT", 2))
-    # socket_timeout must be higher than any brpop/blpop timeout used in the app
-    # Default to 300s (5 min) to support blocking operations while still failing on hung connections
-    socket_timeout  = float(settings.get("REDIS_SOCKET_TIMEOUT", 60))
+    # Use get_static — Redis config can't come from a Redis-backed settings store
+    max_conn = int(settings.get_static("REDIS_MAX_CONN", 500))
+    connect_timeout = float(settings.get_static("REDIS_CONNECT_TIMEOUT", 2))
+    socket_timeout  = float(settings.get_static("REDIS_SOCKET_TIMEOUT", 60))
+    read_from_replicas = str(settings.get_static("REDIS_READ_FROM_REPLICAS", "1")) in ("1", "true", "True")
 
-    # Start with a basic client to detect cluster (works for both redis:// and rediss://)
-    base = redis.Redis.from_url(
-        url,
-        decode_responses=True,
-        socket_connect_timeout=connect_timeout,
-        socket_timeout=socket_timeout,
-        # Pool created internally; fine for the quick probe
-    )
+    # Default False — most projects use standalone Redis. Set REDIS_CLUSTER=True
+    # only if using Redis Cluster or AWS Serverless Valkey in cluster mode.
+    is_cluster = str(settings.get_static("REDIS_CLUSTER", False)).lower() in ("1", "true")
 
-    if _is_cluster(base):
-        # Cluster-aware client (uses ClusterConnectionPool internally)
+    if is_cluster:
         _CLIENT = RedisCluster.from_url(
             url,
             decode_responses=True,
             socket_connect_timeout=connect_timeout,
             socket_timeout=socket_timeout,
             max_connections=max_conn,
-            read_from_replicas=str(settings.get("REDIS_READ_FROM_REPLICAS", "1")) in ("1", "true", "True"),
-            reinitialize_steps=5,  # resilient to topology changes
+            read_from_replicas=read_from_replicas,
+            reinitialize_steps=5,
         )
     else:
-        # Standalone client with an explicit ConnectionPool (controls pool size)
         pool = redis.ConnectionPool.from_url(
             url,
             decode_responses=True,
