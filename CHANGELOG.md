@@ -1,5 +1,10 @@
 ## v1.0.59 - (current)
 
+## v1.0.74 - March 22, 2026
+
+fixing status again where it probed falsely for cluster redis
+
+
 ## v1.0.73 - March 22, 2026
 
 status command fix
