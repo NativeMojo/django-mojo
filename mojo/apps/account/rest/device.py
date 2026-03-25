@@ -36,12 +36,34 @@ def on_geo_located_ip(request, pk=None):
 
 @md.GET('system/geoip/lookup')
 @md.requires_params('ip')
+@md.rate_limit("geoip_lookup", ip_limit=30)
 @md.public_endpoint()
 def on_geo_located_ip_lookup(request):
     ip_address = request.DATA.get('ip')
     auto_refresh = request.DATA.get('auto_refresh', True)
     geo_ip = GeoLocatedIP.geolocate(ip_address, auto_refresh=auto_refresh)
     return geo_ip.on_rest_get(request)
+
+
+@md.GET('system/geoip/time')
+@md.rate_limit("geoip_time", ip_limit=30)
+@md.public_endpoint()
+def on_geo_located_ip_time(request):
+    from mojo.helpers import dates
+    geo_ip = GeoLocatedIP.geolocate(request.ip)
+    timezone = geo_ip.timezone
+    if not timezone:
+        return {"status": False, "error": "Timezone not available for this IP"}
+    local_time = dates.get_local_time(timezone)
+    return {
+        "status": True,
+        "data": {
+            "ip": request.ip,
+            "timezone": timezone,
+            "epoch": int(local_time.timestamp()),
+            "iso": local_time.isoformat()
+        }
+    }
 
 
 @md.URL('location/address/validate')

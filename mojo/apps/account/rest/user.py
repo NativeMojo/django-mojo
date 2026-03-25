@@ -85,6 +85,63 @@ def on_user_login(request):
     return jwt_login(request, user, "account/jwt/login" in request.path, source=source)
 
 
+@md.POST("auth/register")
+@md.public_endpoint()
+@md.strict_rate_limit("register", ip_limit=5, ip_window=300)
+@md.requires_bouncer_token('registration')
+@md.requires_params("email", "password")
+def on_register(request):
+    """
+    Create a new user account.
+
+    Gated by the ALLOW_USER_REGISTRATION setting (default False).
+
+    Required body params: email, password
+    Optional body params: first_name, last_name
+
+    When REQUIRE_VERIFIED_EMAIL is True the response includes
+    requires_verification=True and no JWT is issued — the user must
+    verify their email before they can log in.
+
+    When REQUIRE_VERIFIED_EMAIL is False the user is logged in
+    immediately and a verification email is still sent as a nudge.
+    """
+    if not settings.get("ALLOW_USER_REGISTRATION", False, kind="bool"):
+        raise merrors.PermissionDeniedException("Registration is not enabled", 403, 403)
+
+    email = request.DATA.email.lower().strip()
+    password = request.DATA.password
+
+    if User.objects.filter(email=email).exists():
+        raise merrors.ValueException("An account with this email already exists")
+
+    user = User(email=email)
+    user.username = user.generate_username_from_email()
+    first_name = request.DATA.get("first_name", "").strip()
+    last_name = request.DATA.get("last_name", "").strip()
+    if first_name:
+        user.first_name = first_name
+    if last_name:
+        user.last_name = last_name
+    user.check_password_strength(password)
+    user.set_password(password)
+    user.save()
+
+    # send verification email
+    token = tokens.generate_email_verify_token(user)
+    user.send_template_email("email_verify", context=dict(token=token))
+    user.report_incident(f"{user.username} registered via email", "register:success")
+
+    require_verified = settings.get("REQUIRE_VERIFIED_EMAIL", False, kind="bool")
+    if require_verified:
+        return JsonResponse(dict(
+            status=True,
+            requires_verification=True,
+            message="Account created. Please check your email to verify your account before logging in."
+        ))
+    return jwt_login(request, user)
+
+
 def get_mfa_methods(user):
     """Return list of enabled MFA methods for a user, or empty if MFA not required."""
     if not user.requires_mfa:
@@ -116,22 +173,26 @@ def mfa_required_response(user, methods):
     })
 
 
-def _check_verification_gate(user, source):
+def _check_verification_gate(user, source=None):
     """
     Raises PermissionDeniedException with error='email_not_verified' or
     'phone_not_verified' if the relevant verification setting is enabled
     and the user's channel is not yet verified.
+
+    Blocks login regardless of how the user authenticated (email, username,
+    phone). If REQUIRE_VERIFIED_EMAIL is True the user must have a verified
+    email — period.
 
     Settings are read at call time (not cached at import time) so that
     Django's override_settings works correctly in tests.
     """
     require_verified_email = settings.get("REQUIRE_VERIFIED_EMAIL", False)
     require_verified_phone = settings.get("REQUIRE_VERIFIED_PHONE", False)
-    if source == "email" and require_verified_email and not user.is_email_verified:
+    if require_verified_email and not user.is_email_verified:
         raise merrors.PermissionDeniedException(
             "email_not_verified", 403, 403
         )
-    if source == "phone_number" and require_verified_phone and not user.is_phone_verified:
+    if require_verified_phone and not user.is_phone_verified:
         raise merrors.PermissionDeniedException(
             "phone_not_verified", 403, 403
         )

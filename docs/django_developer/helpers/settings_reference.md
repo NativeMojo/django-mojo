@@ -21,6 +21,7 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 - `ALLOW_PHONE_CHANGE`
 - `ALLOW_PHONE_LOGIN`
 - `ALLOW_SELF_DEACTIVATION`
+- `ALLOW_USER_REGISTRATION`
 - `ALLOW_USERNAME_CHANGE`
 
 ### ALLOWED

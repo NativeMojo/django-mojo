@@ -51,6 +51,7 @@
         passkeyLoginComplete: '/api/auth/passkeys/login/complete',
         oauthBegin:         '/api/auth/oauth/{provider}/begin',
         oauthComplete:      '/api/auth/oauth/{provider}/complete',
+        register:           '/api/auth/register',
         refreshToken:       '/api/refresh_token'
     };
 
@@ -198,6 +199,31 @@
                     if (d.mfa_required) return d;
                     return saveTokens(resp);
                 });
+        },
+
+        // -----------------------------------------------------------------------
+        // Registration
+        // -----------------------------------------------------------------------
+
+        /**
+         * Register a new account with email and password.
+         * If the backend requires email verification the response will contain
+         * { requires_verification: true } and no tokens are stored.
+         * Otherwise tokens are stored and the user is logged in immediately.
+         * @param {object} payload - { email, password, first_name?, last_name? }
+         * @returns {Promise<object>}
+         */
+        register: function (payload) {
+            return post(ep('register'), _withDevice({
+                email: payload.email,
+                password: payload.password,
+                first_name: payload.first_name || '',
+                last_name: payload.last_name || ''
+            })).then(function (resp) {
+                var d = resp.data || resp;
+                if (d.requires_verification) return d;
+                return saveTokens(resp);
+            });
         },
 
         // -----------------------------------------------------------------------

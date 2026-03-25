@@ -182,11 +182,44 @@ def on_user(request, pk=None):
 
 ## Registration / Onboarding Patterns
 
-Self-service registration is intentionally **not** a framework endpoint — what "registration" means varies too widely across projects (open signup, invite-only, domain restriction, approval queue, CAPTCHA, etc.). The framework provides every building block; each project composes them.
+### Built-in Registration
+
+The framework provides a built-in registration endpoint gated by the `ALLOW_USER_REGISTRATION` setting (default `False`).
+
+**Enable it:**
+
+```python
+# settings.py
+ALLOW_USER_REGISTRATION = True
+```
+
+**Endpoint:** `POST /api/auth/register`
+
+| Param | Required | Description |
+|---|---|---|
+| `email` | Yes | Email address (must be unique) |
+| `password` | Yes | Password (strength validated) |
+| `first_name` | No | First name |
+| `last_name` | No | Last name |
+
+**Behavior depends on `REQUIRE_VERIFIED_EMAIL`:**
+
+- **`REQUIRE_VERIFIED_EMAIL = True`** — Account is created, verification email sent, response includes `requires_verification: true`. No JWT is issued. The user must verify their email before they can log in.
+- **`REQUIRE_VERIFIED_EMAIL = False`** (default) — Account is created, verification email sent as a nudge, and the user is logged in immediately with a JWT.
+
+The registration page is served by the bouncer at `/auth/register` and uses `MojoAuth.register()` on the frontend.
+
+**Protections:**
+
+- Rate limited: 5 requests per IP per 5 minutes
+- Bouncer token required (bot detection)
+- Password strength validated via `check_password_strength()`
+- Content guard validates username and name fields on save
+- Duplicate email returns a clear error
 
 ### Pattern A — Invite-only
 
-The project creates accounts server-side and sends invite links. The user sets their password on first visit.
+For projects that need tighter control, create accounts server-side and send invite links. The user sets their password on first visit.
 
 ```python
 # In your project's admin, management command, or REST endpoint:
@@ -203,9 +236,9 @@ user.send_invite()  # builds token URL, sends invite email
 
 User clicks the link → `POST /api/auth/invite/accept` with the token → JWT issued, email verified.
 
-### Pattern B — Open self-registration
+### Pattern B — Custom registration
 
-The project adds its own registration endpoint:
+For projects that need registration logic beyond the built-in endpoint (domain restriction, approval queues, CAPTCHA, etc.), add your own endpoint:
 
 ```python
 # In your project's REST layer:
@@ -235,6 +268,7 @@ With `REQUIRE_VERIFIED_EMAIL = True`, the user cannot log in until they click th
 
 | Need | How |
 |---|---|
+| Enable built-in registration | `ALLOW_USER_REGISTRATION = True` |
 | Create a user | `User(...).save()` + `user.save_password()` |
 | Send invite link | `user.send_invite(request=request)` |
 | Accept invite + set password | `POST /api/auth/invite/accept` |

@@ -83,7 +83,14 @@ Already have an account? <a href="{{ auth_url|default:'/auth' }}">Log in</a>
         if (firstName) payload.first_name = firstName;
         if (lastName) payload.last_name = lastName;
         MojoAuth.register(payload)
-            .then(m.onAuthSuccess)
+            .then(function (result) {
+                if (result && result.requires_verification) {
+                    m.setLoading(btn, false);
+                    m.showMessage(result.message || "Account created. Please check your email to verify your account.", "success");
+                    return;
+                }
+                m.onAuthSuccess(result);
+            })
             .catch(function (err) { m.setLoading(btn, false); m.showMessage(MojoAuth.getError(err) || "Registration failed.", "error"); });
     });
 
