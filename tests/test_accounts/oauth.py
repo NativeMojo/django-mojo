@@ -56,6 +56,31 @@ def test_oauth_begin(opts):
     opts.oauth_state = data.state
 
 
+@th.django_unit_test("oauth: begin uses backend-derived redirect_uri, not frontend page URL")
+def test_oauth_begin_uses_backend_redirect_uri(opts):
+    """
+    Regression: mojo-auth.js startOAuthLogin sends the current page URL as
+    redirect_uri. The backend must use _get_redirect_uri() for the actual
+    OAuth redirect_uri sent to the provider, not the frontend's page URL.
+    Otherwise Google rejects with redirect_uri_mismatch.
+    """
+    from urllib.parse import unquote
+    frontend_url = "https://example.com/login"
+    with th.server_settings(ALLOWED_REDIRECT_URLS=["https://example.com/"]):
+        resp = opts.client.get(
+            f"/api/auth/oauth/{PROVIDER}/begin?redirect_uri={frontend_url}"
+        )
+    assert resp.status_code == 200, f"Unexpected status {resp.status_code}: {resp.response}"
+    auth_url = resp.response.data.auth_url
+    decoded_url = unquote(auth_url)
+    assert "example.com/login" not in decoded_url, (
+        f"Frontend page URL must not be the OAuth redirect_uri: {decoded_url}"
+    )
+    assert "/auth/oauth/google/complete" in decoded_url, (
+        f"OAuth redirect_uri should be the backend-derived callback URL: {decoded_url}"
+    )
+
+
 @th.django_unit_test("oauth: begin rejects unknown provider")
 def test_oauth_begin_unknown_provider(opts):
     resp = opts.client.get("/api/auth/oauth/fakeprovider/begin")
