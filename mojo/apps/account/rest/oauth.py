@@ -21,12 +21,22 @@ from mojo.helpers import logit
 from mojo.helpers.response import JsonResponse
 from mojo.helpers.settings import settings
 
+def _get_origin(request):
+    """Derive the origin (scheme + host) from the request."""
+    origin = request.META.get("HTTP_ORIGIN", "").rstrip("/")
+    if not origin:
+        host = request.META.get("HTTP_HOST", "")
+        scheme = "https" if request.is_secure() else "http"
+        origin = f"{scheme}://{host}"
+    return origin
+
+
 def _get_redirect_uri(request, provider_name):
     """Use configured redirect URI or build one from the request origin."""
     oauth_redirect_uri = settings.get("OAUTH_REDIRECT_URI", "")
     if oauth_redirect_uri:
         return oauth_redirect_uri
-    origin = request.META.get("HTTP_ORIGIN") or request.DATA.get("origin", "")
+    origin = _get_origin(request)
     return f"{origin}/auth/oauth/{provider_name}/complete"
 
 
@@ -146,11 +156,7 @@ def on_oauth_begin(request, provider):
         # backend endpoint. Derive it from the request origin so multiple
         # domains work without extra settings. The frontend URI is stored
         # separately so on_apple_callback knows where to bounce the browser.
-        origin = request.META.get("HTTP_ORIGIN", "").rstrip("/")
-        if not origin:
-            host = request.META.get("HTTP_HOST", "")
-            scheme = "https" if request.is_secure() else "http"
-            origin = f"{scheme}://{host}"
+        origin = _get_origin(request)
         apple_redirect_uri = f"{origin}/api/auth/oauth/apple/callback"
         state = svc.create_state(extra={"redirect_uri": apple_redirect_uri, "frontend_uri": redirect_uri})
         auth_url = svc.get_auth_url(state=state, redirect_uri=apple_redirect_uri)
