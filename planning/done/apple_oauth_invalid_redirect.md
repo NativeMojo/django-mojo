@@ -1,7 +1,8 @@
 # Apple OAuth: Invalid web redirect url
 
 **Type**: bug
-**Status**: Open
+**Status**: Resolved
+**Resolved**: 2026-03-26
 **Date**: 2026-03-21
 
 ## Error (original)

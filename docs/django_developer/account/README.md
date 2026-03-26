@@ -7,3 +7,4 @@
 - [Email Change](email_change.md) — Self-service email address change flow
 - [API Keys](api_keys.md) — Group-scoped programmatic access, permissions, token lifecycle
 - [Notifications](notifications.md) — User inbox, WebSocket + push delivery, expiry
+- [GeoIP](geoip.md) — IP geolocation, threat intelligence, time lookup

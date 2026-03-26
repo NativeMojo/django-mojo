@@ -155,8 +155,16 @@ def on_oauth_begin(request, provider):
         state = svc.create_state(extra={"redirect_uri": apple_redirect_uri, "frontend_uri": redirect_uri})
         auth_url = svc.get_auth_url(state=state, redirect_uri=apple_redirect_uri)
     else:
-        state = svc.create_state(extra={"redirect_uri": redirect_uri})
-        auth_url = svc.get_auth_url(state=state, redirect_uri=redirect_uri)
+        # The OAuth redirect_uri must be registered with the provider (e.g.
+        # Google Cloud Console).  Always use the backend-derived URI for the
+        # actual OAuth redirect; store the frontend's URL as frontend_uri so
+        # post-auth flows can redirect the browser there if needed.
+        oauth_redirect_uri = _get_redirect_uri(request, provider)
+        state = svc.create_state(extra={
+            "redirect_uri": oauth_redirect_uri,
+            "frontend_uri": redirect_uri,
+        })
+        auth_url = svc.get_auth_url(state=state, redirect_uri=oauth_redirect_uri)
 
     return JsonResponse({
         "status": True,
