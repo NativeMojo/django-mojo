@@ -172,6 +172,17 @@
         setTimeout(function () { var f = views[name] && views[name].querySelector("input, button"); if (f) f.focus(); }, 60);
     }
 
+    // OAuth callback — provider redirects back with ?code=&state=
+    var oauthCode = cfg.params.get("code");
+    var oauthState = cfg.params.get("state");
+    if (oauthCode && oauthState) {
+        var provider = sessionStorage.getItem("oauth_provider") || "google";
+        m.showMessage("Completing sign-in\u2026", "info");
+        MojoAuth.completeOAuthLogin(provider)
+            .then(m.onAuthSuccess)
+            .catch(function (err) { m.showMessage(MojoAuth.getError(err) || "OAuth sign-in failed.", "error"); });
+    }
+
     var urlToken = cfg.params.get("token");
     if (urlToken && urlToken.indexOf("pr:") === 0) {
         sessionStorage.setItem("mat_reset_token", urlToken);

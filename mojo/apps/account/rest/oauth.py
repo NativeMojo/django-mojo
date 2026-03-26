@@ -3,9 +3,14 @@ OAuth REST endpoints.
 
 Flow:
   GET  /api/auth/oauth/<provider>/begin    -> returns authorization URL
+  GET|POST /api/auth/oauth/<provider>/callback -> provider redirects here, bounces to frontend
   POST /api/auth/oauth/<provider>/complete -> exchange code, auto-link user, issue JWT
 
-Supported providers: google (more can be added to services/oauth/__init__.py)
+All providers redirect to a backend callback endpoint. The authorization code
+never appears in the frontend URL bar. The callback bounces the browser to the
+frontend with code + state as query params, where the JS calls /complete.
+
+Supported providers: google, apple (more can be added to services/oauth/__init__.py)
 """
 from urllib.parse import urlencode, quote
 
@@ -136,41 +141,37 @@ def on_oauth_begin(request, provider):
     """Return the provider's authorization URL.
 
     Optional query parameter:
-      redirect_uri — override the default redirect URI; must be on the allowlist
+      redirect_uri — frontend URL the browser should land on after the OAuth
+                     callback completes. Must be on the allowlist
                      (ALLOWED_REDIRECT_URLS setting or group.metadata["allowed_redirect_urls"]).
+                     Defaults to _get_redirect_uri().
+
+    All providers redirect to the backend callback endpoint
+    (/api/auth/oauth/<provider>/callback). The frontend_uri is stored in
+    state so the callback knows where to bounce the browser.
     """
     try:
         svc = get_provider(provider)
     except ValueError:
         raise merrors.ValueException(f"Unknown provider: {provider}")
 
-    custom_redirect_uri = request.DATA.get("redirect_uri", "")
-    if custom_redirect_uri:
-        _validate_redirect_uri(request, custom_redirect_uri)
-        redirect_uri = custom_redirect_uri
+    # frontend_uri = where the browser lands after the callback bounce
+    custom_frontend_uri = request.DATA.get("redirect_uri", "")
+    if custom_frontend_uri:
+        _validate_redirect_uri(request, custom_frontend_uri)
+        frontend_uri = custom_frontend_uri
     else:
-        redirect_uri = _get_redirect_uri(request, provider)
+        frontend_uri = _get_redirect_uri(request, provider)
 
-    if provider == "apple":
-        # Apple requires response_mode=form_post so the callback lands on a
-        # backend endpoint. Derive it from the request origin so multiple
-        # domains work without extra settings. The frontend URI is stored
-        # separately so on_apple_callback knows where to bounce the browser.
-        origin = _get_origin(request)
-        apple_redirect_uri = f"{origin}/api/auth/oauth/apple/callback"
-        state = svc.create_state(extra={"redirect_uri": apple_redirect_uri, "frontend_uri": redirect_uri})
-        auth_url = svc.get_auth_url(state=state, redirect_uri=apple_redirect_uri)
-    else:
-        # The OAuth redirect_uri must be registered with the provider (e.g.
-        # Google Cloud Console).  Always use the backend-derived URI for the
-        # actual OAuth redirect; store the frontend's URL as frontend_uri so
-        # post-auth flows can redirect the browser there if needed.
-        oauth_redirect_uri = _get_redirect_uri(request, provider)
-        state = svc.create_state(extra={
-            "redirect_uri": oauth_redirect_uri,
-            "frontend_uri": redirect_uri,
-        })
-        auth_url = svc.get_auth_url(state=state, redirect_uri=oauth_redirect_uri)
+    # callback_uri = where the provider redirects (always our backend)
+    origin = _get_origin(request)
+    callback_uri = f"{origin}/api/auth/oauth/{provider}/callback"
+
+    state = svc.create_state(extra={
+        "redirect_uri": callback_uri,
+        "frontend_uri": frontend_uri,
+    })
+    auth_url = svc.get_auth_url(state=state, redirect_uri=callback_uri)
 
     return JsonResponse({
         "status": True,
@@ -182,28 +183,36 @@ def on_oauth_begin(request, provider):
 
 
 # -----------------------------------------------------------------
-# Apple callback — receives Apple's form_post, bounces to frontend
+# Provider callback — receives redirect from provider, bounces to frontend
 # -----------------------------------------------------------------
 
-@md.POST("auth/oauth/apple/callback")
+@md.GET("auth/oauth/<str:provider>/callback")
+@md.POST("auth/oauth/<str:provider>/callback")
 @md.public_endpoint()
-def on_apple_callback(request):
+def on_oauth_callback(request, provider):
     """
-    Receives Apple's form_post redirect (code + state as POST body).
-    Redirects the browser to the frontend with code + state as query params
-    so the JS flow is identical to Google.
+    Receives the redirect from the OAuth provider after user authorization.
 
-    Requires APPLE_CALLBACK_REDIRECT setting — the frontend URL to redirect to.
+    Google: GET with code + state as query params.
+    Apple:  POST (form_post) with code + state in body.
+
+    Peeks at state to find the frontend_uri, then bounces the browser there
+    with code + state as query params. The frontend JS then calls /complete.
     """
-    code = request.POST.get("code", "")
-    state = request.POST.get("state", "")
+    # Google sends GET query params, Apple sends POST form data
+    code = request.GET.get("code") or request.POST.get("code", "")
+    state = request.GET.get("state") or request.POST.get("state", "")
 
     if not code or not state:
-        raise merrors.ValueException("Missing code or state in Apple callback")
+        raise merrors.ValueException("Missing code or state in OAuth callback")
+
+    try:
+        svc = get_provider(provider)
+    except ValueError:
+        raise merrors.ValueException(f"Unknown provider: {provider}")
 
     # Peek at state (without consuming) to find the frontend URI to bounce to.
     # The state is consumed later by on_oauth_complete.
-    svc = get_provider("apple")
     state_data = svc.peek_state(state)
     if not state_data:
         raise merrors.PermissionDeniedException("Invalid or expired OAuth state", 401, 401)

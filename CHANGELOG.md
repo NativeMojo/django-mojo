@@ -1,5 +1,10 @@
 ## v1.0.59 - (current)
 
+## v1.0.79 - March 26, 2026
+
+google oauth take 5
+
+
 ## v1.0.78 - March 26, 2026
 
 google auth fix take 2
