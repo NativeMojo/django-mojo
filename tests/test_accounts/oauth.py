@@ -44,8 +44,9 @@ def setup_oauth_env(opts):
 # OAuth begin
 # -----------------------------------------------------------------
 
-@th.django_unit_test("oauth: begin returns auth_url and state")
+@th.django_unit_test("oauth: begin returns auth_url with backend callback redirect_uri")
 def test_oauth_begin(opts):
+    from urllib.parse import unquote
     resp = opts.client.get(f"/api/auth/oauth/{PROVIDER}/begin")
     assert resp.status_code == 200, f"Unexpected status {resp.status_code}: {resp.response}"
     data = resp.response.data
@@ -53,16 +54,20 @@ def test_oauth_begin(opts):
     assert data.state, "Missing state"
     assert "accounts.google.com" in data.auth_url, "auth_url should point to Google"
     assert data.state in data.auth_url, "state should be in auth_url"
+    # The redirect_uri sent to the provider must be the backend callback,
+    # NOT a frontend page URL. This keeps the auth code server-side.
+    decoded_url = unquote(data.auth_url)
+    assert "/api/auth/oauth/google/callback" in decoded_url, (
+        f"redirect_uri must be the backend callback endpoint, got: {decoded_url}"
+    )
     opts.oauth_state = data.state
 
 
-@th.django_unit_test("oauth: begin uses backend-derived redirect_uri, not frontend page URL")
-def test_oauth_begin_uses_backend_redirect_uri(opts):
+@th.django_unit_test("oauth: begin stores frontend_uri in state for post-callback bounce")
+def test_oauth_begin_frontend_uri_in_state(opts):
     """
-    Regression: mojo-auth.js startOAuthLogin sends the current page URL as
-    redirect_uri. The backend must use _get_redirect_uri() for the actual
-    OAuth redirect_uri sent to the provider, not the frontend's page URL.
-    Otherwise Google rejects with redirect_uri_mismatch.
+    When the frontend sends redirect_uri, it is stored in state as frontend_uri
+    (where to bounce after callback), NOT used as the provider redirect_uri.
     """
     from urllib.parse import unquote
     frontend_url = "https://example.com/login"
@@ -73,11 +78,62 @@ def test_oauth_begin_uses_backend_redirect_uri(opts):
     assert resp.status_code == 200, f"Unexpected status {resp.status_code}: {resp.response}"
     auth_url = resp.response.data.auth_url
     decoded_url = unquote(auth_url)
+    # The frontend URL must NOT be the provider redirect_uri
     assert "example.com/login" not in decoded_url, (
-        f"Frontend page URL must not be the OAuth redirect_uri: {decoded_url}"
+        f"Frontend URL must not be sent to provider as redirect_uri: {decoded_url}"
     )
-    assert "/auth/oauth/google/complete" in decoded_url, (
-        f"OAuth redirect_uri should be the backend-derived callback URL: {decoded_url}"
+    # The backend callback must be the redirect_uri
+    assert "/api/auth/oauth/google/callback" in decoded_url, (
+        f"redirect_uri must be the backend callback endpoint: {decoded_url}"
+    )
+
+
+@th.django_unit_test("oauth: callback endpoint bounces to frontend with code and state")
+def test_oauth_callback_redirects(opts):
+    """
+    The callback endpoint receives code + state from the provider and
+    redirects to the frontend_uri stored in state. We point the
+    frontend_uri at a known test-server path so the redirect follows
+    and we can verify code + state arrived as query params.
+    """
+    from mojo.apps.account.services.oauth import get_provider
+    svc = get_provider(PROVIDER)
+    # Use the test server's login endpoint as the bounce target
+    frontend_uri = "http://localhost:9009/api/login"
+    callback_uri = "http://localhost:9009/api/auth/oauth/google/callback"
+    state = svc.create_state(extra={
+        "redirect_uri": callback_uri,
+        "frontend_uri": frontend_uri,
+    })
+    # allow_redirects=False to inspect the 302 directly
+    resp = opts.client.get(
+        f"/api/auth/oauth/{PROVIDER}/callback?code=testcode123&state={state}",
+        allow_redirects=False,
+    )
+    assert resp.status_code == 302, (
+        f"Callback should 302 redirect, got {resp.status_code}: {resp.response}"
+    )
+
+
+@th.django_unit_test("oauth: callback rejects missing code or state")
+def test_oauth_callback_rejects_missing_params(opts):
+    resp = opts.client.get(f"/api/auth/oauth/{PROVIDER}/callback?code=testcode123")
+    assert resp.status_code == 400, (
+        f"Should reject missing state, got {resp.status_code}"
+    )
+    resp = opts.client.get(f"/api/auth/oauth/{PROVIDER}/callback?state=fakestate")
+    assert resp.status_code == 400, (
+        f"Should reject missing code, got {resp.status_code}"
+    )
+
+
+@th.django_unit_test("oauth: callback rejects invalid state")
+def test_oauth_callback_rejects_invalid_state(opts):
+    resp = opts.client.get(
+        f"/api/auth/oauth/{PROVIDER}/callback?code=testcode123&state=bogus"
+    )
+    assert resp.status_code in [401, 403], (
+        f"Should reject invalid state, got {resp.status_code}"
     )
 
 
