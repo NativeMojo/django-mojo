@@ -10,31 +10,27 @@
       
       
       
-        <link rel="canonical" href="https://NativeMojo.github.io/django-mojo/web_developer/account/">
+        <link rel="canonical" href="https://NativeMojo.github.io/django-mojo/django_developer/account/geoip/">
       
       
-        <link rel="prev" href="../core/graphs/">
-      
-      
-        <link rel="next" href="authentication/">
       
       
         
       
       
-      <link rel="icon" href="../../assets/images/favicon.png">
+      <link rel="icon" href="../../../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
     
     
       
-        <title>Overview - Django-MOJO</title>
+        <title>GeoIP — Django Developer Reference - Django-MOJO</title>
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
       
         
-        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
       
       
 
@@ -53,7 +49,7 @@
       
     
     
-    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -78,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#account-authentication-rest-api-reference" class="md-skip">
+        <a href="#geoip-django-developer-reference" class="md-skip">
           Skip to content
         </a>
       
@@ -92,7 +88,7 @@
 
 <header class="md-header" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../.." title="Django-MOJO" class="md-header__button md-logo" aria-label="Django-MOJO" data-md-component="logo">
+    <a href="../../.." title="Django-MOJO" class="md-header__button md-logo" aria-label="Django-MOJO" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -112,7 +108,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Overview
+              GeoIP — Django Developer Reference
             
           </span>
         </div>
@@ -225,7 +221,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../.." class="md-tabs__link">
+      <a href="../../.." class="md-tabs__link">
         
   
   
@@ -246,7 +242,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../django_developer/" class="md-tabs__link">
+        <a href="../../" class="md-tabs__link">
           
   
   
@@ -262,13 +258,11 @@
   
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
-        <a href="../" class="md-tabs__link">
+      <li class="md-tabs__item">
+        <a href="../../../web_developer/" class="md-tabs__link">
           
   
   
@@ -302,7 +296,7 @@
 
 <nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../.." title="Django-MOJO" class="md-nav__button md-logo" aria-label="Django-MOJO" data-md-component="logo">
+    <a href="../../.." title="Django-MOJO" class="md-nav__button md-logo" aria-label="Django-MOJO" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -332,7 +326,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../.." class="md-nav__link">
+      <a href="../../.." class="md-nav__link">
         
   
   
@@ -413,7 +407,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/" class="md-nav__link">
+      <a href="../../" class="md-nav__link">
         
   
   
@@ -495,7 +489,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/core/" class="md-nav__link">
+      <a href="../../core/" class="md-nav__link">
         
   
   
@@ -523,7 +517,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/core/mojo_model/" class="md-nav__link">
+      <a href="../../core/mojo_model/" class="md-nav__link">
         
   
   
@@ -551,7 +545,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/core/decorators/" class="md-nav__link">
+      <a href="../../core/decorators/" class="md-nav__link">
         
   
   
@@ -579,7 +573,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/core/middleware/" class="md-nav__link">
+      <a href="../../core/middleware/" class="md-nav__link">
         
   
   
@@ -607,7 +601,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/core/graphs/" class="md-nav__link">
+      <a href="../../core/graphs/" class="md-nav__link">
         
   
   
@@ -635,7 +629,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/core/cache/" class="md-nav__link">
+      <a href="../../core/cache/" class="md-nav__link">
         
   
   
@@ -725,7 +719,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/helpers/" class="md-nav__link">
+      <a href="../../helpers/" class="md-nav__link">
         
   
   
@@ -753,7 +747,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/helpers/logit/" class="md-nav__link">
+      <a href="../../helpers/logit/" class="md-nav__link">
         
   
   
@@ -781,7 +775,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/helpers/dates/" class="md-nav__link">
+      <a href="../../helpers/dates/" class="md-nav__link">
         
   
   
@@ -809,7 +803,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/helpers/settings/" class="md-nav__link">
+      <a href="../../helpers/settings/" class="md-nav__link">
         
   
   
@@ -837,7 +831,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/helpers/settings_reference/" class="md-nav__link">
+      <a href="../../helpers/settings_reference/" class="md-nav__link">
         
   
   
@@ -865,7 +859,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/helpers/crypto/" class="md-nav__link">
+      <a href="../../helpers/crypto/" class="md-nav__link">
         
   
   
@@ -893,7 +887,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/helpers/request/" class="md-nav__link">
+      <a href="../../helpers/request/" class="md-nav__link">
         
   
   
@@ -921,7 +915,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/helpers/response/" class="md-nav__link">
+      <a href="../../helpers/response/" class="md-nav__link">
         
   
   
@@ -949,7 +943,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/helpers/other/" class="md-nav__link">
+      <a href="../../helpers/other/" class="md-nav__link">
         
   
   
@@ -1039,7 +1033,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/account/" class="md-nav__link">
+      <a href="../" class="md-nav__link">
         
   
   
@@ -1067,7 +1061,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/account/user/" class="md-nav__link">
+      <a href="../user/" class="md-nav__link">
         
   
   
@@ -1095,7 +1089,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/account/group/" class="md-nav__link">
+      <a href="../group/" class="md-nav__link">
         
   
   
@@ -1123,7 +1117,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/account/auth/" class="md-nav__link">
+      <a href="../auth/" class="md-nav__link">
         
   
   
@@ -1213,7 +1207,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/logging/" class="md-nav__link">
+      <a href="../../logging/" class="md-nav__link">
         
   
   
@@ -1241,7 +1235,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/logging/logit/" class="md-nav__link">
+      <a href="../../logging/logit/" class="md-nav__link">
         
   
   
@@ -1269,7 +1263,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/logging/incidents/" class="md-nav__link">
+      <a href="../../logging/incidents/" class="md-nav__link">
         
   
   
@@ -1359,7 +1353,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/files/" class="md-nav__link">
+      <a href="../../files/" class="md-nav__link">
         
   
   
@@ -1387,7 +1381,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/files/file/" class="md-nav__link">
+      <a href="../../files/file/" class="md-nav__link">
         
   
   
@@ -1415,7 +1409,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/files/file_manager/" class="md-nav__link">
+      <a href="../../files/file_manager/" class="md-nav__link">
         
   
   
@@ -1505,7 +1499,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/email/" class="md-nav__link">
+      <a href="../../email/" class="md-nav__link">
         
   
   
@@ -1533,7 +1527,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/email/architecture/" class="md-nav__link">
+      <a href="../../email/architecture/" class="md-nav__link">
         
   
   
@@ -1561,7 +1555,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/email/sending/" class="md-nav__link">
+      <a href="../../email/sending/" class="md-nav__link">
         
   
   
@@ -1589,7 +1583,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/email/receiving/" class="md-nav__link">
+      <a href="../../email/receiving/" class="md-nav__link">
         
   
   
@@ -1679,7 +1673,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/jobs/" class="md-nav__link">
+      <a href="../../jobs/" class="md-nav__link">
         
   
   
@@ -1707,7 +1701,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/jobs/publishing/" class="md-nav__link">
+      <a href="../../jobs/publishing/" class="md-nav__link">
         
   
   
@@ -1735,7 +1729,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/jobs/writing_jobs/" class="md-nav__link">
+      <a href="../../jobs/writing_jobs/" class="md-nav__link">
         
   
   
@@ -1763,7 +1757,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/jobs/job_model/" class="md-nav__link">
+      <a href="../../jobs/job_model/" class="md-nav__link">
         
   
   
@@ -1853,7 +1847,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/metrics/" class="md-nav__link">
+      <a href="../../metrics/" class="md-nav__link">
         
   
   
@@ -1881,7 +1875,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/metrics/recording/" class="md-nav__link">
+      <a href="../../metrics/recording/" class="md-nav__link">
         
   
   
@@ -1909,7 +1903,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/metrics/fetching/" class="md-nav__link">
+      <a href="../../metrics/fetching/" class="md-nav__link">
         
   
   
@@ -1999,7 +1993,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/realtime/" class="md-nav__link">
+      <a href="../../realtime/" class="md-nav__link">
         
   
   
@@ -2027,7 +2021,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/realtime/architecture/" class="md-nav__link">
+      <a href="../../realtime/architecture/" class="md-nav__link">
         
   
   
@@ -2055,7 +2049,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/realtime/publishing/" class="md-nav__link">
+      <a href="../../realtime/publishing/" class="md-nav__link">
         
   
   
@@ -2083,7 +2077,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/realtime/hooks/" class="md-nav__link">
+      <a href="../../realtime/hooks/" class="md-nav__link">
         
   
   
@@ -2119,7 +2113,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/phonehub/" class="md-nav__link">
+      <a href="../../phonehub/" class="md-nav__link">
         
   
   
@@ -2147,7 +2141,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/filevault/" class="md-nav__link">
+      <a href="../../filevault/" class="md-nav__link">
         
   
   
@@ -2175,7 +2169,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../django_developer/docit/" class="md-nav__link">
+      <a href="../../docit/" class="md-nav__link">
         
   
   
@@ -2207,31 +2201,28 @@
       
   
   
-    
   
   
-  
     
     
     
     
-      
-        
-        
       
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
         
           
-          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
             
   
   
@@ -2249,7 +2240,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             
@@ -2267,7 +2258,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../" class="md-nav__link">
+      <a href="../../../web_developer/" class="md-nav__link">
         
   
   
@@ -2301,13 +2292,10 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
@@ -2316,7 +2304,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_2" >
         
           
-          <label class="md-nav__link" for="__nav_3_2" id="__nav_3_2_label" tabindex="">
+          <label class="md-nav__link" for="__nav_3_2" id="__nav_3_2_label" tabindex="0">
             
   
   
@@ -2352,7 +2340,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../core/" class="md-nav__link">
+      <a href="../../../web_developer/core/" class="md-nav__link">
         
   
   
@@ -2380,7 +2368,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../core/authentication/" class="md-nav__link">
+      <a href="../../../web_developer/core/authentication/" class="md-nav__link">
         
   
   
@@ -2408,7 +2396,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../core/request_response/" class="md-nav__link">
+      <a href="../../../web_developer/core/request_response/" class="md-nav__link">
         
   
   
@@ -2436,7 +2424,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../core/filtering/" class="md-nav__link">
+      <a href="../../../web_developer/core/filtering/" class="md-nav__link">
         
   
   
@@ -2464,7 +2452,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../core/pagination/" class="md-nav__link">
+      <a href="../../../web_developer/core/pagination/" class="md-nav__link">
         
   
   
@@ -2492,7 +2480,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../core/graphs/" class="md-nav__link">
+      <a href="../../../web_developer/core/graphs/" class="md-nav__link">
         
   
   
@@ -2525,31 +2513,28 @@
                 
   
   
-    
   
   
-  
     
     
     
     
       
       
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
         
           
-          
         
-      
-    
-    
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_3" checked>
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_3" >
         
           
-          <label class="md-nav__link" for="__nav_3_3" id="__nav_3_3_label" tabindex="">
+          <label class="md-nav__link" for="__nav_3_3" id="__nav_3_3_label" tabindex="0">
             
   
   
@@ -2567,7 +2552,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_3_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_3_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3_3">
             <span class="md-nav__icon md-icon"></span>
             
@@ -2582,19 +2567,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../../web_developer/account/" class="md-nav__link">
         
   
   
@@ -2610,7 +2586,6 @@
   
 
       </a>
-      
     </li>
   
 
@@ -2623,7 +2598,7 @@
   
   
     <li class="md-nav__item">
-      <a href="authentication/" class="md-nav__link">
+      <a href="../../../web_developer/account/authentication/" class="md-nav__link">
         
   
   
@@ -2651,7 +2626,7 @@
   
   
     <li class="md-nav__item">
-      <a href="user/" class="md-nav__link">
+      <a href="../../../web_developer/account/user/" class="md-nav__link">
         
   
   
@@ -2679,7 +2654,7 @@
   
   
     <li class="md-nav__item">
-      <a href="group/" class="md-nav__link">
+      <a href="../../../web_developer/account/group/" class="md-nav__link">
         
   
   
@@ -2707,7 +2682,7 @@
   
   
     <li class="md-nav__item">
-      <a href="admin_portal/" class="md-nav__link">
+      <a href="../../../web_developer/account/admin_portal/" class="md-nav__link">
         
   
   
@@ -2735,7 +2710,7 @@
   
   
     <li class="md-nav__item">
-      <a href="api_keys/" class="md-nav__link">
+      <a href="../../../web_developer/account/api_keys/" class="md-nav__link">
         
   
   
@@ -2777,13 +2752,10 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
@@ -2792,7 +2764,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_4" >
         
           
-          <label class="md-nav__link" for="__nav_3_4" id="__nav_3_4_label" tabindex="">
+          <label class="md-nav__link" for="__nav_3_4" id="__nav_3_4_label" tabindex="0">
             
   
   
@@ -2828,7 +2800,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../logging/" class="md-nav__link">
+      <a href="../../../web_developer/logging/" class="md-nav__link">
         
   
   
@@ -2856,7 +2828,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../logging/logs/" class="md-nav__link">
+      <a href="../../../web_developer/logging/logs/" class="md-nav__link">
         
   
   
@@ -2884,7 +2856,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../logging/incidents/" class="md-nav__link">
+      <a href="../../../web_developer/logging/incidents/" class="md-nav__link">
         
   
   
@@ -2926,13 +2898,10 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
@@ -2941,7 +2910,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_5" >
         
           
-          <label class="md-nav__link" for="__nav_3_5" id="__nav_3_5_label" tabindex="">
+          <label class="md-nav__link" for="__nav_3_5" id="__nav_3_5_label" tabindex="0">
             
   
   
@@ -2977,7 +2946,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../files/" class="md-nav__link">
+      <a href="../../../web_developer/files/" class="md-nav__link">
         
   
   
@@ -3005,7 +2974,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../files/upload/" class="md-nav__link">
+      <a href="../../../web_developer/files/upload/" class="md-nav__link">
         
   
   
@@ -3033,7 +3002,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../files/files/" class="md-nav__link">
+      <a href="../../../web_developer/files/files/" class="md-nav__link">
         
   
   
@@ -3075,13 +3044,10 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
@@ -3090,7 +3056,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_6" >
         
           
-          <label class="md-nav__link" for="__nav_3_6" id="__nav_3_6_label" tabindex="">
+          <label class="md-nav__link" for="__nav_3_6" id="__nav_3_6_label" tabindex="0">
             
   
   
@@ -3126,7 +3092,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../email/" class="md-nav__link">
+      <a href="../../../web_developer/email/" class="md-nav__link">
         
   
   
@@ -3154,7 +3120,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../email/email/" class="md-nav__link">
+      <a href="../../../web_developer/email/email/" class="md-nav__link">
         
   
   
@@ -3196,13 +3162,10 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
@@ -3211,7 +3174,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_7" >
         
           
-          <label class="md-nav__link" for="__nav_3_7" id="__nav_3_7_label" tabindex="">
+          <label class="md-nav__link" for="__nav_3_7" id="__nav_3_7_label" tabindex="0">
             
   
   
@@ -3247,7 +3210,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../jobs/" class="md-nav__link">
+      <a href="../../../web_developer/jobs/" class="md-nav__link">
         
   
   
@@ -3275,7 +3238,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../jobs/jobs/" class="md-nav__link">
+      <a href="../../../web_developer/jobs/jobs/" class="md-nav__link">
         
   
   
@@ -3317,13 +3280,10 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
@@ -3332,7 +3292,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_8" >
         
           
-          <label class="md-nav__link" for="__nav_3_8" id="__nav_3_8_label" tabindex="">
+          <label class="md-nav__link" for="__nav_3_8" id="__nav_3_8_label" tabindex="0">
             
   
   
@@ -3368,7 +3328,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../metrics/" class="md-nav__link">
+      <a href="../../../web_developer/metrics/" class="md-nav__link">
         
   
   
@@ -3396,7 +3356,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../metrics/metrics/" class="md-nav__link">
+      <a href="../../../web_developer/metrics/metrics/" class="md-nav__link">
         
   
   
@@ -3438,13 +3398,10 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
@@ -3453,7 +3410,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_9" >
         
           
-          <label class="md-nav__link" for="__nav_3_9" id="__nav_3_9_label" tabindex="">
+          <label class="md-nav__link" for="__nav_3_9" id="__nav_3_9_label" tabindex="0">
             
   
   
@@ -3489,7 +3446,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../realtime/" class="md-nav__link">
+      <a href="../../../web_developer/realtime/" class="md-nav__link">
         
   
   
@@ -3517,7 +3474,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../realtime/websocket/" class="md-nav__link">
+      <a href="../../../web_developer/realtime/websocket/" class="md-nav__link">
         
   
   
@@ -3553,7 +3510,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../phonehub/" class="md-nav__link">
+      <a href="../../../web_developer/phonehub/" class="md-nav__link">
         
   
   
@@ -3581,7 +3538,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../filevault/" class="md-nav__link">
+      <a href="../../../web_developer/filevault/" class="md-nav__link">
         
   
   
@@ -3609,7 +3566,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../docit/" class="md-nav__link">
+      <a href="../../../web_developer/docit/" class="md-nav__link">
         
   
   
@@ -3657,6 +3614,158 @@
     
   
   
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#model-geolocatedip" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Model: GeoLocatedIP
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Model: GeoLocatedIP">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#key-fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key Fields
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#computed-properties" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Computed Properties
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#key-methods" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key Methods
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#restmeta" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RestMeta
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#graphs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Graphs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Settings
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rest-endpoints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        REST Endpoints
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="REST Endpoints">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#getpost-systemgeoip-list-create" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GET/POST system/geoip — List / Create
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#getputdelete-systemgeoippk-detail-update-delete" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GET/PUT/DELETE system/geoip/&lt;pk&gt; — Detail / Update / Delete
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get-systemgeoiplookup-public-ip-lookup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GET system/geoip/lookup — Public IP Lookup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get-systemgeoiptime-public-ip-time-lookup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GET system/geoip/time — Public IP Time Lookup
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
 </nav>
                   </div>
                 </div>
@@ -3675,26 +3784,254 @@
   
 
 
-<h1 id="account-authentication-rest-api-reference">Account &amp; Authentication — REST API Reference<a class="headerlink" href="#account-authentication-rest-api-reference" title="Permanent link">&para;</a></h1>
-<ul>
-<li><a href="authentication/">Authentication</a> — Login, token refresh, password reset</li>
-<li><a href="passkeys/">Passkeys</a> — Passwordless login with WebAuthn/FIDO2</li>
-<li><a href="mfa_totp/">TOTP / Authenticator App</a> — 2FA and standalone login with Google Authenticator etc.</li>
-<li><a href="mfa_sms/">SMS OTP</a> — 2FA and standalone login via SMS code</li>
-<li><a href="magic_login/">Magic Login Links</a> — Passwordless login via emailed link</li>
-<li><a href="oauth/">OAuth / Social Login</a> — Login with Google (and more)</li>
-<li><a href="email_verification/">Email &amp; Phone Verification</a> — Verification gates, send/verify flow, invite links</li>
-<li><a href="email_change/">Email Change</a> — Self-service email address change with password confirmation</li>
-<li><a href="phone_change/">Phone Number Change</a> — Self-service phone number change with OTP verification</li>
-<li><a href="user_self_management/">User Self-Management</a> — Everything a logged-in user can do for their own account (profile, avatar, password, email, phone, passkeys, TOTP, files, notifications, activity log)</li>
-<li><a href="user/">User API</a> — User profile, registration, password reset</li>
-<li><a href="group/">Group API</a> — Groups, membership, permissions</li>
-<li><a href="admin_portal/">Admin Portal API Guide</a> — Building admin consoles (users, groups, secure settings)</li>
-<li><a href="api_keys/">API Keys</a> — Long-lived tokens for programmatic access</li>
-<li><a href="custom_auth_models/">Custom Auth Models</a> — JWT, OAuth, and passkeys for non-User models (e.g. game.Player)</li>
-<li><a href="notifications/">Notifications</a> — Inbox, mark read, WebSocket delivery</li>
-<li><a href="geoip/">GeoIP</a> — IP geolocation and time lookup endpoints</li>
-</ul>
+<h1 id="geoip-django-developer-reference">GeoIP — Django Developer Reference<a class="headerlink" href="#geoip-django-developer-reference" title="Permanent link">&para;</a></h1>
+<p>IP geolocation, threat intelligence, and time lookup via the <code>GeoLocatedIP</code> model and REST endpoints.</p>
+<h2 id="model-geolocatedip">Model: <code>GeoLocatedIP</code><a class="headerlink" href="#model-geolocatedip" title="Permanent link">&para;</a></h2>
+<p>Located at <code>mojo.apps.account.models.geolocated_ip</code>.</p>
+<p>Caches geolocation results per IP to reduce redundant API calls. Tracks security metadata (VPN, Tor, proxy, cloud, known attacker/abuser) and supports incident-driven threat escalation.</p>
+<h3 id="key-fields">Key Fields<a class="headerlink" href="#key-fields" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ip_address</code></td>
+<td>Unique, indexed IP address</td>
+</tr>
+<tr>
+<td><code>subnet</code></td>
+<td>First three octets, used for subnet-based fallback lookups</td>
+</tr>
+<tr>
+<td><code>country_code</code>, <code>country_name</code>, <code>region</code>, <code>city</code>, <code>postal_code</code></td>
+<td>Location fields</td>
+</tr>
+<tr>
+<td><code>latitude</code>, <code>longitude</code></td>
+<td>Coordinates</td>
+</tr>
+<tr>
+<td><code>timezone</code></td>
+<td>IANA timezone string (e.g. <code>America/New_York</code>)</td>
+</tr>
+<tr>
+<td><code>is_tor</code>, <code>is_vpn</code>, <code>is_proxy</code>, <code>is_cloud</code>, <code>is_datacenter</code>, <code>is_mobile</code></td>
+<td>Connection type flags</td>
+</tr>
+<tr>
+<td><code>is_known_attacker</code>, <code>is_known_abuser</code></td>
+<td>Threat flags</td>
+</tr>
+<tr>
+<td><code>threat_level</code></td>
+<td><code>low</code>, <code>medium</code>, <code>high</code>, or <code>critical</code></td>
+</tr>
+<tr>
+<td><code>is_blocked</code>, <code>blocked_at</code>, <code>blocked_reason</code></td>
+<td>Incident-driven blocking</td>
+</tr>
+<tr>
+<td><code>provider</code></td>
+<td>Source of the geolocation data</td>
+</tr>
+<tr>
+<td><code>expires_at</code></td>
+<td>Cache expiration (internal records never expire)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="computed-properties">Computed Properties<a class="headerlink" href="#computed-properties" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>is_expired</code></td>
+<td>True if the cached data needs a refresh</td>
+</tr>
+<tr>
+<td><code>is_threat</code></td>
+<td>True if <code>is_known_attacker</code> or <code>is_known_abuser</code></td>
+</tr>
+<tr>
+<td><code>is_suspicious</code></td>
+<td>True if Tor, VPN, proxy, or high/critical threat level</td>
+</tr>
+<tr>
+<td><code>risk_score</code></td>
+<td>0–100 score based on threat indicators</td>
+</tr>
+</tbody>
+</table>
+<h3 id="key-methods">Key Methods<a class="headerlink" href="#key-methods" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GeoLocatedIP.geolocate(ip_address, auto_refresh=True)</code></td>
+<td>Get or create a record; refreshes if expired</td>
+</tr>
+<tr>
+<td><code>GeoLocatedIP.lookup(ip_address)</code></td>
+<td>Alias for <code>geolocate()</code></td>
+</tr>
+<tr>
+<td><code>instance.refresh(check_threats=False)</code></td>
+<td>Re-fetch geolocation data from provider</td>
+</tr>
+<tr>
+<td><code>instance.check_threats()</code></td>
+<td>Run threat intelligence checks</td>
+</tr>
+<tr>
+<td><code>instance.update_threat_from_incident(priority)</code></td>
+<td>Escalate threat level from incident priority (0–15 scale)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="restmeta">RestMeta<a class="headerlink" href="#restmeta" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>VIEW_PERMS</code></td>
+<td><code>['manage_users']</code></td>
+</tr>
+<tr>
+<td><code>SEARCH_FIELDS</code></td>
+<td><code>ip_address</code>, <code>city</code>, <code>country_name</code>, <code>asn_org</code>, <code>isp</code></td>
+</tr>
+<tr>
+<td><code>POST_SAVE_ACTIONS</code></td>
+<td><code>refresh</code>, <code>threat_analysis</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="graphs">Graphs<a class="headerlink" href="#graphs" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Graph</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>default</code></td>
+<td>All fields except <code>data</code> and <code>provider</code>, plus computed extras</td>
+</tr>
+<tr>
+<td><code>basic</code></td>
+<td>Core location + threat fields only</td>
+</tr>
+<tr>
+<td><code>detailed</code></td>
+<td>All fields including raw <code>data</code></td>
+</tr>
+</tbody>
+</table>
+<p>All graphs include <code>is_threat</code>, <code>is_suspicious</code>, and <code>risk_score</code> as extras.</p>
+<h3 id="settings">Settings<a class="headerlink" href="#settings" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GEOLOCATION_ALLOW_SUBNET_LOOKUP</code></td>
+<td><code>False</code></td>
+<td>Allow fallback to subnet match when exact IP not found</td>
+</tr>
+<tr>
+<td><code>GEOLOCATION_CACHE_DURATION_DAYS</code></td>
+<td><code>90</code></td>
+<td>Days before a cached record expires</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="rest-endpoints">REST Endpoints<a class="headerlink" href="#rest-endpoints" title="Permanent link">&para;</a></h2>
+<p>All endpoints are under the <code>account</code> app prefix (e.g. <code>/api/account/system/geoip</code>).</p>
+<h3 id="getpost-systemgeoip-list-create"><code>GET/POST system/geoip</code> — List / Create<a class="headerlink" href="#getpost-systemgeoip-list-create" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>GET  /api/account/system/geoip
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>POST /api/account/system/geoip
+</code></pre></div>
+<p>Standard CRUD via <code>GeoLocatedIP.on_rest_request</code>. Requires <code>manage_users</code> permission (from RestMeta).</p>
+<h3 id="getputdelete-systemgeoippk-detail-update-delete"><code>GET/PUT/DELETE system/geoip/&lt;pk&gt;</code> — Detail / Update / Delete<a class="headerlink" href="#getputdelete-systemgeoippk-detail-update-delete" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>GET    /api/account/system/geoip/123
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>PUT    /api/account/system/geoip/123
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>DELETE /api/account/system/geoip/123
+</code></pre></div>
+<p>Requires <code>manage_users</code> permission.</p>
+<h3 id="get-systemgeoiplookup-public-ip-lookup"><code>GET system/geoip/lookup</code> — Public IP Lookup<a class="headerlink" href="#get-systemgeoiplookup-public-ip-lookup" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>GET /api/account/system/geoip/lookup?ip=1.2.3.4
+</code></pre></div>
+<p><strong>Public endpoint</strong> — no authentication required. Rate limited to 30 requests/minute per IP.</p>
+<table>
+<thead>
+<tr>
+<th>Param</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ip</code></td>
+<td>Yes</td>
+<td>IP address to geolocate</td>
+</tr>
+<tr>
+<td><code>auto_refresh</code></td>
+<td>No</td>
+<td>Refresh expired cache (default: <code>true</code>)</td>
+</tr>
+</tbody>
+</table>
+<p>Returns the <code>GeoLocatedIP</code> record via <code>on_rest_get</code> (default graph).</p>
+<h3 id="get-systemgeoiptime-public-ip-time-lookup"><code>GET system/geoip/time</code> — Public IP Time Lookup<a class="headerlink" href="#get-systemgeoiptime-public-ip-time-lookup" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>GET /api/account/system/geoip/time
+</code></pre></div>
+<p><strong>Public endpoint</strong> — no authentication required. Rate limited to 30 requests/minute per IP. Uses the caller's IP address automatically.</p>
+<p><strong>Response:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">    </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">    </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">        </span><span class="nt">&quot;ip&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;1.2.3.4&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">        </span><span class="nt">&quot;timezone&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;America/New_York&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">        </span><span class="nt">&quot;epoch&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1711300800</span><span class="p">,</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">        </span><span class="nt">&quot;iso&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-03-24T12:00:00-04:00&quot;</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="p">}</span>
+</code></pre></div>
+<p>Returns an error if timezone data is not available for the IP:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">    </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">    </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Timezone not available for this IP&quot;</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="p">}</span>
+</code></pre></div>
 
 
 
@@ -3750,10 +4087,10 @@
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.suggest", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.suggest", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
       
     
   </body>
