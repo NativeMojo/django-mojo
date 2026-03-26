@@ -1,5 +1,10 @@
 ## v1.0.59 - (current)
 
+## v1.0.77 - March 26, 2026
+
+bugfix google oauth
+
+
 ## v1.0.76 - March 24, 2026
 
 new ip time
