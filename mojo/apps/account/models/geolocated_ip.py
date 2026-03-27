@@ -64,9 +64,15 @@ class GeoLocatedIP(models.Model, MojoModel):
     )
 
     # Incident-driven blocking
-    is_blocked = models.BooleanField(default=False, db_index=True, help_text="Is this IP blocked?")
+    is_blocked = models.BooleanField(default=False, db_index=True, help_text="Is this IP currently blocked?")
     blocked_at = models.DateTimeField(null=True, blank=True, help_text="When this IP was blocked")
-    blocked_reason = models.CharField(max_length=50, null=True, blank=True, help_text="auto or manual")
+    blocked_until = models.DateTimeField(null=True, blank=True, db_index=True, help_text="When the block expires (null = permanent)")
+    blocked_reason = models.CharField(max_length=255, null=True, blank=True, help_text="Why this IP was blocked")
+    block_count = models.IntegerField(default=0, help_text="Number of times this IP has been blocked")
+
+    # Whitelisting — takes precedence over all blocking
+    is_whitelisted = models.BooleanField(default=False, db_index=True, help_text="Whitelisted IPs are never blocked")
+    whitelisted_reason = models.CharField(max_length=255, null=True, blank=True, help_text="Why this IP is whitelisted")
 
     # Auditing and source tracking
     provider = models.CharField(max_length=50, null=True, blank=True)
@@ -82,12 +88,14 @@ class GeoLocatedIP(models.Model, MojoModel):
             models.Index(fields=['is_cloud', 'is_datacenter']),
             models.Index(fields=['is_mobile', 'mobile_carrier']),
             models.Index(fields=['is_blocked', 'threat_level']),
+            models.Index(fields=['is_blocked', 'blocked_until']),
+            models.Index(fields=['is_whitelisted']),
         ]
 
     class RestMeta:
         VIEW_PERMS = ['manage_users']
         SEARCH_FIELDS = ["ip_address", "city", "country_name", "asn_org", "isp"]
-        POST_SAVE_ACTIONS = ["refresh", "threat_analysis"],
+        POST_SAVE_ACTIONS = ["refresh", "threat_analysis", "block", "unblock", "whitelist", "unwhitelist"],
         GRAPHS = {
             'default': {
                 'extra': ['is_threat', 'is_suspicious', 'risk_score'],
@@ -96,8 +104,9 @@ class GeoLocatedIP(models.Model, MojoModel):
             'basic': {
                 'fields': ['id', 'ip_address', 'country_code', 'country_name', 'city', 'region',
                            'is_tor', 'is_vpn', 'is_proxy', 'is_known_attacker', 'is_known_abuser',
-                           'threat_level', 'is_blocked', 'blocked_at', 'blocked_reason'],
-                'extra': ['is_threat', 'is_suspicious', 'risk_score'],
+                           'threat_level', 'is_blocked', 'blocked_at', 'blocked_until',
+                           'blocked_reason', 'block_count', 'is_whitelisted', 'whitelisted_reason'],
+                'extra': ['is_threat', 'is_suspicious', 'risk_score', 'block_active'],
             },
             'detailed': {
                 # Include all fields including raw data
@@ -121,6 +130,17 @@ class GeoLocatedIP(models.Model, MojoModel):
 
         flag_str = f" [{', '.join(flags)}]" if flags else ""
         return f"{self.ip_address} ({self.city}, {self.country_code}){flag_str}"
+
+    @property
+    def block_active(self):
+        """True if the IP is blocked AND the block hasn't expired."""
+        if not self.is_blocked:
+            return False
+        if self.is_whitelisted:
+            return False
+        if self.blocked_until and dates.utcnow() > self.blocked_until:
+            return False
+        return True
 
     @property
     def is_expired(self):
@@ -233,8 +253,7 @@ class GeoLocatedIP(models.Model, MojoModel):
         """
         Called when a new incident is created for this IP.
         Escalates threat_level based on incident priority (0-15 scale).
-        Never downgrades. Auto-sets is_blocked once when threat reaches high/critical,
-        unless the IP was previously manually unblocked (blocked_reason == 'unblocked').
+        Never downgrades. Whitelisted IPs are never auto-blocked.
         """
         if priority >= 13:
             new_level = 'critical'
@@ -254,14 +273,133 @@ class GeoLocatedIP(models.Model, MojoModel):
         self.threat_level = new_level
         update_fields = ['threat_level']
 
-        # Auto-block only once: if not already blocked and not previously manually unblocked
-        if not self.is_blocked and self.blocked_reason != 'unblocked' and new_level in ('high', 'critical'):
+        # Never auto-block whitelisted IPs
+        if self.is_whitelisted:
+            self.save(update_fields=update_fields)
+            return
+
+        # Auto-block when threat reaches high/critical
+        if not self.is_blocked and new_level in ('high', 'critical'):
             self.is_blocked = True
             self.blocked_at = dates.utcnow()
-            self.blocked_reason = 'auto'
-            update_fields += ['is_blocked', 'blocked_at', 'blocked_reason']
+            self.blocked_reason = 'auto:threat_escalation'
+            self.block_count = (self.block_count or 0) + 1
+            update_fields += ['is_blocked', 'blocked_at', 'blocked_reason', 'block_count']
 
         self.save(update_fields=update_fields)
+
+    def block(self, reason="manual", ttl=None, broadcast=True):
+        """
+        Block this IP fleet-wide. Updates the database AND broadcasts
+        the block to all instances via the job system.
+
+        Args:
+            reason: Why the IP is being blocked
+            ttl: Seconds until auto-unblock (None = permanent)
+            broadcast: If True, broadcast to all instances (set False for DB-only updates)
+        Returns:
+            bool: True if the IP was blocked
+        """
+        if self.is_whitelisted:
+            return False
+
+        self.is_blocked = True
+        self.blocked_at = dates.utcnow()
+        self.blocked_reason = reason
+        self.block_count = (self.block_count or 0) + 1
+        ttl = int(ttl) if ttl else 0
+        self.blocked_until = dates.utcnow() + timedelta(seconds=ttl) if ttl else None
+        self.save(update_fields=[
+            'is_blocked', 'blocked_at', 'blocked_until',
+            'blocked_reason', 'block_count',
+        ])
+
+        if broadcast:
+            try:
+                jobs.broadcast_execute(
+                    "mojo.apps.incident.asyncjobs.block_ip",
+                    {"ips": [self.ip_address], "ttl": ttl },
+                )
+            except Exception:
+                pass
+
+        return True
+
+    def unblock(self, reason="manual", broadcast=True):
+        """
+        Unblock this IP fleet-wide. Updates the database AND broadcasts
+        the unblock to all instances.
+        """
+        self.is_blocked = False
+        self.blocked_reason = f"unblocked: {reason}"
+        self.blocked_until = None
+        self.save(update_fields=['is_blocked', 'blocked_reason', 'blocked_until'])
+
+        if broadcast:
+            try:
+                jobs.broadcast_execute(
+                    "mojo.apps.incident.asyncjobs.unblock_ip",
+                    {"ips": [self.ip_address]},
+                )
+            except Exception:
+                pass
+
+    def whitelist(self, reason="manual"):
+        """
+        Whitelist this IP. Unblocks fleet-wide if currently blocked
+        and prevents future auto-blocks.
+        """
+        was_blocked = self.is_blocked
+        self.is_whitelisted = True
+        self.whitelisted_reason = reason
+        if self.is_blocked:
+            self.is_blocked = False
+            self.blocked_until = None
+        self.save(update_fields=[
+            'is_whitelisted', 'whitelisted_reason',
+            'is_blocked', 'blocked_until',
+        ])
+
+        if was_blocked:
+            try:
+                jobs.broadcast_execute(
+                    "mojo.apps.incident.asyncjobs.unblock_ip",
+                    {"ips": [self.ip_address]},
+                )
+            except Exception:
+                pass
+
+    def unwhitelist(self):
+        """Remove whitelist status."""
+        self.is_whitelisted = False
+        self.whitelisted_reason = None
+        self.save(update_fields=['is_whitelisted', 'whitelisted_reason'])
+
+    def on_action_block(self, value):
+        if not isinstance(value, dict):
+            username = self.active_user.username if self.active_user else "unknown"
+            value = {"reason": f"manual block: by {username}", "ttl": 600 }
+        reason = value.get("reason", "")
+        self.log(f"IP Blocked: {self.ip_address} - {reason}", "firewall:block")
+        self.block(reason=reason, ttl=value.get("ttl"))
+
+    def on_action_unblock(self, value):
+        if not isinstance(value, str):
+            username = self.active_user.username if self.active_user else "unknown"
+            value = f"manual unblock: by {username}"
+        self.log(f"IP UNBlocked: {self.ip_address} - {value}", "firewall:unblock")
+        self.unblock(reason=value)
+
+    def on_action_whitelist(self, value):
+        if not isinstance(value, str):
+            username = self.active_user.username if self.active_user else "unknown"
+            value = f"manual whitelist: by {username}"
+        self.log(f"IP Whitelisted: {self.ip_address} - {value}", "firewall:whitelist")
+        self.whitelist(reason=value)
+
+    def on_action_unwhitelist(self, value):
+        self.log(f"IP UNWhitelisted: {self.ip_address}", "firewall:unwhitelist")
+        self.unwhitelist()
 
     def on_action_refresh(self, value):
         self.refresh(check_threats=True)

@@ -1143,6 +1143,14 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
                 return {"response": {"type": "ack", "key": key, "value": value}}
 
 
+        # Chat message routing
+        if mtype and mtype.startswith("chat_"):
+            from mojo.apps.chat.handler import handle_chat_message
+            result = handle_chat_message(self, data)
+            if result:
+                return {"response": result}
+            return None
+
         # Default ack for unrecognized messages
         return {"response": {"type": "ack"}}
 
@@ -1157,6 +1165,24 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         self.save(update_fields=["metadata"])
 
     def on_realtime_can_subscribe(self, topic):
+        if topic.startswith("chat:"):
+            from mojo.apps.chat.models import ChatRoom, ChatMembership
+            try:
+                room_id = int(topic.split(":")[1])
+            except (IndexError, ValueError):
+                return False
+            room = ChatRoom.objects.filter(pk=room_id).first()
+            if not room:
+                return False
+            # Banned users cannot subscribe
+            membership = ChatMembership.objects.filter(room=room, user=self).first()
+            if membership and membership.status == "banned":
+                return False
+            # Group-linked room: check group permission
+            if room.group:
+                return room.group.user_has_permission(self, ["chat", "manage_chat"])
+            # Non-group room: check membership exists and is active/muted
+            return membership is not None and membership.status in ("active", "muted")
         if topic.startswith("group:"):
             from .group import Group
             if self.has_permission(["view_groups", "manage_groups"]):

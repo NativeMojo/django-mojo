@@ -8,8 +8,6 @@ Every part of the framework should treat the incident system as its primary chan
 
 The core insight is that **individual events are rarely meaningful on their own**. A single failed login is noise. Fifty failed logins from the same IP in five minutes is an attack. The incident system exists to bridge that gap automatically, without requiring developers to think about thresholds, deduplication, or alerting in their application code.
 
-As the framework grows, the incident system will expand into a full analysis engine. Every component that participates today will automatically benefit from improvements to rule evaluation, anomaly detection, and automated response — with no changes to calling code.
-
 ---
 
 ## Architecture Overview
@@ -20,11 +18,153 @@ Event (raw signal)
     → Rule.check_rule()            (field-level conditions on event.metadata)
   → threshold/bundling logic       (pending → new transition)
   → Incident (correlated group)
-    → handler chain               (job, email, notify, ticket)
+    → handler chain               (job, email, notify, ticket, block)
     → Ticket (actionable work)
 ```
 
 Events are the input. Incidents are the output. Rules, RuleSets, and handlers are the processing pipeline in between.
+
+---
+
+## Fleet-Wide IP Blocking
+
+The incident system is the **sole authority** for IP blocking decisions. OSSEC and other detection tools report events — they never block directly.
+
+### Design principles
+
+1. **OSSEC detects, the incident engine decides.** OSSEC active response (local blocking) is disabled. OSSEC only reports events via webhook.
+2. **GeoLocatedIP is the source of truth.** All block state lives in the `GeoLocatedIP` model — `is_blocked`, `blocked_until`, `blocked_reason`, `is_whitelisted`.
+3. **Broadcast, not polling.** When a block decision is made, it broadcasts instantly to all instances via `jobs.broadcast_execute()`. No 60-second polling window.
+4. **Whitelist overrides everything.** A whitelisted IP is never blocked, even by auto-escalation rules.
+5. **Admin controls via CRUD + POST_SAVE_ACTIONS.** No dedicated REST endpoints for blocking — use the standard `GeoLocatedIP` REST interface with actions (`block`, `unblock`, `whitelist`, `unwhitelist`).
+
+### How a block flows
+
+```
+OSSEC detects suspicious activity
+  → reports via POST /api/incident/ossec/alert (event only, no blocking)
+  → Event created → RuleSet evaluates
+  → RuleSet with block:// handler fires
+  → GeoLocatedIP.block(reason, ttl) called
+    → DB updated (is_blocked=True, blocked_until, blocked_reason)
+    → jobs.broadcast_execute("mojo.apps.incident.asyncjobs.block_ip", {ips, ttl})
+    → Every instance's job runner picks up the broadcast
+    → firewall.block(ip) applies iptables DROP rule via sudo
+```
+
+### How an unblock flows
+
+```
+Cron (every minute): sweep_expired_blocks
+  → Finds GeoLocatedIP where is_blocked=True AND blocked_until <= now
+  → Bulk DB update: is_blocked=False
+  → jobs.broadcast_execute("mojo.apps.incident.asyncjobs.unblock_ip", {ips})
+  → Every instance removes the iptables rule
+```
+
+Admins can also unblock immediately via the `unblock` action on `GeoLocatedIP`.
+
+### firewall.py — iptables enforcement
+
+`mojo.apps.incident.firewall` is the low-level iptables interface. It is only ever called by the job agent (running as `ec2-user` with passwordless sudo). It refuses to run as any other user.
+
+| Function | Description |
+|---|---|
+| `block(ip)` | Idempotent — adds iptables DROP rule for INPUT (and FORWARD if forwarding is enabled) |
+| `unblock(ip)` | Idempotent — removes DROP rules |
+| `is_blocked(ip)` | Checks `iptables-save` output |
+| `ipset_load(name, cidrs)` | Creates/replaces a kernel ipset with the given CIDRs and adds an iptables DROP rule for it |
+| `ipset_remove(name)` | Removes a kernel ipset and its associated iptables rule |
+
+All IPs are validated against a strict regex before touching iptables. Commands run via `sudo /sbin/iptables`.
+
+### Async jobs
+
+| Job | Type | Description |
+|---|---|---|
+| `block_ip` | Broadcast | Applies iptables blocks on the local instance. Payload: `{ips: [...], ttl: 600}` |
+| `unblock_ip` | Broadcast | Removes iptables blocks on the local instance. Payload: `{ips: [...]}` |
+| `sweep_expired_blocks` | Cron (every minute) | Finds expired blocks in DB, updates DB, broadcasts fleet-wide unblock |
+| `prune_events` | Cron (daily 9:45) | Deletes events older than `INCIDENT_EVENT_PRUNE_DAYS` with level < 6 |
+
+### Why no public blocking endpoints?
+
+Previously there were `ossec/firewall` and `ossec/firewall/block` endpoints. These were removed because:
+
+- **Security risk**: Public endpoints that can block arbitrary IPs are an attack surface. Anyone who discovers them could denial-of-service legitimate users.
+- **Single authority**: Block decisions must flow through the incident engine's rule evaluation, not bypass it via direct API calls.
+- **Admin actions use CRUD**: Admins block/unblock via `GeoLocatedIP` POST_SAVE_ACTIONS, which are permission-gated (`manage_users`).
+
+---
+
+## Bulk Blocking via IPSet
+
+The `IPSet` model manages ipset-based bulk IP blocking for entire countries, datacenter ranges, and abuse lists. Unlike per-IP blocking via `GeoLocatedIP`, IPSet operates on large CIDR sets (thousands to hundreds of thousands of entries) using the Linux `ipset` kernel module for O(1) lookups.
+
+### Model Fields
+
+| Field | Description |
+|---|---|
+| `name` | Unique ipset name (e.g., `country_cn`, `abuse_abuseipdb`) |
+| `kind` | Type of set: `country`, `datacenter`, `abuse`, `custom` |
+| `source` | Data source: `ipdeny`, `abuseipdb`, `manual` |
+| `source_url` | URL to fetch CIDR data from (auto-populated for known sources) |
+| `source_key` | API key or identifier for the source (e.g., country code, API key) |
+| `data` | TextField containing the CIDR list (one per line) |
+| `is_enabled` | Whether this ipset is active in iptables |
+| `cidr_count` | Number of CIDRs currently loaded |
+| `last_synced` | Timestamp of last successful sync to fleet |
+| `sync_error` | Last error message if sync failed |
+
+### POST_SAVE_ACTIONS
+
+| Action | Description |
+|---|---|
+| `sync` | Broadcast the ipset data to all instances (loads into ipset + iptables) |
+| `enable` | Enable the ipset and sync fleet-wide |
+| `disable` | Disable the ipset and remove from fleet-wide iptables |
+| `refresh_source` | Re-fetch data from the source URL, update `data` field, and sync |
+
+### How it works
+
+1. CIDR data is stored directly in the database as a TextField (one CIDR per line).
+2. When synced, the data is broadcast to all instances via `jobs.broadcast_execute()`.
+3. Each instance creates a kernel ipset (`ipset create <name> hash:net`), loads the CIDRs, and adds an iptables DROP rule referencing the set.
+4. Lookups are O(1) regardless of set size, making it practical to block entire countries or large abuse lists.
+
+### REST Endpoint
+
+| Endpoint | Auth | Description |
+|---|---|---|
+| `/api/incident/ipset` | `manage_users` | Standard CRUD + POST_SAVE_ACTIONS for IPSet management |
+
+### Setup Examples
+
+Use the helper classmethods to create common configurations:
+
+```python
+from mojo.apps.incident.models import IPSet
+
+# Block traffic from specific countries
+IPSet.create_country("cn")
+IPSet.create_country("ru")
+IPSet.create_country("ir")
+
+# Block known abusive IPs via AbuseIPDB
+IPSet.create_abuse_list("your-api-key-here")
+```
+
+### Cron: Weekly Refresh
+
+A weekly cron job (Sunday 3:00 AM) calls `refresh_ipsets`, which iterates all enabled IPSet records, re-fetches data from their configured sources, updates the `data` field, and syncs the updated sets fleet-wide.
+
+### Async Jobs
+
+| Job | Type | Description |
+|---|---|---|
+| `sync_ipset` | Broadcast | Loads ipset data on the local instance (creates ipset, loads CIDRs, adds iptables rule) |
+| `remove_ipset` | Broadcast | Removes an ipset and its iptables rule from the local instance |
+| `refresh_ipsets` | Cron (weekly, Sunday 3:00 AM) | Re-fetches source data for all enabled IPSets and syncs fleet-wide |
 
 ---
 
@@ -39,6 +179,7 @@ Events are the input. Incidents are the output. Rules, RuleSets, and handlers ar
 | `IncidentHistory` | Audit trail of incident state changes |
 | `Ticket` | An actionable work item linked to an incident |
 | `TicketNote` | A note or status change attached to a ticket |
+| `IPSet` | A bulk IP blocking set (country, datacenter, abuse list) managed via ipset |
 
 ---
 
@@ -213,7 +354,7 @@ RuleSet.objects.create(
     name="Brute Force Detection",
     bundle_by=BundleBy.SOURCE_IP,
     bundle_minutes=10,
-    handler="ticket://?status=new&priority=8&category=security",
+    handler="block://?ttl=3600,ticket://?status=new&priority=8&category=security",
     metadata={
         "min_count": 10,           # Wait for 10 matching events
         "window_minutes": 10,      # Within 10 minutes
@@ -222,7 +363,7 @@ RuleSet.objects.create(
 )
 ```
 
-Until 10 events accumulate, the incident sits at `pending`. Once the threshold is crossed, it transitions to `new` and the handler fires.
+Until 10 events accumulate, the incident sits at `pending`. Once the threshold is crossed, it transitions to `new` and the handler fires — blocking the IP fleet-wide and creating a ticket.
 
 ---
 
@@ -237,12 +378,13 @@ job://app.module.function
 email://admin@example.com
 notify://user_id_or_channel
 ticket://?status=open&priority=8&category=security&title=Investigate
+block://?ttl=3600
 ```
 
 Chained example:
 
 ```
-ticket://?status=new&priority=9&category=security,email://security@example.com
+block://?ttl=3600,ticket://?status=new&priority=9&category=security,email://security@example.com
 ```
 
 ### Handler Types
@@ -253,6 +395,16 @@ ticket://?status=new&priority=9&category=security,email://security@example.com
 | `email://` | Sends a notification email to the recipient |
 | `notify://` | Sends a push/in-app notification to a user or channel |
 | `ticket://` | Creates a Ticket linked to the incident |
+| `block://` | Blocks the event's `source_ip` fleet-wide via `GeoLocatedIP.block()` |
+
+### Block Handler Parameters
+
+| Param | Default | Description |
+|---|---|---|
+| `ttl` | `600` | Seconds until auto-unblock (0 or omit = permanent) |
+| `reason` | `auto:ruleset` | Reason recorded in `GeoLocatedIP.blocked_reason` |
+
+The block handler extracts `source_ip` from the event, calls `GeoLocatedIP.geolocate()` to get or create the record, then calls `geo.block()` which handles both the DB update and the fleet-wide broadcast.
 
 ### Ticket Handler Parameters
 
@@ -282,13 +434,67 @@ pending  →  new  →  open  →  investigating  →  resolved  →  closed
 | `resolved` | Root cause addressed |
 | `closed` | No further action needed |
 
-Incidents can be merged when duplicates are identified:
+### Incident Actions
+
+| Action | Description |
+|---|---|
+| `merge` | Merge other incidents into this one. Moves all events from listed incidents into the primary and deletes the originals. |
 
 ```python
 primary_incident.on_action_merge([incident_id_1, incident_id_2])
 ```
 
-This moves all events from the listed incidents into the primary and deletes the originals.
+---
+
+## OSSEC Integration
+
+OSSEC runs on every EC2 instance as a detection-only agent. Local active response (blocking) is disabled in `ossec.conf`. OSSEC detects and reports — the incident engine decides and enforces.
+
+### Event flow
+
+```
+OSSEC agent (on EC2 instance)
+  → detects log pattern (SSH brute force, web attack, etc.)
+  → ossec-webhook.sh batches alerts
+  → POST /api/incident/ossec/alert/batch
+  → ossec parser normalizes the alert
+  → reporter.report_event() creates Event
+  → Event.publish() triggers rule evaluation
+  → RuleSet handler fires (block, ticket, email, etc.)
+```
+
+### REST Endpoints
+
+| Endpoint | Auth | Description |
+|---|---|---|
+| `POST /api/incident/ossec/alert` | Public | Receive a single OSSEC alert |
+| `POST /api/incident/ossec/alert/batch` | Public | Receive a batch of OSSEC alerts |
+
+These endpoints only create events — they have no blocking authority.
+
+### OSSEC alert fields (after parsing)
+
+| Field | Maps to |
+|---|---|
+| `rule_id` | `model_id` (bundled as `ossec_rule`) |
+| `level` | `level` |
+| `description` | `title` |
+| `full_log` | `details` |
+| `source_ip` | `source_ip` |
+| `hostname` | `hostname` |
+
+---
+
+## Integration with GeoLocatedIP
+
+The incident system and `GeoLocatedIP` form a feedback loop:
+
+1. **Events enrich GeoLocatedIP**: When events arrive with a `source_ip`, `sync_metadata()` calls `GeoLocatedIP.geolocate()` to attach geo and threat data.
+2. **Incidents escalate threat levels**: `GeoLocatedIP.update_threat_from_incident(priority)` is called when incidents are created. This escalates `threat_level` (never downgrades) and auto-blocks IPs that reach `high` or `critical`.
+3. **GeoLocatedIP data feeds rules**: Rules can match on `risk_score`, `is_tor`, `is_vpn`, `threat_level`, `country_code` — any GeoIP field that ends up in event metadata.
+4. **Block/unblock flows through GeoLocatedIP**: The `block://` handler and admin actions both go through `GeoLocatedIP.block()`, ensuring a single code path for DB updates and fleet broadcasts.
+
+See [GeoIP](../account/geoip.md) for the full model reference.
 
 ---
 
@@ -303,43 +509,6 @@ The incident system only works if data flows into it. When writing a new service
 - Is this an action with security or compliance significance?
 
 If yes, report an event.
-
-### GeoLocatedIP — IP trust scoring
-
-`GeoLocatedIP` classifies IPs as Tor, VPN, proxy, cloud, known attacker, etc. and maintains a `risk_score`. This data should feed the incident system so rules can act on IP reputation:
-
-```python
-from mojo.apps.account.models import GeoLocatedIP
-from mojo.apps import incident
-
-geo = GeoLocatedIP.geolocate(request.ip)
-
-if geo.is_threat:
-    incident.report_event(
-        f"Request from known threat IP {request.ip}",
-        category="ip:known_threat",
-        scope="account",
-        level=10,
-        request=request,
-        source_ip=request.ip,
-        is_tor=geo.is_tor,
-        is_vpn=geo.is_vpn,
-        threat_level=geo.threat_level,
-        risk_score=geo.risk_score,
-    )
-elif geo.is_suspicious:
-    incident.report_event(
-        f"Request from suspicious IP {request.ip}",
-        category="ip:suspicious",
-        scope="account",
-        level=6,
-        request=request,
-        source_ip=request.ip,
-        risk_score=geo.risk_score,
-    )
-```
-
-A RuleSet on `category="ip:known_threat"` can auto-create a ticket, notify security staff, or trigger a blocking job — without any of that logic living in the calling code. As the analysis engine matures, cross-referencing `risk_score` trends with auth failure events can enable automatic trust level adjustments per IP.
 
 ### Pattern: rate limiting
 
@@ -370,6 +539,29 @@ incident.report_event(
 )
 ```
 
+### Pattern: known threat IP
+
+```python
+from mojo.apps.account.models import GeoLocatedIP
+from mojo.apps import incident
+
+geo = GeoLocatedIP.geolocate(request.ip)
+
+if geo.is_threat:
+    incident.report_event(
+        f"Request from known threat IP {request.ip}",
+        category="ip:known_threat",
+        scope="account",
+        level=10,
+        request=request,
+        source_ip=request.ip,
+        is_tor=geo.is_tor,
+        is_vpn=geo.is_vpn,
+        threat_level=geo.threat_level,
+        risk_score=geo.risk_score,
+    )
+```
+
 ### Pattern: payment anomalies
 
 ```python
@@ -384,17 +576,22 @@ incident.report_event(
 )
 ```
 
-### Pattern: data integrity
+### Pattern: auto-block via RuleSet
 
 ```python
-incident.report_event(
-    f"Unexpected deletion of {obj.__class__.__name__} {obj.pk}",
-    category="data:unexpected_delete",
-    scope="admin",
-    level=7,
-    uid=request.user.id,
-    model_name=obj.__class__.__name__,
-    model_id=obj.pk,
+# This RuleSet blocks the IP after 10 failed SSH logins in 5 minutes,
+# creates a ticket, and emails the security team — all from one config.
+RuleSet.objects.create(
+    category="ossec",
+    name="SSH Brute Force",
+    bundle_by=BundleBy.SOURCE_IP,
+    bundle_minutes=5,
+    handler="block://?ttl=3600&reason=ssh_brute_force,ticket://?status=new&priority=9&category=security,email://security@example.com",
+    metadata={
+        "min_count": 10,
+        "window_minutes": 5,
+        "pending_status": "pending"
+    }
 )
 ```
 
@@ -405,6 +602,7 @@ incident.report_event(
 | Setting | Default | Description |
 |---|---|---|
 | `INCIDENT_LEVEL_THRESHOLD` | `7` | Minimum level to auto-create an incident without a matching RuleSet |
+| `INCIDENT_EVENT_PRUNE_DAYS` | `30` | Days to retain events with level < 6 |
 | `INCIDENT_EVENT_METRICS` | — | Enable metrics recording for events and incidents |
 | `INCIDENT_METRICS_MIN_GRANULARITY` | `"hours"` | Granularity for incident metrics |
 
@@ -426,6 +624,11 @@ permission:denied
 payment:declined
 data:unexpected_delete
 rate_limit:api
+ossec
+firewall:block
+firewall:unblock
+firewall:whitelist
+firewall:unwhitelist
 ```
 
 The rule engine matches on these strings — consistent category naming means rule coverage automatically extends to every code path that reports under the same category, without touching the RuleSet.

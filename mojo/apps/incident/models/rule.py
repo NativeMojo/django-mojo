@@ -1,7 +1,7 @@
 from django.db import models
 from mojo.models import MojoModel
 from urllib.parse import urlparse, parse_qs
-from mojo.apps.incident.handlers import JobHandler, EmailHandler, NotifyHandler
+from mojo.apps.incident.handlers import JobHandler, EmailHandler, NotifyHandler, BlockHandler
 import re
 
 
@@ -141,7 +141,7 @@ class RuleSet(models.Model, MojoModel):
         try:
             # Split on commas that are followed by a known scheme, so commas inside
             # notify recipient lists don't break the chain.
-            specs = re.split(r',(?=(?:job|email|notify|ticket)://)', self.handler.strip())
+            specs = re.split(r',(?=(?:job|email|notify|ticket|block)://)', self.handler.strip())
 
             for spec in filter(None, [s.strip() for s in specs]):
                 handler_url = urlparse(spec)
@@ -158,6 +158,10 @@ class RuleSet(models.Model, MojoModel):
 
                 elif handler_type == "notify":
                     handler = NotifyHandler(handler_url.netloc)
+                    success = handler.run(event) or success
+
+                elif handler_type == "block":
+                    handler = BlockHandler(handler_url.netloc, **params)
                     success = handler.run(event) or success
 
                 elif handler_type == "ticket":
@@ -224,92 +228,124 @@ class RuleSet(models.Model, MojoModel):
             return False
 
     @classmethod
+    def _create_ruleset(cls, category, name, rules, **kwargs):
+        """Helper to create a RuleSet with its Rules if it doesn't exist."""
+        ruleset, created = cls.objects.get_or_create(
+            category=category,
+            name=name,
+            defaults=kwargs,
+        )
+        if created:
+            for i, rule_data in enumerate(rules):
+                rule_data.setdefault("index", i)
+                Rule.objects.create(parent=ruleset, **rule_data)
+        return ruleset, created
+
+    @classmethod
     def ensure_default_rules(cls):
         """
-        Create or update a set of core default RuleSets and Rules.
+        Create default OSSEC RuleSets and Rules.
+        Safe to call multiple times — uses get_or_create.
 
-        Defaults provided:
-        1) OSSEC rule 31104 (Common web attack) - Bundle by IP for 1 hour with threshold
-        2) OSSEC catch-all - Bundle moderate severity events (level >= 5) by IP
+        Philosophy:
+        - Events = audit trail (everything gets recorded)
+        - Incidents = bundled events worth reviewing (avoid noise)
+        - Tickets = only for unusual things requiring human action
+
+        Most OSSEC noise (brute force, bot scanning) just gets blocked and forgotten.
+        No incidents or tickets for routine attacks.
+
+        Priority order (lower = checked first):
+          1  - Known bot/scanner patterns → block, no incident
+          5  - SSH brute force → block, no incident
+         10  - Web attack 31104 → block, no incident
+         50  - Critical severity (level >= 12) → block + incident (unusual, worth reviewing)
         """
-        # 1) OSSEC Rule 31104: Common web attack detection
-        # Bundle by source IP for 1 hour, pending until 5 events, then trigger handler
-        ossec_31104, created = cls.objects.get_or_create(
+
+        # 1) Known bot/scanner URL patterns — block and ignore
+        # Matches ANY rule (bots probing for php, asp, git, wordpress, etc.)
+        cls._create_ruleset(
+            category="ossec",
+            name="OSSEC - Bot/Scanner URL Patterns",
+            priority=1,
+            match_by=MatchBy.ANY,
+            bundle_by=BundleBy.SOURCE_IP,
+            bundle_minutes=0,
+            handler="block://?ttl=600&fleet_wide=1",
+            rules=[
+                {"name": "Suspicious URL extensions",
+                 "field_name": "http_url",
+                 "comparator": "regex",
+                 "value": r"\.php\d*\b|\.git[x]?\b|\.asp[x]?\b|\.env[x]?\b|\bcgi-bin\b|wp-content\b|wlwmanifest\b|locale\.json\b|\.jsp\b|\.cfm\b|\.pl\b|\.cgi[x]?\b|dns\-query\b",
+                 "value_type": "str"},
+                {"name": "Suspicious URL paths",
+                 "field_name": "http_url",
+                 "comparator": "regex",
+                 "value": r"/git/\b|/wlwmanifest\.xml\b|/\.well-known/security\.txt|/autodiscover/|/remote/login|/owa/|/ecp/",
+                 "value_type": "str"},
+                {"name": "Suspicious in details",
+                 "field_name": "details",
+                 "comparator": "regex",
+                 "value": r"\.php\d*\b|\.git[x]?\b|\.asp[x]?\b|\.env[x]?\b|\bcgi-bin\b|wp-content\b|wlwmanifest\b|locale\.json\b|\.jsp\b|\.cfm\b|\.pl\b|\.cgi[x]?\b|dns\-query\b",
+                 "value_type": "str"},
+            ],
+        )
+
+        # 2) SSH Brute Force — block and ignore, this is just noise
+        cls._create_ruleset(
+            category="ossec",
+            name="OSSEC - SSH Brute Force",
+            priority=5,
+            match_by=MatchBy.ANY,
+            bundle_by=BundleBy.SOURCE_IP,
+            bundle_minutes=0,
+            handler="block://?ttl=3600&fleet_wide=1",
+            rules=[
+                {"name": "Max auth attempts (5758)",
+                 "field_name": "rule_id",
+                 "comparator": "==", "value": "5758", "value_type": "int"},
+                {"name": "Brute force (5712)",
+                 "field_name": "rule_id",
+                 "comparator": "==", "value": "5712", "value_type": "int"},
+                {"name": "Multiple failures (5720)",
+                 "field_name": "rule_id",
+                 "comparator": "==", "value": "5720", "value_type": "int"},
+                {"name": "Repeated auth failure (5551)",
+                 "field_name": "rule_id",
+                 "comparator": "==", "value": "5551", "value_type": "int"},
+            ],
+        )
+
+        # 3) Web Attack Detection (rule 31104) — block and ignore
+        cls._create_ruleset(
             category="ossec",
             name="OSSEC 31104 - Web Attack Detection",
-            defaults={
-                "priority": 10,
-                "match_by": MatchBy.ALL,
-                "bundle_by": BundleBy.SOURCE_IP,
-                "bundle_minutes": 60,  # 1 hour
-                "handler": "ticket://?status=new&priority=7&category=security",
-                "metadata": {
-                    "min_count": 5,  # Need 5 events before triggering
-                    "window_minutes": 60,  # Within 1 hour window
-                    "pending_status": "pending"  # Status before threshold met
-                }
-            },
+            priority=10,
+            match_by=MatchBy.ALL,
+            bundle_by=BundleBy.SOURCE_IP,
+            bundle_minutes=0,
+            handler="block://?ttl=600&fleet_wide=1",
+            rules=[
+                {"name": "Rule ID is 31104", "field_name": "rule_id",
+                 "comparator": "==", "value": "31104", "value_type": "int"},
+            ],
         )
-        if created:
-            try:
-                Rule.objects.create(
-                    parent=ossec_31104,
-                    name="Category is ossec",
-                    field_name="category",
-                    comparator="==",
-                    value="ossec",
-                    value_type="str",
-                    index=0
-                )
-                Rule.objects.create(
-                    parent=ossec_31104,
-                    name="Rule ID is 31104",
-                    field_name="rule_id",
-                    comparator="==",
-                    value="31104",
-                    value_type="int",
-                    index=1
-                )
-            except Exception:
-                # Safe-guard: do not raise on partial rule creation
-                pass
 
-        # 2) OSSEC Catch-all: Bundle all moderate severity events by IP
-        # Lower priority (higher number) so specific rules are checked first
-        ossec_catchall, created = cls.objects.get_or_create(
+        # 4) Critical Severity — level 12+ is unusual, create incident for review
+        # This is the only default that creates an incident — something unexpected happened
+        cls._create_ruleset(
             category="ossec",
-            name="OSSEC - Catch-all Moderate Severity",
-            defaults={
-                "priority": 100,  # Low priority - checked after specific rules
-                "match_by": MatchBy.ALL,
-                "bundle_by": BundleBy.SOURCE_IP,
-                "bundle_minutes": 60,  # 1 hour
-                "handler": None,  # No automatic handler for catch-all
-            },
+            name="OSSEC - Critical Severity",
+            priority=50,
+            match_by=MatchBy.ALL,
+            bundle_by=BundleBy.SOURCE_IP,
+            bundle_minutes=60,
+            handler="block://?ttl=3600&fleet_wide=1",
+            rules=[
+                {"name": "Severity >= 12", "field_name": "level",
+                 "comparator": ">=", "value": "12", "value_type": "int"},
+            ],
         )
-        if created:
-            try:
-                Rule.objects.create(
-                    parent=ossec_catchall,
-                    name="Category is ossec",
-                    field_name="category",
-                    comparator="==",
-                    value="ossec",
-                    value_type="str",
-                    index=0
-                )
-                Rule.objects.create(
-                    parent=ossec_catchall,
-                    name="Severity >= 5",
-                    field_name="level",
-                    comparator=">=",
-                    value="5",
-                    value_type="int",
-                    index=1
-                )
-            except Exception:
-                # Safe-guard: do not raise on partial rule creation
-                pass
 
     def check_rules(self, event):
         """
