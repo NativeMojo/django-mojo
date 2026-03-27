@@ -188,6 +188,9 @@ def _check_verification_gate(user, source=None):
     """
     require_verified_email = settings.get("REQUIRE_VERIFIED_EMAIL", False)
     require_verified_phone = settings.get("REQUIRE_VERIFIED_PHONE", False)
+    is_verified = user.is_email_verified or user.is_phone_verified
+    if is_verified:
+        return
     if require_verified_email and not user.is_email_verified:
         raise merrors.PermissionDeniedException(
             "email_not_verified", 403, 403

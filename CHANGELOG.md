@@ -1,5 +1,19 @@
 ## v1.0.59 - (current)
 
+## v1.0.80 - March 26, 2026
+
+### Added
+- **`mojo.apps.chat`** — New real-time chat app built on the realtime WebSocket system
+  - Room types: direct (1:1 DM), group (invite-only), channel (public join/leave)
+  - Models: ChatRoom, ChatMessage, ChatMembership, ChatReaction, ChatReadReceipt
+  - WebSocket handler: send, edit, flag, react, typing indicators, read receipts
+  - REST endpoints: room CRUD, membership, message history, DMs, unread counts
+  - Per-room content rules: URL/media/phone restrictions, max length, rate limiting, disappearing messages
+  - Content guard integration for moderation (block/warn)
+  - Admin message flagging (hidden from view, preserved as evidence)
+  - Full User/Group/Member permission integration (chat, manage_chat, moderate_chat)
+  - Subscription auth via `on_realtime_can_subscribe` for `chat:` topics
+
 ## v1.0.79 - March 26, 2026
 
 google oauth take 5

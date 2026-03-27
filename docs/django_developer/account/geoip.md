@@ -1,12 +1,12 @@
 # GeoIP — Django Developer Reference
 
-IP geolocation, threat intelligence, and time lookup via the `GeoLocatedIP` model and REST endpoints.
+IP geolocation, threat intelligence, fleet-wide blocking, and whitelisting via the `GeoLocatedIP` model.
 
 ## Model: `GeoLocatedIP`
 
 Located at `mojo.apps.account.models.geolocated_ip`.
 
-Caches geolocation results per IP to reduce redundant API calls. Tracks security metadata (VPN, Tor, proxy, cloud, known attacker/abuser) and supports incident-driven threat escalation.
+Caches geolocation results per IP to reduce redundant API calls. Tracks security metadata (VPN, Tor, proxy, cloud, known attacker/abuser), maintains threat scoring, and serves as the **source of truth for IP blocking** across the fleet.
 
 ### Key Fields
 
@@ -20,9 +20,30 @@ Caches geolocation results per IP to reduce redundant API calls. Tracks security
 | `is_tor`, `is_vpn`, `is_proxy`, `is_cloud`, `is_datacenter`, `is_mobile` | Connection type flags |
 | `is_known_attacker`, `is_known_abuser` | Threat flags |
 | `threat_level` | `low`, `medium`, `high`, or `critical` |
-| `is_blocked`, `blocked_at`, `blocked_reason` | Incident-driven blocking |
+| `asn`, `asn_org`, `isp` | Network provider info |
+| `mobile_carrier` | Mobile carrier name (Verizon, AT&T, etc.) |
+| `connection_type` | `residential`, `business`, `hosting`, `cellular`, etc. |
+| `last_seen` | Last time this IP was encountered in the system |
 | `provider` | Source of the geolocation data |
+| `data` | JSON bag for raw provider data and threat check results |
 | `expires_at` | Cache expiration (internal records never expire) |
+
+### Blocking Fields
+
+| Field | Description |
+|---|---|
+| `is_blocked` | Whether this IP is currently blocked |
+| `blocked_at` | When the block was applied |
+| `blocked_until` | When the block expires (`null` = permanent) |
+| `blocked_reason` | Why the IP was blocked (e.g. `auto:threat_escalation`, `manual block: by admin`) |
+| `block_count` | Number of times this IP has been blocked |
+
+### Whitelisting Fields
+
+| Field | Description |
+|---|---|
+| `is_whitelisted` | Whitelisted IPs are never blocked, even by auto-escalation |
+| `whitelisted_reason` | Why this IP is whitelisted |
 
 ### Computed Properties
 
@@ -32,6 +53,7 @@ Caches geolocation results per IP to reduce redundant API calls. Tracks security
 | `is_threat` | True if `is_known_attacker` or `is_known_abuser` |
 | `is_suspicious` | True if Tor, VPN, proxy, or high/critical threat level |
 | `risk_score` | 0–100 score based on threat indicators |
+| `block_active` | True if `is_blocked` AND not whitelisted AND `blocked_until` hasn't passed |
 
 ### Key Methods
 
@@ -42,31 +64,134 @@ Caches geolocation results per IP to reduce redundant API calls. Tracks security
 | `instance.refresh(check_threats=False)` | Re-fetch geolocation data from provider |
 | `instance.check_threats()` | Run threat intelligence checks |
 | `instance.update_threat_from_incident(priority)` | Escalate threat level from incident priority (0–15 scale) |
+| `instance.block(reason, ttl, broadcast)` | Block this IP fleet-wide (DB + broadcast) |
+| `instance.unblock(reason, broadcast)` | Unblock this IP fleet-wide |
+| `instance.whitelist(reason)` | Whitelist — also unblocks if currently blocked |
+| `instance.unwhitelist()` | Remove whitelist status |
 
-### RestMeta
+---
+
+## Fleet-Wide IP Blocking
+
+`GeoLocatedIP` is the single source of truth for IP blocking. When `block()` is called, it:
+
+1. Updates the database record (`is_blocked`, `blocked_at`, `blocked_until`, `blocked_reason`, `block_count`)
+2. Broadcasts `block_ip` to all instances via `jobs.broadcast_execute()`
+3. Each instance's job runner (as `ec2-user`) applies the iptables DROP rule
+
+### block(reason, ttl, broadcast)
+
+```python
+geo = GeoLocatedIP.geolocate("1.2.3.4")
+geo.block(reason="ssh_brute_force", ttl=3600)  # Block for 1 hour fleet-wide
+geo.block(reason="repeat_offender")             # Permanent block (no ttl)
+```
+
+- Returns `False` if the IP is whitelisted (whitelisting always wins)
+- `ttl` in seconds. `None` or `0` = permanent (no auto-unblock)
+- `broadcast=False` to update DB only (used during bulk operations)
+
+### unblock(reason, broadcast)
+
+```python
+geo.unblock(reason="manual: false positive")
+```
+
+- Updates DB and broadcasts fleet-wide iptables removal
+- `broadcast=False` for DB-only updates
+
+### whitelist(reason)
+
+```python
+geo.whitelist(reason="office IP range")
+```
+
+- Sets `is_whitelisted=True`
+- If the IP is currently blocked, it unblocks fleet-wide immediately
+- Prevents all future auto-blocks (threat escalation, rule handlers)
+
+### unwhitelist()
+
+```python
+geo.unwhitelist()
+```
+
+Removes whitelist protection. Does not auto-block — the IP would need to trigger rules again.
+
+### Auto-block via threat escalation
+
+`update_threat_from_incident(priority)` is called when incidents are created for an IP. It escalates `threat_level` (never downgrades) and **auto-blocks** IPs that reach `high` or `critical`:
+
+| Incident Priority | Threat Level | Auto-Block? |
+|---|---|---|
+| 0–6 | No change | No |
+| 7–9 | `medium` | No |
+| 10–12 | `high` | Yes |
+| 13–15 | `critical` | Yes |
+
+Whitelisted IPs get the threat level update but are never auto-blocked.
+
+### Expiry sweep
+
+A cron job runs every minute (`sweep_expired_blocks`) that:
+1. Finds all `GeoLocatedIP` records where `is_blocked=True` and `blocked_until` has passed
+2. Bulk updates `is_blocked=False` in the DB
+3. Broadcasts fleet-wide unblock for all expired IPs
+
+This is a single job per minute — not one job per blocked IP.
+
+---
+
+## POST_SAVE_ACTIONS
+
+All blocking and management operations are exposed as POST_SAVE_ACTIONS on the model, following the standard CRUD pattern.
+
+| Action | Payload | Description |
+|---|---|---|
+| `block` | `{"reason": "...", "ttl": 600}` or omit for defaults | Block IP fleet-wide. Defaults to 600s TTL and logs the admin username. |
+| `unblock` | `"reason string"` or omit for default | Unblock IP fleet-wide |
+| `whitelist` | `"reason string"` or omit for default | Whitelist IP, unblocks if currently blocked |
+| `unwhitelist` | — | Remove whitelist status |
+| `refresh` | — | Re-fetch geolocation data from provider (with threat checks) |
+| `threat_analysis` | — | Run threat intelligence checks only |
+
+### Example REST calls
+
+```
+PUT /api/account/system/geoip/123
+{"action": "block", "block": {"reason": "confirmed attacker", "ttl": 86400}}
+
+PUT /api/account/system/geoip/123
+{"action": "unblock", "unblock": "false positive confirmed"}
+
+PUT /api/account/system/geoip/123
+{"action": "whitelist", "whitelist": "office VPN exit node"}
+
+PUT /api/account/system/geoip/123
+{"action": "unwhitelist"}
+```
+
+All actions require `manage_users` permission (from RestMeta).
+
+---
+
+## RestMeta
 
 | Setting | Value |
 |---|---|
 | `VIEW_PERMS` | `['manage_users']` |
 | `SEARCH_FIELDS` | `ip_address`, `city`, `country_name`, `asn_org`, `isp` |
-| `POST_SAVE_ACTIONS` | `refresh`, `threat_analysis` |
+| `POST_SAVE_ACTIONS` | `refresh`, `threat_analysis`, `block`, `unblock`, `whitelist`, `unwhitelist` |
 
 ### Graphs
 
 | Graph | Description |
 |---|---|
 | `default` | All fields except `data` and `provider`, plus computed extras |
-| `basic` | Core location + threat fields only |
+| `basic` | Core location + threat + blocking fields |
 | `detailed` | All fields including raw `data` |
 
-All graphs include `is_threat`, `is_suspicious`, and `risk_score` as extras.
-
-### Settings
-
-| Setting | Default | Description |
-|---|---|---|
-| `GEOLOCATION_ALLOW_SUBNET_LOOKUP` | `False` | Allow fallback to subnet match when exact IP not found |
-| `GEOLOCATION_CACHE_DURATION_DAYS` | `90` | Days before a cached record expires |
+All graphs include `is_threat`, `is_suspicious`, and `risk_score` as extras. The `basic` graph also includes `block_active`.
 
 ---
 
@@ -81,7 +206,7 @@ GET  /api/account/system/geoip
 POST /api/account/system/geoip
 ```
 
-Standard CRUD via `GeoLocatedIP.on_rest_request`. Requires `manage_users` permission (from RestMeta).
+Standard CRUD via `GeoLocatedIP.on_rest_request`. Requires `manage_users` permission.
 
 ### `GET/PUT/DELETE system/geoip/<pk>` — Detail / Update / Delete
 
@@ -91,7 +216,7 @@ PUT    /api/account/system/geoip/123
 DELETE /api/account/system/geoip/123
 ```
 
-Requires `manage_users` permission.
+Requires `manage_users` permission. PUT supports POST_SAVE_ACTIONS for block/unblock/whitelist.
 
 ### `GET system/geoip/lookup` — Public IP Lookup
 
@@ -130,11 +255,22 @@ GET /api/account/system/geoip/time
 }
 ```
 
-Returns an error if timezone data is not available for the IP:
+---
 
-```json
-{
-    "status": false,
-    "error": "Timezone not available for this IP"
-}
-```
+## Settings
+
+| Setting | Default | Description |
+|---|---|---|
+| `GEOLOCATION_ALLOW_SUBNET_LOOKUP` | `False` | Allow fallback to subnet match when exact IP not found |
+| `GEOLOCATION_CACHE_DURATION_DAYS` | `90` | Days before a cached record expires |
+
+---
+
+## Integration with Incident System
+
+`GeoLocatedIP` and the incident system form a feedback loop. See [Incident System](../logging/incidents.md) for the full architecture.
+
+1. **Events enrich GeoLocatedIP**: `sync_metadata()` calls `geolocate()` to attach geo/threat data to events.
+2. **Incidents escalate threat levels**: `update_threat_from_incident()` is called on incident creation, escalating `threat_level` and auto-blocking at `high`/`critical`.
+3. **Rules can auto-block**: The `block://` handler in a RuleSet calls `GeoLocatedIP.block()` when conditions are met.
+4. **Admins manage via CRUD**: Block, unblock, whitelist actions through the standard REST interface with `manage_users` permission.

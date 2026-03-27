@@ -2,11 +2,21 @@ from mojo import decorators as md
 from mojo.apps.incident.parsers import ossec
 from mojo import JsonResponse
 from mojo.apps.incident import reporter
-from mojo.helpers import logit
+
+_defaults_checked = False
+
+def _ensure_defaults():
+    global _defaults_checked
+    if not _defaults_checked:
+        from mojo.apps.incident.models import RuleSet
+        if not RuleSet.objects.filter(category="ossec").exists():
+            RuleSet.ensure_default_rules()
+        _defaults_checked = True
 
 @md.POST('ossec/alert')
 @md.public_endpoint()
 def on_ossec_alert(request):
+    _ensure_defaults()
     ossec_alert = ossec.parse(request.DATA)
 
     # Skip if parsing returned None (ignored or malformed alert)
@@ -26,6 +36,7 @@ def on_ossec_alert(request):
 @md.POST('ossec/alert/batch')
 @md.public_endpoint()
 def on_ossec_alert_batch(request):
+    _ensure_defaults()
     ossec_alerts = ossec.parse(request.DATA) or []
 
     for alert in ossec_alerts:
@@ -63,8 +74,3 @@ def on_ossec_alert_batch(request):
     return JsonResponse({"status": True})
 
 
-@md.POST('ossec/firewall')
-@md.public_endpoint()
-def on_ossec_firewall(request):
-    logit.info("Firewall event received", request.DATA)
-    return JsonResponse({"status": True})

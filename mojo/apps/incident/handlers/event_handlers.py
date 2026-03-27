@@ -147,6 +147,43 @@ class NotifyHandler:
             return False
 
 
+class BlockHandler:
+    """
+    Handler for fleet-wide IP blocking via broadcast.
+
+    When a RuleSet fires with a block:// handler, this broadcasts a block_ip
+    job to all runners so every instance behind the load balancer blocks the IP.
+
+    Handler syntax:
+        block://?ttl=3600&fleet_wide=true
+
+    Params:
+        ttl: seconds to block (default 600)
+        fleet_wide: if "true", broadcast to all instances (default true)
+    """
+
+    def __init__(self, target=None, **params):
+        self.params = params
+
+    def run(self, event):
+        try:
+            ip = getattr(event, "source_ip", None)
+            if not ip:
+                ip = (event.metadata or {}).get("source_ip")
+            if not ip:
+                return False
+
+            ttl = int(self.params.get("ttl", 600)) or None
+            reason = self.params.get("reason", "auto:ruleset")
+
+            from mojo.apps.account.models import GeoLocatedIP
+            geo = GeoLocatedIP.geolocate(ip, auto_refresh=False)
+            # geo.block() handles DB update + fleet-wide broadcast
+            return geo.block(reason=reason, ttl=ttl)
+        except Exception:
+            return False
+
+
 class TicketHandler:
     """
     Handler for creating a ticket based on events.
