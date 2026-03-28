@@ -1192,6 +1192,35 @@ class MojoModel:
         return manager.serialize(self, graph=graph)
 
     @classmethod
+    def to_csv(cls, queryset, format="csv", timezone=None):
+        # Use serializer manager for optimal performance
+        manager = get_serializer_manager()
+        format_key = format.split("_")[0]
+        serializer = manager.get_format_serializer(format_key)
+        formats = cls.get_rest_meta_prop("FORMATS")
+        localize = None
+        if formats is not None and format in formats:
+            fields = formats[format]
+        else:
+            graph_obj = cls.get_rest_meta_graph(["basic", "default"])
+            if not graph_obj or not graph_obj.get("fields"):
+                raise me.ValueException("No valid graph found")
+            fields = graph_obj.get("fields")
+            # Get localize config from graph if available
+            localize = graph_obj.get("localize")
+        # Check if localize is defined in FORMATS_LOCALIZE
+        formats_localize = cls.get_rest_meta_prop("FORMATS_LOCALIZE")
+        if formats_localize and format in formats_localize:
+            localize = formats_localize[format]
+        return serializer.serialize_queryset(
+            queryset,
+            fields=fields,
+            localize=localize,
+            timezone=timezone,
+            raw_data=True
+        )
+
+    @classmethod
     def queryset_to_dict(cls, qset, graph="default"):
         # Use serializer manager for optimal performance
         manager = get_serializer_manager()

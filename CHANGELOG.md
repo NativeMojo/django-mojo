@@ -1,5 +1,10 @@
 ## v1.0.59 - (current)
 
+## v1.0.80 - March 27, 2026
+
+new security firewall with auto blocking and ipset support
+
+
 ## v1.0.80 - March 26, 2026
 
 ### Added

@@ -32,7 +32,7 @@ class CsvFormatter:
         self.streaming_threshold = streaming_threshold
 
     def serialize_queryset(self, queryset, fields=None, graph=None, filename="export.csv",
-                          headers=None, localize=None, stream=True, timezone=None):
+                          headers=None, localize=None, stream=True, timezone=None, raw_data=False):
         """
         Serialize a Django QuerySet to CSV format.
 
@@ -52,7 +52,10 @@ class CsvFormatter:
         # Get fields configuration
         field_config = self._get_field_config(queryset, fields, graph)
 
-        if should_stream:
+        if raw_data:
+            return self._create_standard_response(queryset, field_config, filename,
+                                                headers, localize, timezone, raw_data=True)
+        elif should_stream:
             return self._create_streaming_response(queryset, field_config, filename,
                                                  headers, localize, timezone)
         else:
@@ -174,7 +177,7 @@ class CsvFormatter:
         return response
 
     def _create_standard_response(self, queryset, field_config, filename,
-                                headers, localize, timezone=None):
+                                headers, localize, timezone=None, raw_data=False):
         """
         Create standard HTTP response for smaller datasets.
         """
@@ -193,6 +196,9 @@ class CsvFormatter:
             except Exception as e:
                 logger.error(f"Error processing row for object {obj.pk}: {e}")
                 continue
+
+        if raw_data:
+            return output.getvalue()
 
         response = HttpResponse(output.getvalue(), content_type='text/csv')
         response['Content-Disposition'] = f'attachment; filename={filename}'

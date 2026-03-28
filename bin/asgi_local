@@ -60,6 +60,32 @@ _is_running() {
     return 1
 }
 
+_run_migrations() {
+    echo "==> Running migrations"
+    # If django_migrations is empty (e.g. after test flush), fake first then apply real
+    EMPTY=$( DJANGO_SETTINGS_MODULE=settings PYTHONPATH="$TESTPROJECT/config:$REPO_ROOT" \
+        $PYTHON -c "
+import django; django.setup()
+from django.db import connection
+c = connection.cursor()
+c.execute('SELECT COUNT(*) FROM django_migrations')
+print(c.fetchone()[0])
+" 2>/dev/null || echo "0" )
+
+    if [ "$EMPTY" = "0" ]; then
+        echo "    Migration tracker empty — faking existing then applying new"
+        DJANGO_SETTINGS_MODULE=settings PYTHONPATH="$TESTPROJECT/config:$REPO_ROOT" \
+            $PYTHON -m django migrate --fake --settings=settings --no-input 2>&1 | tail -3
+        DJANGO_SETTINGS_MODULE=settings PYTHONPATH="$TESTPROJECT/config:$REPO_ROOT" \
+            $PYTHON -m django makemigrations --settings=settings --no-input 2>&1 | tail -3
+        DJANGO_SETTINGS_MODULE=settings PYTHONPATH="$TESTPROJECT/config:$REPO_ROOT" \
+            $PYTHON -m django migrate --settings=settings --no-input 2>&1 | tail -3
+    else
+        DJANGO_SETTINGS_MODULE=settings PYTHONPATH="$TESTPROJECT/config:$REPO_ROOT" \
+            $PYTHON -m django migrate --settings=settings --no-input 2>&1 | tail -5
+    fi
+}
+
 do_start() {
     _check_project
     _ensure_redis
@@ -69,6 +95,8 @@ do_start() {
         echo "Already running (PID $(cat "$PIDFILE"))"
         exit 0
     fi
+
+    _run_migrations
 
     echo "==> Starting uvicorn on http://$HOST:$PORT (daemon)"
     nohup $PYTHON -m uvicorn _asgi:application \
@@ -118,6 +146,7 @@ do_foreground() {
     _check_project
     _ensure_redis
     _read_conf
+    _run_migrations
 
     if _is_running; then
         echo "WARNING: daemon already running (PID $(cat "$PIDFILE")), starting foreground anyway"
