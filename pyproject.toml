@@ -1,6 +1,6 @@
 [project]
 name = "django-mojo"
-version = "1.0.79"
+version = "1.0.80"
 description = "A REST framework for Django with secure DB-backed settings, REST/WebSocket support, jobs, auth, and more."
 authors = [{ name = "MOJO Dev Team", email = "gotmojo@mojo.com" }]
 readme = "README.md"
@@ -34,7 +34,7 @@ dependencies = [
     "boto3>=1.42.73",
     "pyfcm>=2.1.0",
     "websocket-client>=1.9.0",
-    "uvicorn>=0.42.0",
+    "uvicorn[standard]>=0.42.0"
 ]
 
 [dependency-groups]
