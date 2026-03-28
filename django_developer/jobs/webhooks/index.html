@@ -23,7 +23,7 @@
     
     
       
-        <title>Django-MOJO Jobs: Webhook Support - Django-MOJO</title>
+        <title>Webhooks — Django Developer Reference - Django-MOJO</title>
       
     
     
@@ -74,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#django-mojo-jobs-webhook-support" class="md-skip">
+        <a href="#webhooks-django-developer-reference" class="md-skip">
           Skip to content
         </a>
       
@@ -108,7 +108,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Django-MOJO Jobs: Webhook Support
+              Webhooks — Django Developer Reference
             
           </span>
         </div>
@@ -3621,17 +3621,6 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#table-of-contents" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Table of Contents
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#quick-start" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3643,100 +3632,44 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#publishing-webhooks" class="md-nav__link">
+  <a href="#full-signature" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Publishing Webhooks
+        Full Signature
       
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Publishing Webhooks">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#basic-usage" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Basic Usage
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#full-parameter-reference" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Full Parameter Reference
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#parameter-details" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Parameter Details
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#configuration" class="md-nav__link">
+  <a href="#parameter-reference" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Configuration
+        Parameter Reference
       
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Configuration">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#environment-specific-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Environment-Specific Configuration
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#error-handling-retries" class="md-nav__link">
+  <a href="#retry-behavior" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Error Handling &amp; Retries
+        Retry Behavior
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Error Handling &amp; Retries">
+    <nav class="md-nav" aria-label="Retry Behavior">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#automatic-retry-logic" class="md-nav__link">
+  <a href="#what-gets-retried" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Automatic Retry Logic
+        What Gets Retried
       
     </span>
   </a>
@@ -3744,110 +3677,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#exponential-backoff" class="md-nav__link">
+  <a href="#backoff-schedule" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Exponential Backoff
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#custom-retry-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Custom Retry Configuration
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#monitoring-metrics" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Monitoring &amp; Metrics
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Monitoring &amp; Metrics">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#job-status-tracking" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Job Status Tracking
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#webhook-metadata" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Webhook Metadata
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#metrics-for-monitoring" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Metrics for Monitoring
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#security-considerations" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Security Considerations
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Security Considerations">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#header-sanitization" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Header Sanitization
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#best-practices" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Best Practices
+        Backoff Schedule
       
     </span>
   </a>
@@ -3872,10 +3705,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#user-registration-webhook" class="md-nav__link">
+  <a href="#basic-webhook" class="md-nav__link">
     <span class="md-ellipsis">
       
-        User Registration Webhook
+        Basic Webhook
       
     </span>
   </a>
@@ -3883,10 +3716,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#payment-success-webhook" class="md-nav__link">
+  <a href="#with-authentication" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Payment Success Webhook
+        With Authentication
       
     </span>
   </a>
@@ -3894,10 +3727,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#batch-webhook-processing" class="md-nav__link">
+  <a href="#critical-webhook-more-retries" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Batch Webhook Processing
+        Critical Webhook (More Retries)
       
     </span>
   </a>
@@ -3905,10 +3738,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#delayed-notification-webhook" class="md-nav__link">
+  <a href="#scheduled-webhook" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Delayed Notification Webhook
+        Scheduled Webhook
       
     </span>
   </a>
@@ -3916,10 +3749,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#webhook-with-custom-retry-logic" class="md-nav__link">
+  <a href="#idempotent-webhook" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Webhook with Custom Retry Logic
+        Idempotent Webhook
       
     </span>
   </a>
@@ -3932,22 +3765,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#troubleshooting" class="md-nav__link">
+  <a href="#monitoring" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Troubleshooting
+        Monitoring
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Troubleshooting">
+    <nav class="md-nav" aria-label="Monitoring">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#common-issues" class="md-nav__link">
+  <a href="#check-status" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Common Issues
+        Check Status
       
     </span>
   </a>
@@ -3955,10 +3788,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#debugging-failed-webhooks" class="md-nav__link">
+  <a href="#webhook-metadata" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Debugging Failed Webhooks
+        Webhook Metadata
       
     </span>
   </a>
@@ -3966,21 +3799,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#performance-considerations" class="md-nav__link">
+  <a href="#metrics" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Performance Considerations
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#monitoring-dashboard-queries" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Monitoring Dashboard Queries
+        Metrics
       
     </span>
   </a>
@@ -3993,10 +3815,21 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#summary" class="md-nav__link">
+  <a href="#configuration" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Summary
+        Configuration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#security" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Security
       
     </span>
   </a>
@@ -4023,66 +3856,40 @@
   
 
 
-<h1 id="django-mojo-jobs-webhook-support">Django-MOJO Jobs: Webhook Support<a class="headerlink" href="#django-mojo-jobs-webhook-support" title="Permanent link">&para;</a></h1>
-<p>Django-MOJO Jobs provides robust webhook support for sending HTTP POST requests to external APIs with automatic retry logic, exponential backoff, and comprehensive error handling.</p>
-<h2 id="table-of-contents">Table of Contents<a class="headerlink" href="#table-of-contents" title="Permanent link">&para;</a></h2>
-<ul>
-<li><a href="#quick-start">Quick Start</a></li>
-<li><a href="#publishing-webhooks">Publishing Webhooks</a></li>
-<li><a href="#configuration">Configuration</a></li>
-<li><a href="#error-handling--retries">Error Handling &amp; Retries</a></li>
-<li><a href="#monitoring--metrics">Monitoring &amp; Metrics</a></li>
-<li><a href="#security-considerations">Security Considerations</a></li>
-<li><a href="#examples">Examples</a></li>
-<li><a href="#troubleshooting">Troubleshooting</a></li>
-</ul>
+<h1 id="webhooks-django-developer-reference">Webhooks — Django Developer Reference<a class="headerlink" href="#webhooks-django-developer-reference" title="Permanent link">&para;</a></h1>
+<p>Send HTTP POST requests to external APIs as async jobs with automatic retries, exponential backoff, and monitoring.</p>
 <h2 id="quick-start">Quick Start<a class="headerlink" href="#quick-start" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.jobs</span><span class="w"> </span><span class="kn">import</span> <span class="n">publish_webhook</span>
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="c1"># Send a simple webhook</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="n">job_id</span> <span class="o">=</span> <span class="n">publish_webhook</span><span class="p">(</span>
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">url</span><span class="o">=</span><span class="s2">&quot;https://api.example.com/webhooks/user-signup&quot;</span><span class="p">,</span>
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">data</span><span class="o">=</span><span class="p">{</span>
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>        <span class="s2">&quot;user_id&quot;</span><span class="p">:</span> <span class="mi">123</span><span class="p">,</span>
-<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>        <span class="s2">&quot;email&quot;</span><span class="p">:</span> <span class="s2">&quot;user@example.com&quot;</span><span class="p">,</span> 
-<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>        <span class="s2">&quot;event&quot;</span><span class="p">:</span> <span class="s2">&quot;signup&quot;</span><span class="p">,</span>
-<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>        <span class="s2">&quot;timestamp&quot;</span><span class="p">:</span> <span class="s2">&quot;2024-01-15T10:30:00Z&quot;</span>
-<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    <span class="p">}</span>
-<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="p">)</span>
-<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>
-<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Webhook queued with job ID: </span><span class="si">{</span><span class="n">job_id</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">job_id</span> <span class="o">=</span> <span class="n">publish_webhook</span><span class="p">(</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="n">url</span><span class="o">=</span><span class="s2">&quot;https://api.partner.com/webhooks/order&quot;</span><span class="p">,</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">data</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;order_id&quot;</span><span class="p">:</span> <span class="mi">99</span><span class="p">,</span> <span class="s2">&quot;event&quot;</span><span class="p">:</span> <span class="s2">&quot;created&quot;</span><span class="p">},</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="p">)</span>
 </code></pre></div>
-<p>That's it! The webhook will be processed asynchronously with automatic retries if it fails.</p>
-<h2 id="publishing-webhooks">Publishing Webhooks<a class="headerlink" href="#publishing-webhooks" title="Permanent link">&para;</a></h2>
-<h3 id="basic-usage">Basic Usage<a class="headerlink" href="#basic-usage" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.jobs</span><span class="w"> </span><span class="kn">import</span> <span class="n">publish_webhook</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="n">job_id</span> <span class="o">=</span> <span class="n">publish_webhook</span><span class="p">(</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    <span class="n">url</span><span class="o">=</span><span class="s2">&quot;https://api.example.com/webhooks&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>    <span class="n">data</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;key&quot;</span><span class="p">:</span> <span class="s2">&quot;value&quot;</span><span class="p">}</span>
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="p">)</span>
+<p>The webhook is queued as a job and processed by a runner. If it fails, it retries automatically.</p>
+<h2 id="full-signature">Full Signature<a class="headerlink" href="#full-signature" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">publish_webhook</span><span class="p">(</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>    <span class="n">url</span><span class="p">,</span>                     <span class="c1"># str — target URL (http:// or https://)</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    <span class="n">data</span><span class="p">,</span>                    <span class="c1"># dict — JSON data to POST</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    <span class="o">*</span><span class="p">,</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>    <span class="n">headers</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>            <span class="c1"># dict — additional HTTP headers</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>    <span class="n">channel</span><span class="o">=</span><span class="s2">&quot;webhooks&quot;</span><span class="p">,</span>      <span class="c1"># str — job channel</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>    <span class="n">delay</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>              <span class="c1"># int seconds from now</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>    <span class="n">run_at</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>             <span class="c1"># datetime — specific execution time</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>    <span class="n">timeout</span><span class="o">=</span><span class="mi">30</span><span class="p">,</span>              <span class="c1"># int seconds — HTTP request timeout</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>    <span class="n">max_retries</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>        <span class="c1"># int — default JOBS_WEBHOOK_MAX_RETRIES (5)</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>    <span class="n">backoff_base</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>       <span class="c1"># float — default 2.0</span>
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>    <span class="n">backoff_max</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>        <span class="c1"># int — default 3600</span>
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>    <span class="n">expires_in</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>         <span class="c1"># int seconds</span>
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>    <span class="n">expires_at</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>         <span class="c1"># datetime</span>
+<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>    <span class="n">idempotency_key</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>    <span class="c1"># str — prevent duplicates</span>
+<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a>    <span class="n">webhook_id</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>         <span class="c1"># str — custom identifier for tracking</span>
+<a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a><span class="p">)</span>
 </code></pre></div>
-<h3 id="full-parameter-reference">Full Parameter Reference<a class="headerlink" href="#full-parameter-reference" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">job_id</span> <span class="o">=</span> <span class="n">publish_webhook</span><span class="p">(</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>    <span class="n">url</span><span class="o">=</span><span class="s2">&quot;https://api.example.com/webhooks&quot;</span><span class="p">,</span>           <span class="c1"># Required: Target URL</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    <span class="n">data</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;event&quot;</span><span class="p">:</span> <span class="s2">&quot;user_signup&quot;</span><span class="p">,</span> <span class="s2">&quot;user_id&quot;</span><span class="p">:</span> <span class="mi">123</span><span class="p">},</span>    <span class="c1"># Required: JSON data to POST</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>    <span class="c1"># Optional parameters</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>    <span class="n">headers</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;Authorization&quot;</span><span class="p">:</span> <span class="s2">&quot;Bearer token123&quot;</span><span class="p">},</span>      <span class="c1"># HTTP headers</span>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>    <span class="n">channel</span><span class="o">=</span><span class="s2">&quot;webhooks&quot;</span><span class="p">,</span>                                <span class="c1"># Job channel (default: &quot;webhooks&quot;)</span>
-<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>    <span class="n">delay</span><span class="o">=</span><span class="mi">300</span><span class="p">,</span>                                        <span class="c1"># Delay in seconds (None = immediate)</span>
-<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>    <span class="n">run_at</span><span class="o">=</span><span class="n">datetime</span><span class="p">(</span><span class="mi">2024</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">15</span><span class="p">,</span> <span class="mi">14</span><span class="p">,</span> <span class="mi">30</span><span class="p">),</span>            <span class="c1"># Specific execution time</span>
-<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>    <span class="n">timeout</span><span class="o">=</span><span class="mi">30</span><span class="p">,</span>                                       <span class="c1"># Request timeout in seconds</span>
-<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>    <span class="n">max_retries</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span>                                    <span class="c1"># Maximum retry attempts</span>
-<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a>    <span class="n">backoff_base</span><span class="o">=</span><span class="mf">2.0</span><span class="p">,</span>                                 <span class="c1"># Exponential backoff base</span>
-<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a>    <span class="n">backoff_max</span><span class="o">=</span><span class="mi">3600</span><span class="p">,</span>                                 <span class="c1"># Maximum backoff in seconds</span>
-<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a>    <span class="n">expires_in</span><span class="o">=</span><span class="mi">86400</span><span class="p">,</span>                                 <span class="c1"># Job expires after N seconds</span>
-<a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a>    <span class="n">expires_at</span><span class="o">=</span><span class="n">datetime</span><span class="p">(</span><span class="mi">2024</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">16</span><span class="p">,</span> <span class="mi">10</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span>         <span class="c1"># Specific expiration time</span>
-<a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a>    <span class="n">idempotency_key</span><span class="o">=</span><span class="s2">&quot;user_123_signup&quot;</span><span class="p">,</span>                <span class="c1"># Prevent duplicate jobs</span>
-<a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a>    <span class="n">webhook_id</span><span class="o">=</span><span class="s2">&quot;signup_notification&quot;</span>                   <span class="c1"># Custom webhook identifier</span>
-<a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a><span class="p">)</span>
-</code></pre></div>
-<h3 id="parameter-details">Parameter Details<a class="headerlink" href="#parameter-details" title="Permanent link">&para;</a></h3>
+<p><strong>Returns</strong>: Job ID string.</p>
+<p><strong>Raises</strong>: <code>ValueError</code> for invalid URL or non-serializable data.</p>
+<p>Internally creates a job that calls <code>mojo.apps.jobs.handlers.webhook.post_webhook</code>.</p>
+<h2 id="parameter-reference">Parameter Reference<a class="headerlink" href="#parameter-reference" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
 <tr>
@@ -4095,482 +3902,280 @@
 <tbody>
 <tr>
 <td><code>url</code></td>
-<td><code>str</code></td>
-<td><em>Required</em></td>
-<td>Target webhook URL (must start with http:// or https://)</td>
+<td>str</td>
+<td><em>required</em></td>
+<td>Target URL (must start with <code>http://</code> or <code>https://</code>)</td>
 </tr>
 <tr>
 <td><code>data</code></td>
-<td><code>Dict[str, Any]</code></td>
-<td><em>Required</em></td>
-<td>Data to POST (must be JSON serializable)</td>
+<td>dict</td>
+<td><em>required</em></td>
+<td>JSON-serializable data to POST</td>
 </tr>
 <tr>
 <td><code>headers</code></td>
-<td><code>Dict[str, str]</code></td>
+<td>dict</td>
 <td><code>None</code></td>
-<td>Additional HTTP headers</td>
+<td>Additional HTTP headers (sensitive values masked in logs)</td>
 </tr>
 <tr>
 <td><code>channel</code></td>
-<td><code>str</code></td>
+<td>str</td>
 <td><code>"webhooks"</code></td>
-<td>Job queue channel</td>
+<td>Job channel — run a dedicated worker for webhooks</td>
 </tr>
 <tr>
 <td><code>delay</code></td>
-<td><code>int</code></td>
+<td>int</td>
 <td><code>None</code></td>
-<td>Delay in seconds before execution</td>
+<td>Seconds before execution</td>
 </tr>
 <tr>
 <td><code>run_at</code></td>
-<td><code>datetime</code></td>
+<td>datetime</td>
 <td><code>None</code></td>
 <td>Specific execution time</td>
 </tr>
 <tr>
 <td><code>timeout</code></td>
-<td><code>int</code></td>
+<td>int</td>
 <td><code>30</code></td>
-<td>HTTP request timeout in seconds</td>
+<td>HTTP request timeout (max: <code>JOBS_WEBHOOK_MAX_TIMEOUT</code>, default 300)</td>
 </tr>
 <tr>
 <td><code>max_retries</code></td>
-<td><code>int</code></td>
+<td>int</td>
 <td><code>5</code></td>
-<td>Maximum retry attempts</td>
+<td>Max retry attempts (uses <code>JOBS_WEBHOOK_MAX_RETRIES</code>)</td>
 </tr>
 <tr>
 <td><code>backoff_base</code></td>
-<td><code>float</code></td>
+<td>float</td>
 <td><code>2.0</code></td>
 <td>Exponential backoff multiplier</td>
 </tr>
 <tr>
 <td><code>backoff_max</code></td>
-<td><code>int</code></td>
+<td>int</td>
 <td><code>3600</code></td>
-<td>Maximum backoff between retries (seconds)</td>
+<td>Max seconds between retries</td>
 </tr>
 <tr>
 <td><code>expires_in</code></td>
-<td><code>int</code></td>
+<td>int</td>
 <td><code>None</code></td>
-<td>Job expiration in seconds</td>
+<td>Job expires after N seconds</td>
 </tr>
 <tr>
 <td><code>expires_at</code></td>
-<td><code>datetime</code></td>
+<td>datetime</td>
 <td><code>None</code></td>
-<td>Specific job expiration time</td>
+<td>Specific expiration time</td>
 </tr>
 <tr>
 <td><code>idempotency_key</code></td>
-<td><code>str</code></td>
+<td>str</td>
 <td><code>None</code></td>
-<td>Key to prevent duplicate executions</td>
+<td>Prevent duplicate webhook jobs</td>
 </tr>
 <tr>
 <td><code>webhook_id</code></td>
-<td><code>str</code></td>
+<td>str</td>
 <td><code>None</code></td>
-<td>Custom identifier for tracking</td>
+<td>Custom ID stored in metadata for tracking</td>
+</tr>
+</tbody>
+</table>
+<h2 id="retry-behavior">Retry Behavior<a class="headerlink" href="#retry-behavior" title="Permanent link">&para;</a></h2>
+<h3 id="what-gets-retried">What Gets Retried<a class="headerlink" href="#what-gets-retried" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>HTTP Status / Error</th>
+<th>Retried?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Connection error</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>Timeout</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>408 Request Timeout</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>429 Too Many Requests</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>502, 503, 504</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>520-524 (Cloudflare)</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>400, 401, 403, 404</td>
+<td>No</td>
+</tr>
+<tr>
+<td>Other 4xx</td>
+<td>No</td>
+</tr>
+<tr>
+<td>Invalid URL</td>
+<td>No</td>
+</tr>
+</tbody>
+</table>
+<h3 id="backoff-schedule">Backoff Schedule<a class="headerlink" href="#backoff-schedule" title="Permanent link">&para;</a></h3>
+<p>Retries use exponential backoff with jitter (0.8x–1.2x):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>Attempt 1: immediate
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>Attempt 2: ~2s
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>Attempt 3: ~4s
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>Attempt 4: ~8s
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>Attempt 5: ~16s
+</code></pre></div>
+<p>The handler returns <code>"success"</code>, <code>"failed"</code>, or <code>"cancelled"</code>.</p>
+<h2 id="examples">Examples<a class="headerlink" href="#examples" title="Permanent link">&para;</a></h2>
+<h3 id="basic-webhook">Basic Webhook<a class="headerlink" href="#basic-webhook" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">publish_webhook</span><span class="p">(</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>    <span class="n">url</span><span class="o">=</span><span class="s2">&quot;https://api.example.com/webhooks/user-signup&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>    <span class="n">data</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;user_id&quot;</span><span class="p">:</span> <span class="mi">123</span><span class="p">,</span> <span class="s2">&quot;email&quot;</span><span class="p">:</span> <span class="s2">&quot;user@example.com&quot;</span><span class="p">,</span> <span class="s2">&quot;event&quot;</span><span class="p">:</span> <span class="s2">&quot;signup&quot;</span><span class="p">},</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="p">)</span>
+</code></pre></div>
+<h3 id="with-authentication">With Authentication<a class="headerlink" href="#with-authentication" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">publish_webhook</span><span class="p">(</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>    <span class="n">url</span><span class="o">=</span><span class="s2">&quot;https://api.partner.com/webhooks/order&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>    <span class="n">data</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;order_id&quot;</span><span class="p">:</span> <span class="mi">99</span><span class="p">,</span> <span class="s2">&quot;event&quot;</span><span class="p">:</span> <span class="s2">&quot;shipped&quot;</span><span class="p">},</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>    <span class="n">headers</span><span class="o">=</span><span class="p">{</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>        <span class="s2">&quot;Authorization&quot;</span><span class="p">:</span> <span class="sa">f</span><span class="s2">&quot;Bearer </span><span class="si">{</span><span class="n">settings</span><span class="o">.</span><span class="n">PARTNER_WEBHOOK_TOKEN</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>        <span class="s2">&quot;X-Webhook-Signature&quot;</span><span class="p">:</span> <span class="n">generate_hmac</span><span class="p">(</span><span class="n">data</span><span class="p">),</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>    <span class="p">},</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="p">)</span>
+</code></pre></div>
+<h3 id="critical-webhook-more-retries">Critical Webhook (More Retries)<a class="headerlink" href="#critical-webhook-more-retries" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">publish_webhook</span><span class="p">(</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>    <span class="n">url</span><span class="o">=</span><span class="s2">&quot;https://fulfillment.example.com/webhooks/payment&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>    <span class="n">data</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;payment_id&quot;</span><span class="p">:</span> <span class="mi">55</span><span class="p">,</span> <span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="s2">&quot;captured&quot;</span><span class="p">},</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>    <span class="n">max_retries</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>    <span class="n">backoff_base</span><span class="o">=</span><span class="mf">1.5</span><span class="p">,</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>    <span class="n">backoff_max</span><span class="o">=</span><span class="mi">7200</span><span class="p">,</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>    <span class="n">timeout</span><span class="o">=</span><span class="mi">60</span><span class="p">,</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>    <span class="n">webhook_id</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;payment_</span><span class="si">{</span><span class="n">payment</span><span class="o">.</span><span class="n">id</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="p">)</span>
+</code></pre></div>
+<h3 id="scheduled-webhook">Scheduled Webhook<a class="headerlink" href="#scheduled-webhook" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">datetime</span><span class="w"> </span><span class="kn">import</span> <span class="n">timedelta</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="n">dates</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="n">publish_webhook</span><span class="p">(</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>    <span class="n">url</span><span class="o">=</span><span class="s2">&quot;https://notifications.example.com/webhooks/reminder&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>    <span class="n">data</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;user_id&quot;</span><span class="p">:</span> <span class="mi">42</span><span class="p">,</span> <span class="s2">&quot;event&quot;</span><span class="p">:</span> <span class="s2">&quot;trial_ending&quot;</span><span class="p">},</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>    <span class="n">run_at</span><span class="o">=</span><span class="n">dates</span><span class="o">.</span><span class="n">subtract</span><span class="p">(</span><span class="n">trial_end_date</span><span class="p">,</span> <span class="n">days</span><span class="o">=</span><span class="mi">1</span><span class="p">),</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>    <span class="n">expires_in</span><span class="o">=</span><span class="mi">86400</span><span class="p">,</span>
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>    <span class="n">webhook_id</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;trial_reminder_</span><span class="si">{</span><span class="n">user</span><span class="o">.</span><span class="n">id</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="p">)</span>
+</code></pre></div>
+<h3 id="idempotent-webhook">Idempotent Webhook<a class="headerlink" href="#idempotent-webhook" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="n">publish_webhook</span><span class="p">(</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>    <span class="n">url</span><span class="o">=</span><span class="s2">&quot;https://analytics.example.com/events&quot;</span><span class="p">,</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>    <span class="n">data</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;user_id&quot;</span><span class="p">:</span> <span class="mi">42</span><span class="p">,</span> <span class="s2">&quot;event&quot;</span><span class="p">:</span> <span class="s2">&quot;signup&quot;</span><span class="p">},</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>    <span class="n">idempotency_key</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;user_signup_</span><span class="si">{</span><span class="n">user</span><span class="o">.</span><span class="n">id</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="p">)</span>
+</code></pre></div>
+<h2 id="monitoring">Monitoring<a class="headerlink" href="#monitoring" title="Permanent link">&para;</a></h2>
+<h3 id="check-status">Check Status<a class="headerlink" href="#check-status" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.jobs</span><span class="w"> </span><span class="kn">import</span> <span class="n">status</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="n">info</span> <span class="o">=</span> <span class="n">status</span><span class="p">(</span><span class="n">job_id</span><span class="p">)</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="c1"># info[&quot;status&quot;] — &quot;pending&quot;, &quot;running&quot;, &quot;completed&quot;, &quot;failed&quot;</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="c1"># info[&quot;attempt&quot;] — current attempt number</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="c1"># info[&quot;last_error&quot;] — last error message if failed</span>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="c1"># info[&quot;metadata&quot;] — includes webhook-specific data</span>
+</code></pre></div>
+<h3 id="webhook-metadata">Webhook Metadata<a class="headerlink" href="#webhook-metadata" title="Permanent link">&para;</a></h3>
+<p>Completed webhook jobs store rich metadata:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="p">{</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>    <span class="s2">&quot;webhook_started_at&quot;</span><span class="p">:</span> <span class="s2">&quot;2026-03-26T10:30:00Z&quot;</span><span class="p">,</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>    <span class="s2">&quot;webhook_completed_at&quot;</span><span class="p">:</span> <span class="s2">&quot;2026-03-26T10:30:02Z&quot;</span><span class="p">,</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>    <span class="s2">&quot;url&quot;</span><span class="p">:</span> <span class="s2">&quot;https://api.example.com/webhook&quot;</span><span class="p">,</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>    <span class="s2">&quot;webhook_id&quot;</span><span class="p">:</span> <span class="s2">&quot;order_99&quot;</span><span class="p">,</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>    <span class="s2">&quot;attempt&quot;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>    <span class="s2">&quot;timeout_seconds&quot;</span><span class="p">:</span> <span class="mi">30</span><span class="p">,</span>
+<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a>    <span class="s2">&quot;response_status_code&quot;</span><span class="p">:</span> <span class="mi">200</span><span class="p">,</span>
+<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a>    <span class="s2">&quot;response_headers&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;content-type&quot;</span><span class="p">:</span> <span class="s2">&quot;application/json&quot;</span><span class="p">},</span>
+<a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a>    <span class="s2">&quot;response_size_bytes&quot;</span><span class="p">:</span> <span class="mi">156</span><span class="p">,</span>
+<a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a>    <span class="s2">&quot;duration_ms&quot;</span><span class="p">:</span> <span class="mi">1245</span><span class="p">,</span>
+<a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a>    <span class="s2">&quot;headers_sent&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;authorization&quot;</span><span class="p">:</span> <span class="s2">&quot;Bear...xxx&quot;</span><span class="p">,</span> <span class="s2">&quot;content-type&quot;</span><span class="p">:</span> <span class="s2">&quot;application/json&quot;</span><span class="p">},</span>
+<a id="__codelineno-9-13" name="__codelineno-9-13" href="#__codelineno-9-13"></a><span class="p">}</span>
+</code></pre></div>
+<h3 id="metrics">Metrics<a class="headerlink" href="#metrics" title="Permanent link">&para;</a></h3>
+<p>The webhook handler emits these metrics:</p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>webhooks.success</code></td>
+<td>Successful deliveries</td>
+</tr>
+<tr>
+<td><code>webhooks.timeout</code></td>
+<td>Timeouts</td>
+</tr>
+<tr>
+<td><code>webhooks.connection_error</code></td>
+<td>Network failures</td>
+</tr>
+<tr>
+<td><code>webhooks.error_client</code></td>
+<td>HTTP 4xx errors</td>
+</tr>
+<tr>
+<td><code>webhooks.error_retriable</code></td>
+<td>HTTP 5xx errors (will retry)</td>
+</tr>
+<tr>
+<td><code>webhooks.duration_ms</code></td>
+<td>Request duration</td>
+</tr>
+<tr>
+<td><code>webhooks.host.{hostname}.{outcome}</code></td>
+<td>Per-host metrics</td>
 </tr>
 </tbody>
 </table>
 <h2 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">&para;</a></h2>
-<p>Add these settings to your Django <code>settings.py</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># Webhook-specific settings</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">JOBS_WEBHOOK_MAX_RETRIES</span> <span class="o">=</span> <span class="mi">5</span>          <span class="c1"># Default max retries for webhooks</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="n">JOBS_WEBHOOK_DEFAULT_TIMEOUT</span> <span class="o">=</span> <span class="mi">30</span>     <span class="c1"># Default request timeout in seconds  </span>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="n">JOBS_WEBHOOK_MAX_TIMEOUT</span> <span class="o">=</span> <span class="mi">300</span>        <span class="c1"># Maximum allowed timeout</span>
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="n">JOBS_WEBHOOK_USER_AGENT</span> <span class="o">=</span> <span class="s2">&quot;Django-MOJO-Webhook/1.0&quot;</span>  <span class="c1"># Default User-Agent</span>
-<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>
-<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="c1"># Make sure webhooks channel is included</span>
-<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="n">JOBS_CHANNELS</span> <span class="o">=</span> <span class="p">[</span>
-<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>    <span class="s1">&#39;default&#39;</span><span class="p">,</span>
-<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>    <span class="s1">&#39;webhooks&#39;</span><span class="p">,</span>  <span class="c1"># &lt;- Webhook jobs go here by default</span>
-<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>    <span class="s1">&#39;emails&#39;</span><span class="p">,</span>
-<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>    <span class="c1"># ... other channels</span>
-<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="p">]</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># settings.py</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="n">JOBS_WEBHOOK_MAX_RETRIES</span> <span class="o">=</span> <span class="mi">5</span>           <span class="c1"># Default max retries for webhooks</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="n">JOBS_WEBHOOK_DEFAULT_TIMEOUT</span> <span class="o">=</span> <span class="mi">30</span>      <span class="c1"># Default HTTP timeout (seconds)</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="n">JOBS_WEBHOOK_MAX_TIMEOUT</span> <span class="o">=</span> <span class="mi">300</span>         <span class="c1"># Maximum allowed timeout (seconds)</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="n">JOBS_WEBHOOK_USER_AGENT</span> <span class="o">=</span> <span class="s2">&quot;Django-MOJO-Webhook/1.0&quot;</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="c1"># Include webhooks channel</span>
+<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="n">JOBS_CHANNELS</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;default&#39;</span><span class="p">,</span> <span class="s1">&#39;webhooks&#39;</span><span class="p">]</span>
 </code></pre></div>
-<h3 id="environment-specific-configuration">Environment-Specific Configuration<a class="headerlink" href="#environment-specific-configuration" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># Production: More aggressive retries, longer timeouts</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="n">JOBS_WEBHOOK_MAX_RETRIES</span> <span class="o">=</span> <span class="mi">10</span>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="n">JOBS_WEBHOOK_DEFAULT_TIMEOUT</span> <span class="o">=</span> <span class="mi">60</span>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="c1"># Development: Fewer retries, shorter timeouts</span>
-<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="n">JOBS_WEBHOOK_MAX_RETRIES</span> <span class="o">=</span> <span class="mi">2</span>
-<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="n">JOBS_WEBHOOK_DEFAULT_TIMEOUT</span> <span class="o">=</span> <span class="mi">15</span>
+<p>Run a dedicated worker for webhooks:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>jobs_engine<span class="w"> </span>--channels<span class="w"> </span>webhooks<span class="w"> </span>--max-workers<span class="w"> </span><span class="m">20</span>
 </code></pre></div>
-<h2 id="error-handling-retries">Error Handling &amp; Retries<a class="headerlink" href="#error-handling-retries" title="Permanent link">&para;</a></h2>
-<h3 id="automatic-retry-logic">Automatic Retry Logic<a class="headerlink" href="#automatic-retry-logic" title="Permanent link">&para;</a></h3>
-<p>Webhooks are automatically retried for certain types of failures:</p>
-<p><strong>Retried Errors:</strong>
-- Network connection errors
-- Request timeouts
-- HTTP 408 (Request Timeout)
-- HTTP 429 (Too Many Requests) 
-- HTTP 502, 503, 504 (Server Errors)
-- HTTP 520-524 (Cloudflare Errors)</p>
-<p><strong>Not Retried:</strong>
-- HTTP 4xx client errors (400, 401, 403, 404, etc.)
-- Invalid URLs or malformed requests
-- JSON serialization errors</p>
-<h3 id="exponential-backoff">Exponential Backoff<a class="headerlink" href="#exponential-backoff" title="Permanent link">&para;</a></h3>
-<p>Retry delays follow exponential backoff with jitter:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>Attempt 1: immediate
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>Attempt 2: ~2 seconds + jitter
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>Attempt 3: ~4 seconds + jitter  
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>Attempt 4: ~8 seconds + jitter
-<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>Attempt 5: ~16 seconds + jitter
-<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>...
-</code></pre></div>
-<p>Jitter (0.8x - 1.2x) prevents thundering herd problems when many webhooks fail simultaneously.</p>
-<h3 id="custom-retry-configuration">Custom Retry Configuration<a class="headerlink" href="#custom-retry-configuration" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># Critical webhooks: More retries, slower backoff</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="n">publish_webhook</span><span class="p">(</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>    <span class="n">url</span><span class="o">=</span><span class="s2">&quot;https://critical-api.example.com/webhook&quot;</span><span class="p">,</span>
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>    <span class="n">data</span><span class="o">=</span><span class="n">payment_data</span><span class="p">,</span>
-<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>    <span class="n">max_retries</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span>         <span class="c1"># Up to 10 attempts</span>
-<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>    <span class="n">backoff_base</span><span class="o">=</span><span class="mf">1.5</span><span class="p">,</span>       <span class="c1"># Slower growth (1.5^attempt)</span>
-<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>    <span class="n">backoff_max</span><span class="o">=</span><span class="mi">7200</span><span class="p">,</span>       <span class="c1"># Up to 2 hours between retries</span>
-<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>    <span class="n">timeout</span><span class="o">=</span><span class="mi">120</span>             <span class="c1"># Longer timeout</span>
-<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="p">)</span>
-<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a>
-<a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="c1"># Non-critical webhooks: Fewer retries, faster failure</span>
-<a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a><span class="n">publish_webhook</span><span class="p">(</span>
-<a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a>    <span class="n">url</span><span class="o">=</span><span class="s2">&quot;https://analytics.example.com/track&quot;</span><span class="p">,</span>
-<a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a>    <span class="n">data</span><span class="o">=</span><span class="n">analytics_data</span><span class="p">,</span>
-<a id="__codelineno-6-15" name="__codelineno-6-15" href="#__codelineno-6-15"></a>    <span class="n">max_retries</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>          <span class="c1"># Only 2 retries</span>
-<a id="__codelineno-6-16" name="__codelineno-6-16" href="#__codelineno-6-16"></a>    <span class="n">backoff_base</span><span class="o">=</span><span class="mf">2.0</span><span class="p">,</span>       <span class="c1"># Standard growth</span>
-<a id="__codelineno-6-17" name="__codelineno-6-17" href="#__codelineno-6-17"></a>    <span class="n">backoff_max</span><span class="o">=</span><span class="mi">300</span>         <span class="c1"># Max 5 minutes between retries</span>
-<a id="__codelineno-6-18" name="__codelineno-6-18" href="#__codelineno-6-18"></a><span class="p">)</span>
-</code></pre></div>
-<h2 id="monitoring-metrics">Monitoring &amp; Metrics<a class="headerlink" href="#monitoring-metrics" title="Permanent link">&para;</a></h2>
-<h3 id="job-status-tracking">Job Status Tracking<a class="headerlink" href="#job-status-tracking" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.jobs</span><span class="w"> </span><span class="kn">import</span> <span class="n">status</span>
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>
-<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="n">job_id</span> <span class="o">=</span> <span class="n">publish_webhook</span><span class="p">(</span><span class="n">url</span><span class="o">=</span><span class="s2">&quot;...&quot;</span><span class="p">,</span> <span class="n">data</span><span class="o">=</span><span class="p">{</span><span class="o">...</span><span class="p">})</span>
-<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>
-<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="c1"># Check job status</span>
-<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="n">job_status</span> <span class="o">=</span> <span class="n">status</span><span class="p">(</span><span class="n">job_id</span><span class="p">)</span>
-<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Status: </span><span class="si">{</span><span class="n">job_status</span><span class="p">[</span><span class="s1">&#39;status&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Attempt: </span><span class="si">{</span><span class="n">job_status</span><span class="p">[</span><span class="s1">&#39;attempt&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Last error: </span><span class="si">{</span><span class="n">job_status</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;last_error&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;None&#39;</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-</code></pre></div>
-<h3 id="webhook-metadata">Webhook Metadata<a class="headerlink" href="#webhook-metadata" title="Permanent link">&para;</a></h3>
-<p>Completed webhook jobs include rich metadata:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p">{</span>
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>    <span class="s2">&quot;webhook_started_at&quot;</span><span class="p">:</span> <span class="s2">&quot;2024-01-15T10:30:00Z&quot;</span><span class="p">,</span>
-<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>    <span class="s2">&quot;webhook_completed_at&quot;</span><span class="p">:</span> <span class="s2">&quot;2024-01-15T10:30:02Z&quot;</span><span class="p">,</span> 
-<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>    <span class="s2">&quot;url&quot;</span><span class="p">:</span> <span class="s2">&quot;https://api.example.com/webhook&quot;</span><span class="p">,</span>
-<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>    <span class="s2">&quot;webhook_id&quot;</span><span class="p">:</span> <span class="s2">&quot;user_signup_123&quot;</span><span class="p">,</span>
-<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>    <span class="s2">&quot;attempt&quot;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>
-<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>    <span class="s2">&quot;timeout_seconds&quot;</span><span class="p">:</span> <span class="mi">30</span><span class="p">,</span>
-<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a>    <span class="s2">&quot;response_status_code&quot;</span><span class="p">:</span> <span class="mi">200</span><span class="p">,</span>
-<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>    <span class="s2">&quot;response_headers&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;content-type&quot;</span><span class="p">:</span> <span class="s2">&quot;application/json&quot;</span><span class="p">},</span>
-<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a>    <span class="s2">&quot;response_size_bytes&quot;</span><span class="p">:</span> <span class="mi">156</span><span class="p">,</span>
-<a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a>    <span class="s2">&quot;duration_ms&quot;</span><span class="p">:</span> <span class="mi">1245</span><span class="p">,</span>
-<a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a>    <span class="s2">&quot;headers_sent&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;authorization&quot;</span><span class="p">:</span> <span class="s2">&quot;Bear...123&quot;</span><span class="p">,</span> <span class="s2">&quot;content-type&quot;</span><span class="p">:</span> <span class="s2">&quot;application/json&quot;</span><span class="p">}</span>
-<a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a><span class="p">}</span>
-</code></pre></div>
-<h3 id="metrics-for-monitoring">Metrics for Monitoring<a class="headerlink" href="#metrics-for-monitoring" title="Permanent link">&para;</a></h3>
-<p>The webhook system emits metrics for monitoring:</p>
+<h2 id="security">Security<a class="headerlink" href="#security" title="Permanent link">&para;</a></h2>
 <ul>
-<li><code>webhooks.success</code> - Successful webhook deliveries</li>
-<li><code>webhooks.timeout</code> - Webhook timeouts  </li>
-<li><code>webhooks.connection_error</code> - Network connection failures</li>
-<li><code>webhooks.error_client</code> - HTTP 4xx client errors</li>
-<li><code>webhooks.error_retriable</code> - HTTP 5xx server errors (will retry)</li>
-<li><code>webhooks.duration_ms</code> - Request duration in milliseconds</li>
-<li><code>webhooks.host.{hostname}.{outcome}</code> - Per-host metrics</li>
+<li>Sensitive headers (<code>Authorization</code>, <code>X-API-Key</code>, etc.) are automatically masked in logs and metadata</li>
+<li>Always use HTTPS URLs in production</li>
+<li>Implement signature verification on the receiving end</li>
+<li>Use short-lived tokens in Authorization headers</li>
 </ul>
-<p>Set up alerts on high error rates or slow response times.</p>
-<h2 id="security-considerations">Security Considerations<a class="headerlink" href="#security-considerations" title="Permanent link">&para;</a></h2>
-<h3 id="header-sanitization">Header Sanitization<a class="headerlink" href="#header-sanitization" title="Permanent link">&para;</a></h3>
-<p>Sensitive headers are automatically masked in logs and metadata:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="n">publish_webhook</span><span class="p">(</span>
-<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>    <span class="n">url</span><span class="o">=</span><span class="s2">&quot;https://api.example.com/webhook&quot;</span><span class="p">,</span>
-<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>    <span class="n">data</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;event&quot;</span><span class="p">:</span> <span class="s2">&quot;signup&quot;</span><span class="p">},</span>
-<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>    <span class="n">headers</span><span class="o">=</span><span class="p">{</span>
-<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>        <span class="s2">&quot;Authorization&quot;</span><span class="p">:</span> <span class="s2">&quot;Bearer sk_live_1234567890abcdef&quot;</span><span class="p">,</span>  
-<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>        <span class="s2">&quot;X-API-Key&quot;</span><span class="p">:</span> <span class="s2">&quot;secret_api_key_here&quot;</span>
-<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>    <span class="p">}</span>
-<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="p">)</span>
-<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a>
-<a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a><span class="c1"># Stored in metadata as:</span>
-<a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a><span class="c1"># &quot;headers_sent&quot;: {</span>
-<a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a><span class="c1">#     &quot;authorization&quot;: &quot;Bear...cdef&quot;,</span>
-<a id="__codelineno-9-13" name="__codelineno-9-13" href="#__codelineno-9-13"></a><span class="c1">#     &quot;x-api-key&quot;: &quot;secr...here&quot;  </span>
-<a id="__codelineno-9-14" name="__codelineno-9-14" href="#__codelineno-9-14"></a><span class="c1"># }</span>
-</code></pre></div>
-<h3 id="best-practices">Best Practices<a class="headerlink" href="#best-practices" title="Permanent link">&para;</a></h3>
-<ol>
-<li><strong>Use HTTPS URLs</strong> - Never send webhooks to HTTP endpoints in production</li>
-<li><strong>Implement signature verification</strong> on the receiving end</li>
-<li><strong>Use short-lived tokens</strong> in Authorization headers when possible</li>
-<li><strong>Set reasonable timeouts</strong> to prevent resource exhaustion</li>
-<li><strong>Monitor for suspicious patterns</strong> (repeated failures to same endpoint)</li>
-</ol>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># Good: Secure webhook with proper auth</span>
-<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="n">publish_webhook</span><span class="p">(</span>
-<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>    <span class="n">url</span><span class="o">=</span><span class="s2">&quot;https://secure-api.example.com/webhook&quot;</span><span class="p">,</span>  <span class="c1"># HTTPS</span>
-<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>    <span class="n">data</span><span class="o">=</span><span class="n">webhook_data</span><span class="p">,</span>
-<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>    <span class="n">headers</span><span class="o">=</span><span class="p">{</span>
-<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>        <span class="s2">&quot;Authorization&quot;</span><span class="p">:</span> <span class="sa">f</span><span class="s2">&quot;Bearer </span><span class="si">{</span><span class="n">short_lived_token</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
-<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a>        <span class="s2">&quot;X-Webhook-Signature&quot;</span><span class="p">:</span> <span class="n">generate_signature</span><span class="p">(</span><span class="n">webhook_data</span><span class="p">),</span>
-<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a>        <span class="s2">&quot;X-Timestamp&quot;</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()))</span>
-<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a>    <span class="p">},</span>
-<a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a>    <span class="n">timeout</span><span class="o">=</span><span class="mi">30</span><span class="p">,</span>  <span class="c1"># Reasonable timeout</span>
-<a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a>    <span class="n">webhook_id</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;event_</span><span class="si">{</span><span class="n">event</span><span class="o">.</span><span class="n">id</span><span class="si">}</span><span class="s2">&quot;</span>  <span class="c1"># Trackable ID</span>
-<a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a><span class="p">)</span>
-</code></pre></div>
-<h2 id="examples">Examples<a class="headerlink" href="#examples" title="Permanent link">&para;</a></h2>
-<h3 id="user-registration-webhook">User Registration Webhook<a class="headerlink" href="#user-registration-webhook" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">notify_user_registered</span><span class="p">(</span><span class="n">user</span><span class="p">):</span>
-<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Send webhook when user registers.&quot;&quot;&quot;</span>
-<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>    <span class="k">return</span> <span class="n">publish_webhook</span><span class="p">(</span>
-<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>        <span class="n">url</span><span class="o">=</span><span class="s2">&quot;https://analytics.yoursite.com/events/user-registered&quot;</span><span class="p">,</span>
-<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>        <span class="n">data</span><span class="o">=</span><span class="p">{</span>
-<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>            <span class="s2">&quot;event&quot;</span><span class="p">:</span> <span class="s2">&quot;user_registered&quot;</span><span class="p">,</span>
-<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a>            <span class="s2">&quot;user_id&quot;</span><span class="p">:</span> <span class="n">user</span><span class="o">.</span><span class="n">id</span><span class="p">,</span>
-<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a>            <span class="s2">&quot;email&quot;</span><span class="p">:</span> <span class="n">user</span><span class="o">.</span><span class="n">email</span><span class="p">,</span>
-<a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a>            <span class="s2">&quot;registration_date&quot;</span><span class="p">:</span> <span class="n">user</span><span class="o">.</span><span class="n">date_joined</span><span class="o">.</span><span class="n">isoformat</span><span class="p">(),</span>
-<a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a>            <span class="s2">&quot;source&quot;</span><span class="p">:</span> <span class="s2">&quot;web_signup&quot;</span>
-<a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a>        <span class="p">},</span>
-<a id="__codelineno-11-12" name="__codelineno-11-12" href="#__codelineno-11-12"></a>        <span class="n">webhook_id</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;user_registered_</span><span class="si">{</span><span class="n">user</span><span class="o">.</span><span class="n">id</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
-<a id="__codelineno-11-13" name="__codelineno-11-13" href="#__codelineno-11-13"></a>        <span class="n">idempotency_key</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;user_reg_</span><span class="si">{</span><span class="n">user</span><span class="o">.</span><span class="n">id</span><span class="si">}</span><span class="s2">&quot;</span>  <span class="c1"># Prevent duplicates</span>
-<a id="__codelineno-11-14" name="__codelineno-11-14" href="#__codelineno-11-14"></a>    <span class="p">)</span>
-</code></pre></div>
-<h3 id="payment-success-webhook">Payment Success Webhook<a class="headerlink" href="#payment-success-webhook" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">notify_payment_success</span><span class="p">(</span><span class="n">payment</span><span class="p">):</span>
-<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Send webhook when payment succeeds.&quot;&quot;&quot;</span> 
-<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>    <span class="k">return</span> <span class="n">publish_webhook</span><span class="p">(</span>
-<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>        <span class="n">url</span><span class="o">=</span><span class="s2">&quot;https://fulfillment.yoursite.com/webhooks/payment-success&quot;</span><span class="p">,</span>
-<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>        <span class="n">data</span><span class="o">=</span><span class="p">{</span>
-<a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a>            <span class="s2">&quot;event&quot;</span><span class="p">:</span> <span class="s2">&quot;payment_success&quot;</span><span class="p">,</span>
-<a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a>            <span class="s2">&quot;payment_id&quot;</span><span class="p">:</span> <span class="n">payment</span><span class="o">.</span><span class="n">id</span><span class="p">,</span>
-<a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a>            <span class="s2">&quot;order_id&quot;</span><span class="p">:</span> <span class="n">payment</span><span class="o">.</span><span class="n">order_id</span><span class="p">,</span>
-<a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a>            <span class="s2">&quot;amount&quot;</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">payment</span><span class="o">.</span><span class="n">amount</span><span class="p">),</span>
-<a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a>            <span class="s2">&quot;currency&quot;</span><span class="p">:</span> <span class="n">payment</span><span class="o">.</span><span class="n">currency</span><span class="p">,</span>
-<a id="__codelineno-12-11" name="__codelineno-12-11" href="#__codelineno-12-11"></a>            <span class="s2">&quot;customer_id&quot;</span><span class="p">:</span> <span class="n">payment</span><span class="o">.</span><span class="n">customer_id</span><span class="p">,</span>
-<a id="__codelineno-12-12" name="__codelineno-12-12" href="#__codelineno-12-12"></a>            <span class="s2">&quot;processed_at&quot;</span><span class="p">:</span> <span class="n">payment</span><span class="o">.</span><span class="n">processed_at</span><span class="o">.</span><span class="n">isoformat</span><span class="p">()</span>
-<a id="__codelineno-12-13" name="__codelineno-12-13" href="#__codelineno-12-13"></a>        <span class="p">},</span>
-<a id="__codelineno-12-14" name="__codelineno-12-14" href="#__codelineno-12-14"></a>        <span class="n">headers</span><span class="o">=</span><span class="p">{</span>
-<a id="__codelineno-12-15" name="__codelineno-12-15" href="#__codelineno-12-15"></a>            <span class="s2">&quot;Authorization&quot;</span><span class="p">:</span> <span class="sa">f</span><span class="s2">&quot;Bearer </span><span class="si">{</span><span class="n">settings</span><span class="o">.</span><span class="n">FULFILLMENT_WEBHOOK_TOKEN</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
-<a id="__codelineno-12-16" name="__codelineno-12-16" href="#__codelineno-12-16"></a>            <span class="s2">&quot;X-Idempotency-Key&quot;</span><span class="p">:</span> <span class="sa">f</span><span class="s2">&quot;payment_</span><span class="si">{</span><span class="n">payment</span><span class="o">.</span><span class="n">id</span><span class="si">}</span><span class="s2">_success&quot;</span>
-<a id="__codelineno-12-17" name="__codelineno-12-17" href="#__codelineno-12-17"></a>        <span class="p">},</span>
-<a id="__codelineno-12-18" name="__codelineno-12-18" href="#__codelineno-12-18"></a>        <span class="n">max_retries</span><span class="o">=</span><span class="mi">8</span><span class="p">,</span>  <span class="c1"># Critical for payments</span>
-<a id="__codelineno-12-19" name="__codelineno-12-19" href="#__codelineno-12-19"></a>        <span class="n">timeout</span><span class="o">=</span><span class="mi">60</span><span class="p">,</span>     <span class="c1"># Longer timeout for important webhooks</span>
-<a id="__codelineno-12-20" name="__codelineno-12-20" href="#__codelineno-12-20"></a>        <span class="n">webhook_id</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;payment_success_</span><span class="si">{</span><span class="n">payment</span><span class="o">.</span><span class="n">id</span><span class="si">}</span><span class="s2">&quot;</span>
-<a id="__codelineno-12-21" name="__codelineno-12-21" href="#__codelineno-12-21"></a>    <span class="p">)</span>
-</code></pre></div>
-<h3 id="batch-webhook-processing">Batch Webhook Processing<a class="headerlink" href="#batch-webhook-processing" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">send_order_confirmations</span><span class="p">(</span><span class="n">orders</span><span class="p">):</span>
-<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Send webhook for each order in a batch.&quot;&quot;&quot;</span>
-<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>    <span class="n">job_ids</span> <span class="o">=</span> <span class="p">[]</span>
-<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>
-<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a>    <span class="k">for</span> <span class="n">order</span> <span class="ow">in</span> <span class="n">orders</span><span class="p">:</span>
-<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a>        <span class="n">job_id</span> <span class="o">=</span> <span class="n">publish_webhook</span><span class="p">(</span>
-<a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a>            <span class="n">url</span><span class="o">=</span><span class="s2">&quot;https://crm.yoursite.com/webhooks/new-order&quot;</span><span class="p">,</span>
-<a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a>            <span class="n">data</span><span class="o">=</span><span class="p">{</span>
-<a id="__codelineno-13-9" name="__codelineno-13-9" href="#__codelineno-13-9"></a>                <span class="s2">&quot;event&quot;</span><span class="p">:</span> <span class="s2">&quot;order_created&quot;</span><span class="p">,</span>
-<a id="__codelineno-13-10" name="__codelineno-13-10" href="#__codelineno-13-10"></a>                <span class="s2">&quot;order_id&quot;</span><span class="p">:</span> <span class="n">order</span><span class="o">.</span><span class="n">id</span><span class="p">,</span>
-<a id="__codelineno-13-11" name="__codelineno-13-11" href="#__codelineno-13-11"></a>                <span class="s2">&quot;customer_email&quot;</span><span class="p">:</span> <span class="n">order</span><span class="o">.</span><span class="n">customer</span><span class="o">.</span><span class="n">email</span><span class="p">,</span>
-<a id="__codelineno-13-12" name="__codelineno-13-12" href="#__codelineno-13-12"></a>                <span class="s2">&quot;total_amount&quot;</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">order</span><span class="o">.</span><span class="n">total</span><span class="p">),</span>
-<a id="__codelineno-13-13" name="__codelineno-13-13" href="#__codelineno-13-13"></a>                <span class="s2">&quot;items&quot;</span><span class="p">:</span> <span class="p">[</span>
-<a id="__codelineno-13-14" name="__codelineno-13-14" href="#__codelineno-13-14"></a>                    <span class="p">{</span><span class="s2">&quot;sku&quot;</span><span class="p">:</span> <span class="n">item</span><span class="o">.</span><span class="n">sku</span><span class="p">,</span> <span class="s2">&quot;quantity&quot;</span><span class="p">:</span> <span class="n">item</span><span class="o">.</span><span class="n">quantity</span><span class="p">}</span>
-<a id="__codelineno-13-15" name="__codelineno-13-15" href="#__codelineno-13-15"></a>                    <span class="k">for</span> <span class="n">item</span> <span class="ow">in</span> <span class="n">order</span><span class="o">.</span><span class="n">items</span><span class="o">.</span><span class="n">all</span><span class="p">()</span>
-<a id="__codelineno-13-16" name="__codelineno-13-16" href="#__codelineno-13-16"></a>                <span class="p">]</span>
-<a id="__codelineno-13-17" name="__codelineno-13-17" href="#__codelineno-13-17"></a>            <span class="p">},</span>
-<a id="__codelineno-13-18" name="__codelineno-13-18" href="#__codelineno-13-18"></a>            <span class="n">headers</span><span class="o">=</span><span class="p">{</span>
-<a id="__codelineno-13-19" name="__codelineno-13-19" href="#__codelineno-13-19"></a>                <span class="s2">&quot;Authorization&quot;</span><span class="p">:</span> <span class="sa">f</span><span class="s2">&quot;Bearer </span><span class="si">{</span><span class="n">settings</span><span class="o">.</span><span class="n">CRM_WEBHOOK_TOKEN</span><span class="si">}</span><span class="s2">&quot;</span>
-<a id="__codelineno-13-20" name="__codelineno-13-20" href="#__codelineno-13-20"></a>            <span class="p">},</span>
-<a id="__codelineno-13-21" name="__codelineno-13-21" href="#__codelineno-13-21"></a>            <span class="n">webhook_id</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;order_created_</span><span class="si">{</span><span class="n">order</span><span class="o">.</span><span class="n">id</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
-<a id="__codelineno-13-22" name="__codelineno-13-22" href="#__codelineno-13-22"></a>            <span class="n">idempotency_key</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;order_</span><span class="si">{</span><span class="n">order</span><span class="o">.</span><span class="n">id</span><span class="si">}</span><span class="s2">_created&quot;</span>
-<a id="__codelineno-13-23" name="__codelineno-13-23" href="#__codelineno-13-23"></a>        <span class="p">)</span>
-<a id="__codelineno-13-24" name="__codelineno-13-24" href="#__codelineno-13-24"></a>        <span class="n">job_ids</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">job_id</span><span class="p">)</span>
-<a id="__codelineno-13-25" name="__codelineno-13-25" href="#__codelineno-13-25"></a>
-<a id="__codelineno-13-26" name="__codelineno-13-26" href="#__codelineno-13-26"></a>    <span class="k">return</span> <span class="n">job_ids</span>
-</code></pre></div>
-<h3 id="delayed-notification-webhook">Delayed Notification Webhook<a class="headerlink" href="#delayed-notification-webhook" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">schedule_trial_ending_reminder</span><span class="p">(</span><span class="n">user</span><span class="p">,</span> <span class="n">trial_end_date</span><span class="p">):</span>
-<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Send webhook 24 hours before trial ends.&quot;&quot;&quot;</span>
-<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>    <span class="n">reminder_time</span> <span class="o">=</span> <span class="n">trial_end_date</span> <span class="o">-</span> <span class="n">timedelta</span><span class="p">(</span><span class="n">days</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
-<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>
-<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a>    <span class="k">return</span> <span class="n">publish_webhook</span><span class="p">(</span>
-<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a>        <span class="n">url</span><span class="o">=</span><span class="s2">&quot;https://notifications.yoursite.com/webhooks/trial-reminder&quot;</span><span class="p">,</span>
-<a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a>        <span class="n">data</span><span class="o">=</span><span class="p">{</span>
-<a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a>            <span class="s2">&quot;event&quot;</span><span class="p">:</span> <span class="s2">&quot;trial_ending_reminder&quot;</span><span class="p">,</span> 
-<a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a>            <span class="s2">&quot;user_id&quot;</span><span class="p">:</span> <span class="n">user</span><span class="o">.</span><span class="n">id</span><span class="p">,</span>
-<a id="__codelineno-14-10" name="__codelineno-14-10" href="#__codelineno-14-10"></a>            <span class="s2">&quot;email&quot;</span><span class="p">:</span> <span class="n">user</span><span class="o">.</span><span class="n">email</span><span class="p">,</span>
-<a id="__codelineno-14-11" name="__codelineno-14-11" href="#__codelineno-14-11"></a>            <span class="s2">&quot;trial_ends_at&quot;</span><span class="p">:</span> <span class="n">trial_end_date</span><span class="o">.</span><span class="n">isoformat</span><span class="p">(),</span>
-<a id="__codelineno-14-12" name="__codelineno-14-12" href="#__codelineno-14-12"></a>            <span class="s2">&quot;plan&quot;</span><span class="p">:</span> <span class="n">user</span><span class="o">.</span><span class="n">subscription</span><span class="o">.</span><span class="n">plan_name</span>
-<a id="__codelineno-14-13" name="__codelineno-14-13" href="#__codelineno-14-13"></a>        <span class="p">},</span>
-<a id="__codelineno-14-14" name="__codelineno-14-14" href="#__codelineno-14-14"></a>        <span class="n">run_at</span><span class="o">=</span><span class="n">reminder_time</span><span class="p">,</span>  <span class="c1"># Schedule for specific time</span>
-<a id="__codelineno-14-15" name="__codelineno-14-15" href="#__codelineno-14-15"></a>        <span class="n">expires_in</span><span class="o">=</span><span class="mi">86400</span><span class="p">,</span>      <span class="c1"># Expire if not sent within 24 hours</span>
-<a id="__codelineno-14-16" name="__codelineno-14-16" href="#__codelineno-14-16"></a>        <span class="n">webhook_id</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;trial_reminder_</span><span class="si">{</span><span class="n">user</span><span class="o">.</span><span class="n">id</span><span class="si">}</span><span class="s2">_</span><span class="si">{</span><span class="n">trial_end_date</span><span class="o">.</span><span class="n">date</span><span class="p">()</span><span class="si">}</span><span class="s2">&quot;</span>
-<a id="__codelineno-14-17" name="__codelineno-14-17" href="#__codelineno-14-17"></a>    <span class="p">)</span>
-</code></pre></div>
-<h3 id="webhook-with-custom-retry-logic">Webhook with Custom Retry Logic<a class="headerlink" href="#webhook-with-custom-retry-logic" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">send_critical_system_alert</span><span class="p">(</span><span class="n">alert_data</span><span class="p">):</span>
-<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Send critical system alerts with aggressive retry policy.&quot;&quot;&quot;</span>
-<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>    <span class="k">return</span> <span class="n">publish_webhook</span><span class="p">(</span>
-<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a>        <span class="n">url</span><span class="o">=</span><span class="s2">&quot;https://alerts.yoursite.com/webhooks/critical&quot;</span><span class="p">,</span>
-<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a>        <span class="n">data</span><span class="o">=</span><span class="p">{</span>
-<a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a>            <span class="s2">&quot;alert_level&quot;</span><span class="p">:</span> <span class="s2">&quot;critical&quot;</span><span class="p">,</span>
-<a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a>            <span class="s2">&quot;service&quot;</span><span class="p">:</span> <span class="n">alert_data</span><span class="p">[</span><span class="s2">&quot;service&quot;</span><span class="p">],</span>
-<a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a>            <span class="s2">&quot;message&quot;</span><span class="p">:</span> <span class="n">alert_data</span><span class="p">[</span><span class="s2">&quot;message&quot;</span><span class="p">],</span> 
-<a id="__codelineno-15-9" name="__codelineno-15-9" href="#__codelineno-15-9"></a>            <span class="s2">&quot;timestamp&quot;</span><span class="p">:</span> <span class="n">datetime</span><span class="o">.</span><span class="n">utcnow</span><span class="p">()</span><span class="o">.</span><span class="n">isoformat</span><span class="p">(),</span>
-<a id="__codelineno-15-10" name="__codelineno-15-10" href="#__codelineno-15-10"></a>            <span class="s2">&quot;affected_users&quot;</span><span class="p">:</span> <span class="n">alert_data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;affected_users&quot;</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
-<a id="__codelineno-15-11" name="__codelineno-15-11" href="#__codelineno-15-11"></a>        <span class="p">},</span>
-<a id="__codelineno-15-12" name="__codelineno-15-12" href="#__codelineno-15-12"></a>        <span class="n">headers</span><span class="o">=</span><span class="p">{</span>
-<a id="__codelineno-15-13" name="__codelineno-15-13" href="#__codelineno-15-13"></a>            <span class="s2">&quot;Authorization&quot;</span><span class="p">:</span> <span class="sa">f</span><span class="s2">&quot;Bearer </span><span class="si">{</span><span class="n">settings</span><span class="o">.</span><span class="n">ALERTS_WEBHOOK_TOKEN</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
-<a id="__codelineno-15-14" name="__codelineno-15-14" href="#__codelineno-15-14"></a>            <span class="s2">&quot;X-Alert-Priority&quot;</span><span class="p">:</span> <span class="s2">&quot;critical&quot;</span>
-<a id="__codelineno-15-15" name="__codelineno-15-15" href="#__codelineno-15-15"></a>        <span class="p">},</span>
-<a id="__codelineno-15-16" name="__codelineno-15-16" href="#__codelineno-15-16"></a>        <span class="n">max_retries</span><span class="o">=</span><span class="mi">15</span><span class="p">,</span>        <span class="c1"># Very aggressive retry</span>
-<a id="__codelineno-15-17" name="__codelineno-15-17" href="#__codelineno-15-17"></a>        <span class="n">backoff_base</span><span class="o">=</span><span class="mf">1.3</span><span class="p">,</span>      <span class="c1"># Slower backoff growth  </span>
-<a id="__codelineno-15-18" name="__codelineno-15-18" href="#__codelineno-15-18"></a>        <span class="n">backoff_max</span><span class="o">=</span><span class="mi">1800</span><span class="p">,</span>      <span class="c1"># Max 30 minutes between retries</span>
-<a id="__codelineno-15-19" name="__codelineno-15-19" href="#__codelineno-15-19"></a>        <span class="n">timeout</span><span class="o">=</span><span class="mi">120</span><span class="p">,</span>           <span class="c1"># Longer timeout for critical alerts</span>
-<a id="__codelineno-15-20" name="__codelineno-15-20" href="#__codelineno-15-20"></a>        <span class="n">webhook_id</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;critical_alert_</span><span class="si">{</span><span class="n">alert_data</span><span class="p">[</span><span class="s1">&#39;alert_id&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span>
-<a id="__codelineno-15-21" name="__codelineno-15-21" href="#__codelineno-15-21"></a>    <span class="p">)</span>
-</code></pre></div>
-<h2 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permanent link">&para;</a></h2>
-<h3 id="common-issues">Common Issues<a class="headerlink" href="#common-issues" title="Permanent link">&para;</a></h3>
-<p><strong>1. Webhook not being sent</strong>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="c1"># Check if job was created</span>
-<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>from<span class="w"> </span>mojo.apps.jobs<span class="w"> </span>import<span class="w"> </span>status
-<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a><span class="nv">job_status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span>status<span class="o">(</span>job_id<span class="o">)</span>
-<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a>print<span class="o">(</span>job_status<span class="o">)</span>
-<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a>
-<a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a><span class="c1"># Check if webhook channel is being processed</span>
-<a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a>python<span class="w"> </span>manage.py<span class="w"> </span>jobs_engine<span class="w"> </span>--channels<span class="w"> </span>webhooks
-</code></pre></div></p>
-<p><strong>2. Webhook failing with timeout</strong>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="c1"># Increase timeout for slow endpoints</span>
-<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="n">publish_webhook</span><span class="p">(</span>
-<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a>    <span class="n">url</span><span class="o">=</span><span class="s2">&quot;https://slow-api.example.com/webhook&quot;</span><span class="p">,</span>
-<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a>    <span class="n">data</span><span class="o">=</span><span class="n">webhook_data</span><span class="p">,</span>
-<a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a>    <span class="n">timeout</span><span class="o">=</span><span class="mi">120</span>  <span class="c1"># 2 minutes instead of default 30 seconds</span>
-<a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a><span class="p">)</span>
-</code></pre></div></p>
-<p><strong>3. Too many retries</strong>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="c1"># Check job metadata for error details</span>
-<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="n">job_status</span> <span class="o">=</span> <span class="n">status</span><span class="p">(</span><span class="n">job_id</span><span class="p">)</span>
-<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Last error:&quot;</span><span class="p">,</span> <span class="n">job_status</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;last_error&#39;</span><span class="p">))</span>
-<a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a><span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Attempt:&quot;</span><span class="p">,</span> <span class="n">job_status</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;attempt&#39;</span><span class="p">))</span>
-<a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a><span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Metadata:&quot;</span><span class="p">,</span> <span class="n">job_status</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;metadata&#39;</span><span class="p">))</span>
-</code></pre></div></p>
-<p><strong>4. Webhooks being duplicated</strong>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="c1"># Use idempotency keys to prevent duplicates</span>
-<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a><span class="n">publish_webhook</span><span class="p">(</span>
-<a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a>    <span class="n">url</span><span class="o">=</span><span class="s2">&quot;https://api.example.com/webhook&quot;</span><span class="p">,</span>
-<a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a>    <span class="n">data</span><span class="o">=</span><span class="n">webhook_data</span><span class="p">,</span>
-<a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a>    <span class="n">idempotency_key</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;unique_event_</span><span class="si">{</span><span class="n">event</span><span class="o">.</span><span class="n">id</span><span class="si">}</span><span class="s2">_</span><span class="si">{</span><span class="n">event</span><span class="o">.</span><span class="n">type</span><span class="si">}</span><span class="s2">&quot;</span>
-<a id="__codelineno-19-6" name="__codelineno-19-6" href="#__codelineno-19-6"></a><span class="p">)</span>
-</code></pre></div></p>
-<h3 id="debugging-failed-webhooks">Debugging Failed Webhooks<a class="headerlink" href="#debugging-failed-webhooks" title="Permanent link">&para;</a></h3>
-<ol>
-<li>
-<p><strong>Check job status and metadata:</strong>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.jobs</span><span class="w"> </span><span class="kn">import</span> <span class="n">status</span>
-<a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a><span class="n">job_info</span> <span class="o">=</span> <span class="n">status</span><span class="p">(</span><span class="n">job_id</span><span class="p">)</span>
-<a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a><span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Status:&quot;</span><span class="p">,</span> <span class="n">job_info</span><span class="p">[</span><span class="s1">&#39;status&#39;</span><span class="p">])</span>
-<a id="__codelineno-20-4" name="__codelineno-20-4" href="#__codelineno-20-4"></a><span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Attempts:&quot;</span><span class="p">,</span> <span class="n">job_info</span><span class="p">[</span><span class="s1">&#39;attempt&#39;</span><span class="p">])</span> 
-<a id="__codelineno-20-5" name="__codelineno-20-5" href="#__codelineno-20-5"></a><span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Last error:&quot;</span><span class="p">,</span> <span class="n">job_info</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;last_error&#39;</span><span class="p">))</span>
-<a id="__codelineno-20-6" name="__codelineno-20-6" href="#__codelineno-20-6"></a><span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Metadata:&quot;</span><span class="p">,</span> <span class="n">job_info</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;metadata&#39;</span><span class="p">))</span>
-</code></pre></div></p>
-</li>
-<li>
-<p><strong>Review webhook job logs:</strong>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="c1"># Look for webhook-specific log entries</span>
-<a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a>tail<span class="w"> </span>-f<span class="w"> </span>logs/jobs.log<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>webhook
-</code></pre></div></p>
-</li>
-<li>
-<p><strong>Test endpoint manually:</strong>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">requests</span>
-<a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a>
-<a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a><span class="c1"># Test the endpoint directly</span>
-<a id="__codelineno-22-4" name="__codelineno-22-4" href="#__codelineno-22-4"></a><span class="n">response</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">post</span><span class="p">(</span>
-<a id="__codelineno-22-5" name="__codelineno-22-5" href="#__codelineno-22-5"></a>    <span class="s2">&quot;https://api.example.com/webhook&quot;</span><span class="p">,</span>
-<a id="__codelineno-22-6" name="__codelineno-22-6" href="#__codelineno-22-6"></a>    <span class="n">json</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;test&quot;</span><span class="p">:</span> <span class="s2">&quot;data&quot;</span><span class="p">},</span>
-<a id="__codelineno-22-7" name="__codelineno-22-7" href="#__codelineno-22-7"></a>    <span class="n">headers</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;Authorization&quot;</span><span class="p">:</span> <span class="s2">&quot;Bearer token&quot;</span><span class="p">},</span>
-<a id="__codelineno-22-8" name="__codelineno-22-8" href="#__codelineno-22-8"></a>    <span class="n">timeout</span><span class="o">=</span><span class="mi">30</span>
-<a id="__codelineno-22-9" name="__codelineno-22-9" href="#__codelineno-22-9"></a><span class="p">)</span>
-<a id="__codelineno-22-10" name="__codelineno-22-10" href="#__codelineno-22-10"></a><span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Status:&quot;</span><span class="p">,</span> <span class="n">response</span><span class="o">.</span><span class="n">status_code</span><span class="p">)</span>
-<a id="__codelineno-22-11" name="__codelineno-22-11" href="#__codelineno-22-11"></a><span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Response:&quot;</span><span class="p">,</span> <span class="n">response</span><span class="o">.</span><span class="n">text</span><span class="p">)</span>
-</code></pre></div></p>
-</li>
-<li>
-<p><strong>Use webhook testing services:</strong>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a><span class="c1"># Test with httpbin.org to see what&#39;s being sent</span>
-<a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a><span class="n">test_job_id</span> <span class="o">=</span> <span class="n">publish_webhook</span><span class="p">(</span>
-<a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a>    <span class="n">url</span><span class="o">=</span><span class="s2">&quot;https://httpbin.org/post&quot;</span><span class="p">,</span>
-<a id="__codelineno-23-4" name="__codelineno-23-4" href="#__codelineno-23-4"></a>    <span class="n">data</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;test&quot;</span><span class="p">:</span> <span class="s2">&quot;webhook&quot;</span><span class="p">},</span>
-<a id="__codelineno-23-5" name="__codelineno-23-5" href="#__codelineno-23-5"></a>    <span class="n">headers</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;X-Test&quot;</span><span class="p">:</span> <span class="s2">&quot;true&quot;</span><span class="p">}</span>
-<a id="__codelineno-23-6" name="__codelineno-23-6" href="#__codelineno-23-6"></a><span class="p">)</span>
-<a id="__codelineno-23-7" name="__codelineno-23-7" href="#__codelineno-23-7"></a>
-<a id="__codelineno-23-8" name="__codelineno-23-8" href="#__codelineno-23-8"></a><span class="c1"># Check the response in job metadata after completion</span>
-<a id="__codelineno-23-9" name="__codelineno-23-9" href="#__codelineno-23-9"></a><span class="n">test_status</span> <span class="o">=</span> <span class="n">status</span><span class="p">(</span><span class="n">test_job_id</span><span class="p">)</span>
-<a id="__codelineno-23-10" name="__codelineno-23-10" href="#__codelineno-23-10"></a><span class="nb">print</span><span class="p">(</span><span class="n">test_status</span><span class="p">[</span><span class="s1">&#39;metadata&#39;</span><span class="p">][</span><span class="s1">&#39;response_sample&#39;</span><span class="p">])</span>
-</code></pre></div></p>
-</li>
-</ol>
-<h3 id="performance-considerations">Performance Considerations<a class="headerlink" href="#performance-considerations" title="Permanent link">&para;</a></h3>
-<p><strong>High-volume webhook sending:</strong>
-- Use dedicated webhook channels: <code>channel="webhooks-high-volume"</code>
-- Run multiple webhook workers: <code>python manage.py jobs_engine --channels webhooks --max-workers 50</code>
-- Consider webhook batching for the same endpoint
-- Monitor queue lengths and processing times</p>
-<p><strong>Memory usage with large payloads:</strong>
-- Keep webhook payloads under 1MB (configurable with <code>JOBS_PAYLOAD_MAX_BYTES</code>)
-- For large data, consider sending just IDs and letting the receiver fetch details
-- Use pagination for bulk data transfers</p>
-<h3 id="monitoring-dashboard-queries">Monitoring Dashboard Queries<a class="headerlink" href="#monitoring-dashboard-queries" title="Permanent link">&para;</a></h3>
-<p><strong>Webhook success rate (last 24 hours):</strong>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a><span class="k">SELECT</span><span class="w"> </span>
-<a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a><span class="w">    </span><span class="k">COUNT</span><span class="p">(</span><span class="k">CASE</span><span class="w"> </span><span class="k">WHEN</span><span class="w"> </span><span class="n">status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;completed&#39;</span><span class="w"> </span><span class="k">THEN</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="k">END</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">100</span><span class="p">.</span><span class="mi">0</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="k">COUNT</span><span class="p">(</span><span class="o">*</span><span class="p">)</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">success_rate</span>
-<a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a><span class="k">FROM</span><span class="w"> </span><span class="n">jobs_job</span><span class="w"> </span>
-<a id="__codelineno-24-4" name="__codelineno-24-4" href="#__codelineno-24-4"></a><span class="k">WHERE</span><span class="w"> </span><span class="n">channel</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;webhooks&#39;</span><span class="w"> </span>
-<a id="__codelineno-24-5" name="__codelineno-24-5" href="#__codelineno-24-5"></a><span class="w">    </span><span class="k">AND</span><span class="w"> </span><span class="n">created</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="n">NOW</span><span class="p">()</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nb">INTERVAL</span><span class="w"> </span><span class="s1">&#39;24 hours&#39;</span><span class="p">;</span>
-</code></pre></div></p>
-<p><strong>Top failing webhook endpoints:</strong>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a><span class="k">SELECT</span><span class="w"> </span>
-<a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a><span class="w">    </span><span class="n">JSON_EXTRACT</span><span class="p">(</span><span class="n">payload</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;$.url&#39;</span><span class="p">)</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">webhook_url</span><span class="p">,</span>
-<a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a><span class="w">    </span><span class="k">COUNT</span><span class="p">(</span><span class="o">*</span><span class="p">)</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">failure_count</span><span class="p">,</span>
-<a id="__codelineno-25-4" name="__codelineno-25-4" href="#__codelineno-25-4"></a><span class="w">    </span><span class="k">AVG</span><span class="p">(</span><span class="n">attempt</span><span class="p">)</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">avg_attempts</span>
-<a id="__codelineno-25-5" name="__codelineno-25-5" href="#__codelineno-25-5"></a><span class="k">FROM</span><span class="w"> </span><span class="n">jobs_job</span><span class="w"> </span>
-<a id="__codelineno-25-6" name="__codelineno-25-6" href="#__codelineno-25-6"></a><span class="k">WHERE</span><span class="w"> </span><span class="n">channel</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;webhooks&#39;</span><span class="w"> </span>
-<a id="__codelineno-25-7" name="__codelineno-25-7" href="#__codelineno-25-7"></a><span class="w">    </span><span class="k">AND</span><span class="w"> </span><span class="n">status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;failed&#39;</span>
-<a id="__codelineno-25-8" name="__codelineno-25-8" href="#__codelineno-25-8"></a><span class="w">    </span><span class="k">AND</span><span class="w"> </span><span class="n">created</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="n">NOW</span><span class="p">()</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nb">INTERVAL</span><span class="w"> </span><span class="s1">&#39;7 days&#39;</span>
-<a id="__codelineno-25-9" name="__codelineno-25-9" href="#__codelineno-25-9"></a><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">JSON_EXTRACT</span><span class="p">(</span><span class="n">payload</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;$.url&#39;</span><span class="p">)</span>
-<a id="__codelineno-25-10" name="__codelineno-25-10" href="#__codelineno-25-10"></a><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">failure_count</span><span class="w"> </span><span class="k">DESC</span>
-<a id="__codelineno-25-11" name="__codelineno-25-11" href="#__codelineno-25-11"></a><span class="k">LIMIT</span><span class="w"> </span><span class="mi">10</span><span class="p">;</span>
-</code></pre></div></p>
-<p><strong>Average webhook processing time:</strong>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a><span class="k">SELECT</span><span class="w"> </span>
-<a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a><span class="w">    </span><span class="k">AVG</span><span class="p">(</span><span class="n">JSON_EXTRACT</span><span class="p">(</span><span class="n">metadata</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;$.duration_ms&#39;</span><span class="p">))</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">avg_duration_ms</span>
-<a id="__codelineno-26-3" name="__codelineno-26-3" href="#__codelineno-26-3"></a><span class="k">FROM</span><span class="w"> </span><span class="n">jobs_job</span><span class="w"> </span>
-<a id="__codelineno-26-4" name="__codelineno-26-4" href="#__codelineno-26-4"></a><span class="k">WHERE</span><span class="w"> </span><span class="n">channel</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;webhooks&#39;</span><span class="w"> </span>
-<a id="__codelineno-26-5" name="__codelineno-26-5" href="#__codelineno-26-5"></a><span class="w">    </span><span class="k">AND</span><span class="w"> </span><span class="n">status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;completed&#39;</span>
-<a id="__codelineno-26-6" name="__codelineno-26-6" href="#__codelineno-26-6"></a><span class="w">    </span><span class="k">AND</span><span class="w"> </span><span class="n">JSON_EXTRACT</span><span class="p">(</span><span class="n">metadata</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;$.duration_ms&#39;</span><span class="p">)</span><span class="w"> </span><span class="k">IS</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span>
-<a id="__codelineno-26-7" name="__codelineno-26-7" href="#__codelineno-26-7"></a><span class="w">    </span><span class="k">AND</span><span class="w"> </span><span class="n">created</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="n">NOW</span><span class="p">()</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nb">INTERVAL</span><span class="w"> </span><span class="s1">&#39;24 hours&#39;</span><span class="p">;</span>
-</code></pre></div></p>
-<hr />
-<h2 id="summary">Summary<a class="headerlink" href="#summary" title="Permanent link">&para;</a></h2>
-<p>Django-MOJO Jobs webhook support provides:</p>
-<p>✅ <strong>Simple API</strong> - Just <code>publish_webhook(url, data)</code><br />
-✅ <strong>Robust retry logic</strong> - Exponential backoff with jitter<br />
-✅ <strong>Smart error handling</strong> - Knows when to retry vs. fail<br />
-✅ <strong>Comprehensive monitoring</strong> - Detailed metadata and metrics<br />
-✅ <strong>Security-conscious</strong> - Header sanitization and HTTPS validation<br />
-✅ <strong>Production-ready</strong> - Handles high-volume webhook sending<br />
-✅ <strong>Flexible scheduling</strong> - Immediate, delayed, or scheduled webhooks<br />
-✅ <strong>Duplicate prevention</strong> - Idempotency key support  </p>
-<p>The webhook system leverages all the existing job infrastructure (Redis streams, Postgres persistence, worker management) while providing webhook-specific optimizations and features.</p>
 
 
 
