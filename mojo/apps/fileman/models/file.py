@@ -22,7 +22,8 @@ class File(models.Model, MojoModel):
         CAN_SAVE = CAN_CREATE = True
         CAN_DELETE = True
         DEFAULT_SORT = "-created"
-        VIEW_PERMS = ["view_fileman", "manage_files"]
+        VIEW_PERMS = ["view_fileman", "manage_files", "files"]
+        SAVE_PERMS = ["manage_files", "files"]
         SEARCH_FIELDS = ["filename", "content_type"]
         POST_SAVE_ACTIONS = ["action"]
         SEARCH_TERMS = [

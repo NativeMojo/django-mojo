@@ -107,9 +107,9 @@ class EmailDomain(MojoSecrets, MojoModel):
         ordering = ["name"]
 
     class RestMeta:
-        VIEW_PERMS = ["manage_aws"]
-        SAVE_PERMS = ["manage_aws"]
-        DELETE_PERMS = ["manage_aws"]
+        VIEW_PERMS = ["manage_aws", "email"]
+        SAVE_PERMS = ["manage_aws", "email"]
+        DELETE_PERMS = ["manage_aws", "email"]
         SEARCH_FIELDS = ["name", "region", "status"]
         GRAPHS = {
             "basic": {

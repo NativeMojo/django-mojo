@@ -132,8 +132,8 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         # do so via direct DB access or a dedicated management command.
         NO_SAVE_FIELDS = ["auth_key", "last_activity", "is_dob_verified"]
         SEARCH_FIELDS = ["username", "email", "display_name", "phone_number"]
-        VIEW_PERMS = ["view_users", "manage_users", "owner"]
-        SAVE_PERMS = ["manage_users", "owner"]
+        VIEW_PERMS = ["view_users", "manage_users", "users", "owner"]
+        SAVE_PERMS = ["manage_users", "users", "owner"]
         OWNER_FIELD = "self"
         LIST_DEFAULT_FILTERS = {
             "is_active": True

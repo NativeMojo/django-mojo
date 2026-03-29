@@ -43,9 +43,9 @@ class Passkey(MojoModel, models.Model):
         ]
 
     class RestMeta:
-        VIEW_PERMS = ["owner", "manage_users"]
-        SAVE_PERMS = ["owner", "manage_users"]
-        DELETE_PERMS = ["owner", "manage_users"]
+        VIEW_PERMS = ["owner", "manage_users", "users"]
+        SAVE_PERMS = ["owner", "manage_users", "users"]
+        DELETE_PERMS = ["owner", "manage_users", "users"]
         CAN_DELETE = True
         OWNER_FIELD = "user"
         UNIQUE_LOOKUP = ["credential_id"]

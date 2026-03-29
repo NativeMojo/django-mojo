@@ -32,8 +32,8 @@ class PushConfig(MojoSecrets, MojoModel):
         ordering = ['group__name', 'name']
 
     class RestMeta:
-        VIEW_PERMS = ["manage_push_config", "manage_groups"]
-        SAVE_PERMS = ["manage_push_config", "manage_groups"]
+        VIEW_PERMS = ["manage_push_config", "manage_groups", "push"]
+        SAVE_PERMS = ["manage_push_config", "manage_groups", "push"]
         SEARCH_FIELDS = ["name"]
         LIST_DEFAULT_FILTERS = {"is_active": True}
         GRAPHS = {

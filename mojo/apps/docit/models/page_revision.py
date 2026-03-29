@@ -70,7 +70,7 @@ class PageRevision(models.Model, MojoModel):
 
     class RestMeta:
         VIEW_PERMS = ['all']
-        SAVE_PERMS = ['manage_docit', 'owner']
+        SAVE_PERMS = ['manage_docit', 'docs', 'owner']
         DELETE_PERMS = ['manage_docit', 'owner']
 
         GRAPHS = {

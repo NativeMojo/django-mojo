@@ -10,8 +10,8 @@ class VaultData(models.Model, MojoModel):
         CAN_CREATE = True
         CAN_DELETE = True
         DEFAULT_SORT = "-created"
-        VIEW_PERMS = ["view_vault", "manage_vault", "owner"]
-        SAVE_PERMS = ["manage_vault", "owner"]
+        VIEW_PERMS = ["view_vault", "manage_vault", "files", "owner"]
+        SAVE_PERMS = ["manage_vault", "files", "owner"]
         DELETE_PERMS = ["manage_vault", "owner"]
         SEARCH_FIELDS = ["name", "description"]
         SEARCH_TERMS = [

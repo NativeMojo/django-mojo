@@ -22,8 +22,8 @@ class UserTOTP(MojoSecrets, MojoModel):
     modified = models.DateTimeField(auto_now=True, db_index=True)
 
     class RestMeta:
-        VIEW_PERMS = ["owner", "manage_users"]
-        SAVE_PERMS = ["owner", "manage_users"]
+        VIEW_PERMS = ["owner", "manage_users", "users"]
+        SAVE_PERMS = ["owner", "manage_users", "users"]
         OWNER_FIELD = "user"
         NO_SHOW_FIELDS = ["mojo_secrets"]
         GRAPHS = {

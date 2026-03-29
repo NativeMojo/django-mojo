@@ -42,8 +42,8 @@ class UserAPIKey(MojoSecrets, MojoModel):
         ordering = ["-created"]
 
     class RestMeta:
-        VIEW_PERMS = ["owner", "manage_users"]
-        SAVE_PERMS = ["owner", "manage_users"]
+        VIEW_PERMS = ["owner", "manage_users", "users"]
+        SAVE_PERMS = ["owner", "manage_users", "users"]
         OWNER_FIELD = "user"
         NO_SHOW_FIELDS = ["mojo_secrets"]
         NO_SAVE_FIELDS = ["jti", "expires", "user", "last_used"]

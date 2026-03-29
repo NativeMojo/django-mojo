@@ -32,8 +32,8 @@ class OAuthConnection(MojoSecrets, MojoModel):
         unique_together = [("provider", "provider_uid")]
 
     class RestMeta:
-        VIEW_PERMS = ["owner", "manage_users"]
-        SAVE_PERMS = ["manage_users"]
+        VIEW_PERMS = ["owner", "manage_users", "users"]
+        SAVE_PERMS = ["manage_users", "users"]
         CAN_DELETE = True
         OWNER_FIELD = "user"
         NO_SHOW_FIELDS = ["mojo_secrets"]

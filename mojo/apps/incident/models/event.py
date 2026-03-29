@@ -44,9 +44,9 @@ class Event(models.Model, MojoModel):
 
     class RestMeta:
         SEARCH_FIELDS = ["details"]
-        VIEW_PERMS = ["view_security"]
+        VIEW_PERMS = ["view_security", "security"]
         CREATE_PERMS = ["all"]
-        SAVE_PERMS = ["manage_security"]
+        SAVE_PERMS = ["manage_security", "security"]
         GRAPHS = {
             "default": {
                 "graphs": {

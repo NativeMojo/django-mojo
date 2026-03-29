@@ -41,8 +41,8 @@ class GroupMember(models.Model, MojoModel):
     metadata = models.JSONField(default=dict, blank=True)
 
     class RestMeta:
-        VIEW_PERMS = ["view_members", "view_groups", "manage_groups", "manage_group"]
-        SAVE_PERMS = ["manage_groups", "manage_group"]
+        VIEW_PERMS = ["view_members", "view_groups", "manage_groups", "manage_group", "groups"]
+        SAVE_PERMS = ["manage_groups", "manage_group", "groups"]
         SEARCH_FIELDS = ["user__username", "user__email", "user__display_name"]
         POST_SAVE_ACTIONS = ['resend_invite']
         CREATED_BY_OWNER_FIELD = 'created_by'  # we do this to protect user

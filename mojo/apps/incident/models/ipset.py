@@ -53,8 +53,8 @@ class IPSet(models.Model, MojoModel):
         verbose_name_plural = "IP Sets"
 
     class RestMeta:
-        VIEW_PERMS = ["view_security"]
-        SAVE_PERMS = ["manage_security"]
+        VIEW_PERMS = ["view_security", "security"]
+        SAVE_PERMS = ["manage_security", "security"]
         DELETE_PERMS = ["manage_security"]
         SEARCH_FIELDS = ["name", "description"]
         POST_SAVE_ACTIONS = ["sync", "enable", "disable", "refresh_source"]

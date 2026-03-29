@@ -16,7 +16,8 @@ class FileManager(MojoSecrets, MojoModel):
         CAN_DELETE = True
         DEFAULT_SORT = "-id"
         POST_SAVE_ACTIONS = ["test_connection", "fix_cors", "clone", "check_cors"]
-        VIEW_PERMS = ["view_fileman", "manage_files"]
+        VIEW_PERMS = ["view_fileman", "manage_files", "files"]
+        SAVE_PERMS = ["manage_files", "files"]
         SEARCH_FIELDS = ["name", "backend_type", "description"]
         SEARCH_TERMS = [
             "name", "backend_type", "description",

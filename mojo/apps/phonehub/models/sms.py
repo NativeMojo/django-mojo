@@ -88,8 +88,8 @@ class SMS(models.Model, MojoModel):
         ]
 
     class RestMeta:
-        VIEW_PERMS = ["view_sms", "manage_sms", "owner", "manage_notifications"]
-        SAVE_PERMS = ["manage_sms", "manage_notifications"]  # Creating SMS via API requires manage permission
+        VIEW_PERMS = ["view_sms", "manage_sms", "phone", "owner", "manage_notifications"]
+        SAVE_PERMS = ["manage_sms", "phone", "manage_notifications"]  # Creating SMS via API requires manage permission
         DELETE_PERMS = ["manage_sms", "manage_notifications"]
         SEARCH_FIELDS = ["to_number", "from_number", "body"]
         LIST_DEFAULT_FILTERS = {}

@@ -19,6 +19,7 @@ from mojo import decorators as md
 from mojo.helpers import logit
 from mojo.helpers.settings import settings
 from mojo.helpers.response import JsonResponse
+from mojo.apps import metrics
 from mojo.apps.account.rest.bouncer.assess import (
     _geolocate, _report_bouncer_event, verify_pass_cookie,
 )
@@ -58,6 +59,10 @@ def on_login_page(request):
     matched, sig_type, sig_value = check_signature_cache(request.ip, ua, fingerprint_id)
     if matched:
         logger.info(f"bouncer: pre-screen blocked by signature {sig_type}:{sig_value} ip={request.ip}")
+        try:
+            metrics.record("bouncer:pre_screen_blocks", category="bouncer")
+        except Exception:
+            pass
         return _serve_decoy(request)
 
     # 2. Pass cookie — known good device, skip challenge
@@ -85,6 +90,10 @@ def on_login_page(request):
 
     if result.decision == 'block':
         logger.info(f"bouncer: pre-screen blocked ip={request.ip} score={result.score}")
+        try:
+            metrics.record("bouncer:pre_screen_blocks", category="bouncer")
+        except Exception:
+            pass
         return _serve_decoy(request)
 
     # 4. Serve challenge page — tier based on pre-screen risk
@@ -126,6 +135,10 @@ def on_register_page(request):
     matched, sig_type, sig_value = check_signature_cache(request.ip, ua, fingerprint_id)
     if matched:
         logger.info(f"bouncer: pre-screen blocked by signature {sig_type}:{sig_value} ip={request.ip}")
+        try:
+            metrics.record("bouncer:pre_screen_blocks", category="bouncer")
+        except Exception:
+            pass
         return _serve_decoy(request)
 
     pass_cookie = request.COOKIES.get('mbp', '')
@@ -147,6 +160,10 @@ def on_register_page(request):
 
     if result.decision == 'block':
         logger.info(f"bouncer: pre-screen blocked ip={request.ip} score={result.score}")
+        try:
+            metrics.record("bouncer:pre_screen_blocks", category="bouncer")
+        except Exception:
+            pass
         return _serve_decoy(request)
 
     if result.score >= 40:
@@ -267,6 +284,10 @@ def on_decoy_post(request):
     duid = request.DATA.get('duid') or request.duid or ''
     username = request.DATA.get('username', '')
 
+    try:
+        metrics.record("bouncer:honeypot_catches", category="bouncer")
+    except Exception:
+        pass
     _report_bouncer_event(
         'security:bouncer:honeypot_post',
         f"Honeypot POST received: username={username} muid={muid} ip={request.ip}",

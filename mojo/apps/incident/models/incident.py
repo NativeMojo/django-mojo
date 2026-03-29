@@ -37,9 +37,9 @@ class Incident(models.Model, MojoModel):
 
     class RestMeta:
         SEARCH_FIELDS = ["details"]
-        VIEW_PERMS = ["view_security"]
+        VIEW_PERMS = ["view_security", "security"]
         CREATE_PERMS = None
-        SAVE_PERMS = ["manage_security"]
+        SAVE_PERMS = ["manage_security", "security"]
         DELETE_PERMS = ["manage_security"]
         POST_SAVE_ACTIONS = ["merge"]
         CAN_DELETE = True

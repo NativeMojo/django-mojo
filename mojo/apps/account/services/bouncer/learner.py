@@ -133,6 +133,11 @@ def _check_campaign(triggered_signals, redis):
 
 def _upsert_signature(sig_type, value, source, confidence, ttl_seconds):
     from mojo.apps.account.models.bot_signature import BotSignature
+    try:
+        from mojo.apps import metrics
+        metrics.record("bouncer:signatures_learned", category="bouncer")
+    except Exception:
+        pass
     expires_at = dates.utcnow() + timedelta(seconds=ttl_seconds)
     sig, created = BotSignature.objects.get_or_create(
         sig_type=sig_type,
@@ -155,6 +160,11 @@ def _upsert_signature(sig_type, value, source, confidence, ttl_seconds):
 
 def _fire_campaign_incident(sig_hash, count):
     from mojo.apps import incident
+    try:
+        from mojo.apps import metrics
+        metrics.record("bouncer:campaigns", category="bouncer")
+    except Exception:
+        pass
     incident.report_event(
         f"Coordinated bot campaign detected: signal_set={sig_hash} count={count}",
         category='security:bouncer:campaign',

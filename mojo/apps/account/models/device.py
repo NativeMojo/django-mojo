@@ -32,7 +32,7 @@ class UserDevice(models.Model, MojoModel):
     last_seen = models.DateTimeField(auto_now=True)
 
     class RestMeta:
-        VIEW_PERMS = ['manage_users', 'owner']
+        VIEW_PERMS = ['manage_users', 'users', 'owner']
         GRAPHS = {
             'default': {
                 'graphs': {
@@ -216,7 +216,7 @@ class UserDeviceLocation(models.Model, MojoModel):
     last_seen = models.DateTimeField(auto_now=True)
 
     class RestMeta:
-        VIEW_PERMS = ['manage_users']
+        VIEW_PERMS = ['manage_users', 'users']
         GRAPHS = {
             'default': {
                 'graphs': {

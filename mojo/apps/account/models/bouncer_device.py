@@ -36,8 +36,9 @@ class BouncerDevice(models.Model, MojoModel):
     modified = models.DateTimeField(auto_now=True)
 
     class RestMeta:
-        VIEW_PERMS = ['manage_users', 'admin_security']
-        SAVE_PERMS = ['manage_users', 'admin_security']
+        VIEW_PERMS = ['manage_users', 'view_security', 'manage_security', 'security', 'users']
+        SAVE_PERMS = ['manage_users', 'manage_security', 'security', 'users']
+        SEARCH_FIELDS = ['muid', 'duid', 'fingerprint_id', 'last_seen_ip']
         GRAPHS = {
             'default': {
                 'fields': [
