@@ -42,6 +42,9 @@ class UserLoginEvent(models.Model, MojoModel):
         ]
 
     class RestMeta:
+        CAN_CREATE = False
+        CAN_SAVE = False
+        CAN_DELETE = False
         VIEW_PERMS = ['manage_users', 'security', 'users']
         SEARCH_FIELDS = ['ip_address', 'country_code', 'region', 'city']
         GRAPHS = {
