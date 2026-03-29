@@ -16,6 +16,7 @@ def setup_users(opts):
     if user is None:
         user = User(username=TEST_USER, display_name=TEST_USER, email=f"{TEST_USER}@example.com")
         user.save()
+    user.is_email_verified = True
     user.save_password(TEST_PWORD)
     user.remove_all_permissions()
 
@@ -23,6 +24,7 @@ def setup_users(opts):
     if user is None:
         user = User(username=ADMIN_USER, display_name=ADMIN_USER, email=f"{ADMIN_USER}@example.com")
         user.save()
+    user.is_email_verified = True
     user.remove_permission(["manage_groups"])
     user.add_permission(["manage_users", "view_global", "view_admin"])
     user.is_staff = True
@@ -36,6 +38,7 @@ def setup_users(opts):
         user.is_superuser = True
         user.save()
         user.save_password(ADMIN_PWORD)
+    user.is_email_verified = True
     user.add_permission(["manage_groups", "manage_users", "view_global", "view_admin"])
 
 
@@ -393,7 +396,8 @@ def test_user_without_parent_membership_cannot_access_child(opts):
         username=new_username,
         email=new_email,
         display_name=new_username,
-        is_active=True
+        is_active=True,
+        is_email_verified=True,
     )
     new_user.save()
     new_user.save_password(TEST_PWORD)
@@ -438,6 +442,7 @@ def test_phone_number_set_normalizes(opts):
     if user is None:
         user = User(username=TEST_PHONE_USER, email=f"{TEST_PHONE_USER}@example.com", display_name=TEST_PHONE_USER)
         user.save()
+    user.is_email_verified = True
     user.save_password(TEST_PHONE_PWORD)
     # Set via the set_phone_number method directly
     user.set_phone_number("415-555-0199")
@@ -520,6 +525,7 @@ def test_mfa_login_returns_challenge(opts):
         mfa_user = User(username="mfa_test_user", email="mfa_test_user@example.com", display_name="MFA Test")
         mfa_user.save()
     User.objects.filter(phone_number="+15550009999").exclude(username="mfa_test_user").update(phone_number=None)
+    mfa_user.is_email_verified = True
     mfa_user.phone_number = "+15550009999"
     mfa_user.is_phone_verified = True
     mfa_user.requires_mfa = True
@@ -562,6 +568,7 @@ def test_phone_number_duplicate_rejected(opts):
     if other is None:
         other = User(username="phone_test_other", email="phone_test_other@example.com", display_name="phone_test_other")
         other.save()
+    other.is_email_verified = True
     other.save_password(TEST_PHONE_PWORD)
     resp = opts.client.login("phone_test_other", TEST_PHONE_PWORD)
     assert opts.client.is_authenticated, "authentication failed"

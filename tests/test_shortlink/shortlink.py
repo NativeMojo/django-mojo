@@ -23,6 +23,7 @@ def setup_shortlink(opts):
     if user is None:
         user = User(username=TEST_USER, email=f"{TEST_USER}@example.com")
         user.save()
+    user.is_email_verified = True
     user.save_password(TEST_PWORD)
     user.add_permission(["view_fileman", "manage_shortlinks"])
     user.save()

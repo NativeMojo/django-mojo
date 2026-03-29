@@ -23,6 +23,7 @@ def setup_secure_settings(opts):
         user = User(username=TEST_USER, email=TEST_EMAIL)
         user.save()
     user.is_active = True
+    user.is_email_verified = True
     user.requires_mfa = False
     user.save_password(TEST_PWORD)
     user.add_permission("manage_settings")

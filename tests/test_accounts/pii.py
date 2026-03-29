@@ -25,6 +25,7 @@ def setup_pii(opts):
     user.metadata = {"ip": "1.2.3.4", "dob": "1990-01-01"}
     user.permissions = {"view_data": True}
     user.is_active = True
+    user.is_email_verified = True
     user.is_staff = False
     user.is_superuser = False
     user.save_password(TEST_PWORD)

@@ -48,6 +48,7 @@ def setup_users(opts):
         user = User(username=TEST_USER, display_name=TEST_USER, email=f"{TEST_USER}@example.com")
         user.save()
     user.remove_all_permissions()
+    user.is_email_verified = True
     user.save_password(TEST_PWORD)
 
     admin = User.objects.filter(username=ADMIN_USER).last()
@@ -58,6 +59,7 @@ def setup_users(opts):
     admin.add_permission(["manage_aws", "manage_users", "view_global", "view_admin"])
     admin.is_staff = True
     admin.is_superuser = True
+    admin.is_email_verified = True
     admin.save_password(ADMIN_PWORD)
 
 

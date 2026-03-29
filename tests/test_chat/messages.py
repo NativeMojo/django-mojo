@@ -15,6 +15,7 @@ TEST_PASSWORD = 'TestPass1!'
 
 
 @th.django_unit_setup()
+@th.requires_app("mojo.apps.chat")
 def setup_messages(opts):
     from mojo.apps.account.models import User
     from mojo.apps.chat.models import ChatRoom, ChatMembership, ChatMessage, ChatReaction, ChatReadReceipt
@@ -23,16 +24,22 @@ def setup_messages(opts):
     User.objects.filter(email__in=[TEST_EMAIL_1, TEST_EMAIL_2, TEST_EMAIL_ADMIN]).delete()
     ChatRoom.objects.filter(name__startswith="test-msg-").delete()
 
-    # Create users
+    # Create users (mark verified so login works with REQUIRE_VERIFIED_EMAIL)
     opts.user1 = User.objects.create_user(
         username=TEST_EMAIL_1, email=TEST_EMAIL_1, password=TEST_PASSWORD,
     )
+    opts.user1.is_email_verified = True
+    opts.user1.save()
     opts.user2 = User.objects.create_user(
         username=TEST_EMAIL_2, email=TEST_EMAIL_2, password=TEST_PASSWORD,
     )
+    opts.user2.is_email_verified = True
+    opts.user2.save()
     opts.admin_user = User.objects.create_user(
         username=TEST_EMAIL_ADMIN, email=TEST_EMAIL_ADMIN, password=TEST_PASSWORD,
     )
+    opts.admin_user.is_email_verified = True
+    opts.admin_user.save()
     opts.admin_user.add_permission("manage_chat")
 
     # Create a group room with both users
@@ -110,7 +117,9 @@ def test_message_history_requires_membership(opts):
     from mojo.apps.account.models import User
     email = 'chat-msg-outsider@example.com'
     User.objects.filter(email=email).delete()
-    User.objects.create_user(username=email, email=email, password=TEST_PASSWORD)
+    outsider = User.objects.create_user(username=email, email=email, password=TEST_PASSWORD)
+    outsider.is_email_verified = True
+    outsider.save()
 
     opts.client.login(email, TEST_PASSWORD)
     resp = opts.client.get('/api/chat/room/messages', params={

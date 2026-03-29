@@ -1,4 +1,19 @@
-## v1.0.59 - (current)
+## v1.1.0 - (current)
+
+### Added
+- **`UserLoginEvent`** — New model recording every successful login with denormalized geo data from `GeoLocatedIP`
+  - Fields: `ip_address`, `country_code`, `region`, `city`, `latitude`, `longitude`, `source`, `user_agent_info`, `is_new_country`, `is_new_region`, `device`
+  - Hooked into `jwt_login()` via `UserLoginEvent.track()` — all standard login paths are covered automatically
+  - `is_new_country` / `is_new_region` flags for per-user anomaly detection
+  - Per-country and per-region metrics recorded on each login (`login:country:*`, `login:region:*`, `login:new_country`, `login:new_region`)
+- **New REST endpoints** (require `manage_users` + `security` + `users` permissions):
+  - `GET /api/account/logins` — Paginated login history with filtering by user, country, region, anomaly flags, source, date range
+  - `GET /api/account/logins/<pk>` — Single event detail
+  - `GET /api/account/logins/summary` — System-wide aggregation by country (or region drill-down)
+  - `GET /api/account/logins/user` — Per-user aggregation by country (or region drill-down), requires `user_id`
+- **Settings**: `LOGIN_EVENT_TRACKING_ENABLED`, `LOGIN_EVENT_FLAG_NEW_COUNTRY`, `LOGIN_EVENT_FLAG_NEW_REGION` (all startup-time, default `True`)
+
+## v1.0.59 - March 2026
 
 ## v1.0.80 - March 27, 2026
 

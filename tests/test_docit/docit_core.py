@@ -32,11 +32,13 @@ def setup_docit_testing(opts):
     # Assign test user to organization and permissions
     user = User.objects.get(username=TEST_USER)
     user.org = test_org
+    user.is_email_verified = True
     user.add_permission("manage_docit")
     user.save()
 
     # Give admin docit permissions
     admin = User.objects.get(username=ADMIN_USER)
+    admin.is_email_verified = True
     admin.add_permission("manage_docit")
     admin.save()
 

@@ -46,6 +46,7 @@ def setup_device_testing(opts):
         user = User(username=TEST_USER, display_name=TEST_USER, email=f"{TEST_USER}@example.com")
         user.save()
     user.is_active = True
+    user.is_email_verified = True
     user.save_password(TEST_PWORD)
     user.save()
 

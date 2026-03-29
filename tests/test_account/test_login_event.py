@@ -8,6 +8,11 @@ from testit import helpers as th
 def setup_login_event(opts):
     from mojo.apps.account.models.user import User
     from mojo.apps.account.models.geolocated_ip import GeoLocatedIP
+    from mojo.apps.account.models.login_event import UserLoginEvent
+
+    # Clean up any leftover data from previous runs (long-lived databases)
+    User.objects.filter(email="geotest@example.com").delete()
+    GeoLocatedIP.objects.filter(ip_address__in=["203.0.113.45", "198.51.100.10", "203.0.113.99"]).delete()
 
     # Create test user
     opts.user = User.objects.create_user(
@@ -15,6 +20,9 @@ def setup_login_event(opts):
         email="geotest@example.com",
         password="testpass123",
     )
+
+    # Clean up any login events for this user from previous runs
+    UserLoginEvent.objects.filter(user=opts.user).delete()
 
     # Create a GeoLocatedIP record so track() can find it
     opts.geo_ip = GeoLocatedIP.objects.create(

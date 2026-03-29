@@ -70,10 +70,13 @@ CATEGORY_MAP = {
 
 
 def _get_model(module_path, class_name):
-    """Import and return a model class."""
+    """Import and return a model class, or None if the app is not installed."""
     import importlib
-    mod = importlib.import_module(module_path)
-    return getattr(mod, class_name)
+    try:
+        mod = importlib.import_module(module_path)
+        return getattr(mod, class_name)
+    except (ImportError, RuntimeError):
+        return None
 
 
 @th.django_unit_test()
@@ -82,6 +85,8 @@ def test_category_perms_in_view_perms(opts):
     for category, models in CATEGORY_MAP.items():
         for module_path, class_name in models:
             model = _get_model(module_path, class_name)
+            if model is None:
+                continue
             view = model.RestMeta.VIEW_PERMS
             # Skip models with VIEW_PERMS = ['all'] (public read)
             if 'all' in view:
@@ -96,6 +101,8 @@ def test_category_perms_in_save_perms(opts):
     for category, models in CATEGORY_MAP.items():
         for module_path, class_name in models:
             model = _get_model(module_path, class_name)
+            if model is None:
+                continue
             save = getattr(model.RestMeta, 'SAVE_PERMS', None)
             # Skip read-only models (no SAVE_PERMS or empty list)
             if not save:
@@ -178,6 +185,8 @@ def test_write_perms_subset_of_view_perms(opts):
     for category, models in CATEGORY_MAP.items():
         for module_path, class_name in models:
             model = _get_model(module_path, class_name)
+            if model is None:
+                continue
             view = set(model.RestMeta.VIEW_PERMS)
             save = set(getattr(model.RestMeta, 'SAVE_PERMS', []))
             # owner is a special case

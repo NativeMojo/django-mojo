@@ -32,6 +32,37 @@ class TestitSkip(Exception):
     pass
 
 
+def is_app_installed(app_label):
+    """Check if a Django app is in INSTALLED_APPS."""
+    from django.apps import apps
+    return apps.is_installed(app_label)
+
+
+def requires_app(app_label):
+    """
+    Decorator that skips a test or setup function if the given app is not installed.
+    Use for optional apps (e.g. chat) that may not be in INSTALLED_APPS.
+
+    Usage:
+        @th.requires_app("mojo.apps.chat")
+        @th.django_unit_setup()
+        def setup_chat(opts):
+            ...
+    """
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            if not is_app_installed(app_label):
+                raise TestitSkip(f"app '{app_label}' not installed")
+            return func(*args, **kwargs)
+        # Preserve testit attributes
+        for attr in ("_test_name", "_requires_extra"):
+            if hasattr(func, attr):
+                setattr(wrapper, attr, getattr(func, attr))
+        return wrapper
+    return decorator
+
+
 def _run_setup(func, *args, **kwargs):
     name = kwargs.get("name", func.__name__)
     logit.color_print(f"{INDENT}{name.ljust(80, '.')}", logit.ConsoleLogger.PINK, end="")

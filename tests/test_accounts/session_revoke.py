@@ -35,6 +35,7 @@ def setup_session_revoke(opts):
         user.save()
     user.username = TEST_USER
     user.is_active = True
+    user.is_email_verified = True
     user.requires_mfa = False
     user.save_password(TEST_PWORD)
     user.save()

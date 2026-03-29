@@ -14,6 +14,7 @@ def setup_realtime_user(opts):
     if user is None:
         user = User(username=TEST_USER, display_name=TEST_USER, email=f"{TEST_USER}@example.com")
         user.save()
+    user.is_email_verified = True
     user.save_password(TEST_PWORD)
     user.remove_all_permissions()
     user.is_staff = False

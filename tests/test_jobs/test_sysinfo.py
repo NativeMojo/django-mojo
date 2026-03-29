@@ -50,6 +50,7 @@ def setup_sysinfo_tests(opts):
     admin.add_permission(["manage_jobs", "view_jobs", "manage_users", "view_global"])
     admin.is_staff = True
     admin.is_superuser = True
+    admin.is_email_verified = True
     admin.save_password(ADMIN_PWORD)
 
     unpriv = User.objects.filter(username=UNPRIV_USER).last()
@@ -61,6 +62,7 @@ def setup_sysinfo_tests(opts):
         )
         unpriv.save()
     unpriv.remove_all_permissions()
+    unpriv.is_email_verified = True
     unpriv.save_password(UNPRIV_PWORD)
 
 

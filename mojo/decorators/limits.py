@@ -294,12 +294,16 @@ def clear_rate_limits(ip=None, key=None, duid=None):
         return 0
     deleted = 0
     if ip:
-        pattern = f"srl:{key}:ip:{ip}" if key else f"srl:*:ip:{ip}"
-        for k in r.scan_iter(pattern):
-            r.delete(k)
-            deleted += 1
+        # Clear both strict (srl:) and fixed-window (rl:) rate limit keys
+        srl_pattern = f"srl:{key}:ip:{ip}" if key else f"srl:*:ip:{ip}"
+        rl_pattern = f"rl:{key}:ip:{ip}:*" if key else f"rl:*:ip:{ip}:*"
+        for pattern in (srl_pattern, rl_pattern):
+            for k in r.scan_iter(pattern):
+                r.delete(k)
+                deleted += 1
     if duid and key:
         r.delete(f"srl:{key}:duid:{duid}")
+        r.delete(f"rl:{key}:duid:{duid}")
         deleted += 1
     return deleted
 

@@ -288,14 +288,20 @@ def test_ruleset_run_handler(opts):
     # Delete existing rulesets and rules with category 'testing'
     RuleSet.objects.filter(category="testing").delete()
 
-    # Create mock event
-    event = objict()
-    event.metadata = {
-        "severity": 5,
-        "hostname": "test-server",
-        "source_ip": "192.168.1.10",
-        "message": "Authentication failure"
-    }
+    # Create a real Event so run_handler can reference event.pk
+    from mojo.apps.incident.models.event import Event
+    event = Event.objects.create(
+        title="Handler test event",
+        category="testing",
+        level=5,
+        source_ip="192.168.1.10",
+        metadata={
+            "severity": 5,
+            "hostname": "test-server",
+            "source_ip": "192.168.1.10",
+            "message": "Authentication failure",
+        },
+    )
 
     # Create RuleSet with job handler
     ruleset_job = RuleSet.objects.create(
