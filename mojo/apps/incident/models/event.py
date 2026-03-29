@@ -9,6 +9,7 @@ from mojo.apps.account.models import GeoLocatedIP
 
 INCIDENT_LEVEL_THRESHOLD = settings.get_static('INCIDENT_LEVEL_THRESHOLD', 7)
 INCIDENT_METRICS_MIN_GRANULARITY = settings.get_static("INCIDENT_METRICS_MIN_GRANULARITY", "hours")
+LLM_API_KEY = settings.get_static("LLM_HANDLER_API_KEY", None)
 
 class Event(models.Model, MojoModel):
     id = models.BigAutoField(primary_key=True)
@@ -43,9 +44,9 @@ class Event(models.Model, MojoModel):
 
     class RestMeta:
         SEARCH_FIELDS = ["details"]
-        VIEW_PERMS = ["view_incidents"]
+        VIEW_PERMS = ["view_security"]
         CREATE_PERMS = ["all"]
-        SAVE_PERMS = ["edit_incidents"]
+        SAVE_PERMS = ["manage_security"]
         GRAPHS = {
             "default": {
                 "graphs": {
@@ -233,8 +234,18 @@ class Event(models.Model, MojoModel):
                 try:
                     desired_status = "new" if meets_threshold else pending_status
                     if incident.status != desired_status:
+                        old_status = incident.status
                         incident.status = desired_status
                         incident.save(update_fields=["status"])
+                        if desired_status == "new" and old_status == pending_status:
+                            incident.add_history("threshold_reached",
+                                note=f"Threshold met: {event_count} events in {window_minutes or 'unlimited'} min (min_count: {min_count})")
+                            if settings.INCIDENT_EVENT_METRICS:
+                                metrics.record('incidents:threshold_reached', account="incident",
+                                    min_granularity=INCIDENT_METRICS_MIN_GRANULARITY)
+                        else:
+                            incident.add_history("status_changed",
+                                note=f"Status changed from {old_status} to {desired_status}")
                 except Exception:
                     pass
 
@@ -245,6 +256,21 @@ class Event(models.Model, MojoModel):
                 transitioned_to_new = (prev_status == pending_status and incident.status == "new")
                 if (created and (min_count is None or meets_threshold)) or transitioned_to_new:
                     rule_set.run_handler(self, incident)
+            elif created and LLM_API_KEY:
+                # No rule matched but level exceeded threshold — default to LLM triage
+                try:
+                    from mojo.apps import jobs
+                    jobs.publish(
+                        "mojo.apps.incident.handlers.llm_agent.execute_llm_handler",
+                        {
+                            "event_id": self.pk,
+                            "incident_id": incident.pk,
+                            "ruleset_id": None,
+                        },
+                        channel="incident_handlers",
+                    )
+                except Exception:
+                    pass
 
     def record_event_metrics(self):
         if settings.INCIDENT_EVENT_METRICS:
@@ -279,11 +305,17 @@ class Event(models.Model, MojoModel):
             incident = Incident.objects.filter(**bundle_criteria).first()
             # Escalate priority when reusing an existing incident
             if incident and self.level > incident.priority:
+                old_priority = incident.priority
                 incident.priority = self.level
                 try:
                     incident.save(update_fields=['priority'])
                 except Exception:
                     incident.save()
+                incident.add_history("priority_escalated",
+                    note=f"Priority escalated from {old_priority} to {self.level} by event (category: {self.category})")
+                if settings.INCIDENT_EVENT_METRICS:
+                    metrics.record('incidents:escalated', account="incident",
+                        min_granularity=INCIDENT_METRICS_MIN_GRANULARITY)
 
         if not incident:
             # Create a new incident if none found
@@ -307,6 +339,9 @@ class Event(models.Model, MojoModel):
             incident.metadata.update(self.metadata)
             incident.save()
             self.record_incident_metrics()
+            rule_name = rule_set.name if rule_set else "level threshold"
+            incident.add_history("created",
+                note=f"Incident created from event (category: {self.category}, level: {self.level}, rule: {rule_name})")
 
             # Update IP threat level when a new incident is created
             if self.source_ip and self.geo_ip:

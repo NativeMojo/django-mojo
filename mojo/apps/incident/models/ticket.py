@@ -1,14 +1,18 @@
+import logging
 from django.db import models
 from mojo.models import MojoModel
 from mojo.helpers import logit
+
+logger = logging.getLogger(__name__)
 
 class Ticket(models.Model, MojoModel):
     class Meta:
         ordering = ['-modified']
 
     class RestMeta:
-        VIEW_PERMS = ['view_incidents', 'view_tickets']
-        SAVE_PERMS = ['manage_incidents', 'view_tickets']
+        VIEW_PERMS = ["view_security"]
+        SAVE_PERMS = ["manage_security"]
+        DELETE_PERMS = ["manage_security"]
         CAN_DELETE = True
         GRAPHS = {
             "default": {
@@ -57,8 +61,8 @@ class TicketNote(models.Model, MojoModel):
         ordering = ['-created']
 
     class RestMeta:
-        VIEW_PERMS = ['view_incidents', 'view_tickets']
-        SAVE_PERMS = ['manage_incidents', 'view_tickets']
+        VIEW_PERMS = ["view_security"]
+        SAVE_PERMS = ["manage_security"]
         CAN_DELETE = True
         GRAPHS = {
             "default": {
@@ -82,3 +86,23 @@ class TicketNote(models.Model, MojoModel):
             if self.parent.group:
                 self.group = self.parent.group
                 self.save(update_fields=['group'])
+
+        # Re-invoke LLM agent when a human replies to an llm_linked ticket
+        if created and self._is_llm_ticket() and not self._is_llm_note():
+            try:
+                from mojo.apps import jobs
+                jobs.publish(
+                    "mojo.apps.incident.handlers.llm_agent.execute_llm_ticket_reply",
+                    {"ticket_id": self.parent_id, "note_id": self.pk},
+                    channel="incident_handlers",
+                )
+            except Exception:
+                logger.exception("Failed to re-invoke LLM for ticket %s", self.parent_id)
+
+    def _is_llm_ticket(self):
+        """Check if the parent ticket is LLM-linked."""
+        return (self.parent.metadata or {}).get("llm_linked", False)
+
+    def _is_llm_note(self):
+        """Check if this note was posted by the LLM (avoid infinite loop)."""
+        return bool(self.note and self.note.startswith("[LLM Agent]"))

@@ -1,165 +1,338 @@
 """
 Event handlers for incident processing.
 
-This module contains handlers for processing incident events based on different
-handler types (job, email, notify, ticket). These handlers are used by the RuleSet.run_handler
-method to handle events that match rule criteria.
+All handlers are dispatched asynchronously via the job queue. RuleSet.run_handler()
+publishes a job per handler spec; the job function loads the event/incident and
+executes the handler. This keeps the detection pipeline fast (Event → Rules → Incident)
+while offloading all handler work (emails, SMS, fleet broadcasts, etc.) to background jobs.
+
+The async job entry point is `execute_handler(payload)` at the bottom of this module.
+
 Supported handler schemes:
-- job://name?param1=value1
-- email://recipient@example.com
-- notify://user-or-channel
-- ticket://?status=open&priority=8
+- job://module.function?param1=value1 — publish async job
+- email://perm@manage_security — email users with permission (verified only)
+- email://protected@incident_emails — email users who opted in via metadata (verified only)
+- email://john.doe — email a specific user by username (verified only)
+- sms://perm@manage_security — SMS users with permission (verified only)
+- sms://protected@incident_sms — SMS users who opted in via metadata (verified only)
+- notify://perm@manage_security — in-app + push notification
+- block://?ttl=3600 — fleet-wide IP block
+- ticket://?status=open&priority=8 — create support ticket
+
+Target resolution (comma-separated, mix and match):
+    perm@name       — all active users with that permission
+    protected@key   — all active users with metadata.protected.{key} = True
+    username        — single user by username
+
+All notification handlers resolve targets to Users.
+No notifications are sent to addresses not associated with a User.
 """
+import logging
+from mojo.helpers.settings import settings
+
+logger = logging.getLogger(__name__)
+
+INCIDENT_EMAIL_FROM = settings.get_static("INCIDENT_EMAIL_FROM", None)
+ADMIN_PORTAL_URL = settings.get_static("ADMIN_PORTAL_URL", None)
+
+
+def _resolve_users(targets, require_email=False, require_phone=False):
+    """
+    Resolve handler targets to a list of User instances.
+
+    Target formats:
+        "perm@manage_security"          — all active users with that permission
+        "protected@incident_emails"     — all active users with metadata.protected.{key} = True
+        "john.doe"                      — single user by username
+
+    Args:
+        targets: list of target strings
+        require_email: only include users with is_email_verified=True and a non-empty email
+        require_phone: only include users with is_phone_verified=True and a phone_number
+
+    Returns:
+        list of User instances (deduplicated)
+    """
+    from django.contrib.auth import get_user_model
+    User = get_user_model()
+
+    users = []
+    seen = set()
+
+    def _add_user(user):
+        if user.pk not in seen:
+            seen.add(user.pk)
+            users.append(user)
+
+    def _apply_filters(qs):
+        if require_email:
+            qs = qs.filter(is_email_verified=True).exclude(email="")
+        if require_phone:
+            qs = qs.filter(is_phone_verified=True).exclude(phone_number=None)
+        return qs
+
+    for target in targets:
+        if target.startswith("perm@"):
+            # Permission-based: all users with this permission flag
+            perm_name = target[5:]
+            qs = User.objects.filter(
+                is_active=True,
+                **{f"permissions__{perm_name}": True},
+            )
+            for user in _apply_filters(qs):
+                _add_user(user)
+
+        elif target.startswith("protected@"):
+            # Metadata opt-in: users with metadata.protected.{key} = True
+            meta_key = target[10:]
+            qs = User.objects.filter(
+                is_active=True,
+                **{f"metadata__protected__{meta_key}": True},
+            )
+            for user in _apply_filters(qs):
+                _add_user(user)
+
+        else:
+            # Username lookup
+            try:
+                user = User.objects.get(username=target, is_active=True)
+                if require_email and (not user.is_email_verified or not user.email):
+                    logger.warning("User %s has unverified email, skipping", target)
+                    continue
+                if require_phone and (not user.is_phone_verified or not user.phone_number):
+                    logger.warning("User %s has unverified phone, skipping", target)
+                    continue
+                _add_user(user)
+            except User.DoesNotExist:
+                logger.warning("User not found for target: %s", target)
+
+    return users
+
+
+def _build_incident_context(event):
+    """Build a context dict for email/SMS templates."""
+    ctx = {
+        "event_id": event.pk,
+        "category": event.category,
+        "level": event.level,
+        "source_ip": getattr(event, "source_ip", None),
+        "title": event.title or "Alert",
+        "details": event.details or "",
+    }
+    if event.incident_id:
+        ctx["incident_id"] = event.incident_id
+        if ADMIN_PORTAL_URL:
+            ctx["incident_url"] = f"{ADMIN_PORTAL_URL}/incidents/{event.incident_id}"
+    return ctx
+
 
 class JobHandler:
     """
-    Handler for executing jobs based on events.
+    Publish an async job via the mojo job queue.
 
-    This handler executes a named job with the given parameters
-    when an event matches rule criteria.
+    Handler syntax:
+        job://module.path.function_name?param1=value1&param2=value2
 
-    Attributes:
-        handler_name (str): The name of the job to execute.
-        params (dict): Parameters to pass to the job.
+    The job function receives a payload dict containing event context
+    plus all query string params from the handler URL.
     """
 
     def __init__(self, handler_name, **params):
-        """
-        Initialize a JobHandler with a job name and parameters.
-
-        Args:
-            handler_name (str): The name of the job to execute.
-            **params: Parameters to pass to the job.
-        """
         self.handler_name = handler_name
         self.params = params
 
     def run(self, event):
-        """
-        Execute the job for the given event.
-
-        Args:
-            event (Event): The event that triggered this handler.
-
-        Returns:
-            bool: True if the job was executed successfully, False otherwise.
-        """
-        # TODO: Implement actual job execution logic
-        # For example, using Celery or your task queue to execute jobs asynchronously
         try:
-            # Example implementation:
-            # from mojo.jobs import execute_job
-            # result = execute_job.delay(self.handler_name, event=event, **self.params)
-            # return result.successful()
+            from mojo.apps import jobs
+            payload = _build_incident_context(event)
+            payload.update(self.params)
+            jobs.publish(self.handler_name, payload)
             return True
-        except Exception as e:
-            # Log the error
-            # logger.error(f"Error executing job {self.handler_name}: {e}")
+        except Exception:
+            logger.exception("JobHandler failed for %s", self.handler_name)
             return False
 
 
 class EmailHandler:
     """
-    Handler for sending email notifications based on events.
+    Send email alerts to Users resolved by permission or ID.
 
-    This handler sends an email to the specified recipient
-    when an event matches rule criteria.
+    Handler syntax:
+        email://perm@manage_security
+        email://perm@manage_security,42
+        email://perm@manage_security?template=incident_critical
 
-    Attributes:
-        recipient (str): The email address to send notifications to.
+    Only sends to users with is_email_verified=True.
+    Requires INCIDENT_EMAIL_FROM setting (must match a configured Mailbox).
     """
 
-    def __init__(self, recipient):
-        """
-        Initialize an EmailHandler with a recipient.
-
-        Args:
-            recipient (str): The email address to send notifications to.
-        """
-        self.recipient = recipient
+    def __init__(self, target, **params):
+        self.targets = [t.strip() for t in target.split(",") if t.strip()]
+        self.params = params
 
     def run(self, event):
-        """
-        Send an email notification for the given event.
+        if not INCIDENT_EMAIL_FROM:
+            logger.warning("EmailHandler: INCIDENT_EMAIL_FROM not configured, skipping")
+            return False
 
-        Args:
-            event (Event): The event that triggered this handler.
+        if not self.targets:
+            return False
 
-        Returns:
-            bool: True if the email was sent successfully, False otherwise.
-        """
-        # TODO: Implement actual email sending logic
         try:
-            # Example implementation:
-            # from mojo.helpers.mail import send_mail
-            # subject = f"Incident Alert: {event.name}"
-            # body = f"An incident has been detected:\n\n{event.details}\n\nMetadata: {event.metadata}"
-            # result = send_mail(subject, body, [self.recipient])
-            # return result
+            users = _resolve_users(self.targets, require_email=True)
+            if not users:
+                logger.warning("EmailHandler: no eligible users found for %s", self.targets)
+                return False
+
+            from mojo.apps.aws.services import email as email_service
+
+            ctx = _build_incident_context(event)
+            template = self.params.get("template")
+            emails = [u.email for u in users]
+
+            if template:
+                email_service.send_with_template(
+                    from_email=INCIDENT_EMAIL_FROM,
+                    to=emails,
+                    template_name=template,
+                    context=ctx,
+                )
+            else:
+                subject = f"[Incident] {event.category}: {ctx['title']}"
+                body_lines = [
+                    f"Category: {event.category}",
+                    f"Level: {event.level}",
+                    f"Source IP: {ctx['source_ip'] or 'N/A'}",
+                    f"Title: {ctx['title']}",
+                    f"Details: {ctx['details'] or 'N/A'}",
+                ]
+                if ctx.get("incident_url"):
+                    body_lines.append(f"\nView incident: {ctx['incident_url']}")
+                elif ctx.get("incident_id"):
+                    body_lines.append(f"Incident ID: {ctx['incident_id']}")
+
+                email_service.send_email(
+                    from_email=INCIDENT_EMAIL_FROM,
+                    to=emails,
+                    subject=subject,
+                    body_text="\n".join(body_lines),
+                )
             return True
-        except Exception as e:
-            # Log the error
-            # logger.error(f"Error sending email to {self.recipient}: {e}")
+        except Exception:
+            logger.exception("EmailHandler failed for %s", self.targets)
+            return False
+
+
+class SmsHandler:
+    """
+    Send SMS alerts to Users resolved by permission or ID.
+
+    Handler syntax:
+        sms://perm@manage_security
+        sms://perm@manage_security,42
+
+    Only sends to users with is_phone_verified=True.
+    """
+
+    def __init__(self, target, **params):
+        self.targets = [t.strip() for t in target.split(",") if t.strip()]
+        self.params = params
+
+    def run(self, event):
+        if not self.targets:
+            return False
+
+        try:
+            users = _resolve_users(self.targets, require_phone=True)
+            if not users:
+                logger.warning("SmsHandler: no eligible users found for %s", self.targets)
+                return False
+
+            from mojo.apps import phonehub
+
+            ctx = _build_incident_context(event)
+            message_parts = [
+                f"[Incident] {event.category}: {ctx['title']}",
+                f"Level: {event.level}",
+            ]
+            if ctx.get("source_ip"):
+                message_parts.append(f"IP: {ctx['source_ip']}")
+            if ctx.get("incident_url"):
+                message_parts.append(ctx["incident_url"])
+
+            message = "\n".join(message_parts)
+
+            sent = False
+            for user in users:
+                try:
+                    phonehub.send_sms(
+                        phone_number=user.phone_number,
+                        message=message,
+                        user=user,
+                    )
+                    sent = True
+                except Exception:
+                    logger.exception("SmsHandler: failed to send SMS to user %s", user.pk)
+
+            return sent
+        except Exception:
+            logger.exception("SmsHandler failed for %s", self.targets)
             return False
 
 
 class NotifyHandler:
     """
-    Handler for sending notifications through various channels based on events.
+    Send in-app + push notification to Users.
 
-    This handler can send notifications through multiple channels (SMS, push, etc.)
-    when an event matches rule criteria.
-
-    Attributes:
-        recipient (str): The recipient identifier (can be a username, user ID, etc.).
+    Handler syntax:
+        notify://perm@manage_security
+        notify://perm@manage_security,42
     """
 
-    def __init__(self, recipient):
-        """
-        Initialize a NotifyHandler with a recipient.
-
-        Args:
-            recipient (str): The recipient identifier.
-        """
-        self.recipient = recipient
+    def __init__(self, target, **params):
+        self.targets = [t.strip() for t in target.split(",") if t.strip()]
+        self.params = params
 
     def run(self, event):
-        """
-        Send a notification for the given event.
+        if not self.targets:
+            return False
 
-        Args:
-            event (Event): The event that triggered this handler.
-
-        Returns:
-            bool: True if the notification was sent successfully, False otherwise.
-        """
-        # TODO: Implement actual notification logic
         try:
-            # Example implementation:
-            # from mojo.helpers.notifications import send_notification
-            # message = f"Incident Alert: {event.name}\n{event.details}"
-            # result = send_notification(self.recipient, message, metadata=event.metadata)
-            # return result
-            return True
-        except Exception as e:
-            # Log the error
-            # logger.error(f"Error sending notification to {self.recipient}: {e}")
+            from mojo.apps.account.models import Notification
+
+            users = _resolve_users(self.targets)
+            if not users:
+                logger.warning("NotifyHandler: no eligible users found for %s", self.targets)
+                return False
+
+            ctx = _build_incident_context(event)
+            title = f"[{event.category}] {ctx['title']}"
+
+            sent = False
+            for user in users:
+                Notification.send(
+                    title=title,
+                    body=ctx["details"],
+                    user=user,
+                    kind="incident_alert",
+                    data=ctx,
+                    action_url=ctx.get("incident_url"),
+                )
+                sent = True
+
+            return sent
+        except Exception:
+            logger.exception("NotifyHandler failed for %s", self.targets)
             return False
 
 
 class BlockHandler:
     """
-    Handler for fleet-wide IP blocking via broadcast.
-
-    When a RuleSet fires with a block:// handler, this broadcasts a block_ip
-    job to all runners so every instance behind the load balancer blocks the IP.
+    Fleet-wide IP blocking via broadcast.
 
     Handler syntax:
-        block://?ttl=3600&fleet_wide=true
-
-    Params:
-        ttl: seconds to block (default 600)
-        fleet_wide: if "true", broadcast to all instances (default true)
+        block://?ttl=3600
+        block://?ttl=600&reason=auto:ruleset
     """
 
     def __init__(self, target=None, **params):
@@ -178,45 +351,24 @@ class BlockHandler:
 
             from mojo.apps.account.models import GeoLocatedIP
             geo = GeoLocatedIP.geolocate(ip, auto_refresh=False)
-            # geo.block() handles DB update + fleet-wide broadcast
             return geo.block(reason=reason, ttl=ttl)
         except Exception:
+            logger.exception("BlockHandler failed for event %s", event.pk)
             return False
 
 
 class TicketHandler:
     """
-    Handler for creating a ticket based on events.
+    Create a support ticket linked to the incident.
 
-    This handler creates a ticket linked to the incident (if available) when
-    an event matches rule criteria.
-
-    Attributes:
-        params (dict): Optional parameters to override ticket fields:
-            - title, description, status, priority, category, assignee
+    Handler syntax:
+        ticket://?status=open&priority=8&title=Investigate&category=security
     """
 
     def __init__(self, target=None, **params):
-        """
-        Initialize a TicketHandler with optional parameters.
-        A target is accepted for URL compatibility but ignored.
-
-        Args:
-            target (str|None): Unused placeholder for URL netloc.
-            **params: Ticket field overrides.
-        """
         self.params = params
 
     def run(self, event):
-        """
-        Create a ticket for the given event.
-
-        Args:
-            event (Event): The event that triggered this handler.
-
-        Returns:
-            bool: True if the ticket was created successfully, False otherwise.
-        """
         try:
             from mojo.apps.incident.models import Ticket
             title = self.params.get("title") or (getattr(event, "title", None) or "Auto-generated ticket")
@@ -228,7 +380,6 @@ class TicketHandler:
             except Exception:
                 priority = 1
 
-            # Optional: assignee by id
             assignee = None
             assignee_id = self.params.get("assignee")
             if assignee_id:
@@ -251,4 +402,134 @@ class TicketHandler:
             )
             return True
         except Exception:
+            logger.exception("TicketHandler failed for event %s", event.pk)
             return False
+
+
+class LLMHandler:
+    """
+    Invoke the LLM security agent to triage an incident.
+
+    Handler syntax:
+        llm://                          — use defaults
+        llm://claude-sonnet-4-20250514   — specify model (future use)
+        llm://?action=assess            — action hint for prompt
+
+    The handler publishes a job that runs the full LLM agent loop
+    with tool use. The agent investigates the incident, decides if it's
+    noise or real, and takes action (ignore, resolve, block, create ticket).
+    """
+
+    def __init__(self, target=None, **params):
+        self.target = target
+        self.params = params
+
+    def run(self, event):
+        try:
+            from mojo.apps import jobs
+            payload = {
+                "event_id": event.pk,
+                "incident_id": event.incident_id,
+                "ruleset_id": None,
+            }
+            # Try to get ruleset_id from the incident
+            if event.incident_id:
+                try:
+                    from mojo.apps.incident.models import Incident
+                    incident = Incident.objects.get(pk=event.incident_id)
+                    if incident.rule_set_id:
+                        payload["ruleset_id"] = incident.rule_set_id
+                except Exception:
+                    pass
+
+            jobs.publish(
+                "mojo.apps.incident.handlers.llm_agent.execute_llm_handler",
+                payload,
+                channel="incident_handlers",
+            )
+            return True
+        except Exception:
+            logger.exception("LLMHandler failed for event %s", event.pk)
+            return False
+
+
+# ---------------------------------------------------------------------------
+# Async job entry point
+# ---------------------------------------------------------------------------
+
+HANDLER_MAP = {
+    "job": JobHandler,
+    "email": EmailHandler,
+    "sms": SmsHandler,
+    "notify": NotifyHandler,
+    "block": BlockHandler,
+    "ticket": TicketHandler,
+    "llm": LLMHandler,
+}
+
+
+def execute_handler(payload):
+    """
+    Job function called by the job queue to execute a single handler spec.
+
+    Payload keys:
+        handler_spec: The full handler URL string (e.g. "email://perm@manage_security?template=critical")
+        event_id: ID of the Event that triggered this handler
+        incident_id: ID of the associated Incident (optional)
+    """
+    from urllib.parse import urlparse, parse_qs
+
+    spec = payload.get("handler_spec")
+    event_id = payload.get("event_id")
+    incident_id = payload.get("incident_id")
+
+    if not spec or not event_id:
+        logger.error("execute_handler: missing handler_spec or event_id in payload")
+        return
+
+    # Load the event
+    try:
+        from mojo.apps.incident.models import Event
+        event = Event.objects.get(pk=event_id)
+    except Exception:
+        logger.exception("execute_handler: failed to load event %s", event_id)
+        return
+
+    # Load the incident (optional)
+    incident = None
+    if incident_id:
+        try:
+            from mojo.apps.incident.models import Incident
+            incident = Incident.objects.get(pk=incident_id)
+        except Exception:
+            logger.warning("execute_handler: incident %s not found", incident_id)
+
+    # Parse and execute the handler
+    try:
+        handler_url = urlparse(spec)
+        handler_type = handler_url.scheme
+        params = {k: v[0] for k, v in parse_qs(handler_url.query).items()}
+
+        handler_cls = HANDLER_MAP.get(handler_type)
+        if not handler_cls:
+            logger.warning("execute_handler: unknown handler type %s", handler_type)
+            return
+
+        if handler_type in ("job", "block", "ticket"):
+            handler = handler_cls(handler_url.netloc or None, **params)
+        else:
+            handler = handler_cls(handler_url.netloc, **params)
+
+        result = handler.run(event)
+
+        # Record handler execution in incident history
+        if incident:
+            status_text = "succeeded" if result else "failed"
+            incident.add_history(f"handler:{handler_type}",
+                note=f"Handler {spec} {status_text}")
+
+    except Exception:
+        logger.exception("execute_handler: failed to run handler %s for event %s", spec, event_id)
+        if incident:
+            incident.add_history(f"handler:{handler_type}",
+                note=f"Handler {spec} failed (exception)")

@@ -6,9 +6,9 @@ class IncidentHistory(models.Model, MojoModel):
         ordering = ['-created']
 
     class RestMeta:
-        VIEW_PERMS = ["manage_incidents", "view_incidents"]
-        SAVE_PERMS = ["manage_incidents"]
-        DELETE_PERMS = ["manage_incidents"]
+        VIEW_PERMS = ["view_security"]
+        SAVE_PERMS = ["manage_security"]
+        DELETE_PERMS = ["manage_security"]
         CAN_DELETE = False  # History should not be deletable
 
         GRAPHS = {

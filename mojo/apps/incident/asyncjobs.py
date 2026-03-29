@@ -172,5 +172,122 @@ def refresh_ipsets(job):
         job.add_log(f"Refreshed {len(refreshed)} IPSets: {refreshed}")
 
 
+def check_system_health(job):
+    """
+    Cron job (every 3 min): checks system health across all runners.
+    Fires incident events when thresholds are breached. The rules engine
+    handles escalation via threshold/bundling logic — a single spike is
+    a blip, sustained problems trigger incidents.
+    """
+    from mojo.apps import jobs
+    from mojo.apps.incident import reporter
+
+    HEALTH_TCP_MAX = settings.get_static("HEALTH_TCP_MAX", 2000)
+    HEALTH_CPU_CRIT = settings.get_static("HEALTH_CPU_CRIT", 90)
+    HEALTH_MEM_CRIT = settings.get_static("HEALTH_MEM_CRIT", 90)
+    HEALTH_DISK_CRIT = settings.get_static("HEALTH_DISK_CRIT", 85)
+
+    # Check runner availability
+    runners = jobs.get_runners()
+    alive_ids = set()
+    for runner in runners:
+        if runner.get("alive"):
+            alive_ids.add(runner["runner_id"])
+        else:
+            reporter.report_event(
+                f"Runner {runner['runner_id']} is not responding",
+                title=f"Runner down: {runner['runner_id']}",
+                category="system:health:runner",
+                level=10,
+                scope="system",
+                hostname=runner["runner_id"],
+            )
+
+    if not alive_ids:
+        job.add_log("No alive runners found, skipping sysinfo collection")
+        return
+
+    # Collect sysinfo from all alive runners
+    sysinfo = jobs.get_sysinfo(timeout=10.0)
+    checked = 0
+
+    for entry in sysinfo:
+        runner_id = entry.get("runner_id", "unknown")
+        if entry.get("status") != "success":
+            continue
+
+        result = entry.get("result", {})
+        hostname = (result.get("os") or {}).get("hostname", runner_id)
+        checked += 1
+
+        # TCP connections
+        tcp_cons = (result.get("network") or {}).get("tcp_cons", 0)
+        if tcp_cons > HEALTH_TCP_MAX:
+            reporter.report_event(
+                f"TCP connections: {tcp_cons} (threshold: {HEALTH_TCP_MAX})",
+                title=f"High TCP connections on {hostname}",
+                category="system:health:tcp",
+                level=8,
+                scope="system",
+                hostname=hostname,
+            )
+
+        # CPU
+        cpu_load = result.get("cpu_load", 0)
+        if cpu_load > HEALTH_CPU_CRIT:
+            reporter.report_event(
+                f"CPU load: {cpu_load}% (threshold: {HEALTH_CPU_CRIT}%)",
+                title=f"High CPU on {hostname}",
+                category="system:health:cpu",
+                level=5,
+                scope="system",
+                hostname=hostname,
+            )
+
+        # Memory
+        mem_pct = (result.get("memory") or {}).get("percent", 0)
+        if mem_pct > HEALTH_MEM_CRIT:
+            reporter.report_event(
+                f"Memory usage: {mem_pct}% (threshold: {HEALTH_MEM_CRIT}%)",
+                title=f"High memory on {hostname}",
+                category="system:health:memory",
+                level=5,
+                scope="system",
+                hostname=hostname,
+            )
+
+        # Disk
+        disk_pct = (result.get("disk") or {}).get("percent", 0)
+        if disk_pct > HEALTH_DISK_CRIT:
+            reporter.report_event(
+                f"Disk usage: {disk_pct}% (threshold: {HEALTH_DISK_CRIT}%)",
+                title=f"High disk on {hostname}",
+                category="system:health:disk",
+                level=5,
+                scope="system",
+                hostname=hostname,
+            )
+
+    # Check scheduler leader lock
+    try:
+        from mojo.apps.jobs.keys import JobKeys
+        from mojo.apps.jobs.adapters import get_adapter
+        redis_client = get_adapter()
+        keys = JobKeys()
+        lock_key = keys.scheduler_lock()
+        if not redis_client.get(lock_key):
+            reporter.report_event(
+                "Scheduler leader lock is missing — no scheduler may be running",
+                title="Scheduler leader lock missing",
+                category="system:health:scheduler",
+                level=10,
+                scope="system",
+            )
+    except Exception:
+        pass
+
+    job.add_log(f"Health check complete: {checked} runners checked, {len(alive_ids)} alive")
+
+
 def example(job):
     job.add_log("This is an example job")

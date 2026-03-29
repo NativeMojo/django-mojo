@@ -1,8 +1,10 @@
+import logging
+import re
 from django.db import models
 from mojo.models import MojoModel
 from urllib.parse import urlparse, parse_qs
-from mojo.apps.incident.handlers import JobHandler, EmailHandler, NotifyHandler, BlockHandler
-import re
+
+logger = logging.getLogger(__name__)
 
 
 class BundleBy:
@@ -116,65 +118,63 @@ class RuleSet(models.Model, MojoModel):
 
     class RestMeta:
         SEARCH_FIELDS = ["name"]
-        VIEW_PERMS = ["view_incidents"]
-        CREATE_PERMS = None
+        VIEW_PERMS = ["view_security"]
+        CREATE_PERMS = ["manage_security"]
+        SAVE_PERMS = ["manage_security"]
+        DELETE_PERMS = ["manage_security"]
         CAN_DELETE = True
 
     def run_handler(self, event, incident=None):
         """
-        Runs one or more handlers configured on this RuleSet.
+        Dispatch all handlers configured on this RuleSet as async jobs.
 
-        Handlers can be chained in the `handler` field. The chain is split on
-        ',{scheme}://' where scheme in [job, email, notify, ticket].
+        Each handler spec in the chain is published as a separate job via
+        `jobs.publish()`. The job function (`execute_handler`) loads the
+        event/incident and runs the handler in the background.
 
         Args:
-            event (Event): The event to run the handler for.
+            event (Event): The event that triggered this handler.
             incident (Incident|None): The incident created for this event (if any).
 
         Returns:
-            bool: True if at least one handler was successfully run, False otherwise.
+            bool: True if at least one job was published, False otherwise.
         """
         if not self.handler:
             return False
 
-        success = False
         try:
-            # Split on commas that are followed by a known scheme, so commas inside
-            # notify recipient lists don't break the chain.
-            specs = re.split(r',(?=(?:job|email|notify|ticket|block)://)', self.handler.strip())
+            from mojo.apps import jobs
+
+            specs = re.split(r',(?=(?:job|email|sms|notify|ticket|block|llm)://)', self.handler.strip())
+            published = False
 
             for spec in filter(None, [s.strip() for s in specs]):
                 handler_url = urlparse(spec)
-                handler_type = handler_url.scheme
-                params = {k: v[0] for k, v in parse_qs(handler_url.query).items()}
-
-                if handler_type == "job":
-                    handler = JobHandler(handler_url.netloc, **params)
-                    success = handler.run(event) or success
-
-                elif handler_type == "email":
-                    handler = EmailHandler(handler_url.netloc)
-                    success = handler.run(event) or success
-
-                elif handler_type == "notify":
-                    handler = NotifyHandler(handler_url.netloc)
-                    success = handler.run(event) or success
-
-                elif handler_type == "block":
-                    handler = BlockHandler(handler_url.netloc, **params)
-                    success = handler.run(event) or success
-
-                elif handler_type == "ticket":
-                    created = self._create_ticket_from_handler(event, incident, handler_url, params)
-                    success = created or success
-
-                else:
-                    # Unsupported handler type; skip to next
+                if handler_url.scheme not in ("job", "email", "sms", "notify", "block", "ticket", "llm"):
                     continue
 
-            return success
+                payload = {
+                    "handler_spec": spec,
+                    "event_id": event.pk,
+                    "incident_id": incident.pk if incident else None,
+                }
+                try:
+                    jobs.publish(
+                        "mojo.apps.incident.handlers.event_handlers.execute_handler",
+                        payload,
+                        channel="incident_handlers",
+                    )
+                    published = True
+                except Exception:
+                    logger.exception("Failed to publish handler job for %s", spec)
+                    # Record failure in history so admins can see it
+                    if incident:
+                        incident.add_history(f"handler:{handler_url.scheme}",
+                            note=f"Handler {spec} failed to publish")
+
+            return published
         except Exception:
-            # logger.error(f"Error running handlers for ruleset {self.id}: {e}")
+            logger.exception("Error dispatching handlers for ruleset %s", self.pk)
             return False
 
     def _create_ticket_from_handler(self, event, incident, handler_url, params):
@@ -440,8 +440,10 @@ class Rule(models.Model, MojoModel):
 
     class RestMeta:
         SEARCH_FIELDS = ["details"]
-        VIEW_PERMS = ["view_incidents"]
-        CREATE_PERMS = ["manage_incidents"]
+        VIEW_PERMS = ["view_security"]
+        CREATE_PERMS = ["manage_security"]
+        SAVE_PERMS = ["manage_security"]
+        DELETE_PERMS = ["manage_security"]
         CAN_DELETE = True
 
     def check_rule(self, event):
