@@ -206,6 +206,9 @@ def jwt_login(request, user, legacy=False, source=None, extra=None):
         _check_verification_gate(user, source)
     user.last_login = dates.utcnow()
     user.track()
+    # Record login event with geo data for map visualization and anomaly detection
+    from mojo.apps.account.models.login_event import UserLoginEvent
+    UserLoginEvent.track(request, user, device=request.device, source=source)
     keys = dict(uid=user.id, ip=request.ip)
     if request.device:
         keys['device'] = request.device.id

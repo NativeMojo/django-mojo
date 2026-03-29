@@ -17,3 +17,4 @@
 - [Custom Auth Models](custom_auth_models.md) — JWT, OAuth, and passkeys for non-User models (e.g. game.Player)
 - [Notifications](notifications.md) — Inbox, mark read, WebSocket delivery
 - [GeoIP](geoip.md) — IP geolocation and time lookup endpoints
+- [Login Events](login_events.md) — Login history with geolocation, aggregation for maps, anomaly detection
