@@ -3733,32 +3733,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#push-notifications" class="md-nav__link">
+  <a href="#communications-push-chat-email-phone" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Push Notifications
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#chat-app" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Chat App
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#email-app-aws" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Email App (AWS)
+        Communications (Push, Chat, Email, Phone)
       
     </span>
   </a>
@@ -3788,10 +3766,21 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#docit-app" class="md-nav__link">
+  <a href="#jobs-app" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Docit App
+        Jobs App
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metrics-app" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Metrics App
       
     </span>
   </a>
@@ -3986,8 +3975,8 @@
 <tbody>
 <tr>
 <td><code>security</code></td>
-<td>Security</td>
-<td>All incidents, events, rules, tickets, IPSets, bouncer devices/signals/signatures, GeoLocatedIP</td>
+<td>Security &amp; Logs</td>
+<td>Incidents, events, rules, tickets, IPSets, bouncer devices/signals/signatures, GeoLocatedIP, system logs</td>
 </tr>
 <tr>
 <td><code>users</code></td>
@@ -4000,39 +3989,24 @@
 <td>Groups, members, group API keys, settings</td>
 </tr>
 <tr>
-<td><code>phone</code></td>
-<td>Phone</td>
-<td>Phone numbers, phone config, SMS</td>
+<td><code>comms</code></td>
+<td>Communications</td>
+<td>Email (mailboxes, domains, templates, messages), phone (numbers, config, SMS), push (config, templates, delivery, devices), chat (rooms, messages, reactions, receipts, membership)</td>
 </tr>
 <tr>
-<td><code>push</code></td>
-<td>Push</td>
-<td>Push config, notification templates, delivery records, registered devices</td>
+<td><code>jobs</code></td>
+<td>Job System</td>
+<td>Jobs, job events, job logs, runners, queue control, system stats</td>
+</tr>
+<tr>
+<td><code>metrics</code></td>
+<td>Metrics</td>
+<td>All metrics operations — recording, fetching, categories, values, permissions management</td>
 </tr>
 <tr>
 <td><code>files</code></td>
 <td>Files</td>
-<td>File managers, files, renditions, vault files, vault data</td>
-</tr>
-<tr>
-<td><code>chat</code></td>
-<td>Chat</td>
-<td>Chat rooms, messages, reactions, receipts, membership</td>
-</tr>
-<tr>
-<td><code>email</code></td>
-<td>Email</td>
-<td>Mailboxes, domains, templates, sent/incoming messages, attachments</td>
-</tr>
-<tr>
-<td><code>logs</code></td>
-<td>Logs</td>
-<td>All log entries (read + write)</td>
-</tr>
-<tr>
-<td><code>docs</code></td>
-<td>Docs</td>
-<td>Books, pages, assets, revisions (write — read is public)</td>
+<td>File managers, files, renditions, vault files, vault data, S3 buckets</td>
 </tr>
 </tbody>
 </table>
@@ -4105,7 +4079,7 @@
 </tr>
 <tr>
 <td><code>manage_chat</code></td>
-<td>Chat</td>
+<td>Communications</td>
 <td>Create/manage chat rooms and membership</td>
 </tr>
 <tr>
@@ -4135,68 +4109,103 @@
 </tr>
 <tr>
 <td><code>view_logs</code></td>
-<td>Logs</td>
+<td>Security</td>
 <td>Read logit entries</td>
 </tr>
 <tr>
 <td><code>manage_logs</code></td>
-<td>Logs</td>
+<td>Security</td>
 <td>Write/delete logit entries</td>
 </tr>
 <tr>
 <td><code>admin</code></td>
-<td>Logs</td>
+<td>Security</td>
 <td>Full admin access to logit</td>
 </tr>
 <tr>
 <td><code>manage_notifications</code></td>
-<td>Push</td>
+<td>Communications</td>
 <td>Manage notification templates and delivery</td>
 </tr>
 <tr>
 <td><code>view_notifications</code></td>
-<td>Push</td>
+<td>Communications</td>
 <td>Read notification delivery records</td>
 </tr>
 <tr>
 <td><code>manage_devices</code></td>
-<td>Push</td>
+<td>Communications</td>
 <td>Manage registered push devices</td>
 </tr>
 <tr>
 <td><code>view_devices</code></td>
-<td>Push</td>
+<td>Communications</td>
 <td>Read registered push devices</td>
 </tr>
 <tr>
 <td><code>manage_push_config</code></td>
-<td>Push</td>
+<td>Communications</td>
 <td>Push notification configuration</td>
 </tr>
 <tr>
 <td><code>view_phone_numbers</code></td>
-<td>Phone</td>
+<td>Communications</td>
 <td>Read phone number records</td>
 </tr>
 <tr>
 <td><code>manage_phone_numbers</code></td>
-<td>Phone</td>
+<td>Communications</td>
 <td>Manage phone numbers</td>
 </tr>
 <tr>
 <td><code>manage_phone_config</code></td>
-<td>Phone</td>
+<td>Communications</td>
 <td>Phone hub configuration</td>
 </tr>
 <tr>
 <td><code>view_sms</code></td>
-<td>Phone</td>
+<td>Communications</td>
 <td>Read SMS records</td>
 </tr>
 <tr>
 <td><code>manage_sms</code></td>
-<td>Phone</td>
+<td>Communications</td>
 <td>Send and manage SMS</td>
+</tr>
+<tr>
+<td><code>send_sms</code></td>
+<td>Communications</td>
+<td>Send SMS messages</td>
+</tr>
+<tr>
+<td><code>send_notifications</code></td>
+<td>Communications</td>
+<td>Send push notifications</td>
+</tr>
+<tr>
+<td><code>view_jobs</code></td>
+<td>Jobs</td>
+<td>Read-only job monitoring, queue sizes, runner info</td>
+</tr>
+<tr>
+<td><code>manage_jobs</code></td>
+<td>Jobs</td>
+<td>Full job system control — create, cancel, retry, purge, runner management</td>
+</tr>
+<tr>
+<td><code>view_metrics</code></td>
+<td>Metrics</td>
+<td>Read metrics data and categories</td>
+</tr>
+<tr>
+<td><code>manage_metrics</code></td>
+<td>Metrics</td>
+<td>Manage metrics permissions and accounts</td>
+</tr>
+<tr>
+<td><code>write_metrics</code></td>
+<td>Metrics</td>
+<td>Record metrics data</td>
 </tr>
 <tr>
 <td><code>manage_shortlinks</code></td>
@@ -4376,7 +4385,7 @@
 </tr>
 </tbody>
 </table>
-<h3 id="push-notifications">Push Notifications<a class="headerlink" href="#push-notifications" title="Permanent link">&para;</a></h3>
+<h3 id="communications-push-chat-email-phone">Communications (Push, Chat, Email, Phone)<a class="headerlink" href="#communications-push-chat-email-phone" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
 <tr>
@@ -4389,118 +4398,110 @@
 <tbody>
 <tr>
 <td>PushConfig</td>
-<td>manage_push_config, manage_groups, <strong>push</strong></td>
-<td>manage_push_config, manage_groups, <strong>push</strong></td>
+<td>manage_push_config, manage_groups, <strong>comms</strong></td>
+<td>manage_push_config, manage_groups, <strong>comms</strong></td>
 <td></td>
 </tr>
 <tr>
 <td>NotificationTemplate</td>
-<td>manage_notifications, manage_groups, <strong>push</strong>, owner, manage_users</td>
-<td>manage_notifications, manage_groups, <strong>push</strong></td>
+<td>manage_notifications, manage_groups, <strong>comms</strong>, owner, manage_users</td>
+<td>manage_notifications, manage_groups, <strong>comms</strong></td>
 <td></td>
 </tr>
 <tr>
 <td>NotificationDelivery</td>
-<td>view_notifications, manage_notifications, <strong>push</strong>, owner, manage_users</td>
-<td>manage_notifications, <strong>push</strong></td>
+<td>view_notifications, manage_notifications, <strong>comms</strong>, owner, manage_users</td>
+<td>manage_notifications, <strong>comms</strong></td>
 <td></td>
 </tr>
 <tr>
 <td>RegisteredDevice</td>
-<td>view_devices, manage_devices, <strong>push</strong>, owner, manage_users</td>
-<td>manage_devices, <strong>push</strong>, owner</td>
+<td>view_devices, manage_devices, <strong>comms</strong>, owner, manage_users</td>
+<td>manage_devices, <strong>comms</strong>, owner</td>
 <td></td>
 </tr>
-</tbody>
-</table>
-<h3 id="chat-app">Chat App<a class="headerlink" href="#chat-app" title="Permanent link">&para;</a></h3>
-<table>
-<thead>
-<tr>
-<th>Model</th>
-<th>VIEW_PERMS</th>
-<th>SAVE_PERMS</th>
-<th>Notes</th>
-</tr>
-</thead>
-<tbody>
 <tr>
 <td>ChatRoom</td>
-<td>chat, manage_chat, owner</td>
-<td>manage_chat, <strong>chat</strong>, owner</td>
+<td><strong>comms</strong>, manage_chat, owner</td>
+<td>manage_chat, <strong>comms</strong>, owner</td>
 <td>CREATE_PERMS = authenticated</td>
 </tr>
 <tr>
 <td>ChatMessage</td>
-<td>chat, manage_chat</td>
+<td><strong>comms</strong>, manage_chat</td>
 <td>(read-only)</td>
 <td>Created via WebSocket</td>
 </tr>
 <tr>
 <td>ChatReaction</td>
-<td>chat, manage_chat</td>
+<td><strong>comms</strong>, manage_chat</td>
 <td>(read-only)</td>
 <td>Created via WebSocket</td>
 </tr>
 <tr>
 <td>ChatReadReceipt</td>
-<td>chat, manage_chat</td>
+<td><strong>comms</strong>, manage_chat</td>
 <td>(read-only)</td>
 <td>Created via WebSocket</td>
 </tr>
 <tr>
 <td>ChatMembership</td>
-<td>chat, manage_chat</td>
-<td>manage_chat, <strong>chat</strong></td>
+<td><strong>comms</strong>, manage_chat</td>
+<td>manage_chat, <strong>comms</strong></td>
 <td></td>
 </tr>
-</tbody>
-</table>
-<h3 id="email-app-aws">Email App (AWS)<a class="headerlink" href="#email-app-aws" title="Permanent link">&para;</a></h3>
-<table>
-<thead>
-<tr>
-<th>Model</th>
-<th>VIEW_PERMS</th>
-<th>SAVE_PERMS</th>
-<th>Notes</th>
-</tr>
-</thead>
-<tbody>
 <tr>
 <td>Mailbox</td>
-<td>manage_aws, <strong>email</strong></td>
-<td>manage_aws, <strong>email</strong></td>
+<td>manage_aws, <strong>comms</strong></td>
+<td>manage_aws, <strong>comms</strong></td>
 <td></td>
 </tr>
 <tr>
 <td>EmailDomain</td>
-<td>manage_aws, <strong>email</strong></td>
-<td>manage_aws, <strong>email</strong></td>
+<td>manage_aws, <strong>comms</strong></td>
+<td>manage_aws, <strong>comms</strong></td>
 <td></td>
 </tr>
 <tr>
 <td>EmailTemplate</td>
-<td>manage_aws, <strong>email</strong></td>
-<td>manage_aws, <strong>email</strong></td>
+<td>manage_aws, <strong>comms</strong></td>
+<td>manage_aws, <strong>comms</strong></td>
 <td></td>
 </tr>
 <tr>
 <td>SentMessage</td>
-<td>manage_aws, <strong>email</strong></td>
-<td>manage_aws, <strong>email</strong></td>
+<td>manage_aws, <strong>comms</strong></td>
+<td>manage_aws, <strong>comms</strong></td>
 <td></td>
 </tr>
 <tr>
 <td>IncomingEmail</td>
-<td>manage_aws, <strong>email</strong></td>
-<td>manage_aws, <strong>email</strong></td>
+<td>manage_aws, <strong>comms</strong></td>
+<td>manage_aws, <strong>comms</strong></td>
 <td></td>
 </tr>
 <tr>
 <td>EmailAttachment</td>
-<td>manage_aws, <strong>email</strong></td>
-<td>manage_aws, <strong>email</strong></td>
+<td>manage_aws, <strong>comms</strong></td>
+<td>manage_aws, <strong>comms</strong></td>
+<td></td>
+</tr>
+<tr>
+<td>PhoneNumber</td>
+<td>view_phone_numbers, manage_phone_numbers, <strong>comms</strong>, manage_users</td>
+<td>manage_phone_numbers, <strong>comms</strong>, manage_users</td>
+<td></td>
+</tr>
+<tr>
+<td>PhoneConfig</td>
+<td>manage_phone_config, manage_groups, <strong>comms</strong></td>
+<td>manage_phone_config, manage_groups, <strong>comms</strong></td>
+<td></td>
+</tr>
+<tr>
+<td>SMS</td>
+<td>view_sms, manage_sms, <strong>comms</strong>, owner, manage_notifications</td>
+<td>manage_sms, <strong>comms</strong>, manage_notifications</td>
 <td></td>
 </tr>
 </tbody>
@@ -4518,9 +4519,9 @@
 <tbody>
 <tr>
 <td>Log</td>
-<td>manage_logs, view_logs, <strong>logs</strong>, admin</td>
-<td>admin, <strong>logs</strong></td>
-<td></td>
+<td>manage_logs, view_logs, <strong>security</strong>, admin</td>
+<td>admin, <strong>security</strong></td>
+<td>Logs are part of the security category</td>
 </tr>
 </tbody>
 </table>
@@ -4567,7 +4568,7 @@
 </tr>
 </tbody>
 </table>
-<h3 id="docit-app">Docit App<a class="headerlink" href="#docit-app" title="Permanent link">&para;</a></h3>
+<h3 id="jobs-app">Jobs App<a class="headerlink" href="#jobs-app" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
 <tr>
@@ -4579,31 +4580,29 @@
 </thead>
 <tbody>
 <tr>
-<td>Book</td>
-<td>all</td>
-<td>manage_docit, <strong>docs</strong>, owner</td>
-<td>Public read</td>
-</tr>
-<tr>
-<td>Asset</td>
-<td>all</td>
-<td>manage_docit, <strong>docs</strong>, owner</td>
+<td>Job</td>
+<td>view_jobs, manage_jobs, <strong>jobs</strong></td>
+<td>manage_jobs, <strong>jobs</strong></td>
 <td></td>
 </tr>
 <tr>
-<td>PageRevision</td>
-<td>all</td>
-<td>manage_docit, <strong>docs</strong>, owner</td>
-<td></td>
+<td>JobEvent</td>
+<td>manage_jobs, view_jobs, <strong>jobs</strong></td>
+<td>(system-created)</td>
+<td>SAVE_PERMS = []</td>
 </tr>
 <tr>
-<td>Page</td>
-<td>all</td>
-<td>manage_docit, <strong>docs</strong>, owner</td>
-<td></td>
+<td>JobLog</td>
+<td>manage_jobs, view_jobs, <strong>jobs</strong></td>
+<td>(system-created)</td>
+<td>SAVE_PERMS = []</td>
 </tr>
 </tbody>
 </table>
+<p><strong>REST endpoints (non-RestMeta):</strong> All 26 <code>@md.requires_perms()</code> endpoints in jobs/rest/ also accept <code>jobs</code>.</p>
+<h3 id="metrics-app">Metrics App<a class="headerlink" href="#metrics-app" title="Permanent link">&para;</a></h3>
+<p>Metrics does not use RestMeta models. Permission checking is handled via <code>check_view_permissions()</code> and <code>check_write_permissions()</code> in <code>mojo/apps/metrics/rest/helpers.py</code>. See <a href="../../metrics/permissions/">Metrics Permissions</a> for details.</p>
+<p>The <code>metrics</code> category grants full read+write access to all metrics operations. Fine-grained: <code>view_metrics</code> (read), <code>write_metrics</code> (record), <code>manage_metrics</code> (admin).</p>
 <h3 id="other-apps">Other Apps<a class="headerlink" href="#other-apps" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
@@ -4616,24 +4615,6 @@
 </thead>
 <tbody>
 <tr>
-<td>PhoneNumber</td>
-<td>view_phone_numbers, manage_phone_numbers, <strong>phone</strong>, manage_users</td>
-<td>manage_phone_numbers, <strong>phone</strong>, manage_users</td>
-<td></td>
-</tr>
-<tr>
-<td>PhoneConfig</td>
-<td>manage_phone_config, manage_groups, <strong>phone</strong></td>
-<td>manage_phone_config, manage_groups, <strong>phone</strong></td>
-<td></td>
-</tr>
-<tr>
-<td>SMS</td>
-<td>view_sms, manage_sms, <strong>phone</strong>, owner, manage_notifications</td>
-<td>manage_sms, <strong>phone</strong>, manage_notifications</td>
-<td></td>
-</tr>
-<tr>
 <td>ShortLink</td>
 <td>manage_shortlinks, owner</td>
 <td>manage_shortlinks, owner</td>
@@ -4644,6 +4625,30 @@
 <td>manage_shortlinks</td>
 <td>(read-only)</td>
 <td>Analytics</td>
+</tr>
+<tr>
+<td>Book</td>
+<td>all</td>
+<td>manage_docit, docs, owner</td>
+<td>Public read</td>
+</tr>
+<tr>
+<td>Asset</td>
+<td>all</td>
+<td>manage_docit, docs, owner</td>
+<td></td>
+</tr>
+<tr>
+<td>Page</td>
+<td>all</td>
+<td>manage_docit, docs, owner</td>
+<td></td>
+</tr>
+<tr>
+<td>PageRevision</td>
+<td>all</td>
+<td>manage_docit, docs, owner</td>
+<td></td>
 </tr>
 </tbody>
 </table>
@@ -4660,7 +4665,7 @@
 <h2 id="design-guidelines">Design Guidelines<a class="headerlink" href="#design-guidelines" title="Permanent link">&para;</a></h2>
 <p>When adding permissions to a new model:</p>
 <ol>
-<li><strong>Always add the category permission</strong> — every model should include its domain's category perm (<code>security</code>, <code>users</code>, <code>groups</code>, <code>phone</code>, <code>push</code>, <code>files</code>, <code>chat</code>, <code>email</code>, <code>logs</code>, <code>docs</code>) in both VIEW_PERMS and SAVE_PERMS</li>
+<li><strong>Always add the category permission</strong> — every model should include its domain's category perm (<code>security</code>, <code>users</code>, <code>groups</code>, <code>comms</code>, <code>jobs</code>, <code>metrics</code>, <code>files</code>) in both VIEW_PERMS and SAVE_PERMS</li>
 <li><strong>Use view/manage pairs for fine-grained access</strong> — <code>view_X</code> for read-only, <code>manage_X</code> for write</li>
 <li><strong>Always include manage in view</strong> — if <code>manage_X</code> is in SAVE_PERMS, add it to VIEW_PERMS too</li>
 <li><strong>Use <code>owner</code> sparingly</strong> — only for user-facing models where users manage their own records</li>

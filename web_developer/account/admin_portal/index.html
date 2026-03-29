@@ -2779,6 +2779,89 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#permissions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Permissions
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Permissions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#category-permissions-use-these-in-your-ui" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Category Permissions (Use These in Your UI)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-to-display-permissions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How to Display Permissions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#assigning-permissions-via-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Assigning Permissions via API
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reading-current-permissions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reading Current Permissions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fine-grained-permissions-advanced" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fine-Grained Permissions (Advanced)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#protected-permissions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Protected Permissions
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#common-admin-endpoints" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2862,10 +2945,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#example-permission-aware-frontend-calls" class="md-nav__link">
+  <a href="#example-permission-aware-frontend" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Example: Permission-Aware Frontend Calls
+        Example: Permission-Aware Frontend
       
     </span>
   </a>
@@ -3861,6 +3944,89 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#permissions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Permissions
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Permissions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#category-permissions-use-these-in-your-ui" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Category Permissions (Use These in Your UI)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-to-display-permissions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How to Display Permissions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#assigning-permissions-via-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Assigning Permissions via API
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reading-current-permissions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reading Current Permissions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fine-grained-permissions-advanced" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fine-Grained Permissions (Advanced)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#protected-permissions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Protected Permissions
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#common-admin-endpoints" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3944,10 +4110,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#example-permission-aware-frontend-calls" class="md-nav__link">
+  <a href="#example-permission-aware-frontend" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Example: Permission-Aware Frontend Calls
+        Example: Permission-Aware Frontend
       
     </span>
   </a>
@@ -3999,14 +4165,7 @@
 <h1 id="admin-portal-api-guide-rest-api-reference">Admin Portal API Guide — REST API Reference<a class="headerlink" href="#admin-portal-api-guide-rest-api-reference" title="Permanent link">&para;</a></h1>
 <p>This guide is for web developers building internal admin portals on top of django-mojo.</p>
 <h2 id="what-admin-portal-means-in-mojo">What "Admin Portal" Means in Mojo<a class="headerlink" href="#what-admin-portal-means-in-mojo" title="Permanent link">&para;</a></h2>
-<p>An admin portal is a frontend that calls privileged REST endpoints, usually with one or more of:</p>
-<ul>
-<li><code>manage_users</code></li>
-<li><code>manage_groups</code></li>
-<li><code>manage_settings</code></li>
-<li><code>view_logs</code> / <code>manage_incidents</code> / other app-specific admin perms</li>
-</ul>
-<p>Always design UI and API calls around explicit permission checks. A logged-in user is not automatically an admin.</p>
+<p>An admin portal is a frontend that calls privileged REST endpoints. Access is controlled by permissions stored on each user. Always design UI and API calls around explicit permission checks. A logged-in user is not automatically an admin.</p>
 <h2 id="base-pattern">Base Pattern<a class="headerlink" href="#base-pattern" title="Permanent link">&para;</a></h2>
 <ol>
 <li>Authenticate user (<code>POST /api/account/login</code>).</li>
@@ -4014,35 +4173,286 @@
 <li>Pass <code>group=&lt;id&gt;</code> when operating on group-scoped resources.</li>
 <li>Handle <code>403</code> as "authenticated but missing permission".</li>
 </ol>
+<h2 id="permissions">Permissions<a class="headerlink" href="#permissions" title="Permanent link">&para;</a></h2>
+<h3 id="category-permissions-use-these-in-your-ui">Category Permissions (Use These in Your UI)<a class="headerlink" href="#category-permissions-use-these-in-your-ui" title="Permanent link">&para;</a></h3>
+<p>Category permissions are the <strong>recommended way</strong> to assign access. Each category grants full read+write access to an entire domain. Display these as toggles in your admin portal's user/member permission editor.</p>
+<table>
+<thead>
+<tr>
+<th>Permission</th>
+<th>Label</th>
+<th>What it unlocks</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>users</code></td>
+<td>User Management</td>
+<td>Users, passkeys, MFA, API keys, OAuth, devices, locations</td>
+</tr>
+<tr>
+<td><code>groups</code></td>
+<td>Group Management</td>
+<td>Groups, members, group API keys, settings</td>
+</tr>
+<tr>
+<td><code>security</code></td>
+<td>Security &amp; Logs</td>
+<td>Incidents, events, rules, tickets, IP blocks, bouncer, GeoIP, system logs</td>
+</tr>
+<tr>
+<td><code>comms</code></td>
+<td>Communications</td>
+<td>Email, phone, SMS, push notifications, chat rooms, messages</td>
+</tr>
+<tr>
+<td><code>jobs</code></td>
+<td>Job System</td>
+<td>Jobs, job events, job logs, runners, queue control</td>
+</tr>
+<tr>
+<td><code>metrics</code></td>
+<td>Metrics</td>
+<td>All metrics — recording, fetching, categories, permissions</td>
+</tr>
+<tr>
+<td><code>files</code></td>
+<td>File Management</td>
+<td>File managers, files, renditions, vault files, vault data</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Superusers</strong> (<code>is_superuser=true</code>) bypass all permission checks automatically. No category permissions needed.</p>
+<h3 id="how-to-display-permissions">How to Display Permissions<a class="headerlink" href="#how-to-display-permissions" title="Permanent link">&para;</a></h3>
+<p>Build your permission editor as a simple list of category toggles:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>User Management     [on/off]
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>Group Management    [on/off]
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>Security &amp; Logs     [on/off]
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>Communications      [on/off]
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>Job System          [on/off]
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>Metrics             [on/off]
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>File Management     [on/off]
+</code></pre></div>
+<p>This replaces the need to show 30+ individual permission toggles. Seven toggles cover the entire platform.</p>
+<h3 id="assigning-permissions-via-api">Assigning Permissions via API<a class="headerlink" href="#assigning-permissions-via-api" title="Permanent link">&para;</a></h3>
+<p><strong>Update a user's permissions:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>POST /api/user/&lt;id&gt;
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">&quot;permissions&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="nt">&quot;users&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span><span class="nt">&quot;groups&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span><span class="nt">&quot;security&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">    </span><span class="nt">&quot;comms&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="p">}</span>
+</code></pre></div>
+<p>Requires <code>manage_users</code> or <code>users</code> permission.</p>
+<p><strong>Update a group member's permissions:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>POST /api/group/member/&lt;id&gt;
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">&quot;permissions&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">    </span><span class="nt">&quot;files&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">    </span><span class="nt">&quot;comms&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">    </span><span class="nt">&quot;jobs&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="p">}</span>
+</code></pre></div>
+<p>Requires <code>manage_groups</code>, <code>manage_group</code>, or <code>groups</code> permission.</p>
+<p><strong>Invite a user with permissions:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>POST /api/group/member/invite
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">&quot;email&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;alice@example.com&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="nt">&quot;group&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">7</span><span class="p">,</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span><span class="nt">&quot;permissions&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">    </span><span class="nt">&quot;security&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">    </span><span class="nt">&quot;files&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">    </span><span class="nt">&quot;metrics&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="p">}</span>
+</code></pre></div>
+<h3 id="reading-current-permissions">Reading Current Permissions<a class="headerlink" href="#reading-current-permissions" title="Permanent link">&para;</a></h3>
+<p>Permissions are returned in the user and group member responses as a JSON object:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">42</span><span class="p">,</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span><span class="nt">&quot;username&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;alice&quot;</span><span class="p">,</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">  </span><span class="nt">&quot;permissions&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">    </span><span class="nt">&quot;security&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">    </span><span class="nt">&quot;files&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="w">    </span><span class="nt">&quot;users&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="w">    </span><span class="nt">&quot;comms&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="w">    </span><span class="nt">&quot;jobs&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a><span class="p">}</span>
+</code></pre></div>
+<p>Use this to set the initial state of your toggle UI. Any key not present or set to <code>false</code> means the user does not have that permission.</p>
+<h3 id="fine-grained-permissions-advanced">Fine-Grained Permissions (Advanced)<a class="headerlink" href="#fine-grained-permissions-advanced" title="Permanent link">&para;</a></h3>
+<p>Category permissions cover most use cases. Fine-grained permissions exist for when you need read-only access or scoped access within a domain. You do <strong>not</strong> need to show these in a standard admin UI — they are for special cases.</p>
+<table>
+<thead>
+<tr>
+<th>Fine-Grained</th>
+<th>Category</th>
+<th>Use case</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>view_security</code></td>
+<td><code>security</code></td>
+<td>Read-only security dashboard (no edit access)</td>
+</tr>
+<tr>
+<td><code>view_users</code></td>
+<td><code>users</code></td>
+<td>Read-only user directory</td>
+</tr>
+<tr>
+<td><code>view_groups</code></td>
+<td><code>groups</code></td>
+<td>Read-only group listing</td>
+</tr>
+<tr>
+<td><code>view_fileman</code></td>
+<td><code>files</code></td>
+<td>Read-only file browser</td>
+</tr>
+<tr>
+<td><code>view_logs</code></td>
+<td><code>security</code></td>
+<td>Read-only log viewer (logs are part of <code>security</code>)</td>
+</tr>
+<tr>
+<td><code>view_jobs</code></td>
+<td><code>jobs</code></td>
+<td>Read-only job monitoring</td>
+</tr>
+<tr>
+<td><code>view_metrics</code></td>
+<td><code>metrics</code></td>
+<td>Read-only metrics dashboard</td>
+</tr>
+<tr>
+<td><code>manage_group</code></td>
+<td><code>groups</code></td>
+<td>Manage only the user's own group (not all groups)</td>
+</tr>
+</tbody>
+</table>
+<p>If your portal needs a "read-only security viewer" role, assign <code>view_security</code> instead of <code>security</code>. But for most admin roles, the category permission is all you need.</p>
+<h3 id="protected-permissions">Protected Permissions<a class="headerlink" href="#protected-permissions" title="Permanent link">&para;</a></h3>
+<p>Some permission changes require the assigning user to have <code>manage_users</code> or <code>users</code>:</p>
+<ul>
+<li><code>manage_users</code>, <code>manage_groups</code>, <code>view_logs</code>, <code>view_admin</code>, <code>manage_notifications</code>, <code>manage_files</code>, <code>manage_aws</code></li>
+<li>All category permissions (<code>users</code>, <code>groups</code>, <code>security</code>, <code>comms</code>, <code>jobs</code>, <code>metrics</code>, <code>files</code>)</li>
+</ul>
+<p>This prevents non-admin users from escalating their own access.</p>
 <h2 id="common-admin-endpoints">Common Admin Endpoints<a class="headerlink" href="#common-admin-endpoints" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
 <tr>
 <th>Area</th>
 <th>Endpoint(s)</th>
-<th>Typical Permission</th>
+<th>Category Permission</th>
 </tr>
 </thead>
 <tbody>
 <tr>
 <td>User administration</td>
 <td><code>GET/POST /api/user</code>, <code>GET/POST /api/user/&lt;id&gt;</code></td>
-<td><code>view_users</code>, <code>manage_users</code></td>
+<td><code>users</code></td>
 </tr>
 <tr>
 <td>Group administration</td>
 <td><code>GET/POST /api/group</code>, <code>GET/POST /api/group/&lt;id&gt;</code></td>
-<td><code>view_groups</code>, <code>manage_groups</code></td>
+<td><code>groups</code></td>
 </tr>
 <tr>
 <td>Group membership</td>
 <td><code>POST /api/group/member</code>, <code>POST /api/group/member/&lt;id&gt;</code></td>
-<td><code>manage_users</code>, <code>manage_members</code>, <code>manage_group</code>, <code>manage_groups</code></td>
+<td><code>groups</code></td>
 </tr>
 <tr>
 <td>Secure settings</td>
-<td><code>GET/POST /api/settings</code>, <code>GET/POST /api/settings/&lt;id&gt;</code>, <code>DELETE /api/settings/&lt;id&gt;</code></td>
-<td><code>manage_settings</code></td>
+<td><code>GET/POST /api/settings</code>, <code>DELETE /api/settings/&lt;id&gt;</code></td>
+<td><code>groups</code></td>
+</tr>
+<tr>
+<td>Security dashboard</td>
+<td><code>GET /api/incident/incident</code>, <code>GET /api/incident/event</code></td>
+<td><code>security</code></td>
+</tr>
+<tr>
+<td>Firewall / IP blocks</td>
+<td><code>GET/POST /api/incident/ipset</code></td>
+<td><code>security</code></td>
+</tr>
+<tr>
+<td>Bouncer devices</td>
+<td><code>GET /api/account/bouncer/device</code></td>
+<td><code>security</code> or <code>users</code></td>
+</tr>
+<tr>
+<td>Bot signatures</td>
+<td><code>GET/POST /api/account/bouncer/bot_signature</code></td>
+<td><code>security</code> or <code>users</code></td>
+</tr>
+<tr>
+<td>System logs</td>
+<td><code>GET /api/logit/log</code></td>
+<td><code>security</code></td>
+</tr>
+<tr>
+<td>Email / SES</td>
+<td><code>GET/POST /api/aws/mailbox</code>, <code>GET/POST /api/aws/email_template</code></td>
+<td><code>comms</code></td>
+</tr>
+<tr>
+<td>Phone numbers</td>
+<td><code>GET/POST /api/phonehub/phone</code></td>
+<td><code>comms</code></td>
+</tr>
+<tr>
+<td>SMS</td>
+<td><code>GET/POST /api/phonehub/sms</code></td>
+<td><code>comms</code></td>
+</tr>
+<tr>
+<td>Push notifications</td>
+<td><code>GET/POST /api/account/push/config</code></td>
+<td><code>comms</code></td>
+</tr>
+<tr>
+<td>Chat rooms</td>
+<td><code>GET/POST /api/chat/room</code></td>
+<td><code>comms</code></td>
+</tr>
+<tr>
+<td>Job system</td>
+<td><code>GET /api/jobs/status</code>, <code>GET /api/jobs/health</code></td>
+<td><code>jobs</code></td>
+</tr>
+<tr>
+<td>Job control</td>
+<td><code>POST /api/jobs/control/*</code></td>
+<td><code>jobs</code></td>
+</tr>
+<tr>
+<td>Metrics</td>
+<td><code>GET /api/metrics/fetch</code>, <code>POST /api/metrics/record</code></td>
+<td><code>metrics</code></td>
+</tr>
+<tr>
+<td>Metrics permissions</td>
+<td><code>GET/POST /api/metrics/permissions</code></td>
+<td><code>metrics</code></td>
+</tr>
+<tr>
+<td>File management</td>
+<td><code>GET/POST /api/fileman/manager</code>, <code>GET/POST /api/fileman/file</code></td>
+<td><code>files</code></td>
 </tr>
 </tbody>
 </table>
@@ -4061,7 +4471,7 @@
 <tr>
 <td><code>GET</code></td>
 <td><code>/api/settings</code></td>
-<td>List settings (requires <code>manage_settings</code>)</td>
+<td>List settings (requires <code>groups</code> or <code>manage_settings</code>)</td>
 </tr>
 <tr>
 <td><code>POST</code></td>
@@ -4086,38 +4496,47 @@
 </tbody>
 </table>
 <h3 id="create-a-global-setting">Create a global setting<a class="headerlink" href="#create-a-global-setting" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="err">POST</span><span class="w"> </span><span class="err">/api/se</span><span class="kc">tt</span><span class="err">i</span><span class="kc">n</span><span class="err">gs</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="p">{</span>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span><span class="nt">&quot;key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;WEBHOOK_SECRET&quot;</span><span class="p">,</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;super-secret-value&quot;</span><span class="p">,</span>
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span><span class="nt">&quot;is_secret&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="err">POST</span><span class="w"> </span><span class="err">/api/se</span><span class="kc">tt</span><span class="err">i</span><span class="kc">n</span><span class="err">gs</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="p">{</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span><span class="nt">&quot;key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;WEBHOOK_SECRET&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">  </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;super-secret-value&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">  </span><span class="nt">&quot;is_secret&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="p">}</span>
 </code></pre></div>
 <h3 id="create-a-group-scoped-setting">Create a group-scoped setting<a class="headerlink" href="#create-a-group-scoped-setting" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="err">POST</span><span class="w"> </span><span class="err">/api/se</span><span class="kc">tt</span><span class="err">i</span><span class="kc">n</span><span class="err">gs</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="p">{</span>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span><span class="nt">&quot;group&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">42</span><span class="p">,</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="nt">&quot;key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;WEBAPP_BASE_URL&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://portal.example.com&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">  </span><span class="nt">&quot;is_secret&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
-<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="err">POST</span><span class="w"> </span><span class="err">/api/se</span><span class="kc">tt</span><span class="err">i</span><span class="kc">n</span><span class="err">gs</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="p">{</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">  </span><span class="nt">&quot;group&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">42</span><span class="p">,</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">  </span><span class="nt">&quot;key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;WEBAPP_BASE_URL&quot;</span><span class="p">,</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="w">  </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://portal.example.com&quot;</span><span class="p">,</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="w">  </span><span class="nt">&quot;is_secret&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="p">}</span>
 </code></pre></div>
 <h3 id="response-behavior-for-secrets">Response behavior for secrets<a class="headerlink" href="#response-behavior-for-secrets" title="Permanent link">&para;</a></h3>
 <p>When <code>is_secret=true</code>, API responses include masked <code>display_value</code> (<code>"******"</code>). Build UIs to treat secret values as write-only unless the user explicitly replaces them.</p>
 <h3 id="listing-with-search">Listing with search<a class="headerlink" href="#listing-with-search" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="err">GET /api/settings?search=WEBAPP&amp;sort=key</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="err">GET /api/settings?search=WEBAPP&amp;sort=key</span>
 </code></pre></div>
-<h2 id="example-permission-aware-frontend-calls">Example: Permission-Aware Frontend Calls<a class="headerlink" href="#example-permission-aware-frontend-calls" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kd">const</span><span class="w"> </span><span class="nx">headers</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">Authorization</span><span class="o">:</span><span class="w"> </span><span class="sb">`Bearer </span><span class="si">${</span><span class="nx">token</span><span class="si">}</span><span class="sb">`</span><span class="w"> </span><span class="p">};</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="c1">// User admin list</span>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="k">await</span><span class="w"> </span><span class="nx">fetch</span><span class="p">(</span><span class="s1">&#39;/api/user?size=20&amp;sort=-created&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">headers</span><span class="w"> </span><span class="p">});</span>
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>
-<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="c1">// Group admin list</span>
-<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="k">await</span><span class="w"> </span><span class="nx">fetch</span><span class="p">(</span><span class="s1">&#39;/api/group?size=50&amp;sort=name&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">headers</span><span class="w"> </span><span class="p">});</span>
-<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>
-<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="c1">// Settings list (admin only)</span>
-<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="k">await</span><span class="w"> </span><span class="nx">fetch</span><span class="p">(</span><span class="s1">&#39;/api/settings?size=100&amp;sort=key&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">headers</span><span class="w"> </span><span class="p">});</span>
+<h2 id="example-permission-aware-frontend">Example: Permission-Aware Frontend<a class="headerlink" href="#example-permission-aware-frontend" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="kd">const</span><span class="w"> </span><span class="nx">headers</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">Authorization</span><span class="o">:</span><span class="w"> </span><span class="sb">`Bearer </span><span class="si">${</span><span class="nx">token</span><span class="si">}</span><span class="sb">`</span><span class="w"> </span><span class="p">};</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="c1">// Fetch current user to check their permissions</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="kd">const</span><span class="w"> </span><span class="nx">me</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">fetch</span><span class="p">(</span><span class="s1">&#39;/api/account/me&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">headers</span><span class="w"> </span><span class="p">}).</span><span class="nx">then</span><span class="p">(</span><span class="nx">r</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">json</span><span class="p">());</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="kd">const</span><span class="w"> </span><span class="nx">perms</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">me</span><span class="p">.</span><span class="nx">data</span><span class="p">.</span><span class="nx">permissions</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="p">{};</span>
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>
+<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="c1">// Show/hide admin sections based on category permissions</span>
+<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">perms</span><span class="p">.</span><span class="nx">users</span><span class="p">)</span><span class="w">    </span><span class="nx">showSection</span><span class="p">(</span><span class="s1">&#39;user-admin&#39;</span><span class="p">);</span>
+<a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">perms</span><span class="p">.</span><span class="nx">groups</span><span class="p">)</span><span class="w">   </span><span class="nx">showSection</span><span class="p">(</span><span class="s1">&#39;group-admin&#39;</span><span class="p">);</span>
+<a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">perms</span><span class="p">.</span><span class="nx">security</span><span class="p">)</span><span class="w"> </span><span class="nx">showSection</span><span class="p">(</span><span class="s1">&#39;security-dashboard&#39;</span><span class="p">);</span>
+<a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">perms</span><span class="p">.</span><span class="nx">comms</span><span class="p">)</span><span class="w">    </span><span class="nx">showSection</span><span class="p">(</span><span class="s1">&#39;communications&#39;</span><span class="p">);</span>
+<a id="__codelineno-11-12" name="__codelineno-11-12" href="#__codelineno-11-12"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">perms</span><span class="p">.</span><span class="nx">jobs</span><span class="p">)</span><span class="w">     </span><span class="nx">showSection</span><span class="p">(</span><span class="s1">&#39;job-system&#39;</span><span class="p">);</span>
+<a id="__codelineno-11-13" name="__codelineno-11-13" href="#__codelineno-11-13"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">perms</span><span class="p">.</span><span class="nx">metrics</span><span class="p">)</span><span class="w">  </span><span class="nx">showSection</span><span class="p">(</span><span class="s1">&#39;metrics-dashboard&#39;</span><span class="p">);</span>
+<a id="__codelineno-11-14" name="__codelineno-11-14" href="#__codelineno-11-14"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">perms</span><span class="p">.</span><span class="nx">files</span><span class="p">)</span><span class="w">    </span><span class="nx">showSection</span><span class="p">(</span><span class="s1">&#39;file-manager&#39;</span><span class="p">);</span>
+<a id="__codelineno-11-15" name="__codelineno-11-15" href="#__codelineno-11-15"></a>
+<a id="__codelineno-11-16" name="__codelineno-11-16" href="#__codelineno-11-16"></a><span class="c1">// API calls — the server enforces permissions regardless of UI state</span>
+<a id="__codelineno-11-17" name="__codelineno-11-17" href="#__codelineno-11-17"></a><span class="k">await</span><span class="w"> </span><span class="nx">fetch</span><span class="p">(</span><span class="s1">&#39;/api/user?size=20&amp;sort=-created&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">headers</span><span class="w"> </span><span class="p">});</span>
+<a id="__codelineno-11-18" name="__codelineno-11-18" href="#__codelineno-11-18"></a><span class="k">await</span><span class="w"> </span><span class="nx">fetch</span><span class="p">(</span><span class="s1">&#39;/api/group?size=50&amp;sort=name&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">headers</span><span class="w"> </span><span class="p">});</span>
+<a id="__codelineno-11-19" name="__codelineno-11-19" href="#__codelineno-11-19"></a><span class="k">await</span><span class="w"> </span><span class="nx">fetch</span><span class="p">(</span><span class="s1">&#39;/api/settings?size=100&amp;sort=key&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">headers</span><span class="w"> </span><span class="p">});</span>
 </code></pre></div>
 <h2 id="error-handling-contract">Error Handling Contract<a class="headerlink" href="#error-handling-contract" title="Permanent link">&para;</a></h2>
 <p>Use <code>status</code>, <code>code</code>, and <code>error</code> from the response envelope:</p>
@@ -4133,6 +4552,7 @@
 <li><a href="../user/">User API</a></li>
 <li><a href="../group/">Group API</a></li>
 <li><a href="../">Account Overview</a></li>
+<li><a href="../../security/">Security Dashboard</a></li>
 </ul>
 
 
