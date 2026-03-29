@@ -10,7 +10,7 @@
       
       
       
-        <link rel="canonical" href="https://NativeMojo.github.io/django-mojo/web_developer/account/geoip/">
+        <link rel="canonical" href="https://NativeMojo.github.io/django-mojo/web_developer/security/">
       
       
       
@@ -18,19 +18,19 @@
         
       
       
-      <link rel="icon" href="../../../assets/images/favicon.png">
+      <link rel="icon" href="../../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
     
     
       
-        <title>GeoIP — REST API Reference - Django-MOJO</title>
+        <title>System Security — Web Developer Guide - Django-MOJO</title>
       
     
     
-      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
       
         
-        <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
       
       
 
@@ -49,7 +49,7 @@
       
     
     
-    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -74,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#geoip-rest-api-reference" class="md-skip">
+        <a href="#system-security-web-developer-guide" class="md-skip">
           Skip to content
         </a>
       
@@ -88,7 +88,7 @@
 
 <header class="md-header" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../../.." title="Django-MOJO" class="md-header__button md-logo" aria-label="Django-MOJO" data-md-component="logo">
+    <a href="../.." title="Django-MOJO" class="md-header__button md-logo" aria-label="Django-MOJO" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -108,7 +108,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              GeoIP — REST API Reference
+              System Security — Web Developer Guide
             
           </span>
         </div>
@@ -221,7 +221,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../../.." class="md-tabs__link">
+      <a href="../.." class="md-tabs__link">
         
   
   
@@ -242,7 +242,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../../django_developer/" class="md-tabs__link">
+        <a href="../../django_developer/" class="md-tabs__link">
           
   
   
@@ -262,7 +262,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../" class="md-tabs__link">
+        <a href="../" class="md-tabs__link">
           
   
   
@@ -296,7 +296,7 @@
 
 <nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../../.." title="Django-MOJO" class="md-nav__button md-logo" aria-label="Django-MOJO" data-md-component="logo">
+    <a href="../.." title="Django-MOJO" class="md-nav__button md-logo" aria-label="Django-MOJO" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -326,7 +326,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../.." class="md-nav__link">
+      <a href="../.." class="md-nav__link">
         
   
   
@@ -407,7 +407,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../django_developer/" class="md-nav__link">
+      <a href="../../django_developer/" class="md-nav__link">
         
   
   
@@ -489,7 +489,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../django_developer/core/" class="md-nav__link">
+      <a href="../../django_developer/core/" class="md-nav__link">
         
   
   
@@ -517,7 +517,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../django_developer/core/mojo_model/" class="md-nav__link">
+      <a href="../../django_developer/core/mojo_model/" class="md-nav__link">
         
   
   
@@ -545,7 +545,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../django_developer/core/decorators/" class="md-nav__link">
+      <a href="../../django_developer/core/decorators/" class="md-nav__link">
         
   
   
@@ -573,7 +573,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../django_developer/core/middleware/" class="md-nav__link">
+      <a href="../../django_developer/core/middleware/" class="md-nav__link">
         
   
   
@@ -601,7 +601,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../django_developer/core/graphs/" class="md-nav__link">
+      <a href="../../django_developer/core/graphs/" class="md-nav__link">
         
   
   
@@ -629,7 +629,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../django_developer/core/cache/" class="md-nav__link">
+      <a href="../../django_developer/core/cache/" class="md-nav__link">
         
   
   
@@ -719,7 +719,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../django_developer/helpers/" class="md-nav__link">
+      <a href="../../django_developer/helpers/" class="md-nav__link">
         
   
   
@@ -747,7 +747,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../django_developer/helpers/logit/" class="md-nav__link">
+      <a href="../../django_developer/helpers/logit/" class="md-nav__link">
         
   
   
@@ -775,7 +775,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../django_developer/helpers/dates/" class="md-nav__link">
+      <a href="../../django_developer/helpers/dates/" class="md-nav__link">
         
   
   
@@ -803,7 +803,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../django_developer/helpers/settings/" class="md-nav__link">
+      <a href="../../django_developer/helpers/settings/" class="md-nav__link">
         
   
   
@@ -831,7 +831,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../django_developer/helpers/settings_reference/" class="md-nav__link">
+      <a href="../../django_developer/helpers/settings_reference/" class="md-nav__link">
         
   
   
@@ -859,7 +859,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../django_developer/helpers/crypto/" class="md-nav__link">
+      <a href="../../django_developer/helpers/crypto/" class="md-nav__link">
         
   
   
@@ -887,7 +887,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../django_developer/helpers/request/" class="md-nav__link">
+      <a href="../../django_developer/helpers/request/" class="md-nav__link">
         
   
   
@@ -915,7 +915,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../django_developer/helpers/response/" class="md-nav__link">
+      <a href="../../django_developer/helpers/response/" class="md-nav__link">
         
   
   
@@ -943,7 +943,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../django_developer/helpers/other/" class="md-nav__link">
+      <a href="../../django_developer/helpers/other/" class="md-nav__link">
         
   
   
@@ -1033,7 +1033,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../django_developer/account/" class="md-nav__link">
+      <a href="../../django_developer/account/" class="md-nav__link">
         
   
   
@@ -1061,7 +1061,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../django_developer/account/user/" class="md-nav__link">
+      <a href="../../django_developer/account/user/" class="md-nav__link">
         
   
   
@@ -1089,7 +1089,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../django_developer/account/group/" class="md-nav__link">
+      <a href="../../django_developer/account/group/" class="md-nav__link">
         
   
   
@@ -1117,7 +1117,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../django_developer/account/auth/" class="md-nav__link">
+      <a href="../../django_developer/account/auth/" class="md-nav__link">
         
   
   
@@ -1207,7 +1207,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../django_developer/logging/" class="md-nav__link">
+      <a href="../../django_developer/logging/" class="md-nav__link">
         
   
   
@@ -1235,7 +1235,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../django_developer/logging/logit/" class="md-nav__link">
+      <a href="../../django_developer/logging/logit/" class="md-nav__link">
         
   
   
@@ -1263,7 +1263,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../django_developer/logging/incidents/" class="md-nav__link">
+      <a href="../../django_developer/logging/incidents/" class="md-nav__link">
         
   
   
@@ -1353,7 +1353,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../django_developer/files/" class="md-nav__link">
+      <a href="../../django_developer/files/" class="md-nav__link">
         
   
   
@@ -1381,7 +1381,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../django_developer/files/file/" class="md-nav__link">
+      <a href="../../django_developer/files/file/" class="md-nav__link">
         
   
   
@@ -1409,7 +1409,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../django_developer/files/file_manager/" class="md-nav__link">
+      <a href="../../django_developer/files/file_manager/" class="md-nav__link">
         
   
   
@@ -1499,7 +1499,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../django_developer/email/" class="md-nav__link">
+      <a href="../../django_developer/email/" class="md-nav__link">
         
   
   
@@ -1527,7 +1527,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../django_developer/email/architecture/" class="md-nav__link">
+      <a href="../../django_developer/email/architecture/" class="md-nav__link">
         
   
   
@@ -1555,7 +1555,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../django_developer/email/sending/" class="md-nav__link">
+      <a href="../../django_developer/email/sending/" class="md-nav__link">
         
   
   
@@ -1583,7 +1583,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../django_developer/email/receiving/" class="md-nav__link">
+      <a href="../../django_developer/email/receiving/" class="md-nav__link">
         
   
   
@@ -1673,7 +1673,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../django_developer/jobs/" class="md-nav__link">
+      <a href="../../django_developer/jobs/" class="md-nav__link">
         
   
   
@@ -1701,7 +1701,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../django_developer/jobs/publishing/" class="md-nav__link">
+      <a href="../../django_developer/jobs/publishing/" class="md-nav__link">
         
   
   
@@ -1729,7 +1729,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../django_developer/jobs/writing_jobs/" class="md-nav__link">
+      <a href="../../django_developer/jobs/writing_jobs/" class="md-nav__link">
         
   
   
@@ -1757,7 +1757,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../django_developer/jobs/job_model/" class="md-nav__link">
+      <a href="../../django_developer/jobs/job_model/" class="md-nav__link">
         
   
   
@@ -1847,7 +1847,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../django_developer/metrics/" class="md-nav__link">
+      <a href="../../django_developer/metrics/" class="md-nav__link">
         
   
   
@@ -1875,7 +1875,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../django_developer/metrics/recording/" class="md-nav__link">
+      <a href="../../django_developer/metrics/recording/" class="md-nav__link">
         
   
   
@@ -1903,7 +1903,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../django_developer/metrics/fetching/" class="md-nav__link">
+      <a href="../../django_developer/metrics/fetching/" class="md-nav__link">
         
   
   
@@ -1993,7 +1993,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../django_developer/realtime/" class="md-nav__link">
+      <a href="../../django_developer/realtime/" class="md-nav__link">
         
   
   
@@ -2021,7 +2021,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../django_developer/realtime/architecture/" class="md-nav__link">
+      <a href="../../django_developer/realtime/architecture/" class="md-nav__link">
         
   
   
@@ -2049,7 +2049,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../django_developer/realtime/publishing/" class="md-nav__link">
+      <a href="../../django_developer/realtime/publishing/" class="md-nav__link">
         
   
   
@@ -2077,7 +2077,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../django_developer/realtime/hooks/" class="md-nav__link">
+      <a href="../../django_developer/realtime/hooks/" class="md-nav__link">
         
   
   
@@ -2113,7 +2113,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../django_developer/phonehub/" class="md-nav__link">
+      <a href="../../django_developer/phonehub/" class="md-nav__link">
         
   
   
@@ -2141,7 +2141,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../django_developer/filevault/" class="md-nav__link">
+      <a href="../../django_developer/filevault/" class="md-nav__link">
         
   
   
@@ -2169,7 +2169,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../django_developer/docit/" class="md-nav__link">
+      <a href="../../django_developer/docit/" class="md-nav__link">
         
   
   
@@ -2258,7 +2258,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../" class="md-nav__link">
+      <a href="../" class="md-nav__link">
         
   
   
@@ -2340,7 +2340,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../core/" class="md-nav__link">
+      <a href="../core/" class="md-nav__link">
         
   
   
@@ -2368,7 +2368,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../core/authentication/" class="md-nav__link">
+      <a href="../core/authentication/" class="md-nav__link">
         
   
   
@@ -2396,7 +2396,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../core/request_response/" class="md-nav__link">
+      <a href="../core/request_response/" class="md-nav__link">
         
   
   
@@ -2424,7 +2424,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../core/filtering/" class="md-nav__link">
+      <a href="../core/filtering/" class="md-nav__link">
         
   
   
@@ -2452,7 +2452,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../core/pagination/" class="md-nav__link">
+      <a href="../core/pagination/" class="md-nav__link">
         
   
   
@@ -2480,7 +2480,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../core/graphs/" class="md-nav__link">
+      <a href="../core/graphs/" class="md-nav__link">
         
   
   
@@ -2570,7 +2570,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../" class="md-nav__link">
+      <a href="../account/" class="md-nav__link">
         
   
   
@@ -2598,7 +2598,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../authentication/" class="md-nav__link">
+      <a href="../account/authentication/" class="md-nav__link">
         
   
   
@@ -2626,7 +2626,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../user/" class="md-nav__link">
+      <a href="../account/user/" class="md-nav__link">
         
   
   
@@ -2654,7 +2654,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../group/" class="md-nav__link">
+      <a href="../account/group/" class="md-nav__link">
         
   
   
@@ -2682,7 +2682,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../admin_portal/" class="md-nav__link">
+      <a href="../account/admin_portal/" class="md-nav__link">
         
   
   
@@ -2710,7 +2710,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../api_keys/" class="md-nav__link">
+      <a href="../account/api_keys/" class="md-nav__link">
         
   
   
@@ -2800,7 +2800,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../logging/" class="md-nav__link">
+      <a href="../logging/" class="md-nav__link">
         
   
   
@@ -2828,7 +2828,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../logging/logs/" class="md-nav__link">
+      <a href="../logging/logs/" class="md-nav__link">
         
   
   
@@ -2856,7 +2856,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../logging/incidents/" class="md-nav__link">
+      <a href="../logging/incidents/" class="md-nav__link">
         
   
   
@@ -2946,7 +2946,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../files/" class="md-nav__link">
+      <a href="../files/" class="md-nav__link">
         
   
   
@@ -2974,7 +2974,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../files/upload/" class="md-nav__link">
+      <a href="../files/upload/" class="md-nav__link">
         
   
   
@@ -3002,7 +3002,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../files/files/" class="md-nav__link">
+      <a href="../files/files/" class="md-nav__link">
         
   
   
@@ -3092,7 +3092,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../email/" class="md-nav__link">
+      <a href="../email/" class="md-nav__link">
         
   
   
@@ -3120,7 +3120,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../email/email/" class="md-nav__link">
+      <a href="../email/email/" class="md-nav__link">
         
   
   
@@ -3210,7 +3210,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../jobs/" class="md-nav__link">
+      <a href="../jobs/" class="md-nav__link">
         
   
   
@@ -3238,7 +3238,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../jobs/jobs/" class="md-nav__link">
+      <a href="../jobs/jobs/" class="md-nav__link">
         
   
   
@@ -3328,7 +3328,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../metrics/" class="md-nav__link">
+      <a href="../metrics/" class="md-nav__link">
         
   
   
@@ -3356,7 +3356,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../metrics/metrics/" class="md-nav__link">
+      <a href="../metrics/metrics/" class="md-nav__link">
         
   
   
@@ -3446,7 +3446,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../realtime/" class="md-nav__link">
+      <a href="../realtime/" class="md-nav__link">
         
   
   
@@ -3474,7 +3474,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../realtime/websocket/" class="md-nav__link">
+      <a href="../realtime/websocket/" class="md-nav__link">
         
   
   
@@ -3510,7 +3510,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../phonehub/" class="md-nav__link">
+      <a href="../phonehub/" class="md-nav__link">
         
   
   
@@ -3538,7 +3538,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../filevault/" class="md-nav__link">
+      <a href="../filevault/" class="md-nav__link">
         
   
   
@@ -3566,7 +3566,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../docit/" class="md-nav__link">
+      <a href="../docit/" class="md-nav__link">
         
   
   
@@ -3621,22 +3621,110 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#get-systemgeoip-list-geoip-records" class="md-nav__link">
+  <a href="#permissions" class="md-nav__link">
     <span class="md-ellipsis">
       
-        GET system/geoip — List GeoIP Records
+        Permissions
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="GET system/geoip — List GeoIP Records">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-security-pipeline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Security Pipeline
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#apis-at-a-glance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        APIs at a Glance
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#building-a-security-dashboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Building a Security Dashboard
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Building a Security Dashboard">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#graphs" class="md-nav__link">
+  <a href="#1-incident-queue" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Graphs
+        1. Incident Queue
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-incident-detail" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Incident Detail
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-firewall-status" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Firewall Status
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-metrics-dashboards" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Metrics Dashboards
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5-ticket-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Ticket Management
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#6-event-reporting-client-side" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Event Reporting (Client-Side)
       
     </span>
   </a>
@@ -3649,97 +3737,57 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#get-systemgeoippk-geoip-detail" class="md-nav__link">
+  <a href="#event-sources" class="md-nav__link">
     <span class="md-ellipsis">
       
-        GET system/geoip/&lt;pk&gt; — GeoIP Detail
+        Event Sources
       
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="GET system/geoip/&lt;pk&gt; — GeoIP Detail">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#actions-via-post" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Actions (via POST)
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#get-systemgeoiplookup-public-ip-lookup" class="md-nav__link">
+  <a href="#incident-handlers" class="md-nav__link">
     <span class="md-ellipsis">
       
-        GET system/geoip/lookup — Public IP Lookup
+        Incident Handlers
       
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="GET system/geoip/lookup — Public IP Lookup">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#response" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Response
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#get-systemgeoiptime-public-ip-time-lookup" class="md-nav__link">
+  <a href="#llm-agent" class="md-nav__link">
     <span class="md-ellipsis">
       
-        GET system/geoip/time — Public IP Time Lookup
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="GET system/geoip/time — Public IP Time Lookup">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#response_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Response
+        LLM Agent
       
     </span>
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#error-response" class="md-nav__link">
+      
+        <li class="md-nav__item">
+  <a href="#dashboard-chart-ideas" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Error Response
+        Dashboard Chart Ideas
       
     </span>
   </a>
   
 </li>
-        
-      </ul>
-    </nav>
+      
+        <li class="md-nav__item">
+  <a href="#settings-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Settings Reference
+      
+    </span>
+  </a>
   
 </li>
       
@@ -3763,184 +3811,526 @@
   
 
 
-<h1 id="geoip-rest-api-reference">GeoIP — REST API Reference<a class="headerlink" href="#geoip-rest-api-reference" title="Permanent link">&para;</a></h1>
-<p>IP geolocation and time lookup endpoints.</p>
-<p>All endpoints are under the <code>account</code> app prefix.</p>
-<hr />
-<h2 id="get-systemgeoip-list-geoip-records"><code>GET system/geoip</code> — List GeoIP Records<a class="headerlink" href="#get-systemgeoip-list-geoip-records" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>GET /api/account/system/geoip
-</code></pre></div>
-<p><strong>Requires:</strong> <code>manage_users</code> permission.</p>
-<p>Returns a paginated list of cached GeoIP records. Supports standard query parameters (<code>search</code>, <code>sort</code>, <code>start</code>, <code>size</code>, <code>graph</code>).</p>
-<p><strong>Search fields:</strong> <code>ip_address</code>, <code>city</code>, <code>country_name</code>, <code>asn_org</code>, <code>isp</code></p>
-<h3 id="graphs">Graphs<a class="headerlink" href="#graphs" title="Permanent link">&para;</a></h3>
+<h1 id="system-security-web-developer-guide">System Security — Web Developer Guide<a class="headerlink" href="#system-security-web-developer-guide" title="Permanent link">&para;</a></h1>
+<p>How to build a security operations dashboard using django-mojo's APIs. This guide ties together incidents, events, firewall, bouncer, logs, and metrics into a single picture.</p>
+<h2 id="permissions">Permissions<a class="headerlink" href="#permissions" title="Permanent link">&para;</a></h2>
+<p>Two permissions control all security-related access:</p>
 <table>
 <thead>
 <tr>
-<th>Graph</th>
-<th>Description</th>
+<th>Permission</th>
+<th>Access</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>default</code></td>
-<td>All fields except raw provider data, plus <code>is_threat</code>, <code>is_suspicious</code>, <code>risk_score</code></td>
+<td><code>view_security</code></td>
+<td>Read-only: incidents, events, history, tickets, rules, firewall status</td>
 </tr>
 <tr>
-<td><code>basic</code></td>
-<td>Core location and threat fields only</td>
-</tr>
-<tr>
-<td><code>detailed</code></td>
-<td>All fields including raw data</td>
+<td><code>manage_security</code></td>
+<td>Full: edit incidents, manage tickets, create rules, block IPs, merge incidents</td>
 </tr>
 </tbody>
 </table>
-<hr />
-<h2 id="get-systemgeoippk-geoip-detail"><code>GET system/geoip/&lt;pk&gt;</code> — GeoIP Detail<a class="headerlink" href="#get-systemgeoippk-geoip-detail" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>GET /api/account/system/geoip/123
+<h2 id="the-security-pipeline">The Security Pipeline<a class="headerlink" href="#the-security-pipeline" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>Detection → Event → Rules → Incident → Handlers → Enforcement
 </code></pre></div>
-<p><strong>Requires:</strong> <code>manage_users</code> permission.</p>
-<p>Returns a single GeoIP record. Supports <code>?graph=</code> parameter.</p>
-<h3 id="actions-via-post">Actions (via POST)<a class="headerlink" href="#actions-via-post" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>Detection</strong> — failed logins, rate limits, OSSEC alerts, bouncer blocks, app errors</li>
+<li><strong>Events</strong> — every detection creates an Event record with category, level, and metadata</li>
+<li><strong>Rules</strong> — RuleSets match events by category and apply threshold/bundling logic</li>
+<li><strong>Incidents</strong> — matched events are grouped into Incidents for investigation</li>
+<li><strong>Handlers</strong> — rules fire actions: block IPs, send emails/SMS, create tickets, invoke LLM</li>
+<li><strong>Enforcement</strong> — IP blocks propagate fleet-wide via iptables/ipset</li>
+</ol>
+<h2 id="apis-at-a-glance">APIs at a Glance<a class="headerlink" href="#apis-at-a-glance" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
 <tr>
-<th>Action</th>
-<th>Value</th>
-<th>Description</th>
+<th>API</th>
+<th>Path</th>
+<th>What it provides</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>refresh</code></td>
+<td>Incidents</td>
+<td><code>/api/incident/incident</code></td>
+<td>Security incidents with status, priority, category</td>
+</tr>
+<tr>
+<td>Events</td>
+<td><code>/api/incident/event</code></td>
+<td>Raw security events that feed into incidents</td>
+</tr>
+<tr>
+<td>History</td>
+<td><code>/api/incident/incidenthistory</code></td>
+<td>Audit trail for each incident</td>
+</tr>
+<tr>
+<td>Tickets</td>
+<td><code>/api/incident/ticket</code></td>
+<td>Human review items, LLM conversation threads</td>
+</tr>
+<tr>
+<td>Ticket Notes</td>
+<td><code>/api/incident/ticketnote</code></td>
+<td>Ticket conversation (human + LLM)</td>
+</tr>
+<tr>
+<td>Rules</td>
+<td><code>/api/incident/ruleset</code></td>
+<td>Rule engine configuration</td>
+</tr>
+<tr>
+<td>GeoIP</td>
+<td><code>/api/account/system/geoip</code></td>
+<td>IP records, block status, threat level, geolocation</td>
+</tr>
+<tr>
+<td>Logs</td>
+<td><code>/api/logit/log</code></td>
+<td>Audit logs, firewall history</td>
+</tr>
+<tr>
+<td>Metrics</td>
+<td><code>/api/metrics/fetch</code></td>
+<td>Time-series data for dashboards</td>
+</tr>
+<tr>
+<td>Bouncer</td>
+<td><code>/api/account/bouncer/assess</code></td>
+<td>Bot detection (called by bouncer JS, not your app)</td>
+</tr>
+</tbody>
+</table>
+<p>See individual API docs for full details:
+- <a href="../logging/incidents/">Incidents</a>
+- <a href="../logging/reporting_events/">Events &amp; Reporting</a>
+- <a href="../account/firewall/">Firewall &amp; GeoIP</a>
+- <a href="../logging/logs/">Logs</a>
+- <a href="../metrics/metrics/">Metrics</a>
+- <a href="../account/bouncer/">Bouncer</a>
+- <a href="../account/geoip/">GeoIP</a></p>
+<h2 id="building-a-security-dashboard">Building a Security Dashboard<a class="headerlink" href="#building-a-security-dashboard" title="Permanent link">&para;</a></h2>
+<h3 id="1-incident-queue">1. Incident Queue<a class="headerlink" href="#1-incident-queue" title="Permanent link">&para;</a></h3>
+<p>The main view. Show incidents that need attention:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>GET /api/incident/incident?status=new&amp;sort=-priority,-created&amp;size=50
+</code></pre></div>
+<p>This returns incidents that haven't been handled by a human or the LLM agent.</p>
+<p>If the LLM agent is configured, most incidents flow through automatically:
+- <code>new</code> → LLM picks it up → <code>investigating</code> → <code>resolved</code> or <code>ignored</code>
+- Humans only see <code>status=open</code> (things the LLM escalated or humans claimed)</p>
+<p><strong>Recommended tabs:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Tab</th>
+<th>Filter</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Unhandled</td>
+<td><code>status=new</code></td>
+<td>Needs attention (human or LLM)</td>
+</tr>
+<tr>
+<td>My Work</td>
+<td><code>status=open</code></td>
+<td>Human-owned incidents</td>
+</tr>
+<tr>
+<td>LLM Active</td>
+<td><code>status=investigating</code></td>
+<td>LLM is working on these</td>
+</tr>
+<tr>
+<td>Resolved</td>
+<td><code>status=resolved</code></td>
+<td>Recently resolved</td>
+</tr>
+<tr>
+<td>Ignored</td>
+<td><code>status=ignored</code></td>
+<td>Noise (review periodically)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="2-incident-detail">2. Incident Detail<a class="headerlink" href="#2-incident-detail" title="Permanent link">&para;</a></h3>
+<p>For a single incident, fetch the incident + its history + its events:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>GET /api/incident/incident/301
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>GET /api/incident/incidenthistory?parent=301&amp;sort=created
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>GET /api/incident/event?incident=301&amp;sort=-created
+</code></pre></div>
+<p>The history shows the full timeline: creation, handler execution, LLM assessments, admin edits, merges.</p>
+<h3 id="3-firewall-status">3. Firewall Status<a class="headerlink" href="#3-firewall-status" title="Permanent link">&para;</a></h3>
+<p>Show currently blocked IPs and recent firewall activity:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>GET /api/account/system/geoip?is_blocked=true&amp;sort=-blocked_at
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>GET /api/logit/log?kind=firewall:block&amp;sort=-created&amp;size=20
+</code></pre></div>
+<p><strong>Firewall log <code>kind</code> values:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Kind</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firewall:block</code></td>
+<td>IP blocked (manual or rule)</td>
+</tr>
+<tr>
+<td><code>firewall:unblock</code></td>
+<td>IP unblocked</td>
+</tr>
+<tr>
+<td><code>firewall:whitelist</code></td>
+<td>IP whitelisted</td>
+</tr>
+<tr>
+<td><code>firewall:unwhitelist</code></td>
+<td>Whitelist removed</td>
+</tr>
+<tr>
+<td><code>firewall:auto_block</code></td>
+<td>Auto-blocked from incident escalation</td>
+</tr>
+</tbody>
+</table>
+<p>All firewall logs include structured <code>payload</code> JSON with <code>ip</code>, <code>reason</code>, <code>trigger</code>, and action-specific fields. Parse <code>payload</code> for dashboard cards.</p>
+<h3 id="4-metrics-dashboards">4. Metrics Dashboards<a class="headerlink" href="#4-metrics-dashboards" title="Permanent link">&para;</a></h3>
+<p>Fetch time-series data for charts:</p>
+<p><strong>Firewall metrics:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>GET /api/metrics/fetch?slug=firewall:blocks&amp;granularity=hours&amp;dr_start=2026-03-20
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>GET /api/metrics/fetch?slug=firewall:auto_blocks&amp;granularity=hours&amp;dr_start=2026-03-20
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>GET /api/metrics/fetch?category=firewall&amp;granularity=days
+</code></pre></div>
+<p><strong>Incident metrics:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>GET /api/metrics/fetch?slug=incidents&amp;account=incident&amp;granularity=hours&amp;dr_start=2026-03-20
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>GET /api/metrics/fetch?slug=incidents:escalated&amp;account=incident&amp;granularity=hours
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>GET /api/metrics/fetch?slug=incidents:resolved&amp;account=incident&amp;granularity=hours
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>GET /api/metrics/fetch?slug=incidents:threshold_reached&amp;account=incident&amp;granularity=hours
+</code></pre></div>
+<p><strong>Event volume:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>GET /api/metrics/fetch?slug=incident_events&amp;account=incident&amp;granularity=hours
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>GET /api/metrics/fetch?category=incident_events_by_country&amp;account=incident&amp;granularity=days
+</code></pre></div>
+<p><strong>Available metric slugs:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Slug</th>
+<th>Category</th>
+<th>What it tracks</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firewall:blocks</code></td>
+<td>firewall</td>
+<td>Manual + rule-based IP blocks</td>
+</tr>
+<tr>
+<td><code>firewall:auto_blocks</code></td>
+<td>firewall</td>
+<td>Auto-blocks from threat escalation</td>
+</tr>
+<tr>
+<td><code>firewall:blocks:country:{CC}</code></td>
+<td>firewall</td>
+<td>Blocks by country code</td>
+</tr>
+<tr>
+<td><code>firewall:broadcasts</code></td>
+<td>firewall</td>
+<td>Fleet-wide block broadcasts</td>
+</tr>
+<tr>
+<td><code>incidents</code></td>
 <td>—</td>
-<td>Re-fetch geolocation data from provider with threat checks</td>
+<td>Incidents created</td>
 </tr>
 <tr>
-<td><code>threat_analysis</code></td>
+<td><code>incidents:escalated</code></td>
 <td>—</td>
-<td>Run threat intelligence checks</td>
+<td>Priority escalations</td>
 </tr>
 <tr>
-<td><code>block</code></td>
-<td><code>{"reason": "...", "ttl": 600}</code></td>
-<td>Block this IP fleet-wide (ttl in seconds, null=permanent)</td>
-</tr>
-<tr>
-<td><code>unblock</code></td>
-<td><code>"reason string"</code></td>
-<td>Unblock this IP fleet-wide</td>
-</tr>
-<tr>
-<td><code>whitelist</code></td>
-<td><code>"reason string"</code></td>
-<td>Whitelist — prevents all future blocks</td>
-</tr>
-<tr>
-<td><code>unwhitelist</code></td>
+<td><code>incidents:resolved</code></td>
 <td>—</td>
-<td>Remove whitelist status</td>
+<td>Incidents resolved</td>
+</tr>
+<tr>
+<td><code>incidents:threshold_reached</code></td>
+<td>—</td>
+<td>Pending → new transitions</td>
+</tr>
+<tr>
+<td><code>incident_events</code></td>
+<td>—</td>
+<td>Total events</td>
+</tr>
+<tr>
+<td><code>incident_events:country:{CC}</code></td>
+<td>incident_events_by_country</td>
+<td>Events by country</td>
 </tr>
 </tbody>
 </table>
-<p>See <a href="../firewall/">firewall.md</a> for full firewall management and security dashboard guide.</p>
-<hr />
-<h2 id="get-systemgeoiplookup-public-ip-lookup"><code>GET system/geoip/lookup</code> — Public IP Lookup<a class="headerlink" href="#get-systemgeoiplookup-public-ip-lookup" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>GET /api/account/system/geoip/lookup?ip=1.2.3.4
+<h3 id="5-ticket-management">5. Ticket Management<a class="headerlink" href="#5-ticket-management" title="Permanent link">&para;</a></h3>
+<p>Tickets are how the LLM agent communicates with humans:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>GET /api/incident/ticket?status=open&amp;sort=-priority
 </code></pre></div>
-<p><strong>Public</strong> — no authentication required. Rate limited to <strong>30 requests/minute</strong> per IP.</p>
+<p>Tickets with <code>metadata.llm_linked=true</code> are part of an LLM conversation. When you post a note, the LLM reads it and responds:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>POST /api/incident/ticketnote
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>{
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>  &quot;parent&quot;: 10,
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>  &quot;note&quot;: &quot;Approved. Enable the rule with threshold 10.&quot;
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>}
+</code></pre></div>
+<p>The LLM will post a follow-up note automatically. Check <code>ticketnote?parent=10&amp;sort=created</code> to see the conversation.</p>
+<h3 id="6-event-reporting-client-side">6. Event Reporting (Client-Side)<a class="headerlink" href="#6-event-reporting-client-side" title="Permanent link">&para;</a></h3>
+<p>Report security events from your frontend:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="nx">fetch</span><span class="p">(</span><span class="s1">&#39;/api/incident/event&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span><span class="nx">method</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;POST&#39;</span><span class="p">,</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">  </span><span class="nx">headers</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="s1">&#39;Content-Type&#39;</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;application/json&#39;</span><span class="w"> </span><span class="p">},</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">  </span><span class="nx">body</span><span class="o">:</span><span class="w"> </span><span class="nb">JSON</span><span class="p">.</span><span class="nx">stringify</span><span class="p">({</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="w">    </span><span class="nx">category</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;xss:attempt&#39;</span><span class="p">,</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="w">    </span><span class="nx">level</span><span class="o">:</span><span class="w"> </span><span class="mf">8</span><span class="p">,</span>
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="w">    </span><span class="nx">details</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;Script tag detected in comment field&#39;</span><span class="p">,</span>
+<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="w">    </span><span class="nx">metadata</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="w">      </span><span class="nx">field</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;comment&#39;</span><span class="p">,</span>
+<a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a><span class="w">      </span><span class="nx">input</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;&lt;script&gt;...&#39;</span><span class="p">,</span>
+<a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a><span class="w">      </span><span class="nx">page</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;/posts/new&#39;</span>
+<a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-9-13" name="__codelineno-9-13" href="#__codelineno-9-13"></a><span class="w">  </span><span class="p">})</span>
+<a id="__codelineno-9-14" name="__codelineno-9-14" href="#__codelineno-9-14"></a><span class="p">});</span>
+</code></pre></div>
+<p>Events with <code>level &gt;= 7</code> automatically create incidents. See <a href="../logging/reporting_events/">Reporting Events</a> for full field reference.</p>
+<h2 id="event-sources">Event Sources<a class="headerlink" href="#event-sources" title="Permanent link">&para;</a></h2>
+<p>These are the built-in detection sources. Your app can add custom events via the reporting API.</p>
 <table>
 <thead>
 <tr>
-<th>Param</th>
-<th>Required</th>
+<th>Source</th>
+<th>Category</th>
+<th>Level</th>
+<th>What it detects</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Failed login (unknown user)</td>
+<td><code>login:unknown</code></td>
+<td>8</td>
+<td>Credential stuffing</td>
+</tr>
+<tr>
+<td>Failed login (wrong password)</td>
+<td><code>invalid_password</code></td>
+<td>1</td>
+<td>Brute force</td>
+</tr>
+<tr>
+<td>Invalid/expired token</td>
+<td><code>invalid_token</code>, <code>expired_token</code></td>
+<td>8</td>
+<td>Token abuse</td>
+</tr>
+<tr>
+<td>Rate limit hit</td>
+<td><code>rate_limit:{endpoint}</code></td>
+<td>5</td>
+<td>API abuse</td>
+</tr>
+<tr>
+<td>Bouncer block</td>
+<td><code>security:bouncer:block</code></td>
+<td>8</td>
+<td>Bot detected</td>
+</tr>
+<tr>
+<td>MFA failures</td>
+<td><code>totp:login_failed</code></td>
+<td>1</td>
+<td>MFA bypass attempt</td>
+</tr>
+<tr>
+<td>OSSEC alerts</td>
+<td><code>ossec</code></td>
+<td>varies</td>
+<td>OS-level threats</td>
+</tr>
+<tr>
+<td>System health</td>
+<td><code>system:health:{type}</code></td>
+<td>5-10</td>
+<td>Infrastructure issues</td>
+</tr>
+</tbody>
+</table>
+<h2 id="incident-handlers">Incident Handlers<a class="headerlink" href="#incident-handlers" title="Permanent link">&para;</a></h2>
+<p>Rules can fire these handlers when incidents are created:</p>
+<table>
+<thead>
+<tr>
+<th>Handler</th>
+<th>Syntax</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Block IP</td>
+<td><code>block://?ttl=3600</code></td>
+<td>Fleet-wide IP block</td>
+</tr>
+<tr>
+<td>Email</td>
+<td><code>email://perm@manage_security</code></td>
+<td>Email verified users</td>
+</tr>
+<tr>
+<td>SMS</td>
+<td><code>sms://perm@manage_security</code></td>
+<td>SMS verified users (critical only)</td>
+</tr>
+<tr>
+<td>Notify</td>
+<td><code>notify://perm@manage_security</code></td>
+<td>In-app + push notification</td>
+</tr>
+<tr>
+<td>Ticket</td>
+<td><code>ticket://?priority=8</code></td>
+<td>Create ticket for human review</td>
+</tr>
+<tr>
+<td>Job</td>
+<td><code>job://module.function</code></td>
+<td>Run custom async job</td>
+</tr>
+<tr>
+<td>LLM</td>
+<td><code>llm://</code></td>
+<td>Autonomous LLM triage agent</td>
+</tr>
+</tbody>
+</table>
+<p>Handlers resolve notification targets via:
+- <code>perm@name</code> — all users with that permission
+- <code>protected@key</code> — users who opted in via <code>metadata.protected.{key}</code>
+- <code>username</code> — specific user by username</p>
+<h2 id="llm-agent">LLM Agent<a class="headerlink" href="#llm-agent" title="Permanent link">&para;</a></h2>
+<p>When configured (<code>LLM_HANDLER_API_KEY</code> setting), the LLM agent acts as an automated first responder:</p>
+<ol>
+<li>Triages every <code>status=new</code> incident</li>
+<li>Queries context (events, IP history, related incidents, metrics)</li>
+<li>Takes action: ignore noise, resolve real threats, block IPs, create tickets for humans</li>
+<li>Learns over time by creating new rules and storing pattern knowledge</li>
+<li>Communicates with humans through ticket notes</li>
+</ol>
+<p>High-level events that don't match any rule are automatically sent to the LLM if configured. This ensures nothing falls through the cracks.</p>
+<p>The LLM creates rules in a <strong>disabled</strong> state and opens a ticket for human approval. Respond to the ticket to approve, modify, or reject the proposed rule.</p>
+<h2 id="dashboard-chart-ideas">Dashboard Chart Ideas<a class="headerlink" href="#dashboard-chart-ideas" title="Permanent link">&para;</a></h2>
+<p><strong>Overview cards:</strong>
+- Total incidents today (use <code>incidents</code> metric)
+- Unhandled count (<code>GET /api/incident/incident?status=new</code> → <code>count</code>)
+- Active blocks (<code>GET /api/account/system/geoip?is_blocked=true</code> → <code>count</code>)
+- Events/hour trend (use <code>incident_events</code> metric)</p>
+<p><strong>Time-series charts:</strong>
+- Incident volume over time (<code>incidents</code> metric, hourly granularity)
+- Block rate (<code>firewall:blocks</code> metric)
+- Events by country (use <code>incident_events_by_country</code> category)
+- Resolution rate (<code>incidents:resolved</code> vs <code>incidents</code> metrics)</p>
+<p><strong>Tables:</strong>
+- Top source IPs by event count
+- Recent firewall actions (logit with <code>kind=firewall:*</code>)
+- Open tickets awaiting human response
+- LLM-proposed rules pending approval</p>
+<h2 id="settings-reference">Settings Reference<a class="headerlink" href="#settings-reference" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Default</th>
 <th>Description</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>ip</code></td>
-<td>Yes</td>
-<td>IP address to geolocate</td>
+<td><code>INCIDENT_LEVEL_THRESHOLD</code></td>
+<td><code>7</code></td>
+<td>Min event level to auto-create incidents</td>
 </tr>
 <tr>
-<td><code>auto_refresh</code></td>
-<td>No</td>
-<td>Refresh expired cache (default: <code>true</code>)</td>
+<td><code>INCIDENT_EVENT_METRICS</code></td>
+<td><code>True</code></td>
+<td>Enable incident/event metrics recording</td>
+</tr>
+<tr>
+<td><code>INCIDENT_DEDUP_WINDOW_SECONDS</code></td>
+<td><code>60</code></td>
+<td>Dedup window for identical events (0=disabled)</td>
+</tr>
+<tr>
+<td><code>HEALTH_MONITORING_ENABLED</code></td>
+<td><code>False</code></td>
+<td>Enable system health monitoring cron</td>
+</tr>
+<tr>
+<td><code>HEALTH_TCP_MAX</code></td>
+<td><code>2000</code></td>
+<td>TCP connection threshold per node</td>
+</tr>
+<tr>
+<td><code>HEALTH_CPU_CRIT</code></td>
+<td><code>90</code></td>
+<td>CPU % threshold</td>
+</tr>
+<tr>
+<td><code>HEALTH_MEM_CRIT</code></td>
+<td><code>90</code></td>
+<td>Memory % threshold</td>
+</tr>
+<tr>
+<td><code>HEALTH_DISK_CRIT</code></td>
+<td><code>85</code></td>
+<td>Disk % threshold</td>
+</tr>
+<tr>
+<td><code>OSSEC_SECRET</code></td>
+<td><code>None</code></td>
+<td>Optional secret for OSSEC endpoints</td>
+</tr>
+<tr>
+<td><code>LLM_HANDLER_API_KEY</code></td>
+<td><code>None</code></td>
+<td>Claude API key (enables LLM agent)</td>
+</tr>
+<tr>
+<td><code>LLM_HANDLER_MODEL</code></td>
+<td><code>claude-sonnet-4-20250514</code></td>
+<td>Claude model for LLM agent</td>
+</tr>
+<tr>
+<td><code>INCIDENT_EMAIL_FROM</code></td>
+<td><code>None</code></td>
+<td>SES mailbox for incident emails</td>
+</tr>
+<tr>
+<td><code>ADMIN_PORTAL_URL</code></td>
+<td><code>None</code></td>
+<td>URL for deep links in notifications</td>
 </tr>
 </tbody>
 </table>
-<h3 id="response">Response<a class="headerlink" href="#response" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">    </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">        </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">42</span><span class="p">,</span>
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">        </span><span class="nt">&quot;ip_address&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;1.2.3.4&quot;</span><span class="p">,</span>
-<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">        </span><span class="nt">&quot;country_code&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;US&quot;</span><span class="p">,</span>
-<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">        </span><span class="nt">&quot;country_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;United States&quot;</span><span class="p">,</span>
-<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">        </span><span class="nt">&quot;region&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;New York&quot;</span><span class="p">,</span>
-<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">        </span><span class="nt">&quot;city&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;New York&quot;</span><span class="p">,</span>
-<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="w">        </span><span class="nt">&quot;timezone&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;America/New_York&quot;</span><span class="p">,</span>
-<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="w">        </span><span class="nt">&quot;is_tor&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
-<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="w">        </span><span class="nt">&quot;is_vpn&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
-<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="w">        </span><span class="nt">&quot;is_proxy&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
-<a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a><span class="w">        </span><span class="nt">&quot;is_threat&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
-<a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a><span class="w">        </span><span class="nt">&quot;is_suspicious&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
-<a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a><span class="w">        </span><span class="nt">&quot;risk_score&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span>
-<a id="__codelineno-3-17" name="__codelineno-3-17" href="#__codelineno-3-17"></a><span class="w">    </span><span class="p">}</span>
-<a id="__codelineno-3-18" name="__codelineno-3-18" href="#__codelineno-3-18"></a><span class="p">}</span>
-</code></pre></div>
-<hr />
-<h2 id="get-systemgeoiptime-public-ip-time-lookup"><code>GET system/geoip/time</code> — Public IP Time Lookup<a class="headerlink" href="#get-systemgeoiptime-public-ip-time-lookup" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>GET /api/account/system/geoip/time
-</code></pre></div>
-<p><strong>Public</strong> — no authentication required. Rate limited to <strong>30 requests/minute</strong> per IP.</p>
-<p>No parameters required. Uses the caller's IP address automatically to determine timezone and return the current time.</p>
-<h3 id="response_1">Response<a class="headerlink" href="#response_1" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">    </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">    </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">        </span><span class="nt">&quot;ip&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;1.2.3.4&quot;</span><span class="p">,</span>
-<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">        </span><span class="nt">&quot;timezone&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;America/New_York&quot;</span><span class="p">,</span>
-<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">        </span><span class="nt">&quot;epoch&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1711300800</span><span class="p">,</span>
-<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">        </span><span class="nt">&quot;iso&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-03-24T12:00:00-04:00&quot;</span>
-<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">    </span><span class="p">}</span>
-<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="p">}</span>
-</code></pre></div>
-<table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>ip</code></td>
-<td>The caller's detected IP address</td>
-</tr>
-<tr>
-<td><code>timezone</code></td>
-<td>IANA timezone string</td>
-</tr>
-<tr>
-<td><code>epoch</code></td>
-<td>Current time as Unix timestamp (seconds)</td>
-</tr>
-<tr>
-<td><code>iso</code></td>
-<td>Current time as ISO 8601 string with timezone offset</td>
-</tr>
-</tbody>
-</table>
-<h3 id="error-response">Error Response<a class="headerlink" href="#error-response" title="Permanent link">&para;</a></h3>
-<p>If timezone data is not available for the IP:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">    </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">    </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Timezone not available for this IP&quot;</span>
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="p">}</span>
-</code></pre></div>
 
 
 
@@ -3996,10 +4386,10 @@
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.suggest", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.suggest", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
       
     
   </body>

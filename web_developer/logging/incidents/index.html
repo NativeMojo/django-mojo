@@ -2967,10 +2967,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#incident-states" class="md-nav__link">
+  <a href="#incident-status-lifecycle" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Incident States
+        Incident Status Lifecycle
       
     </span>
   </a>
@@ -2978,10 +2978,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#update-incident-state" class="md-nav__link">
+  <a href="#update-incident" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Update Incident State
+        Update Incident
       
     </span>
   </a>
@@ -3000,10 +3000,32 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#incident-history" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Incident History
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#list-events" class="md-nav__link">
     <span class="md-ellipsis">
       
         List Events
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tickets" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tickets
       
     </span>
   </a>
@@ -3822,10 +3844,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#incident-states" class="md-nav__link">
+  <a href="#incident-status-lifecycle" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Incident States
+        Incident Status Lifecycle
       
     </span>
   </a>
@@ -3833,10 +3855,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#update-incident-state" class="md-nav__link">
+  <a href="#update-incident" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Update Incident State
+        Update Incident
       
     </span>
   </a>
@@ -3855,10 +3877,32 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#incident-history" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Incident History
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#list-events" class="md-nav__link">
     <span class="md-ellipsis">
       
         List Events
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tickets" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tickets
       
     </span>
   </a>
@@ -3899,7 +3943,8 @@
 <h1 id="incident-api-rest-api-reference">Incident API — REST API Reference<a class="headerlink" href="#incident-api-rest-api-reference" title="Permanent link">&para;</a></h1>
 <h2 id="permissions-required">Permissions Required<a class="headerlink" href="#permissions-required" title="Permanent link">&para;</a></h2>
 <ul>
-<li><code>view_incidents</code> or <code>manage_users</code></li>
+<li><code>view_security</code> — read-only access to incidents, events, history, tickets</li>
+<li><code>manage_security</code> — create, edit, delete, merge incidents, manage tickets and rules</li>
 </ul>
 <h2 id="endpoints">Endpoints<a class="headerlink" href="#endpoints" title="Permanent link">&para;</a></h2>
 <table>
@@ -3934,7 +3979,17 @@
 <tr>
 <td>POST</td>
 <td><code>/api/incident/incident/&lt;id&gt;</code></td>
-<td>Update incident state</td>
+<td>Update incident</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/api/incident/incidenthistory</code></td>
+<td>List incident history</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/api/incident/ruleset</code></td>
+<td>List rule sets</td>
 </tr>
 <tr>
 <td>GET</td>
@@ -3946,11 +4001,31 @@
 <td><code>/api/incident/ticket</code></td>
 <td>List tickets</td>
 </tr>
+<tr>
+<td>GET</td>
+<td><code>/api/incident/ticket/&lt;id&gt;</code></td>
+<td>Get ticket</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/api/incident/ticket</code></td>
+<td>Create ticket</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/api/incident/ticketnote</code></td>
+<td>List ticket notes</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/api/incident/ticketnote</code></td>
+<td>Create ticket note</td>
+</tr>
 </tbody>
 </table>
 <h2 id="list-incidents">List Incidents<a class="headerlink" href="#list-incidents" title="Permanent link">&para;</a></h2>
 <p><strong>GET</strong> <code>/api/incident/incident</code></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>GET /api/incident/incident?state=open&amp;sort=-created&amp;size=20
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>GET /api/incident/incident?status=new&amp;sort=-created&amp;size=20
 </code></pre></div>
 <p><strong>Response:</strong></p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span>
@@ -3961,73 +4036,252 @@
 <a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
 <a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">    </span><span class="p">{</span>
 <a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">      </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">301</span><span class="p">,</span>
-<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">      </span><span class="nt">&quot;created&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2024-01-15T10:00:00Z&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">      </span><span class="nt">&quot;state&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;open&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">      </span><span class="nt">&quot;created&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-03-27T10:00:00Z&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">      </span><span class="nt">&quot;state&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
 <a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">      </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;new&quot;</span><span class="p">,</span>
 <a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">      </span><span class="nt">&quot;priority&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span>
 <a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="w">      </span><span class="nt">&quot;category&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;auth:failed&quot;</span><span class="p">,</span>
 <a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="w">      </span><span class="nt">&quot;scope&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;account&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="w">      </span><span class="nt">&quot;metadata&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="w">        </span><span class="nt">&quot;source_ip&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;1.2.3.4&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a><span class="w">        </span><span class="nt">&quot;username&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;unknown_user&quot;</span>
-<a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a><span class="w">      </span><span class="p">}</span>
-<a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a><span class="w">    </span><span class="p">}</span>
-<a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a><span class="w">  </span><span class="p">]</span>
-<a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a><span class="p">}</span>
+<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="w">      </span><span class="nt">&quot;source_ip&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;1.2.3.4&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="w">      </span><span class="nt">&quot;hostname&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;web-01&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a><span class="w">      </span><span class="nt">&quot;title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Failed login attempts&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a><span class="w">      </span><span class="nt">&quot;metadata&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a><span class="w">        </span><span class="nt">&quot;username&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;unknown_user&quot;</span>
+<a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a><span class="w">      </span><span class="p">}</span>
+<a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a><span class="w">  </span><span class="p">]</span>
+<a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a><span class="p">}</span>
 </code></pre></div>
-<h2 id="incident-states">Incident States<a class="headerlink" href="#incident-states" title="Permanent link">&para;</a></h2>
-<ul>
-<li><code>open</code> — Active, requires attention</li>
-<li><code>investigating</code> — Being worked on</li>
-<li><code>resolved</code> — Root cause addressed</li>
-<li><code>closed</code> — No further action needed</li>
-</ul>
-<h2 id="update-incident-state">Update Incident State<a class="headerlink" href="#update-incident-state" title="Permanent link">&para;</a></h2>
+<h2 id="incident-status-lifecycle">Incident Status Lifecycle<a class="headerlink" href="#incident-status-lifecycle" title="Permanent link">&para;</a></h2>
+<p>Incidents move through these statuses:</p>
+<table>
+<thead>
+<tr>
+<th>Status</th>
+<th>Set by</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>pending</code></td>
+<td>System</td>
+<td>Below threshold, accumulating events</td>
+</tr>
+<tr>
+<td><code>new</code></td>
+<td>System</td>
+<td>Unhandled — neither human nor LLM has touched it</td>
+</tr>
+<tr>
+<td><code>investigating</code></td>
+<td>LLM</td>
+<td>LLM agent is actively triaging</td>
+</tr>
+<tr>
+<td><code>resolved</code></td>
+<td>LLM or Human</td>
+<td>Real threat, handled (blocked, notified, etc.)</td>
+</tr>
+<tr>
+<td><code>ignored</code></td>
+<td>LLM or Human</td>
+<td>Noise / false positive</td>
+</tr>
+<tr>
+<td><code>open</code></td>
+<td>Human</td>
+<td>Human has taken ownership</td>
+</tr>
+<tr>
+<td><code>paused</code></td>
+<td>Human</td>
+<td>Human paused investigation</td>
+</tr>
+<tr>
+<td><code>closed</code></td>
+<td>Human</td>
+<td>Final — done, archived</td>
+</tr>
+</tbody>
+</table>
+<p><strong>For your dashboard:</strong>
+- Show <code>status=new</code> as the "unhandled" queue
+- Show <code>status=open</code> as the "human work" queue
+- If the LLM agent is configured, most incidents move from <code>new</code> to <code>investigating</code> to <code>resolved</code>/<code>ignored</code> automatically</p>
+<h2 id="update-incident">Update Incident<a class="headerlink" href="#update-incident" title="Permanent link">&para;</a></h2>
 <p><strong>POST</strong> <code>/api/incident/incident/&lt;id&gt;</code></p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">&quot;state&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;investigating&quot;</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;open&quot;</span>
 <a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="p">}</span>
 </code></pre></div>
 <h2 id="merge-incidents">Merge Incidents<a class="headerlink" href="#merge-incidents" title="Permanent link">&para;</a></h2>
 <p><strong>POST</strong> <code>/api/incident/incident/&lt;id&gt;</code></p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span>
 <a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">&quot;action&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;merge&quot;</span><span class="p">,</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="nt">&quot;incident_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">302</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="mi">302</span><span class="p">,</span><span class="w"> </span><span class="mi">303</span><span class="p">]</span>
 <a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="p">}</span>
 </code></pre></div>
-<p>Merges incident 302 into incident <code>&lt;id&gt;</code>.</p>
+<p>Merges incidents 302 and 303 into incident <code>&lt;id&gt;</code>. Events are re-linked, source incidents are deleted.</p>
+<h2 id="incident-history">Incident History<a class="headerlink" href="#incident-history" title="Permanent link">&para;</a></h2>
+<p><strong>GET</strong> <code>/api/incident/incidenthistory?parent=301&amp;sort=-created</code></p>
+<p>Returns the audit trail for an incident — every state change, handler execution, LLM assessment, and admin edit.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">    </span><span class="p">{</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">      </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">      </span><span class="nt">&quot;created&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-03-27T10:00:01Z&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">      </span><span class="nt">&quot;kind&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;created&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">      </span><span class="nt">&quot;note&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Incident created from event (category: auth:failed, level: 5, rule: brute_force)&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">      </span><span class="nt">&quot;state&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">      </span><span class="nt">&quot;priority&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="w">      </span><span class="nt">&quot;by&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span>
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="w">    </span><span class="p">},</span>
+<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a><span class="w">    </span><span class="p">{</span>
+<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="w">      </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
+<a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a><span class="w">      </span><span class="nt">&quot;created&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-03-27T10:00:02Z&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a><span class="w">      </span><span class="nt">&quot;kind&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;handler:llm&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a><span class="w">      </span><span class="nt">&quot;note&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;[LLM Agent] Triage complete: noise — single failed login from known IP&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a><span class="w">      </span><span class="nt">&quot;state&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
+<a id="__codelineno-4-18" name="__codelineno-4-18" href="#__codelineno-4-18"></a><span class="w">      </span><span class="nt">&quot;priority&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span>
+<a id="__codelineno-4-19" name="__codelineno-4-19" href="#__codelineno-4-19"></a><span class="w">      </span><span class="nt">&quot;by&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span>
+<a id="__codelineno-4-20" name="__codelineno-4-20" href="#__codelineno-4-20"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-4-21" name="__codelineno-4-21" href="#__codelineno-4-21"></a><span class="w">  </span><span class="p">]</span>
+<a id="__codelineno-4-22" name="__codelineno-4-22" href="#__codelineno-4-22"></a><span class="p">}</span>
+</code></pre></div>
+<p><strong>History <code>kind</code> values:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Kind</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>created</code></td>
+<td>Incident created from event</td>
+</tr>
+<tr>
+<td><code>priority_escalated</code></td>
+<td>Priority increased by new event</td>
+</tr>
+<tr>
+<td><code>status_changed</code></td>
+<td>Status transition</td>
+</tr>
+<tr>
+<td><code>threshold_reached</code></td>
+<td>Pending → new (min_count met)</td>
+</tr>
+<tr>
+<td><code>handler:block</code></td>
+<td>Block handler fired</td>
+</tr>
+<tr>
+<td><code>handler:email</code></td>
+<td>Email handler fired</td>
+</tr>
+<tr>
+<td><code>handler:sms</code></td>
+<td>SMS handler fired</td>
+</tr>
+<tr>
+<td><code>handler:notify</code></td>
+<td>Notification handler fired</td>
+</tr>
+<tr>
+<td><code>handler:llm</code></td>
+<td>LLM agent action</td>
+</tr>
+<tr>
+<td><code>merged</code></td>
+<td>Incidents merged</td>
+</tr>
+<tr>
+<td><code>updated</code></td>
+<td>Admin edited fields</td>
+</tr>
+</tbody>
+</table>
 <h2 id="list-events">List Events<a class="headerlink" href="#list-events" title="Permanent link">&para;</a></h2>
 <p><strong>GET</strong> <code>/api/incident/event</code></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>GET /api/incident/event?category=permission_denied&amp;sort=-created&amp;size=50
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>GET /api/incident/event?category=auth:failed&amp;sort=-created&amp;size=50
+</code></pre></div>
+<p>Events with <code>metadata.dedup_count &gt; 1</code> represent multiple identical events that were deduplicated. Check this field to get true event volume.</p>
+<h2 id="tickets">Tickets<a class="headerlink" href="#tickets" title="Permanent link">&para;</a></h2>
+<p>Tickets are the bridge between automated systems and human operators.</p>
+<p><strong>GET</strong> <code>/api/incident/ticket?status=open&amp;sort=-priority</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">    </span><span class="p">{</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">      </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">10</span><span class="p">,</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">      </span><span class="nt">&quot;title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;[Rule Proposal] Block repeated SSH from unknown IPs&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">      </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;open&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">      </span><span class="nt">&quot;priority&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">      </span><span class="nt">&quot;category&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;llm_review&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="w">      </span><span class="nt">&quot;incident&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">301</span><span class="w"> </span><span class="p">},</span>
+<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="w">      </span><span class="nt">&quot;metadata&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;llm_linked&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a><span class="w">  </span><span class="p">]</span>
+<a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a><span class="p">}</span>
+</code></pre></div>
+<p>Tickets with <code>metadata.llm_linked=true</code> are managed by the LLM agent. When you post a note to these tickets, the LLM is automatically re-invoked to continue the conversation.</p>
+<p><strong>POST</strong> <code>/api/incident/ticketnote</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="nt">&quot;parent&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">10</span><span class="p">,</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span><span class="nt">&quot;note&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Approved. Enable the rule.&quot;</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="p">}</span>
 </code></pre></div>
 <h2 id="filtering">Filtering<a class="headerlink" href="#filtering" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
 <tr>
 <th>Filter</th>
+<th>Applies to</th>
 <th>Description</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>state</code></td>
-<td>Incident state</td>
+<td><code>status</code></td>
+<td>Incidents, Tickets</td>
+<td>Status string</td>
 </tr>
 <tr>
 <td><code>priority</code></td>
-<td>Priority level (1-10)</td>
+<td>Incidents, Tickets</td>
+<td>Priority level (0-15)</td>
 </tr>
 <tr>
 <td><code>category</code></td>
-<td>Event/incident category</td>
+<td>Events, Incidents, Tickets</td>
+<td>Category string</td>
 </tr>
 <tr>
 <td><code>scope</code></td>
-<td>App scope (e.g., <code>account</code>)</td>
+<td>Events, Incidents</td>
+<td>App scope (e.g., <code>account</code>, <code>system</code>)</td>
+</tr>
+<tr>
+<td><code>source_ip</code></td>
+<td>Events, Incidents</td>
+<td>Source IP address</td>
+</tr>
+<tr>
+<td><code>hostname</code></td>
+<td>Events, Incidents</td>
+<td>Server hostname</td>
 </tr>
 <tr>
 <td><code>dr_start</code>, <code>dr_end</code></td>
+<td>All</td>
 <td>Date range</td>
+</tr>
+<tr>
+<td><code>parent</code></td>
+<td>History, TicketNotes</td>
+<td>Parent incident/ticket ID</td>
 </tr>
 </tbody>
 </table>
