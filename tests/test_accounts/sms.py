@@ -45,6 +45,7 @@ def setup_sms_env(opts):
         user.save()
     User.objects.filter(phone_number=TEST_PHONE).exclude(username=TEST_USER).update(phone_number=None)
     user.is_active = True
+    user.is_email_verified = True
     user.phone_number = TEST_PHONE
     user.is_phone_verified = True
     user.requires_mfa = True
@@ -171,6 +172,7 @@ def test_sms_no_phone(opts):
         no_phone_user.save()
     no_phone_user.phone_number = None
     no_phone_user.is_phone_verified = False
+    no_phone_user.is_email_verified = True
     no_phone_user.save_password(TEST_PWORD)
     no_phone_user.save()
 

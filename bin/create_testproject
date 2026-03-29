@@ -108,6 +108,7 @@ INSTALLED_APPS = [
     "mojo.apps.phonehub",
     "mojo.apps.filevault",
     "mojo.apps.shortlink",
+    "mojo.apps.chat",
     "django.contrib.humanize",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -169,7 +170,7 @@ LOGGING = {"version": 1, "disable_existing_loggers": False}
 
 INCIDENT_EVENT_METRICS = False  # no metrics processing needed in tests
 
-JOBS_CHANNELS = ["default", "email"]
+JOBS_CHANNELS = ["default", "email", "incident_handlers"]
 JOBS_DEFAULT_MAX_RETRIES = 0
 JOBS_ENGINE_MAX_WORKERS = 2
 JOBS_RUNNER_HEARTBEAT_SEC = 5

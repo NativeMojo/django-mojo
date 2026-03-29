@@ -307,6 +307,7 @@ def test_metrics_user_account_permissions(opts):
     if user1 is None:
         user1 = User(username=user1_name, email=f"{user1_name}@example.com")
         user1.save()
+    user1.is_email_verified = True
     user1.save_password(pword)
     user1.remove_all_permissions()
 
@@ -314,6 +315,7 @@ def test_metrics_user_account_permissions(opts):
     if user2 is None:
         user2 = User(username=user2_name, email=f"{user2_name}@example.com")
         user2.save()
+    user2.is_email_verified = True
     user2.save_password(pword)
     user2.remove_all_permissions()
 
@@ -352,6 +354,7 @@ def test_metrics_group_account_permissions(opts):
     if member_user is None:
         member_user = User(username=member_name, email=f"{member_name}@example.com")
         member_user.save()
+    member_user.is_email_verified = True
     member_user.save_password(pword)
     member_user.remove_all_permissions()
 
@@ -359,6 +362,7 @@ def test_metrics_group_account_permissions(opts):
     if outsider_user is None:
         outsider_user = User(username=outsider_name, email=f"{outsider_name}@example.com")
         outsider_user.save()
+    outsider_user.is_email_verified = True
     outsider_user.save_password(pword)
     outsider_user.remove_all_permissions()
 

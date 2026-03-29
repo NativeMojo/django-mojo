@@ -26,6 +26,7 @@ def setup_totp_env(opts):
         user = User(username=TEST_USER, email=f"{TEST_USER}@example.com", display_name="TOTP User")
         user.save()
     user.is_active = True
+    user.is_email_verified = True
     user.save_password(TEST_PWORD)
 
     # Clean up any existing TOTP records

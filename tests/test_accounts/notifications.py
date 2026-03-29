@@ -30,6 +30,7 @@ def setup_notifications(opts):
     if user is None:
         user = User(username=TEST_USER, email=f"{TEST_USER}@example.com", display_name="Notif User")
         user.save()
+    user.is_email_verified = True
     user.save_password(TEST_PWORD)
     user.save()
     opts.user = user
@@ -38,6 +39,7 @@ def setup_notifications(opts):
     if other is None:
         other = User(username=TEST_OTHER, email=f"{TEST_OTHER}@example.com", display_name="Other User")
         other.save()
+    other.is_email_verified = True
     other.save_password(TEST_PWORD)
     other.save()
     opts.other = other

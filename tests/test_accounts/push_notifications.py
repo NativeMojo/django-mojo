@@ -30,11 +30,13 @@ def setup_push_testing(opts):
     # Assign test user to organization
     user = User.objects.get(username=TEST_USER)
     user.org = test_org
+    user.is_email_verified = True
     user.add_permission("send_notifications")
     user.save()
 
     # Give admin push config permissions
     admin = User.objects.get(username=ADMIN_USER)
+    admin.is_email_verified = True
     admin.add_permission(["manage_push_config", "manage_notifications"])
     admin.save()
 

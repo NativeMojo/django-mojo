@@ -42,6 +42,7 @@ def setup_security_events(opts):
     user.username = TEST_USER
     user.email = TEST_EMAIL
     user.is_active = True
+    user.is_email_verified = True
     user.requires_mfa = False
     user.save_password(TEST_PWORD)
     user.save()
@@ -55,6 +56,7 @@ def setup_security_events(opts):
     other.username = OTHER_USER
     other.email = OTHER_EMAIL
     other.is_active = True
+    other.is_email_verified = True
     other.save_password(TEST_PWORD)
     other.save()
     opts.other_user_id = other.pk
@@ -275,6 +277,7 @@ def test_security_events_empty(opts):
         clean_user.save()
     clean_user.username = "secevents_clean"
     clean_user.is_active = True
+    clean_user.is_email_verified = True
     clean_user.save_password(TEST_PWORD)
     clean_user.save()
 

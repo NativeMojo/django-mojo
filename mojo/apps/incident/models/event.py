@@ -165,6 +165,8 @@ class Event(models.Model, MojoModel):
         rule_set = RuleSet.check_by_category(self.scope, self)
         if rule_set is None:
             rule_set = RuleSet.check_by_category(self.category, self)
+        if rule_set is None:
+            rule_set = RuleSet.check_by_category("*", self)
 
         # Honor action=ignore from RuleSet metadata
         if rule_set and rule_set.handler == "ignore":

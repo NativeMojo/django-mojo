@@ -56,6 +56,7 @@ def setup_passkey_env(opts):
             display_name="Passkey User",
         )
     user.is_active = True
+    user.is_email_verified = True
     user.save()
     user.save_password(TEST_PASSWORD)
 

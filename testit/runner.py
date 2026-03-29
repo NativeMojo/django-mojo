@@ -221,17 +221,23 @@ def run_test(opts, module, func_name, module_name, test_name):
 
 
 def run_setup(opts, module, func_name, module_name, test_name):
-    """Run a specific test function inside a module."""
+    """Run a specific setup function. Returns True if skipped."""
     test_key = f"{module_name}.{test_name}.{func_name}"
     helpers.VERBOSE = opts.verbose or opts.errors
     try:
         getattr(module, func_name)(opts)
+        return False
+    except helpers.TestitSkip as skip:
+        msg = str(skip) if str(skip) else "skipped"
+        logit.color_print(f"{helpers.INDENT}{msg}", logit.ConsoleLogger.BLUE)
+        return True
     except Exception as err:
         if opts.verbose:
             print(f"⚠️ Setup Error: {err}")
             traceback.print_exc()
         if opts.stop:
             sys.exit(1)
+        return False
 
 
 def import_module_for_testing(module_name, test_name):
@@ -240,7 +246,7 @@ def import_module_for_testing(module_name, test_name):
         name = f"{module_name}.{test_name}"
         module = import_module(name)
         return module
-    except ImportError:
+    except (ImportError, RuntimeError):
         print(f"⚠️ Failed to import test module: {name}")
         traceback.print_exc()
         return None
@@ -251,11 +257,14 @@ def run_module_tests_by_name(opts, module_name, test_name):
     module = import_module_for_testing(module_name, test_name)
     if not module:
         return
-    run_module_setup(opts, module, test_name, module_name)
+    skipped = run_module_setup(opts, module, test_name, module_name)
+    if skipped:
+        return
     run_module_tests(opts, module, test_name, module_name)
 
 
 def run_module_setup(opts, module, test_name, module_name):
+    """Run all setup functions for a module. Returns True if module was skipped."""
     opts.client = testit.client.RestClient(opts.host, logger=opts.logger)
     test_key = f"{module_name}.{test_name}"
     started = time.time()
@@ -277,9 +286,12 @@ def run_module_setup(opts, module, test_name, module_name):
     if len(setup_funcs):
         logit.color_print(f"\nRUNNING SETUP: {test_key}", logit.ConsoleLogger.BLUE)
         for module, func_name in setup_funcs:
-            run_setup(opts, module, func_name, module_name, test_name)
+            skipped = run_setup(opts, module, func_name, module_name, test_name)
+            if skipped:
+                return True
         duration = time.time() - started
         print(f"{helpers.INDENT}---------\n{helpers.INDENT}run time: {duration:.2f}s")
+    return False
 
 
 def run_module_tests(opts, module, test_name, module_name):

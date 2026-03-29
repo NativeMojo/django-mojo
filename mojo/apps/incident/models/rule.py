@@ -159,10 +159,11 @@ class RuleSet(models.Model, MojoModel):
                     "incident_id": incident.pk if incident else None,
                 }
                 try:
+                    channel = "incident_handlers" if "incident_handlers" in jobs.JOB_CHANNELS else "default"
                     jobs.publish(
                         "mojo.apps.incident.handlers.event_handlers.execute_handler",
                         payload,
-                        channel="incident_handlers",
+                        channel=channel,
                     )
                     published = True
                 except Exception:
@@ -251,6 +252,28 @@ class RuleSet(models.Model, MojoModel):
         cls.ensure_bouncer_rules()
         cls.ensure_auth_rules()
         cls.ensure_health_rules()
+        cls.ensure_catchall_rules()
+
+    @classmethod
+    def ensure_catchall_rules(cls):
+        """
+        Create a catch-all RuleSet that matches any event without a specific ruleset.
+        Uses category="*" as a sentinel — Event.publish() falls back to this
+        after scope and category lookups both return None.
+        Safe to call multiple times — uses get_or_create.
+        """
+        cls._create_ruleset(
+            category="*",
+            name="Catch-All - Default Bundling",
+            priority=9999,
+            match_by=MatchBy.ALL,
+            bundle_by=BundleBy.SOURCE_IP,
+            bundle_minutes=BundleMinutes.THIRTY_MINUTES,
+            rules=[
+                {"name": "Level >= 1", "field_name": "level",
+                 "comparator": ">=", "value": "1", "value_type": "int"},
+            ],
+        )
 
     @classmethod
     def ensure_ossec_rules(cls):

@@ -85,7 +85,7 @@ class Incident(models.Model, MojoModel):
                 parent=self,
                 kind=kind,
                 note=note,
-                by=by,
+                user=by,
                 to=to,
                 group=group,
                 media=media,

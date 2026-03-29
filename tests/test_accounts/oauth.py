@@ -487,6 +487,7 @@ def setup_oauth_connection_env(opts):
         admin = User(username=ADMIN_USER, email=f"{ADMIN_USER}@example.com", display_name="OAuth Admin")
         admin.save()
     admin.is_active = True
+    admin.is_email_verified = True
     admin.add_permission(["manage_users"])
     admin.save_password(ADMIN_PWORD)
     OAuthConnection.objects.filter(user=admin).delete()
@@ -498,6 +499,7 @@ def setup_oauth_connection_env(opts):
         other = User(username=OTHER_USER, email=OTHER_EMAIL, display_name="Other User")
         other.save()
     other.is_active = True
+    other.is_email_verified = True
     other.save_password(OTHER_PWORD)
     OAuthConnection.objects.filter(user=other).delete()
     opts.other_user = other

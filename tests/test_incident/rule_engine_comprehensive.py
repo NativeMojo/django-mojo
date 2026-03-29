@@ -93,16 +93,16 @@ def test_bug_default_ossec_rules_never_match(opts):
     # Create default rules
     RuleSet.ensure_default_rules()
 
-    # Get the default OSSEC bundle ruleset
+    # Get the default OSSEC Critical Severity ruleset (level >= 12)
     ossec_bundle = RuleSet.objects.get(
         category="ossec",
-        name="OSSEC - Catch-all Moderate Severity"
+        name="OSSEC - Critical Severity"
     )
 
     # Create an event that SHOULD match all the rules
     event = Event.objects.create(
         category="ossec",
-        level=8,
+        level=12,
         model_name="ossec_rule",
         model_id=5001,
         source_ip="192.168.1.100",
@@ -1185,8 +1185,13 @@ def test_handler_chaining(opts):
 
 @th.django_unit_test()
 def test_handler_ticket_creation(opts):
-    """Test that ticket handler creates tickets."""
+    """Test that ticket handler creates tickets via execute_handler.
+
+    Handlers run as async jobs, so we call execute_handler directly
+    to verify the ticket handler logic without needing a job worker.
+    """
     from mojo.apps.incident.models import Event, RuleSet, Rule, Incident, Ticket
+    from mojo.apps.incident.handlers.event_handlers import execute_handler
 
     # Clean up
     RuleSet.objects.filter(category="ticket_test").delete()
@@ -1195,13 +1200,14 @@ def test_handler_ticket_creation(opts):
     Ticket.objects.filter(category="ticket_test").delete()
 
     # Create ruleset with ticket handler
+    handler_spec = "ticket://?status=open&priority=8&category=ticket_test"
     ruleset = RuleSet.objects.create(
         name="Ticket Test",
         category="ticket_test",
         priority=1,
         match_by=0,
         bundle_by=0,
-        handler="ticket://?status=open&priority=8&category=ticket_test"
+        handler=handler_spec,
     )
 
     Rule.objects.create(
@@ -1212,7 +1218,7 @@ def test_handler_ticket_creation(opts):
         value_type="str"
     )
 
-    # Create event
+    # Create event and incident
     event = Event.objects.create(
         category="ticket_test",
         level=8,
@@ -1220,7 +1226,23 @@ def test_handler_ticket_creation(opts):
         details="This needs immediate attention"
     )
     event.sync_metadata()
-    event.publish()
+    event.save()
+
+    incident = Incident.objects.create(
+        priority=8, state=0, status="new",
+        category="ticket_test", scope="test",
+        title="Ticket test incident",
+        rule_set=ruleset,
+    )
+    event.incident = incident
+    event.save(update_fields=["incident"])
+
+    # Call execute_handler directly (simulates what the job worker does)
+    execute_handler({
+        "handler_spec": handler_spec,
+        "event_id": event.pk,
+        "incident_id": incident.pk,
+    })
 
     # Check that ticket was created
     tickets = Ticket.objects.filter(category="ticket_test")
@@ -1320,39 +1342,43 @@ def test_full_flow_event_to_incident(opts):
 
 @th.django_unit_test()
 def test_event_without_matching_ruleset(opts):
-    """Test that events without matching rulesets don't create incidents (unless level >= threshold)."""
+    """Events without a specific ruleset are caught by the catch-all '*' ruleset
+    and bundled into incidents by source_ip within a 30-minute window."""
     from mojo.apps.incident.models import Event, Incident
-    from mojo.apps.incident.models.event import INCIDENT_LEVEL_THRESHOLD
+    from mojo.apps.incident.models.rule import RuleSet
 
     # Clean up
     Event.objects.filter(category="no_match").delete()
     Incident.objects.filter(category="no_match").delete()
 
-    # Create event with low level and no matching ruleset
+    # Ensure catch-all exists
+    RuleSet.ensure_default_rules()
+
+    # Create a low-level event — catch-all bundles it into an incident
     event = Event.objects.create(
         category="no_match",
-        level=3,  # Below threshold
+        level=3,
+        source_ip="10.0.0.50",
         title="Low severity event"
     )
     event.sync_metadata()
     event.publish()
 
-    # Should not create incident
     incidents = Incident.objects.filter(category="no_match")
-    assert incidents.count() == 0, "Low level event without ruleset should not create incident"
+    assert incidents.count() == 1, "Catch-all ruleset should bundle even low-level events"
 
-    # Create event with high level (above threshold)
-    high_event = Event.objects.create(
+    # Create a second event from the same IP — should bundle into same incident
+    event2 = Event.objects.create(
         category="no_match",
-        level=INCIDENT_LEVEL_THRESHOLD + 1,
-        title="High severity event"
+        level=5,
+        source_ip="10.0.0.50",
+        title="Medium severity event"
     )
-    high_event.sync_metadata()
-    high_event.publish()
+    event2.sync_metadata()
+    event2.publish()
 
-    # Should create incident based on level threshold
     incidents = Incident.objects.filter(category="no_match")
-    assert incidents.count() == 1, f"High level event (>={INCIDENT_LEVEL_THRESHOLD}) should create incident"
+    assert incidents.count() == 1, "Second event from same IP should bundle into existing incident"
 
 
 @th.django_unit_test()

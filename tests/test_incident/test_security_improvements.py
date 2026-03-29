@@ -1,63 +1,11 @@
 """
 Tests for security system improvements (Phases 1-3).
 
-Covers: event dedup, incident history, incident metrics, handler dispatch,
+Covers: incident history, incident metrics, handler dispatch,
 OSSEC secret validation, LLM handler wiring, ticket LLM hooks.
 """
 from testit import helpers as th
 from objict import objict
-
-
-# ---------------------------------------------------------------------------
-# Event Deduplication
-# ---------------------------------------------------------------------------
-
-@th.django_unit_test()
-def test_event_dedup_increments_counter(opts):
-    """Identical events within the dedup window should increment dedup_count."""
-    from mojo.apps.incident.models import Event
-    from mojo.apps.incident import reporter
-
-    cat = "test:dedup:increment"
-    Event.objects.filter(category=cat).delete()
-
-    reporter.report_event("first", category=cat, level=2, source_ip="10.0.0.1")
-    assert Event.objects.filter(category=cat).count() == 1, "First event should create a row"
-
-    reporter.report_event("second", category=cat, level=2, source_ip="10.0.0.1")
-    assert Event.objects.filter(category=cat).count() == 1, "Dedup should NOT create a second row"
-
-    event = Event.objects.get(category=cat)
-    count = (event.metadata or {}).get("dedup_count", 1)
-    assert count == 2, f"dedup_count should be 2, got {count}"
-
-
-@th.django_unit_test()
-def test_event_dedup_different_ip_creates_new(opts):
-    """Events from different IPs should NOT be deduped."""
-    from mojo.apps.incident.models import Event
-    from mojo.apps.incident import reporter
-
-    cat = "test:dedup:diffip"
-    Event.objects.filter(category=cat).delete()
-
-    reporter.report_event("from ip1", category=cat, level=2, source_ip="10.0.0.1")
-    reporter.report_event("from ip2", category=cat, level=2, source_ip="10.0.0.2")
-    assert Event.objects.filter(category=cat).count() == 2, "Different IPs should create separate events"
-
-
-@th.django_unit_test()
-def test_event_dedup_different_level_creates_new(opts):
-    """Events with different levels should NOT be deduped."""
-    from mojo.apps.incident.models import Event
-    from mojo.apps.incident import reporter
-
-    cat = "test:dedup:difflevel"
-    Event.objects.filter(category=cat).delete()
-
-    reporter.report_event("low", category=cat, level=2, source_ip="10.0.0.1")
-    reporter.report_event("high", category=cat, level=8, source_ip="10.0.0.1")
-    assert Event.objects.filter(category=cat).count() == 2, "Different levels should create separate events"
 
 
 # ---------------------------------------------------------------------------

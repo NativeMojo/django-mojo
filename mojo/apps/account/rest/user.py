@@ -179,9 +179,10 @@ def _check_verification_gate(user, source=None):
     'phone_not_verified' if the relevant verification setting is enabled
     and the user's channel is not yet verified.
 
-    Blocks login regardless of how the user authenticated (email, username,
-    phone). If REQUIRE_VERIFIED_EMAIL is True the user must have a verified
-    email — period.
+    Only enforced when the login source matches the verification channel:
+    - REQUIRE_VERIFIED_EMAIL blocks email-based login only
+    - REQUIRE_VERIFIED_PHONE blocks phone-based login only
+    Username login is never blocked by verification gates.
 
     Settings are read at call time (not cached at import time) so that
     Django's override_settings works correctly in tests.
@@ -191,11 +192,11 @@ def _check_verification_gate(user, source=None):
     is_verified = user.is_email_verified or user.is_phone_verified
     if is_verified:
         return
-    if require_verified_email and not user.is_email_verified:
+    if require_verified_email and source == "email" and not user.is_email_verified:
         raise merrors.PermissionDeniedException(
             "email_not_verified", 403, 403
         )
-    if require_verified_phone and not user.is_phone_verified:
+    if require_verified_phone and source == "phone_number" and not user.is_phone_verified:
         raise merrors.PermissionDeniedException(
             "phone_not_verified", 403, 403
         )

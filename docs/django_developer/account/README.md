@@ -8,3 +8,4 @@
 - [API Keys](api_keys.md) — Group-scoped programmatic access, permissions, token lifecycle
 - [Notifications](notifications.md) — User inbox, WebSocket + push delivery, expiry
 - [GeoIP](geoip.md) — IP geolocation, threat intelligence, time lookup
+- [Login Events](login_events.md) — UserLoginEvent model, geo tracking, anomaly flags, metrics

@@ -325,6 +325,7 @@ def test_deactivate_confirm_incident_logged(opts):
     disposable.username = "deact_incident_test"
     disposable.email = "deact_incident_test@example.com"
     disposable.is_active = True
+    disposable.is_email_verified = True
     disposable.save_password(TEST_PWORD)
     disposable.save()
 
@@ -357,6 +358,7 @@ def test_deactivate_jwt_invalid_after(opts):
     disposable.username = "deact_jwt_test"
     disposable.email = "deact_jwt_test@example.com"
     disposable.is_active = True
+    disposable.is_email_verified = True
     disposable.save_password(TEST_PWORD)
     disposable.save()
 

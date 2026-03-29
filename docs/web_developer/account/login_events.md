@@ -238,9 +238,10 @@ Query these via `GET /api/metrics/query?slug=login:country:US&granularity=days&r
 
 ## Settings
 
+These settings are read at startup. Changes require a server restart.
+
 | Setting | Default | Description |
 |---|---|---|
 | `LOGIN_EVENT_TRACKING_ENABLED` | `true` | Master toggle. When `false`, no events are created |
-| `LOGIN_EVENT_PRUNE_DAYS` | `365` | Events older than this are eligible for pruning |
 | `LOGIN_EVENT_FLAG_NEW_COUNTRY` | `true` | Enable first-time-country detection |
 | `LOGIN_EVENT_FLAG_NEW_REGION` | `true` | Enable first-time-region detection |

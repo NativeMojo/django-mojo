@@ -44,6 +44,7 @@ def setup_username_change(opts):
         user.save()
     user.username = TEST_USER
     user.is_active = True
+    user.is_email_verified = True
     user.requires_mfa = False
     user.save_password(TEST_PWORD)
     user.save()
@@ -56,6 +57,7 @@ def setup_username_change(opts):
         collision.save()
     collision.username = COLLISION_USER
     collision.is_active = True
+    collision.is_email_verified = True
     collision.save_password(TEST_PWORD)
     collision.save()
     opts.collision_id = collision.pk
@@ -65,11 +67,13 @@ def setup_username_change(opts):
     if oauth_user is None:
         oauth_user = User(username=OAUTH_USER, email=OAUTH_EMAIL)
         oauth_user.set_unusable_password()
+        oauth_user.is_email_verified = True
         oauth_user.save()
     else:
         oauth_user.username = OAUTH_USER
         oauth_user.set_unusable_password()
         oauth_user.is_active = True
+        oauth_user.is_email_verified = True
         oauth_user.save()
     opts.oauth_user_id = oauth_user.pk
 
