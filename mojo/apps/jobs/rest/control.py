@@ -13,7 +13,7 @@ from datetime import datetime
 
 # Get runtime configuration
 @md.GET('control/config')
-@md.requires_perms('manage_jobs')
+@md.requires_perms('manage_jobs', 'jobs')
 def on_get_config(request):
     """Get current jobs system configuration."""
     config = {
@@ -54,7 +54,7 @@ def on_get_config(request):
 
 # Clear stuck jobs
 @md.POST('control/clear-stuck')
-@md.requires_perms('manage_jobs')
+@md.requires_perms('manage_jobs', 'jobs')
 @md.requires_params('channel')
 def on_clear_stuck_jobs(request):
     """
@@ -86,7 +86,7 @@ def on_clear_stuck_jobs(request):
 
 # Add a simpler manual reclaim endpoint
 @md.POST('jobs/control/manual-reclaim')
-@md.requires_perms('manage_jobs')
+@md.requires_perms('manage_jobs', 'jobs')
 @md.requires_params('channel')
 def on_manual_reclaim_jobs(request):
     """
@@ -114,7 +114,7 @@ def on_manual_reclaim_jobs(request):
 
 # Purge old job data
 @md.POST('control/purge')
-@md.requires_perms('manage_jobs')
+@md.requires_perms('manage_jobs', 'jobs')
 @md.requires_params('days_old')
 def on_purge_old_jobs(request):
     """
@@ -148,7 +148,7 @@ def on_purge_old_jobs(request):
 
 # Reset failed jobs
 @md.POST('control/reset-failed')
-@md.requires_perms('manage_jobs')
+@md.requires_perms('manage_jobs', 'jobs')
 def on_reset_failed_jobs(request):
     """
     Reset failed jobs to pending status for retry and requeue via JobManager.
@@ -218,7 +218,7 @@ def on_reset_failed_jobs(request):
 
 # Clear Redis queues
 @md.POST('control/clear-queue')
-@md.requires_perms('manage_jobs')
+@md.requires_perms('manage_jobs', 'jobs')
 @md.requires_params('channel')
 def on_clear_queue(request):
     """
@@ -257,7 +257,7 @@ def on_clear_queue(request):
 
 # Get queue sizes
 @md.GET('control/queue-sizes')
-@md.requires_perms('view_jobs', 'manage_jobs')
+@md.requires_perms('view_jobs', 'manage_jobs', 'jobs')
 def on_get_queue_sizes(request):
     """Get current queue sizes for all channels via JobManager."""
     try:
@@ -282,7 +282,7 @@ def on_get_queue_sizes(request):
 
 # Rebuild scheduled ZSETs from DB truth
 @md.POST('control/rebuild-scheduled')
-@md.requires_perms('manage_jobs')
+@md.requires_perms('manage_jobs', 'jobs')
 def on_rebuild_scheduled(request):
     """
     Rebuild Redis scheduled ZSETs from DB pending jobs with future run_at.
@@ -319,7 +319,7 @@ def on_rebuild_scheduled(request):
 
 # Cleanup consumer groups and stale consumers
 @md.POST('control/cleanup-consumers')
-@md.requires_perms('manage_jobs')
+@md.requires_perms('manage_jobs', 'jobs')
 def on_cleanup_consumers(request):
     """
     Cleanup Redis Stream consumer groups and consumers.
@@ -354,7 +354,7 @@ def on_cleanup_consumers(request):
 
 # List discovered channels (from registered streams)
 @md.GET('control/channels')
-@md.requires_perms('manage_jobs', 'view_jobs')
+@md.requires_perms('manage_jobs', 'view_jobs', 'jobs')
 def on_get_channels(request):
     """
     Discover channels by scanning Redis for registered streams.
@@ -375,7 +375,7 @@ def on_get_channels(request):
 
 # Force scheduler leadership
 @md.POST('control/force-scheduler-lead')
-@md.requires_perms('manage_jobs')
+@md.requires_perms('manage_jobs', 'jobs')
 def on_force_scheduler_lead(request):
     """
     Force release scheduler lock to allow a new leader.
@@ -415,7 +415,7 @@ def on_force_scheduler_lead(request):
 
 # Test job execution
 @md.POST('control/test')
-@md.requires_perms('manage_jobs')
+@md.requires_perms('manage_jobs', 'jobs')
 def on_test_job(request):
     """
     Publish a test job to verify the system is working.

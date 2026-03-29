@@ -20,9 +20,9 @@ DEFAULT_RULES = {
 
 class ChatRoom(models.Model, MojoModel):
     class RestMeta:
-        VIEW_PERMS = ["chat", "manage_chat", "owner"]
+        VIEW_PERMS = ["comms", "manage_chat", "owner"]
         CREATE_PERMS = ["authenticated"]
-        SAVE_PERMS = ["manage_chat", "chat", "owner"]
+        SAVE_PERMS = ["manage_chat", "comms", "owner"]
         CAN_DELETE = True
         DELETE_PERMS = ["manage_chat"]
         OWNER_FIELD = "user"

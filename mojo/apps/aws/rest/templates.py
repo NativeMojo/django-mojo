@@ -14,6 +14,6 @@ These delegate to the model's on_rest_request, leveraging RestMeta for permissio
 
 @md.URL('email/template')
 @md.URL('email/template/<int:pk>')
-@md.requires_perms("manage_aws")
+@md.requires_perms("manage_aws", "comms")
 def on_email_template(request, pk=None):
     return EmailTemplate.on_rest_request(request, pk)

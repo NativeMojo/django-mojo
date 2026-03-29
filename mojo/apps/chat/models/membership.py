@@ -17,8 +17,8 @@ STATUS_CHOICES = [
 
 class ChatMembership(models.Model, MojoModel):
     class RestMeta:
-        VIEW_PERMS = ["chat", "manage_chat"]
-        SAVE_PERMS = ["manage_chat", "chat"]
+        VIEW_PERMS = ["comms", "manage_chat"]
+        SAVE_PERMS = ["manage_chat", "comms"]
         GRAPHS = {
             "list": {
                 "fields": [

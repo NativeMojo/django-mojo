@@ -63,9 +63,9 @@ class EmailAttachment(models.Model, MojoModel):
         ordering = ["-created", "id"]
 
     class RestMeta:
-        VIEW_PERMS = ["manage_aws", "email"]
-        SAVE_PERMS = ["manage_aws", "email"]
-        DELETE_PERMS = ["manage_aws", "email"]
+        VIEW_PERMS = ["manage_aws", "comms"]
+        SAVE_PERMS = ["manage_aws", "comms"]
+        DELETE_PERMS = ["manage_aws", "comms"]
         SEARCH_FIELDS = ["filename", "content_type", "stored_as"]
         GRAPHS = {
             "basic": {

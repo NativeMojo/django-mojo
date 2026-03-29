@@ -5,7 +5,7 @@ from mojo.helpers.aws import s3
 
 @md.URL('s3/bucket')
 @md.URL('s3/bucket/<str:bucket_name>')
-@md.requires_perms("manage_aws")
+@md.requires_perms("manage_aws", "files")
 def on_s3_bucket(request, bucket_name=None):
     bucket_name = request.DATA.get('bucket_name', bucket_name)
     if request.method == "GET":

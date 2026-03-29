@@ -86,15 +86,17 @@ Returns `{"id": -1, "permissions": []}` if not a member.
 
 **POST** `/api/group/member/invite`
 
-Requires `manage_users`, `manage_members`, `manage_group`, or `manage_groups` permission within the group.
+Requires `manage_users`, `manage_members`, `manage_group`, `manage_groups`, or `groups` permission within the group.
 
 ```json
 {
   "email": "bob@example.com",
   "group": 7,
-  "permissions": {"manage_content": true}
+  "permissions": {"files": true, "comms": true}
 }
 ```
+
+Use [category permissions](admin_portal.md#category-permissions-use-these-in-your-ui) (`users`, `groups`, `security`, `comms`, `jobs`, `metrics`, `files`) for simplicity. Fine-grained permissions are also supported.
 
 ### Update Member Permissions
 
@@ -103,8 +105,9 @@ Requires `manage_users`, `manage_members`, `manage_group`, or `manage_groups` pe
 ```json
 {
   "permissions": {
-    "manage_content": true,
-    "view_reports": true
+    "files": true,
+    "security": true,
+    "comms": true
   }
 }
 ```

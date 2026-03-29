@@ -46,11 +46,11 @@ def check_view_permissions(request, account="public"):
         PermissionDeniedException: If user doesn't have proper permissions
     """
     if account == "global":
-        if not request.user.is_authenticated or not request.user.has_permission("view_metrics"):
+        if not request.user.is_authenticated or not request.user.has_permission(["view_metrics", "metrics"]):
             raise mojo.errors.PermissionDeniedException()
-    elif _check_group_account_permission(request, account, "view_metrics"):
+    elif _check_group_account_permission(request, account, ["view_metrics", "metrics"]):
         return
-    elif _check_user_account_permission(request, account, "view_metrics"):
+    elif _check_user_account_permission(request, account, ["view_metrics", "metrics"]):
         return
     elif account != "public":
         perms = metrics.get_view_perms(account)
@@ -73,11 +73,11 @@ def check_write_permissions(request, account="public"):
         PermissionDeniedException: If user doesn't have proper permissions
     """
     if account == "global":
-        if not request.user.is_authenticated or not request.user.has_permission("write_metrics"):
+        if not request.user.is_authenticated or not request.user.has_permission(["write_metrics", "metrics"]):
             raise mojo.errors.PermissionDeniedException()
-    elif _check_group_account_permission(request, account, "write_metrics"):
+    elif _check_group_account_permission(request, account, ["write_metrics", "metrics"]):
         return
-    elif _check_user_account_permission(request, account, "write_metrics"):
+    elif _check_user_account_permission(request, account, ["write_metrics", "metrics"]):
         return
     elif account != "public":
         perms = metrics.get_write_perms(account)

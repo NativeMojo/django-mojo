@@ -20,7 +20,7 @@ def _as_list(value: Any) -> List[str]:
 
 
 @md.URL("email/send")
-@md.requires_perms("manage_aws")
+@md.requires_perms("manage_aws", "comms")
 def on_send_email(request):
     """
     Send an email through AWS SES using a Mailbox resolved by from_email.

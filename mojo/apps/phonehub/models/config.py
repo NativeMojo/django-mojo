@@ -54,8 +54,8 @@ class PhoneConfig(MojoSecrets, MojoModel):
         ordering = ['group__name', 'name']
 
     class RestMeta:
-        VIEW_PERMS = ["manage_phone_config", "manage_groups", "phone"]
-        SAVE_PERMS = ["manage_phone_config", "manage_groups", "phone"]
+        VIEW_PERMS = ["manage_phone_config", "manage_groups", "comms"]
+        SAVE_PERMS = ["manage_phone_config", "manage_groups", "comms"]
         DELETE_PERMS = ["manage_phone_config", "manage_groups"]
         SEARCH_FIELDS = ["name"]
         LIST_DEFAULT_FILTERS = {"is_active": True}

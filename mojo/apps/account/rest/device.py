@@ -11,7 +11,7 @@ def on_user_device(request, pk=None):
 
 @md.GET('user/device/lookup')
 @md.requires_params('duid')
-@md.requires_perms("manage_users", "manage_devices")
+@md.requires_perms("manage_users", "manage_devices", "users")
 def on_user_device_by_duid(request):
     duid = request.DATA.get('duid')
     device = UserDevice.objects.filter(duid=duid).first()
@@ -22,7 +22,7 @@ def on_user_device_by_duid(request):
 
 @md.URL('user/device/location')
 @md.URL('user/device/location/<int:pk>')
-@md.requires_perms("manage_users", "manage_devices")
+@md.requires_perms("manage_users", "manage_devices", "users")
 def on_user_device_location(request, pk=None):
     return UserDeviceLocation.on_rest_request(request, pk)
 

@@ -39,7 +39,7 @@ def on_job_logs(request, pk=None):
 
 # Get job status
 @md.GET('status/<str:job_id>')
-@md.requires_perms('manage_jobs', 'view_jobs')
+@md.requires_perms('manage_jobs', 'view_jobs', 'jobs')
 def on_get_job_status(request, job_id):
     """Get the current status of a job."""
     try:
@@ -65,7 +65,7 @@ def on_get_job_status(request, job_id):
 
 # Cancel a job
 @md.POST('cancel')
-@md.requires_perms('manage_jobs')
+@md.requires_perms('manage_jobs', 'jobs')
 @md.requires_params('job_id')
 def on_cancel_job(request):
     """Request cancellation of a job."""
@@ -87,7 +87,7 @@ def on_cancel_job(request):
 
 # Retry a job
 @md.POST('retry')
-@md.requires_perms('manage_jobs')
+@md.requires_perms('manage_jobs', 'jobs')
 @md.requires_params('job_id')
 def on_retry_job(request):
     """Retry a failed or canceled job."""
@@ -120,7 +120,7 @@ def on_retry_job(request):
 
 # Get channel health
 @md.GET('health/<str:channel>')
-@md.requires_perms('manage_jobs', 'view_jobs')
+@md.requires_perms('manage_jobs', 'view_jobs', 'jobs')
 def on_channel_health(request, channel):
     """Get comprehensive health metrics for a channel."""
     try:
@@ -141,7 +141,7 @@ def on_channel_health(request, channel):
 
 # Get all channels health
 @md.GET('health')
-@md.requires_perms('manage_jobs', 'view_jobs')
+@md.requires_perms('manage_jobs', 'view_jobs', 'jobs')
 def on_health_overview(request):
     """Get health overview for all configured channels."""
     try:
@@ -189,7 +189,7 @@ def on_health_overview(request):
 
 # Get active runners
 @md.GET('runners')
-@md.requires_perms('manage_jobs', 'view_jobs')
+@md.requires_perms('manage_jobs', 'view_jobs', 'jobs')
 def on_list_runners(request):
     """List all active runners with their status."""
     try:
@@ -218,7 +218,7 @@ def on_list_runners(request):
 
 # Ping a specific runner
 @md.POST('runners/ping')
-@md.requires_perms('manage_jobs')
+@md.requires_perms('manage_jobs', 'jobs')
 @md.requires_params('runner_id')
 def on_ping_runner(request):
     """Ping a specific runner to check if it's responsive."""
@@ -244,7 +244,7 @@ def on_ping_runner(request):
 
 # Shutdown a runner
 @md.POST('runners/shutdown')
-@md.requires_perms('manage_jobs')
+@md.requires_perms('manage_jobs', 'jobs')
 @md.requires_params('runner_id')
 def on_shutdown_runner(request):
     """Request a runner to shutdown gracefully."""
@@ -269,7 +269,7 @@ def on_shutdown_runner(request):
 
 # Get sysinfo from all runners or a specific runner
 @md.GET('runners/sysinfo')
-@md.requires_perms('manage_jobs', 'view_jobs')
+@md.requires_perms('manage_jobs', 'view_jobs', 'jobs')
 def on_runners_sysinfo(request):
     """Collect host system info from all active runners."""
     try:
@@ -290,7 +290,7 @@ def on_runners_sysinfo(request):
 
 
 @md.GET('runners/sysinfo/<str:runner_id>')
-@md.requires_perms('manage_jobs', 'view_jobs')
+@md.requires_perms('manage_jobs', 'view_jobs', 'jobs')
 def on_runner_sysinfo(request, runner_id):
     """Collect host system info from a specific runner."""
     try:
@@ -317,7 +317,7 @@ def on_runner_sysinfo(request, runner_id):
 
 # Broadcast command to all runners
 @md.POST('runners/broadcast')
-@md.requires_perms('manage_jobs')
+@md.requires_perms('manage_jobs', 'jobs')
 @md.requires_params('command')
 def on_broadcast_command(request):
     """Broadcast a command to all runners."""
@@ -353,7 +353,7 @@ def on_broadcast_command(request):
 
 # Get system stats
 @md.GET('stats')
-@md.requires_perms('manage_jobs', 'view_jobs')
+@md.requires_perms('manage_jobs', 'view_jobs', 'jobs')
 def on_system_stats(request):
     """Get overall system statistics."""
     try:
@@ -374,7 +374,7 @@ def on_system_stats(request):
 
 
 @md.POST('test')
-@md.requires_perms('manage_jobs')
+@md.requires_perms('manage_jobs', 'jobs')
 def on_system_test(request):
     from mojo.apps import jobs
     jobs.publish(
@@ -401,7 +401,7 @@ def on_system_test(request):
 
 
 @md.POST('tests')
-@md.requires_perms('manage_jobs')
+@md.requires_perms('manage_jobs', 'jobs')
 def on_system_tests(request):
     from mojo.apps import jobs
     import random

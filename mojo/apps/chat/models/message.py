@@ -17,7 +17,7 @@ MODERATION_CHOICES = [
 
 class ChatMessage(models.Model, MojoModel):
     class RestMeta:
-        VIEW_PERMS = ["chat", "manage_chat"]
+        VIEW_PERMS = ["comms", "manage_chat"]
         NO_SAVE_FIELDS = ["is_flagged", "flagged_by", "flagged_at", "moderation_decision"]
         GRAPHS = {
             "list": {

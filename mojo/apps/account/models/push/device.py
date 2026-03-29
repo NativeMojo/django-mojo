@@ -41,8 +41,8 @@ class RegisteredDevice(models.Model, MojoModel):
         ordering = ['-last_seen']
 
     class RestMeta:
-        VIEW_PERMS = ["view_devices", "manage_devices", "push", "owner", "manage_users"]
-        SAVE_PERMS = ["manage_devices", "push", "owner"]
+        VIEW_PERMS = ["view_devices", "manage_devices", "comms", "owner", "manage_users"]
+        SAVE_PERMS = ["manage_devices", "comms", "owner"]
         SEARCH_FIELDS = ["device_name", "device_id"]
         LIST_DEFAULT_FILTERS = {"is_active": True}
         GRAPHS = {
