@@ -5,13 +5,26 @@ from mojo.helpers import logit
 from mojo.helpers.crypto import sign as crypto_sign, verify as crypto_verify
 from mojo.helpers.response import JsonResponse
 from mojo.helpers.settings import settings
-from mojo.apps import incident, jobs
+from mojo.apps import incident, jobs, metrics
 
 from mojo.apps.account.services.bouncer.scoring import RiskScorer, ScoringContext
 from mojo.apps.account.services.bouncer.environment import EnvironmentService
 from mojo.apps.account.services.bouncer.token_manager import TokenManager
 
 logger = logit.get_logger('bouncer', 'bouncer.log')
+
+_bouncer_defaults_checked = False
+
+def _ensure_bouncer_defaults():
+    global _bouncer_defaults_checked
+    if not _bouncer_defaults_checked:
+        try:
+            from mojo.apps.incident.models import RuleSet
+            if not RuleSet.objects.filter(category__startswith="security:bouncer:").exists():
+                RuleSet.ensure_bouncer_rules()
+        except Exception:
+            pass
+        _bouncer_defaults_checked = True
 
 
 def _geolocate(ip):
@@ -48,6 +61,8 @@ def on_bouncer_assess(request):
     """
     from mojo.apps.account.models.bouncer_device import BouncerDevice
     from mojo.apps.account.models.bouncer_signal import BouncerSignal
+
+    _ensure_bouncer_defaults()
 
     muid = request.muid or ''
     duid = request.DATA.get('duid') or request.duid or ''
@@ -90,6 +105,12 @@ def on_bouncer_assess(request):
         request=request,
     )
     result = RiskScorer.score(context)
+
+    # Record metrics
+    try:
+        metrics.record("bouncer:assessments", category="bouncer")
+    except Exception:
+        pass
 
     # Issue token + set pass cookie on allow/monitor
     token = None
@@ -141,6 +162,13 @@ def on_bouncer_assess(request):
 
     # Incident + learning for blocks
     if result.decision == 'block':
+        try:
+            metrics.record("bouncer:blocks", category="bouncer")
+            country_code = getattr(geo_ip, 'country_code', None) if geo_ip else None
+            if country_code:
+                metrics.record(f"bouncer:blocks:country:{country_code}", category="bouncer")
+        except Exception:
+            pass
         _report_bouncer_event(
             'security:bouncer:block',
             f"Bouncer block: muid={muid} duid={duid} ip={request.ip} score={result.score}",
@@ -164,6 +192,10 @@ def on_bouncer_assess(request):
                 },
             )
     elif result.decision == 'monitor':
+        try:
+            metrics.record("bouncer:monitors", category="bouncer")
+        except Exception:
+            pass
         _report_bouncer_event(
             'security:bouncer:monitor',
             f"Bouncer monitor: muid={muid} duid={duid} ip={request.ip} score={result.score}",

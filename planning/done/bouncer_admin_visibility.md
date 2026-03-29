@@ -1,6 +1,6 @@
 # Bouncer Admin Visibility & Metrics
 
-**Status**: In Progress
+**Status**: Done
 **Priority**: Medium
 **Created**: 2026-03-28
 
@@ -228,20 +228,20 @@ Updated `docs/web_developer/security/README.md`:
 ## Acceptance Criteria
 
 ### Metrics
-- [ ] `metrics.record()` calls added for: assessments, blocks, blocks:country, monitors, pre_screen_blocks, honeypot_catches, signatures_learned, campaigns
-- [ ] All bouncer metrics use `category="bouncer"` for batch fetching
-- [ ] Country-level block metrics recorded (`bouncer:blocks:country:{CC}`)
+- [x] `metrics.record()` calls added for: assessments, blocks, blocks:country, monitors, pre_screen_blocks, honeypot_catches, signatures_learned, campaigns
+- [x] All bouncer metrics use `category="bouncer"` for batch fetching
+- [x] Country-level block metrics recorded (`bouncer:blocks:country:{CC}`)
 
 ### Search
-- [ ] SEARCH_FIELDS added to BouncerDevice, BouncerSignal, BotSignature
+- [x] SEARCH_FIELDS added to BouncerDevice, BouncerSignal, BotSignature
 
 ### Default Rules
-- [ ] `ensure_bouncer_rules()` classmethod added to RuleSet
-- [ ] Honeypot credential stuffing rule: `security:bouncer:honeypot_post` → block 1hr
-- [ ] Bot campaign rule: `security:bouncer:campaign` → block 24hr + notify
-- [ ] High-confidence block rule: `security:bouncer:block` (score >= 80) → block 1hr
-- [ ] Medium-confidence blocks (60-79) left for LLM/human triage (no rule)
-- [ ] Lazy invocation on first bouncer assess (same pattern as OSSEC `_ensure_defaults`)
+- [x] `ensure_bouncer_rules()` classmethod added to RuleSet
+- [x] Honeypot credential stuffing rule: `security:bouncer:honeypot_post` → block 1hr
+- [x] Bot campaign rule: `security:bouncer:campaign` → block 24hr + notify
+- [x] High-confidence block rule: `security:bouncer:block` (score >= 80) → block 1hr
+- [x] Medium-confidence blocks (60-79) left for LLM/human triage (no rule)
+- [x] Lazy invocation on first bouncer assess (same pattern as OSSEC `_ensure_defaults`)
 
 ### Docs
 - [x] `bouncer.md` updated with admin visibility section covering device/signal/signature APIs

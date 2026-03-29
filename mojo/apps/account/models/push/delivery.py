@@ -43,8 +43,8 @@ class NotificationDelivery(models.Model, MojoModel):
         ordering = ['-created']
 
     class RestMeta:
-        VIEW_PERMS = ["view_notifications", "manage_notifications", "owner", "manage_users"]
-        SAVE_PERMS = ["manage_notifications"]
+        VIEW_PERMS = ["view_notifications", "manage_notifications", "push", "owner", "manage_users"]
+        SAVE_PERMS = ["manage_notifications", "push"]
         SEARCH_FIELDS = ["title", "category"]
         LIST_DEFAULT_FILTERS = {"status": "sent"}
         GRAPHS = {

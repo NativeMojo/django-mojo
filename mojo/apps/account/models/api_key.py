@@ -44,8 +44,8 @@ class ApiKey(MojoSecrets, MojoModel):
         ordering = ["-created"]
 
     class RestMeta:
-        VIEW_PERMS = ["manage_group", "manage_groups"]
-        SAVE_PERMS = ["manage_group", "manage_groups"]
+        VIEW_PERMS = ["manage_group", "manage_groups", "groups"]
+        SAVE_PERMS = ["manage_group", "manage_groups", "groups"]
         CAN_DELETE = True
         GRAPHS = {
             "default": {

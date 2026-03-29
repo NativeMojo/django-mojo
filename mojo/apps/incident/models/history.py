@@ -6,8 +6,8 @@ class IncidentHistory(models.Model, MojoModel):
         ordering = ['-created']
 
     class RestMeta:
-        VIEW_PERMS = ["view_security"]
-        SAVE_PERMS = ["manage_security"]
+        VIEW_PERMS = ["view_security", "security"]
+        SAVE_PERMS = ["manage_security", "security"]
         DELETE_PERMS = ["manage_security"]
         CAN_DELETE = False  # History should not be deletable
 

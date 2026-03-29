@@ -39,8 +39,8 @@ class NotificationTemplate(models.Model, MojoModel):
         unique_together = [('group', 'name')]
 
     class RestMeta:
-        VIEW_PERMS = ["manage_notifications", "manage_groups", "owner", "manage_users"]
-        SAVE_PERMS = ["manage_notifications", "manage_groups"]
+        VIEW_PERMS = ["manage_notifications", "manage_groups", "push", "owner", "manage_users"]
+        SAVE_PERMS = ["manage_notifications", "manage_groups", "push"]
         SEARCH_FIELDS = ["name", "category"]
         LIST_DEFAULT_FILTERS = {"is_active": True}
         GRAPHS = {

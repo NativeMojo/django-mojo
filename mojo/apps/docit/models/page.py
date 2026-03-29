@@ -101,7 +101,7 @@ class Page(models.Model, MojoModel):
 
     class RestMeta:
         VIEW_PERMS = ['all']
-        SAVE_PERMS = ['manage_docit', 'owner']
+        SAVE_PERMS = ['manage_docit', 'docs', 'owner']
         DELETE_PERMS = ['manage_docit', 'owner']
         CREATED_BY_OWNER_FIELD = 'created_by'
         UPDATED_BY_OWNER_FIELD = 'modified_by'

@@ -118,10 +118,10 @@ class RuleSet(models.Model, MojoModel):
 
     class RestMeta:
         SEARCH_FIELDS = ["name"]
-        VIEW_PERMS = ["view_security"]
-        CREATE_PERMS = ["manage_security"]
-        SAVE_PERMS = ["manage_security"]
-        DELETE_PERMS = ["manage_security"]
+        VIEW_PERMS = ["view_security", "security"]
+        CREATE_PERMS = ["manage_security", "security"]
+        SAVE_PERMS = ["manage_security", "security"]
+        DELETE_PERMS = ["manage_security", "security"]
         CAN_DELETE = True
 
     def run_handler(self, event, incident=None):
@@ -244,6 +244,17 @@ class RuleSet(models.Model, MojoModel):
     @classmethod
     def ensure_default_rules(cls):
         """
+        Create all default RuleSets across categories.
+        Safe to call multiple times — each method uses get_or_create.
+        """
+        cls.ensure_ossec_rules()
+        cls.ensure_bouncer_rules()
+        cls.ensure_auth_rules()
+        cls.ensure_health_rules()
+
+    @classmethod
+    def ensure_ossec_rules(cls):
+        """
         Create default OSSEC RuleSets and Rules.
         Safe to call multiple times — uses get_or_create.
 
@@ -347,6 +358,165 @@ class RuleSet(models.Model, MojoModel):
             ],
         )
 
+    @classmethod
+    def ensure_auth_rules(cls):
+        """
+        Create default RuleSets for authentication security events.
+        Safe to call multiple times — uses get_or_create.
+
+        Auth events that indicate automated probing get IP-blocked.
+        Single wrong passwords and MFA typos are noise (below incident threshold).
+        """
+
+        # Credential stuffing — unknown usernames at level 8.
+        # If the username doesn't exist, there's no legitimate reason to keep trying.
+        cls._create_ruleset(
+            category="login:unknown",
+            name="Auth - Credential Stuffing",
+            priority=5,
+            match_by=MatchBy.ALL,
+            bundle_by=BundleBy.SOURCE_IP,
+            bundle_minutes=15,
+            handler="block://?ttl=1800&fleet_wide=1",
+            rules=[
+                {"name": "Level >= 8", "field_name": "level",
+                 "comparator": ">=", "value": "8", "value_type": "int"},
+            ],
+        )
+
+        # Bouncer token abuse — replay, IP mismatch, expired reuse.
+        # These are deliberate probing attempts, not accidents.
+        cls._create_ruleset(
+            category="security:bouncer:token_invalid",
+            name="Auth - Bouncer Token Abuse",
+            priority=5,
+            match_by=MatchBy.ALL,
+            bundle_by=BundleBy.SOURCE_IP,
+            bundle_minutes=30,
+            handler="block://?ttl=1800&fleet_wide=1",
+            rules=[
+                {"name": "Level >= 7", "field_name": "level",
+                 "comparator": ">=", "value": "7", "value_type": "int"},
+            ],
+        )
+
+    @classmethod
+    def ensure_health_rules(cls):
+        """
+        Create default RuleSets for infrastructure health events.
+        Safe to call multiple times — uses get_or_create.
+
+        IMPORTANT: Health events are NOT attacks — never block IPs.
+        The right response is notify humans and create tickets for critical issues.
+        """
+
+        # Runner down — critical, needs immediate human attention.
+        # A dead job runner means async work (handlers, learning, broadcasts) is stalled.
+        cls._create_ruleset(
+            category="system:health:runner",
+            name="Health - Runner Down",
+            priority=1,
+            match_by=MatchBy.ALL,
+            bundle_by=BundleBy.HOSTNAME,
+            bundle_minutes=30,
+            handler="notify://perm@manage_security,ticket://?priority=9",
+            rules=[
+                {"name": "Level >= 10", "field_name": "level",
+                 "comparator": ">=", "value": "10", "value_type": "int"},
+            ],
+        )
+
+        # Scheduler missing — critical, no cron jobs running.
+        # Health checks themselves will stop if the scheduler is gone.
+        cls._create_ruleset(
+            category="system:health:scheduler",
+            name="Health - Scheduler Missing",
+            priority=1,
+            match_by=MatchBy.ALL,
+            bundle_by=BundleBy.NONE,
+            bundle_minutes=60,
+            handler="notify://perm@manage_security,ticket://?priority=9",
+            rules=[
+                {"name": "Level >= 10", "field_name": "level",
+                 "comparator": ">=", "value": "10", "value_type": "int"},
+            ],
+        )
+
+        # TCP connection overload — could be connection leak, DDoS, or load spike.
+        # Notify but don't create a ticket — often self-resolving.
+        cls._create_ruleset(
+            category="system:health:tcp",
+            name="Health - TCP Connection Overload",
+            priority=5,
+            match_by=MatchBy.ALL,
+            bundle_by=BundleBy.HOSTNAME,
+            bundle_minutes=30,
+            handler="notify://perm@manage_security",
+            rules=[
+                {"name": "Level >= 8", "field_name": "level",
+                 "comparator": ">=", "value": "8", "value_type": "int"},
+            ],
+        )
+
+    @classmethod
+    def ensure_bouncer_rules(cls):
+        """
+        Create default RuleSets for bouncer events.
+        Safe to call multiple times — uses get_or_create.
+
+        Bouncer events that indicate confirmed malicious activity should
+        escalate to firewall-level IP blocks. Medium-confidence blocks
+        (score 60-79) are left for LLM/human triage.
+        """
+
+        # Honeypot credential stuffing — always block.
+        # If someone POSTs credentials to a decoy page, they're malicious.
+        cls._create_ruleset(
+            category="security:bouncer:honeypot_post",
+            name="Bouncer - Honeypot Credential Stuffing",
+            priority=1,
+            match_by=MatchBy.ALL,
+            bundle_by=BundleBy.SOURCE_IP,
+            bundle_minutes=30,
+            handler="block://?ttl=3600&fleet_wide=1",
+            rules=[
+                {"name": "Level >= 9", "field_name": "level",
+                 "comparator": ">=", "value": "9", "value_type": "int"},
+            ],
+        )
+
+        # Coordinated bot campaign — block longer + notify admin.
+        # Campaign detection means 5+ distinct blocks with the same signal pattern.
+        cls._create_ruleset(
+            category="security:bouncer:campaign",
+            name="Bouncer - Bot Campaign Detection",
+            priority=1,
+            match_by=MatchBy.ALL,
+            bundle_by=BundleBy.SOURCE_IP,
+            bundle_minutes=60,
+            handler="block://?ttl=86400&fleet_wide=1,notify://perm@manage_security",
+            rules=[
+                {"name": "Level >= 10", "field_name": "level",
+                 "comparator": ">=", "value": "10", "value_type": "int"},
+            ],
+        )
+
+        # High-confidence bouncer block (score 80+) — block IP.
+        # Score 60-79 is handled by LLM/human triage (no rule created).
+        cls._create_ruleset(
+            category="security:bouncer:block",
+            name="Bouncer - High Confidence Bot Block",
+            priority=1,
+            match_by=MatchBy.ALL,
+            bundle_by=BundleBy.SOURCE_IP,
+            bundle_minutes=30,
+            handler="block://?ttl=3600&fleet_wide=1",
+            rules=[
+                {"name": "Risk score >= 80", "field_name": "risk_score",
+                 "comparator": ">=", "value": "80", "value_type": "int"},
+            ],
+        )
+
     def check_rules(self, event):
         """
         Checks if an event satisfies the rules in this RuleSet based
@@ -440,10 +610,10 @@ class Rule(models.Model, MojoModel):
 
     class RestMeta:
         SEARCH_FIELDS = ["details"]
-        VIEW_PERMS = ["view_security"]
-        CREATE_PERMS = ["manage_security"]
-        SAVE_PERMS = ["manage_security"]
-        DELETE_PERMS = ["manage_security"]
+        VIEW_PERMS = ["view_security", "security"]
+        CREATE_PERMS = ["manage_security", "security"]
+        SAVE_PERMS = ["manage_security", "security"]
+        DELETE_PERMS = ["manage_security", "security"]
         CAN_DELETE = True
 
     def check_rule(self, event):

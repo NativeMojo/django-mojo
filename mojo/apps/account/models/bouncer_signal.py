@@ -52,8 +52,9 @@ class BouncerSignal(models.Model, MojoModel):
     created = models.DateTimeField(auto_now_add=True, db_index=True)
 
     class RestMeta:
-        VIEW_PERMS = ['manage_users', 'admin_security']
+        VIEW_PERMS = ['manage_users', 'view_security', 'manage_security', 'security', 'users']
         SAVE_PERMS = []  # read-only via REST
+        SEARCH_FIELDS = ['muid', 'duid', 'ip_address', 'decision']
         GRAPHS = {
             'default': {
                 'fields': [

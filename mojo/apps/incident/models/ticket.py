@@ -10,8 +10,8 @@ class Ticket(models.Model, MojoModel):
         ordering = ['-modified']
 
     class RestMeta:
-        VIEW_PERMS = ["view_security"]
-        SAVE_PERMS = ["manage_security"]
+        VIEW_PERMS = ["view_security", "security"]
+        SAVE_PERMS = ["manage_security", "security"]
         DELETE_PERMS = ["manage_security"]
         CAN_DELETE = True
         GRAPHS = {
@@ -61,8 +61,8 @@ class TicketNote(models.Model, MojoModel):
         ordering = ['-created']
 
     class RestMeta:
-        VIEW_PERMS = ["view_security"]
-        SAVE_PERMS = ["manage_security"]
+        VIEW_PERMS = ["view_security", "security"]
+        SAVE_PERMS = ["manage_security", "security"]
         CAN_DELETE = True
         GRAPHS = {
             "default": {

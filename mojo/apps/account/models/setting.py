@@ -34,8 +34,8 @@ class Setting(MojoSecrets, MojoModel):
         ordering = ["key"]
 
     class RestMeta:
-        VIEW_PERMS = ["manage_settings"]
-        SAVE_PERMS = ["manage_settings"]
+        VIEW_PERMS = ["manage_settings", "groups"]
+        SAVE_PERMS = ["manage_settings", "groups"]
         SEARCH_FIELDS = ["key"]
         GRAPHS = {
             "default": {

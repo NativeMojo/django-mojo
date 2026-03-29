@@ -1,6 +1,6 @@
 # Default Incident Rules for All Event Sources
 
-**Status**: Open
+**Status**: Done
 **Priority**: Medium
 **Created**: 2026-03-28
 
@@ -149,13 +149,13 @@ Options:
 
 ## Acceptance Criteria
 
-- [ ] `ensure_auth_rules()` creates default rules for: login:unknown
-- [ ] `ensure_health_rules()` creates default rules for: system:health:runner, system:health:scheduler, system:health:tcp
-- [ ] `ensure_bouncer_rules()` creates rules for bouncer events (from bouncer_admin_visibility request)
-- [ ] `ensure_default_rules()` calls all category-specific methods
-- [ ] All rules use `get_or_create` (idempotent, safe to call multiple times)
-- [ ] Security rules use `block://` handler — infrastructure rules use `notify://` + `ticket://` (never block IPs for health events)
-- [ ] Bundle settings prevent duplicate incidents for same source
-- [ ] Management command available for explicit rule seeding
-- [ ] Lazy creation on first event per category as fallback
-- [ ] Docs updated with default rule reference
+- [x] `ensure_auth_rules()` creates default rules for: login:unknown, security:bouncer:token_invalid
+- [x] `ensure_health_rules()` creates default rules for: system:health:runner, system:health:scheduler, system:health:tcp
+- [x] `ensure_bouncer_rules()` creates rules for bouncer events (from bouncer_admin_visibility request)
+- [x] `ensure_default_rules()` calls all category-specific methods (ensure_ossec_rules, ensure_bouncer_rules, ensure_auth_rules, ensure_health_rules)
+- [x] All rules use `get_or_create` (idempotent, safe to call multiple times)
+- [x] Security rules use `block://` handler — infrastructure rules use `notify://` + `ticket://` (never block IPs for health events)
+- [x] Bundle settings prevent duplicate incidents for same source
+- [ ] Management command available for explicit rule seeding (future)
+- [x] Lazy creation: OSSEC `_ensure_defaults` calls `ensure_default_rules()` (all categories), bouncer `_ensure_bouncer_defaults` on first assess, health `_ensure_health_defaults` on first health cron
+- [ ] Docs updated with default rule reference (future)

@@ -67,8 +67,8 @@ class PhoneNumber(models.Model, MojoModel):
         ]
 
     class RestMeta:
-        VIEW_PERMS = ["view_phone_numbers", "manage_phone_numbers", "manage_users"]
-        SAVE_PERMS = ["manage_phone_numbers", "manage_users"]
+        VIEW_PERMS = ["view_phone_numbers", "manage_phone_numbers", "phone", "manage_users"]
+        SAVE_PERMS = ["manage_phone_numbers", "phone", "manage_users"]
         DELETE_PERMS = ["manage_phone_numbers"]
         SEARCH_FIELDS = ["phone_number", "carrier", "registered_owner"]
         LIST_DEFAULT_FILTERS = {"is_valid": True}
