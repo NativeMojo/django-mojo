@@ -4,6 +4,8 @@ from mojo.helpers.settings import settings
 from mojo.models import MojoModel
 from mojo.helpers import dates
 from mojo.apps import jobs
+from mojo.apps import metrics
+import ujson
 
 
 GEOLOCATION_ALLOW_SUBNET_LOOKUP = settings.get_static('GEOLOCATION_ALLOW_SUBNET_LOOKUP', False, kind='bool')
@@ -288,6 +290,24 @@ class GeoLocatedIP(models.Model, MojoModel):
 
         self.save(update_fields=update_fields)
 
+        if self.is_blocked and 'is_blocked' in update_fields:
+            self.log(
+                f"Auto-blocked: {self.ip_address} (threat escalated to {new_level}, priority {priority})",
+                "firewall:auto_block",
+                payload=ujson.dumps({
+                    "ip": self.ip_address,
+                    "reason": "auto:threat_escalation",
+                    "trigger": "auto:threat_escalation",
+                    "threat_level": new_level,
+                    "incident_priority": priority,
+                    "block_count": self.block_count,
+                }),
+            )
+            metrics.record("firewall:blocks", category="firewall")
+            metrics.record("firewall:auto_blocks", category="firewall")
+            if self.country_code:
+                metrics.record(f"firewall:blocks:country:{self.country_code}", category="firewall")
+
     def block(self, reason="manual", ttl=None, broadcast=True):
         """
         Block this IP fleet-wide. Updates the database AND broadcasts
@@ -314,12 +334,33 @@ class GeoLocatedIP(models.Model, MojoModel):
             'blocked_reason', 'block_count',
         ])
 
+        # Structured logit entry
+        trigger = "auto:incident_rule" if reason == "auto:ruleset" else "manual"
+        self.log(
+            f"IP Blocked: {self.ip_address} - {reason}",
+            "firewall:block",
+            payload=ujson.dumps({
+                "ip": self.ip_address,
+                "reason": reason,
+                "ttl": ttl or None,
+                "blocked_until": str(self.blocked_until) if self.blocked_until else None,
+                "block_count": self.block_count,
+                "trigger": trigger,
+            }),
+        )
+
+        # Metrics — only for blocks
+        metrics.record("firewall:blocks", category="firewall")
+        if self.country_code:
+            metrics.record(f"firewall:blocks:country:{self.country_code}", category="firewall")
+
         if broadcast:
             try:
                 jobs.broadcast_execute(
                     "mojo.apps.incident.asyncjobs.block_ip",
-                    {"ips": [self.ip_address], "ttl": ttl },
+                    {"ips": [self.ip_address], "ttl": ttl},
                 )
+                metrics.record("firewall:broadcasts", category="firewall")
             except Exception:
                 pass
 
@@ -334,6 +375,16 @@ class GeoLocatedIP(models.Model, MojoModel):
         self.blocked_reason = f"unblocked: {reason}"
         self.blocked_until = None
         self.save(update_fields=['is_blocked', 'blocked_reason', 'blocked_until'])
+
+        self.log(
+            f"IP Unblocked: {self.ip_address} - {reason}",
+            "firewall:unblock",
+            payload=ujson.dumps({
+                "ip": self.ip_address,
+                "reason": reason,
+                "trigger": "manual",
+            }),
+        )
 
         if broadcast:
             try:
@@ -360,6 +411,17 @@ class GeoLocatedIP(models.Model, MojoModel):
             'is_blocked', 'blocked_until',
         ])
 
+        self.log(
+            f"IP Whitelisted: {self.ip_address} - {reason}",
+            "firewall:whitelist",
+            payload=ujson.dumps({
+                "ip": self.ip_address,
+                "reason": reason,
+                "was_blocked": was_blocked,
+                "trigger": "manual",
+            }),
+        )
+
         if was_blocked:
             try:
                 jobs.broadcast_execute(
@@ -375,30 +437,34 @@ class GeoLocatedIP(models.Model, MojoModel):
         self.whitelisted_reason = None
         self.save(update_fields=['is_whitelisted', 'whitelisted_reason'])
 
+        self.log(
+            f"IP Unwhitelisted: {self.ip_address}",
+            "firewall:unwhitelist",
+            payload=ujson.dumps({
+                "ip": self.ip_address,
+                "trigger": "manual",
+            }),
+        )
+
     def on_action_block(self, value):
         if not isinstance(value, dict):
             username = self.active_user.username if self.active_user else "unknown"
-            value = {"reason": f"manual block: by {username}", "ttl": 600 }
-        reason = value.get("reason", "")
-        self.log(f"IP Blocked: {self.ip_address} - {reason}", "firewall:block")
-        self.block(reason=reason, ttl=value.get("ttl"))
+            value = {"reason": f"manual block: by {username}", "ttl": 600}
+        self.block(reason=value.get("reason", ""), ttl=value.get("ttl"))
 
     def on_action_unblock(self, value):
         if not isinstance(value, str):
             username = self.active_user.username if self.active_user else "unknown"
             value = f"manual unblock: by {username}"
-        self.log(f"IP UNBlocked: {self.ip_address} - {value}", "firewall:unblock")
         self.unblock(reason=value)
 
     def on_action_whitelist(self, value):
         if not isinstance(value, str):
             username = self.active_user.username if self.active_user else "unknown"
             value = f"manual whitelist: by {username}"
-        self.log(f"IP Whitelisted: {self.ip_address} - {value}", "firewall:whitelist")
         self.whitelist(reason=value)
 
     def on_action_unwhitelist(self, value):
-        self.log(f"IP UNWhitelisted: {self.ip_address}", "firewall:unwhitelist")
         self.unwhitelist()
 
     def on_action_refresh(self, value):

@@ -40,10 +40,16 @@ Returns a single GeoIP record. Supports `?graph=` parameter.
 
 ### Actions (via POST)
 
-| Action | Description |
-|---|---|
-| `refresh` | Re-fetch geolocation data from provider with threat checks |
-| `threat_analysis` | Run threat intelligence checks |
+| Action | Value | Description |
+|---|---|---|
+| `refresh` | — | Re-fetch geolocation data from provider with threat checks |
+| `threat_analysis` | — | Run threat intelligence checks |
+| `block` | `{"reason": "...", "ttl": 600}` | Block this IP fleet-wide (ttl in seconds, null=permanent) |
+| `unblock` | `"reason string"` | Unblock this IP fleet-wide |
+| `whitelist` | `"reason string"` | Whitelist — prevents all future blocks |
+| `unwhitelist` | — | Remove whitelist status |
+
+See [firewall.md](firewall.md) for full firewall management and security dashboard guide.
 
 ---
 

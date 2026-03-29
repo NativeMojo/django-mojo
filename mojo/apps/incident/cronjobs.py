@@ -1,5 +1,8 @@
 from mojo.decorators.cron import schedule
 from mojo.apps import jobs
+from mojo.helpers.settings import settings
+
+HEALTH_MONITORING_ENABLED = settings.get_static("HEALTH_MONITORING_ENABLED", False)
 
 
 # Runs hourly at the configured minute (default 0)
@@ -23,4 +26,14 @@ def sweep_expired_blocks(force=False, verbose=False, now=None):
 def refresh_ipsets(force=False, verbose=False, now=None):
     jobs.publish(
         func="mojo.apps.incident.asyncjobs.refresh_ipsets",
+        payload={})
+
+
+# Every 3 minutes — check system health across all runners
+@schedule(minutes="*/3")
+def check_system_health(force=False, verbose=False, now=None):
+    if not HEALTH_MONITORING_ENABLED:
+        return
+    jobs.publish(
+        func="mojo.apps.incident.asyncjobs.check_system_health",
         payload={})

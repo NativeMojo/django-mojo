@@ -1,0 +1,280 @@
+# System Security — Web Developer Guide
+
+How to build a security operations dashboard using django-mojo's APIs. This guide ties together incidents, events, firewall, bouncer, logs, and metrics into a single picture.
+
+## Permissions
+
+Two permissions control all security-related access:
+
+| Permission | Access |
+|------------|--------|
+| `view_security` | Read-only: incidents, events, history, tickets, rules, firewall status |
+| `manage_security` | Full: edit incidents, manage tickets, create rules, block IPs, merge incidents |
+
+## The Security Pipeline
+
+```
+Detection → Event → Rules → Incident → Handlers → Enforcement
+```
+
+1. **Detection** — failed logins, rate limits, OSSEC alerts, bouncer blocks, app errors
+2. **Events** — every detection creates an Event record with category, level, and metadata
+3. **Rules** — RuleSets match events by category and apply threshold/bundling logic
+4. **Incidents** — matched events are grouped into Incidents for investigation
+5. **Handlers** — rules fire actions: block IPs, send emails/SMS, create tickets, invoke LLM
+6. **Enforcement** — IP blocks propagate fleet-wide via iptables/ipset
+
+## APIs at a Glance
+
+| API | Path | What it provides |
+|-----|------|-----------------|
+| Incidents | `/api/incident/incident` | Security incidents with status, priority, category |
+| Events | `/api/incident/event` | Raw security events that feed into incidents |
+| History | `/api/incident/incidenthistory` | Audit trail for each incident |
+| Tickets | `/api/incident/ticket` | Human review items, LLM conversation threads |
+| Ticket Notes | `/api/incident/ticketnote` | Ticket conversation (human + LLM) |
+| Rules | `/api/incident/ruleset` | Rule engine configuration |
+| GeoIP | `/api/account/system/geoip` | IP records, block status, threat level, geolocation |
+| Logs | `/api/logit/log` | Audit logs, firewall history |
+| Metrics | `/api/metrics/fetch` | Time-series data for dashboards |
+| Bouncer | `/api/account/bouncer/assess` | Bot detection (called by bouncer JS, not your app) |
+
+See individual API docs for full details:
+- [Incidents](../logging/incidents.md)
+- [Events & Reporting](../logging/reporting_events.md)
+- [Firewall & GeoIP](../account/firewall.md)
+- [Logs](../logging/logs.md)
+- [Metrics](../metrics/metrics.md)
+- [Bouncer](../account/bouncer.md)
+- [GeoIP](../account/geoip.md)
+
+## Building a Security Dashboard
+
+### 1. Incident Queue
+
+The main view. Show incidents that need attention:
+
+```
+GET /api/incident/incident?status=new&sort=-priority,-created&size=50
+```
+
+This returns incidents that haven't been handled by a human or the LLM agent.
+
+If the LLM agent is configured, most incidents flow through automatically:
+- `new` → LLM picks it up → `investigating` → `resolved` or `ignored`
+- Humans only see `status=open` (things the LLM escalated or humans claimed)
+
+**Recommended tabs:**
+
+| Tab | Filter | Purpose |
+|-----|--------|---------|
+| Unhandled | `status=new` | Needs attention (human or LLM) |
+| My Work | `status=open` | Human-owned incidents |
+| LLM Active | `status=investigating` | LLM is working on these |
+| Resolved | `status=resolved` | Recently resolved |
+| Ignored | `status=ignored` | Noise (review periodically) |
+
+### 2. Incident Detail
+
+For a single incident, fetch the incident + its history + its events:
+
+```
+GET /api/incident/incident/301
+GET /api/incident/incidenthistory?parent=301&sort=created
+GET /api/incident/event?incident=301&sort=-created
+```
+
+The history shows the full timeline: creation, handler execution, LLM assessments, admin edits, merges.
+
+### 3. Firewall Status
+
+Show currently blocked IPs and recent firewall activity:
+
+```
+GET /api/account/system/geoip?is_blocked=true&sort=-blocked_at
+GET /api/logit/log?kind=firewall:block&sort=-created&size=20
+```
+
+**Firewall log `kind` values:**
+
+| Kind | Meaning |
+|------|---------|
+| `firewall:block` | IP blocked (manual or rule) |
+| `firewall:unblock` | IP unblocked |
+| `firewall:whitelist` | IP whitelisted |
+| `firewall:unwhitelist` | Whitelist removed |
+| `firewall:auto_block` | Auto-blocked from incident escalation |
+
+All firewall logs include structured `payload` JSON with `ip`, `reason`, `trigger`, and action-specific fields. Parse `payload` for dashboard cards.
+
+### 4. Metrics Dashboards
+
+Fetch time-series data for charts:
+
+**Firewall metrics:**
+
+```
+GET /api/metrics/fetch?slug=firewall:blocks&granularity=hours&dr_start=2026-03-20
+GET /api/metrics/fetch?slug=firewall:auto_blocks&granularity=hours&dr_start=2026-03-20
+GET /api/metrics/fetch?category=firewall&granularity=days
+```
+
+**Incident metrics:**
+
+```
+GET /api/metrics/fetch?slug=incidents&account=incident&granularity=hours&dr_start=2026-03-20
+GET /api/metrics/fetch?slug=incidents:escalated&account=incident&granularity=hours
+GET /api/metrics/fetch?slug=incidents:resolved&account=incident&granularity=hours
+GET /api/metrics/fetch?slug=incidents:threshold_reached&account=incident&granularity=hours
+```
+
+**Event volume:**
+
+```
+GET /api/metrics/fetch?slug=incident_events&account=incident&granularity=hours
+GET /api/metrics/fetch?category=incident_events_by_country&account=incident&granularity=days
+```
+
+**Available metric slugs:**
+
+| Slug | Category | What it tracks |
+|------|----------|---------------|
+| `firewall:blocks` | firewall | Manual + rule-based IP blocks |
+| `firewall:auto_blocks` | firewall | Auto-blocks from threat escalation |
+| `firewall:blocks:country:{CC}` | firewall | Blocks by country code |
+| `firewall:broadcasts` | firewall | Fleet-wide block broadcasts |
+| `incidents` | — | Incidents created |
+| `incidents:escalated` | — | Priority escalations |
+| `incidents:resolved` | — | Incidents resolved |
+| `incidents:threshold_reached` | — | Pending → new transitions |
+| `incident_events` | — | Total events |
+| `incident_events:country:{CC}` | incident_events_by_country | Events by country |
+
+### 5. Ticket Management
+
+Tickets are how the LLM agent communicates with humans:
+
+```
+GET /api/incident/ticket?status=open&sort=-priority
+```
+
+Tickets with `metadata.llm_linked=true` are part of an LLM conversation. When you post a note, the LLM reads it and responds:
+
+```
+POST /api/incident/ticketnote
+{
+  "parent": 10,
+  "note": "Approved. Enable the rule with threshold 10."
+}
+```
+
+The LLM will post a follow-up note automatically. Check `ticketnote?parent=10&sort=created` to see the conversation.
+
+### 6. Event Reporting (Client-Side)
+
+Report security events from your frontend:
+
+```js
+fetch('/api/incident/event', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    category: 'xss:attempt',
+    level: 8,
+    details: 'Script tag detected in comment field',
+    metadata: {
+      field: 'comment',
+      input: '<script>...',
+      page: '/posts/new'
+    }
+  })
+});
+```
+
+Events with `level >= 7` automatically create incidents. See [Reporting Events](../logging/reporting_events.md) for full field reference.
+
+## Event Sources
+
+These are the built-in detection sources. Your app can add custom events via the reporting API.
+
+| Source | Category | Level | What it detects |
+|--------|----------|-------|-----------------|
+| Failed login (unknown user) | `login:unknown` | 8 | Credential stuffing |
+| Failed login (wrong password) | `invalid_password` | 1 | Brute force |
+| Invalid/expired token | `invalid_token`, `expired_token` | 8 | Token abuse |
+| Rate limit hit | `rate_limit:{endpoint}` | 5 | API abuse |
+| Bouncer block | `security:bouncer:block` | 8 | Bot detected |
+| MFA failures | `totp:login_failed` | 1 | MFA bypass attempt |
+| OSSEC alerts | `ossec` | varies | OS-level threats |
+| System health | `system:health:{type}` | 5-10 | Infrastructure issues |
+
+## Incident Handlers
+
+Rules can fire these handlers when incidents are created:
+
+| Handler | Syntax | What it does |
+|---------|--------|-------------|
+| Block IP | `block://?ttl=3600` | Fleet-wide IP block |
+| Email | `email://perm@manage_security` | Email verified users |
+| SMS | `sms://perm@manage_security` | SMS verified users (critical only) |
+| Notify | `notify://perm@manage_security` | In-app + push notification |
+| Ticket | `ticket://?priority=8` | Create ticket for human review |
+| Job | `job://module.function` | Run custom async job |
+| LLM | `llm://` | Autonomous LLM triage agent |
+
+Handlers resolve notification targets via:
+- `perm@name` — all users with that permission
+- `protected@key` — users who opted in via `metadata.protected.{key}`
+- `username` — specific user by username
+
+## LLM Agent
+
+When configured (`LLM_HANDLER_API_KEY` setting), the LLM agent acts as an automated first responder:
+
+1. Triages every `status=new` incident
+2. Queries context (events, IP history, related incidents, metrics)
+3. Takes action: ignore noise, resolve real threats, block IPs, create tickets for humans
+4. Learns over time by creating new rules and storing pattern knowledge
+5. Communicates with humans through ticket notes
+
+High-level events that don't match any rule are automatically sent to the LLM if configured. This ensures nothing falls through the cracks.
+
+The LLM creates rules in a **disabled** state and opens a ticket for human approval. Respond to the ticket to approve, modify, or reject the proposed rule.
+
+## Dashboard Chart Ideas
+
+**Overview cards:**
+- Total incidents today (use `incidents` metric)
+- Unhandled count (`GET /api/incident/incident?status=new` → `count`)
+- Active blocks (`GET /api/account/system/geoip?is_blocked=true` → `count`)
+- Events/hour trend (use `incident_events` metric)
+
+**Time-series charts:**
+- Incident volume over time (`incidents` metric, hourly granularity)
+- Block rate (`firewall:blocks` metric)
+- Events by country (use `incident_events_by_country` category)
+- Resolution rate (`incidents:resolved` vs `incidents` metrics)
+
+**Tables:**
+- Top source IPs by event count
+- Recent firewall actions (logit with `kind=firewall:*`)
+- Open tickets awaiting human response
+- LLM-proposed rules pending approval
+
+## Settings Reference
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `INCIDENT_LEVEL_THRESHOLD` | `7` | Min event level to auto-create incidents |
+| `INCIDENT_EVENT_METRICS` | `True` | Enable incident/event metrics recording |
+| `INCIDENT_DEDUP_WINDOW_SECONDS` | `60` | Dedup window for identical events (0=disabled) |
+| `HEALTH_MONITORING_ENABLED` | `False` | Enable system health monitoring cron |
+| `HEALTH_TCP_MAX` | `2000` | TCP connection threshold per node |
+| `HEALTH_CPU_CRIT` | `90` | CPU % threshold |
+| `HEALTH_MEM_CRIT` | `90` | Memory % threshold |
+| `HEALTH_DISK_CRIT` | `85` | Disk % threshold |
+| `OSSEC_SECRET` | `None` | Optional secret for OSSEC endpoints |
+| `LLM_HANDLER_API_KEY` | `None` | Claude API key (enables LLM agent) |
+| `LLM_HANDLER_MODEL` | `claude-sonnet-4-20250514` | Claude model for LLM agent |
+| `INCIDENT_EMAIL_FROM` | `None` | SES mailbox for incident emails |
+| `ADMIN_PORTAL_URL` | `None` | URL for deep links in notifications |
