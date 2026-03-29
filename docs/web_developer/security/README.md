@@ -37,7 +37,10 @@ Detection → Event → Rules → Incident → Handlers → Enforcement
 | GeoIP | `/api/account/system/geoip` | IP records, block status, threat level, geolocation |
 | Logs | `/api/logit/log` | Audit logs, firewall history |
 | Metrics | `/api/metrics/fetch` | Time-series data for dashboards |
-| Bouncer | `/api/account/bouncer/assess` | Bot detection (called by bouncer JS, not your app) |
+| Bouncer (client) | `/api/account/bouncer/assess` | Bot detection (called by bouncer JS, not your app) |
+| Bouncer Devices | `/api/account/bouncer/device` | Device reputation, risk tiers, block counts |
+| Bouncer Signals | `/api/account/bouncer/signal` | Assessment audit trail with full signal payloads |
+| Bot Signatures | `/api/account/bouncer/signature` | Manage bot signatures (auto-learned + manual) |
 
 See individual API docs for full details:
 - [Incidents](../logging/incidents.md)
@@ -107,7 +110,25 @@ GET /api/logit/log?kind=firewall:block&sort=-created&size=20
 
 All firewall logs include structured `payload` JSON with `ip`, `reason`, `trigger`, and action-specific fields. Parse `payload` for dashboard cards.
 
-### 4. Metrics Dashboards
+### 4. Bouncer Status
+
+Show bot detection activity and device reputation:
+
+```
+GET /api/account/bouncer/signal?decision=block&sort=-created&graph=list&size=20
+GET /api/account/bouncer/device?risk_tier=blocked&sort=-block_count&size=20
+GET /api/account/bouncer/signature?is_active=true&sort=-hit_count&size=20
+```
+
+Bouncer events also create incidents — query them alongside other security incidents:
+
+```
+GET /api/incident/incident?category__startswith=security:bouncer&sort=-created
+```
+
+See [Bouncer Admin APIs](../account/bouncer.md#admin-visibility-apis) for full endpoint reference, signal payloads, and dashboard patterns.
+
+### 5. Metrics Dashboards
 
 Fetch time-series data for charts:
 
@@ -117,6 +138,14 @@ Fetch time-series data for charts:
 GET /api/metrics/fetch?slug=firewall:blocks&granularity=hours&dr_start=2026-03-20
 GET /api/metrics/fetch?slug=firewall:auto_blocks&granularity=hours&dr_start=2026-03-20
 GET /api/metrics/fetch?category=firewall&granularity=days
+```
+
+**Bouncer metrics:**
+
+```
+GET /api/metrics/fetch?slug=bouncer:blocks&granularity=hours&dr_start=2026-03-20
+GET /api/metrics/fetch?slug=bouncer:pre_screen_blocks&granularity=hours&dr_start=2026-03-20
+GET /api/metrics/fetch?category=bouncer&granularity=days
 ```
 
 **Incident metrics:**
@@ -147,10 +176,18 @@ GET /api/metrics/fetch?category=incident_events_by_country&account=incident&gran
 | `incidents:escalated` | — | Priority escalations |
 | `incidents:resolved` | — | Incidents resolved |
 | `incidents:threshold_reached` | — | Pending → new transitions |
+| `bouncer:assessments` | bouncer | Total bouncer scoring runs |
+| `bouncer:blocks` | bouncer | Bouncer blocks (full scoring) |
+| `bouncer:blocks:country:{CC}` | bouncer | Bouncer blocks by country |
+| `bouncer:monitors` | bouncer | Suspicious but allowed |
+| `bouncer:pre_screen_blocks` | bouncer | Signature cache hits (served decoy) |
+| `bouncer:honeypot_catches` | bouncer | Credential attempts on decoy pages |
+| `bouncer:signatures_learned` | bouncer | Auto-created bot signatures |
+| `bouncer:campaigns` | bouncer | Coordinated bot campaign detections |
 | `incident_events` | — | Total events |
 | `incident_events:country:{CC}` | incident_events_by_country | Events by country |
 
-### 5. Ticket Management
+### 6. Ticket Management
 
 Tickets are how the LLM agent communicates with humans:
 
@@ -170,7 +207,7 @@ POST /api/incident/ticketnote
 
 The LLM will post a follow-up note automatically. Check `ticketnote?parent=10&sort=created` to see the conversation.
 
-### 6. Event Reporting (Client-Side)
+### 7. Event Reporting (Client-Side)
 
 Report security events from your frontend:
 
