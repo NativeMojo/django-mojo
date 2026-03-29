@@ -3699,10 +3699,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#4-metrics-dashboards" class="md-nav__link">
+  <a href="#4-bouncer-status" class="md-nav__link">
     <span class="md-ellipsis">
       
-        4. Metrics Dashboards
+        4. Bouncer Status
       
     </span>
   </a>
@@ -3710,10 +3710,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#5-ticket-management" class="md-nav__link">
+  <a href="#5-metrics-dashboards" class="md-nav__link">
     <span class="md-ellipsis">
       
-        5. Ticket Management
+        5. Metrics Dashboards
       
     </span>
   </a>
@@ -3721,10 +3721,21 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#6-event-reporting-client-side" class="md-nav__link">
+  <a href="#6-ticket-management" class="md-nav__link">
     <span class="md-ellipsis">
       
-        6. Event Reporting (Client-Side)
+        6. Ticket Management
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#7-event-reporting-client-side" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Event Reporting (Client-Side)
       
     </span>
   </a>
@@ -3900,9 +3911,24 @@
 <td>Time-series data for dashboards</td>
 </tr>
 <tr>
-<td>Bouncer</td>
+<td>Bouncer (client)</td>
 <td><code>/api/account/bouncer/assess</code></td>
 <td>Bot detection (called by bouncer JS, not your app)</td>
+</tr>
+<tr>
+<td>Bouncer Devices</td>
+<td><code>/api/account/bouncer/device</code></td>
+<td>Device reputation, risk tiers, block counts</td>
+</tr>
+<tr>
+<td>Bouncer Signals</td>
+<td><code>/api/account/bouncer/signal</code></td>
+<td>Assessment audit trail with full signal payloads</td>
+</tr>
+<tr>
+<td>Bot Signatures</td>
+<td><code>/api/account/bouncer/signature</code></td>
+<td>Manage bot signatures (auto-learned + manual)</td>
 </tr>
 </tbody>
 </table>
@@ -4004,22 +4030,37 @@
 </tbody>
 </table>
 <p>All firewall logs include structured <code>payload</code> JSON with <code>ip</code>, <code>reason</code>, <code>trigger</code>, and action-specific fields. Parse <code>payload</code> for dashboard cards.</p>
-<h3 id="4-metrics-dashboards">4. Metrics Dashboards<a class="headerlink" href="#4-metrics-dashboards" title="Permanent link">&para;</a></h3>
+<h3 id="4-bouncer-status">4. Bouncer Status<a class="headerlink" href="#4-bouncer-status" title="Permanent link">&para;</a></h3>
+<p>Show bot detection activity and device reputation:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>GET /api/account/bouncer/signal?decision=block&amp;sort=-created&amp;graph=list&amp;size=20
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>GET /api/account/bouncer/device?risk_tier=blocked&amp;sort=-block_count&amp;size=20
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>GET /api/account/bouncer/signature?is_active=true&amp;sort=-hit_count&amp;size=20
+</code></pre></div>
+<p>Bouncer events also create incidents — query them alongside other security incidents:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>GET /api/incident/incident?category__startswith=security:bouncer&amp;sort=-created
+</code></pre></div>
+<p>See <a href="../account/bouncer/#admin-visibility-apis">Bouncer Admin APIs</a> for full endpoint reference, signal payloads, and dashboard patterns.</p>
+<h3 id="5-metrics-dashboards">5. Metrics Dashboards<a class="headerlink" href="#5-metrics-dashboards" title="Permanent link">&para;</a></h3>
 <p>Fetch time-series data for charts:</p>
 <p><strong>Firewall metrics:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>GET /api/metrics/fetch?slug=firewall:blocks&amp;granularity=hours&amp;dr_start=2026-03-20
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>GET /api/metrics/fetch?slug=firewall:auto_blocks&amp;granularity=hours&amp;dr_start=2026-03-20
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>GET /api/metrics/fetch?category=firewall&amp;granularity=days
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>GET /api/metrics/fetch?slug=firewall:blocks&amp;granularity=hours&amp;dr_start=2026-03-20
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>GET /api/metrics/fetch?slug=firewall:auto_blocks&amp;granularity=hours&amp;dr_start=2026-03-20
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>GET /api/metrics/fetch?category=firewall&amp;granularity=days
+</code></pre></div>
+<p><strong>Bouncer metrics:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>GET /api/metrics/fetch?slug=bouncer:blocks&amp;granularity=hours&amp;dr_start=2026-03-20
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>GET /api/metrics/fetch?slug=bouncer:pre_screen_blocks&amp;granularity=hours&amp;dr_start=2026-03-20
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>GET /api/metrics/fetch?category=bouncer&amp;granularity=days
 </code></pre></div>
 <p><strong>Incident metrics:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>GET /api/metrics/fetch?slug=incidents&amp;account=incident&amp;granularity=hours&amp;dr_start=2026-03-20
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>GET /api/metrics/fetch?slug=incidents:escalated&amp;account=incident&amp;granularity=hours
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>GET /api/metrics/fetch?slug=incidents:resolved&amp;account=incident&amp;granularity=hours
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>GET /api/metrics/fetch?slug=incidents:threshold_reached&amp;account=incident&amp;granularity=hours
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>GET /api/metrics/fetch?slug=incidents&amp;account=incident&amp;granularity=hours&amp;dr_start=2026-03-20
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>GET /api/metrics/fetch?slug=incidents:escalated&amp;account=incident&amp;granularity=hours
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>GET /api/metrics/fetch?slug=incidents:resolved&amp;account=incident&amp;granularity=hours
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>GET /api/metrics/fetch?slug=incidents:threshold_reached&amp;account=incident&amp;granularity=hours
 </code></pre></div>
 <p><strong>Event volume:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>GET /api/metrics/fetch?slug=incident_events&amp;account=incident&amp;granularity=hours
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>GET /api/metrics/fetch?category=incident_events_by_country&amp;account=incident&amp;granularity=days
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>GET /api/metrics/fetch?slug=incident_events&amp;account=incident&amp;granularity=hours
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>GET /api/metrics/fetch?category=incident_events_by_country&amp;account=incident&amp;granularity=days
 </code></pre></div>
 <p><strong>Available metric slugs:</strong></p>
 <table>
@@ -4072,6 +4113,46 @@
 <td>Pending → new transitions</td>
 </tr>
 <tr>
+<td><code>bouncer:assessments</code></td>
+<td>bouncer</td>
+<td>Total bouncer scoring runs</td>
+</tr>
+<tr>
+<td><code>bouncer:blocks</code></td>
+<td>bouncer</td>
+<td>Bouncer blocks (full scoring)</td>
+</tr>
+<tr>
+<td><code>bouncer:blocks:country:{CC}</code></td>
+<td>bouncer</td>
+<td>Bouncer blocks by country</td>
+</tr>
+<tr>
+<td><code>bouncer:monitors</code></td>
+<td>bouncer</td>
+<td>Suspicious but allowed</td>
+</tr>
+<tr>
+<td><code>bouncer:pre_screen_blocks</code></td>
+<td>bouncer</td>
+<td>Signature cache hits (served decoy)</td>
+</tr>
+<tr>
+<td><code>bouncer:honeypot_catches</code></td>
+<td>bouncer</td>
+<td>Credential attempts on decoy pages</td>
+</tr>
+<tr>
+<td><code>bouncer:signatures_learned</code></td>
+<td>bouncer</td>
+<td>Auto-created bot signatures</td>
+</tr>
+<tr>
+<td><code>bouncer:campaigns</code></td>
+<td>bouncer</td>
+<td>Coordinated bot campaign detections</td>
+</tr>
+<tr>
 <td><code>incident_events</code></td>
 <td>—</td>
 <td>Total events</td>
@@ -4083,34 +4164,34 @@
 </tr>
 </tbody>
 </table>
-<h3 id="5-ticket-management">5. Ticket Management<a class="headerlink" href="#5-ticket-management" title="Permanent link">&para;</a></h3>
+<h3 id="6-ticket-management">6. Ticket Management<a class="headerlink" href="#6-ticket-management" title="Permanent link">&para;</a></h3>
 <p>Tickets are how the LLM agent communicates with humans:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>GET /api/incident/ticket?status=open&amp;sort=-priority
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>GET /api/incident/ticket?status=open&amp;sort=-priority
 </code></pre></div>
 <p>Tickets with <code>metadata.llm_linked=true</code> are part of an LLM conversation. When you post a note, the LLM reads it and responds:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>POST /api/incident/ticketnote
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>{
-<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>  &quot;parent&quot;: 10,
-<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>  &quot;note&quot;: &quot;Approved. Enable the rule with threshold 10.&quot;
-<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>}
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>POST /api/incident/ticketnote
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>{
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>  &quot;parent&quot;: 10,
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>  &quot;note&quot;: &quot;Approved. Enable the rule with threshold 10.&quot;
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>}
 </code></pre></div>
 <p>The LLM will post a follow-up note automatically. Check <code>ticketnote?parent=10&amp;sort=created</code> to see the conversation.</p>
-<h3 id="6-event-reporting-client-side">6. Event Reporting (Client-Side)<a class="headerlink" href="#6-event-reporting-client-side" title="Permanent link">&para;</a></h3>
+<h3 id="7-event-reporting-client-side">7. Event Reporting (Client-Side)<a class="headerlink" href="#7-event-reporting-client-side" title="Permanent link">&para;</a></h3>
 <p>Report security events from your frontend:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="nx">fetch</span><span class="p">(</span><span class="s1">&#39;/api/incident/event&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span><span class="nx">method</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;POST&#39;</span><span class="p">,</span>
-<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">  </span><span class="nx">headers</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="s1">&#39;Content-Type&#39;</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;application/json&#39;</span><span class="w"> </span><span class="p">},</span>
-<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">  </span><span class="nx">body</span><span class="o">:</span><span class="w"> </span><span class="nb">JSON</span><span class="p">.</span><span class="nx">stringify</span><span class="p">({</span>
-<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="w">    </span><span class="nx">category</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;xss:attempt&#39;</span><span class="p">,</span>
-<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="w">    </span><span class="nx">level</span><span class="o">:</span><span class="w"> </span><span class="mf">8</span><span class="p">,</span>
-<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="w">    </span><span class="nx">details</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;Script tag detected in comment field&#39;</span><span class="p">,</span>
-<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="w">    </span><span class="nx">metadata</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="w">      </span><span class="nx">field</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;comment&#39;</span><span class="p">,</span>
-<a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a><span class="w">      </span><span class="nx">input</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;&lt;script&gt;...&#39;</span><span class="p">,</span>
-<a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a><span class="w">      </span><span class="nx">page</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;/posts/new&#39;</span>
-<a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a><span class="w">    </span><span class="p">}</span>
-<a id="__codelineno-9-13" name="__codelineno-9-13" href="#__codelineno-9-13"></a><span class="w">  </span><span class="p">})</span>
-<a id="__codelineno-9-14" name="__codelineno-9-14" href="#__codelineno-9-14"></a><span class="p">});</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="nx">fetch</span><span class="p">(</span><span class="s1">&#39;/api/incident/event&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="w">  </span><span class="nx">method</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;POST&#39;</span><span class="p">,</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">  </span><span class="nx">headers</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="s1">&#39;Content-Type&#39;</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;application/json&#39;</span><span class="w"> </span><span class="p">},</span>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="w">  </span><span class="nx">body</span><span class="o">:</span><span class="w"> </span><span class="nb">JSON</span><span class="p">.</span><span class="nx">stringify</span><span class="p">({</span>
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="w">    </span><span class="nx">category</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;xss:attempt&#39;</span><span class="p">,</span>
+<a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a><span class="w">    </span><span class="nx">level</span><span class="o">:</span><span class="w"> </span><span class="mf">8</span><span class="p">,</span>
+<a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a><span class="w">    </span><span class="nx">details</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;Script tag detected in comment field&#39;</span><span class="p">,</span>
+<a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a><span class="w">    </span><span class="nx">metadata</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a><span class="w">      </span><span class="nx">field</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;comment&#39;</span><span class="p">,</span>
+<a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a><span class="w">      </span><span class="nx">input</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;&lt;script&gt;...&#39;</span><span class="p">,</span>
+<a id="__codelineno-12-11" name="__codelineno-12-11" href="#__codelineno-12-11"></a><span class="w">      </span><span class="nx">page</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;/posts/new&#39;</span>
+<a id="__codelineno-12-12" name="__codelineno-12-12" href="#__codelineno-12-12"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-12-13" name="__codelineno-12-13" href="#__codelineno-12-13"></a><span class="w">  </span><span class="p">})</span>
+<a id="__codelineno-12-14" name="__codelineno-12-14" href="#__codelineno-12-14"></a><span class="p">});</span>
 </code></pre></div>
 <p>Events with <code>level &gt;= 7</code> automatically create incidents. See <a href="../logging/reporting_events/">Reporting Events</a> for full field reference.</p>
 <h2 id="event-sources">Event Sources<a class="headerlink" href="#event-sources" title="Permanent link">&para;</a></h2>
