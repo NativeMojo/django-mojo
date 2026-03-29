@@ -301,3 +301,435 @@ When `BOUNCER_REQUIRE_TOKEN=True` and token validation fails:
 | `bouncer_token_ip_mismatch` | Request IP differs from token issue IP |
 | `bouncer_token_consumed` | Nonce already used (replay attempt) |
 | `bouncer_token_scope` | Token `page_type` does not match this endpoint |
+
+---
+
+## Admin Visibility APIs
+
+Three REST endpoints provide full admin visibility into bouncer activity. Use these to build security dashboards, investigate bot attacks, and manage bot signatures.
+
+**Permissions required:** `manage_users` OR `admin_security`
+
+### Devices — `/api/account/bouncer/device`
+
+Every unique browser/device that interacts with the bouncer gets a `BouncerDevice` record. This is the device reputation database.
+
+#### List Devices
+
+```
+GET /api/account/bouncer/device?sort=-last_seen&graph=list&size=50
+```
+
+Response:
+
+```json
+{
+  "status": true,
+  "data": [
+    {
+      "id": 1,
+      "muid": "m_abc123def456",
+      "duid": "browser-uuid-here",
+      "risk_tier": "blocked",
+      "event_count": 47,
+      "block_count": 12,
+      "last_seen_ip": "203.0.113.50",
+      "last_seen": "2026-03-28T14:22:00Z"
+    }
+  ]
+}
+```
+
+#### Device Detail
+
+```
+GET /api/account/bouncer/device/1
+```
+
+Returns full record including `msid` (session ID), `fingerprint_id`, `linked_muids` (cross-session identity stitching), and `first_seen`.
+
+#### Key Fields
+
+| Field | Description |
+|-------|-------------|
+| `muid` | Mojo unique device identifier (persistent across sessions) |
+| `duid` | Browser-generated device UUID from `localStorage` |
+| `fingerprint_id` | Browser fingerprint hash (canvas, WebGL, fonts, etc.) |
+| `risk_tier` | `unknown`, `low`, `medium`, `high`, `blocked` |
+| `event_count` | Total bouncer assessments for this device |
+| `block_count` | Times this device was blocked |
+| `last_seen_ip` | Most recent IP address |
+| `linked_muids` | Other muid values linked to this device (fingerprint stitching) |
+
+#### Useful Queries
+
+```
+# Blocked devices
+GET /api/account/bouncer/device?risk_tier=blocked&sort=-block_count
+
+# High-risk devices
+GET /api/account/bouncer/device?risk_tier=high&sort=-last_seen
+
+# Devices by IP
+GET /api/account/bouncer/device?search=203.0.113.50
+
+# Most active devices
+GET /api/account/bouncer/device?sort=-event_count&size=20
+```
+
+---
+
+### Signals — `/api/account/bouncer/signal`
+
+Every bouncer assessment is recorded as a `BouncerSignal`. This is a **read-only** audit trail — every challenge attempt, every scoring decision, with full signal payloads.
+
+#### List Signals
+
+```
+GET /api/account/bouncer/signal?sort=-created&graph=list&size=50
+```
+
+Response:
+
+```json
+{
+  "status": true,
+  "data": [
+    {
+      "id": 501,
+      "muid": "m_abc123def456",
+      "msid": "session_xyz",
+      "stage": "assess",
+      "ip_address": "203.0.113.50",
+      "page_type": "login",
+      "risk_score": 85,
+      "decision": "block",
+      "created": "2026-03-28T14:22:00Z"
+    }
+  ]
+}
+```
+
+#### Signal Detail
+
+```
+GET /api/account/bouncer/signal/501?graph=detail
+```
+
+The `detail` graph includes the full signal payloads and linked records:
+
+```json
+{
+  "status": true,
+  "data": {
+    "id": 501,
+    "muid": "m_abc123def456",
+    "duid": "browser-uuid-here",
+    "msid": "session_xyz",
+    "mtab": "tab_id_here",
+    "session_id": "client-session-id",
+    "stage": "assess",
+    "ip_address": "203.0.113.50",
+    "page_type": "login",
+    "risk_score": 85,
+    "decision": "block",
+    "triggered_signals": ["webdriver_flag", "playwright_artifacts", "rapid_click"],
+    "raw_signals": {
+      "environment": {"webdriver_flag": true, "playwright_artifacts": true},
+      "behavior": {"mouse_move_count": 0, "rapid_click": true},
+      "gate_challenge": {"honeypot_filled": false, "time_to_click_ms": 12}
+    },
+    "server_signals": {
+      "ip_reputation": "high_risk",
+      "geo_risk": 0.7,
+      "header_anomalies": ["missing_accept_language"]
+    },
+    "token_nonce": "abc123",
+    "created": "2026-03-28T14:22:00Z",
+    "device": {
+      "id": 1, "muid": "m_abc123def456", "duid": "browser-uuid-here",
+      "risk_tier": "blocked", "event_count": 47, "block_count": 12,
+      "last_seen_ip": "203.0.113.50", "last_seen": "2026-03-28T14:22:00Z"
+    },
+    "geo_ip": {
+      "id": 42, "ip_address": "203.0.113.50", "country_code": "CN",
+      "country_name": "China", "city": "Beijing", "is_blocked": true
+    }
+  }
+}
+```
+
+#### Key Fields
+
+| Field | Description |
+|-------|-------------|
+| `stage` | `assess` (challenge completion), `submit` (form submit), `event` (client event) |
+| `risk_score` | 0–100 composite score from all analyzers |
+| `decision` | `allow`, `monitor`, `block`, `log` |
+| `triggered_signals` | Array of signal names that contributed to the score |
+| `raw_signals` | Client-side signals as submitted by mojo-bouncer.js |
+| `server_signals` | Server-side enrichment (IP reputation, geo risk, header analysis) |
+| `page_type` | `login`, `registration`, `password_reset` |
+
+#### Useful Queries
+
+```
+# Recent blocks
+GET /api/account/bouncer/signal?decision=block&sort=-created&size=50
+
+# All signals for a specific device
+GET /api/account/bouncer/signal?search=m_abc123def456&sort=-created
+
+# Signals from a specific IP
+GET /api/account/bouncer/signal?search=203.0.113.50&sort=-created
+
+# High-score assessments (potential bots that were allowed)
+GET /api/account/bouncer/signal?decision=monitor&sort=-risk_score
+
+# Signals by stage
+GET /api/account/bouncer/signal?stage=assess&sort=-created
+```
+
+---
+
+### Bot Signatures — `/api/account/bouncer/signature`
+
+Bot signatures are patterns the bouncer uses for **pre-screening** — matching known bots before running the full scoring pipeline. Signatures are auto-learned from confirmed blocks and can also be created manually.
+
+Pre-screen matches serve the honeypot decoy page immediately, with zero scoring overhead.
+
+#### List Signatures
+
+```
+GET /api/account/bouncer/signature?sort=-modified&graph=list
+```
+
+Response:
+
+```json
+{
+  "status": true,
+  "data": [
+    {
+      "id": 10,
+      "sig_type": "subnet_24",
+      "value": "203.0.113.0/24",
+      "source": "auto",
+      "confidence": 95,
+      "hit_count": 234,
+      "is_active": true,
+      "expires_at": "2026-03-29T14:00:00Z",
+      "modified": "2026-03-28T14:22:00Z"
+    }
+  ]
+}
+```
+
+#### Signature Detail
+
+```
+GET /api/account/bouncer/signature/10
+```
+
+Returns full record including `block_count`, `notes`, and `created`.
+
+#### Create a Manual Signature
+
+```
+POST /api/account/bouncer/signature
+```
+
+```json
+{
+  "sig_type": "ip",
+  "value": "198.51.100.5",
+  "source": "manual",
+  "confidence": 100,
+  "is_active": true,
+  "notes": "Known scanner — reported by hosting provider"
+}
+```
+
+#### Update a Signature
+
+```
+POST /api/account/bouncer/signature/10
+```
+
+```json
+{
+  "is_active": false,
+  "notes": "Disabled — false positive on corporate proxy"
+}
+```
+
+#### Delete a Signature
+
+```
+DELETE /api/account/bouncer/signature/10
+```
+
+#### Key Fields
+
+| Field | Description |
+|-------|-------------|
+| `sig_type` | `ip`, `subnet_24`, `subnet_16`, `user_agent`, `fingerprint`, `signal_set` |
+| `value` | The pattern to match (IP, subnet CIDR, UA string, fingerprint hash, signal set hash) |
+| `source` | `auto` (learned from blocks) or `manual` (admin-created) |
+| `confidence` | 0–100 confidence score |
+| `hit_count` | Pre-screen cache hits (how many times this signature matched) |
+| `block_count` | How many of those hits resulted in blocks |
+| `is_active` | Active signatures are loaded into the pre-screen cache |
+| `expires_at` | Auto-learned signatures expire (null = permanent) |
+
+#### Signature Types
+
+| Type | What it matches | Auto-learn trigger |
+|------|----------------|-------------------|
+| `ip` | Exact IP address | Direct match |
+| `subnet_24` | /24 subnet (e.g. `203.0.113.0/24`) | 5+ blocks from same /24 |
+| `subnet_16` | /16 subnet | Manual only |
+| `user_agent` | Exact User-Agent string | 5+ blocks with same UA |
+| `fingerprint` | Browser fingerprint hash | 3+ blocks with same fingerprint |
+| `signal_set` | Hash of triggered signal combination | 5+ blocks with same signal pattern (campaign) |
+
+#### Useful Queries
+
+```
+# Active signatures by type
+GET /api/account/bouncer/signature?sig_type=subnet_24&is_active=true&sort=-hit_count
+
+# Auto-learned signatures
+GET /api/account/bouncer/signature?source=auto&sort=-modified
+
+# Most effective signatures (highest hit count)
+GET /api/account/bouncer/signature?is_active=true&sort=-hit_count&size=20
+
+# Expiring soon
+GET /api/account/bouncer/signature?is_active=true&sort=expires_at
+
+# Manual overrides
+GET /api/account/bouncer/signature?source=manual
+```
+
+---
+
+## Bouncer Events in the Incident System
+
+Bouncer events flow into the incident system automatically. High-confidence detections trigger firewall blocks via default rules.
+
+### Event Flow
+
+```
+Bouncer scores request → block decision
+  → Creates BouncerSignal (audit trail)
+  → Fires incident event (security:bouncer:block, level 8)
+    → Incident created (level >= threshold)
+      → Default rule matches → block:// handler → IP blocked fleet-wide
+```
+
+### Event Categories
+
+| Category | Level | Creates Incident | Default Rule Action |
+|----------|-------|-----------------|-------------------|
+| `security:bouncer:block` | 8 | Yes | Score >= 80: block IP 1hr |
+| `security:bouncer:honeypot_post` | 9 | Yes | Block IP 1hr |
+| `security:bouncer:campaign` | 10 | Yes | Block IP 24hr + notify admin |
+| `security:bouncer:token_invalid` | 7 | Yes | Block IP 30min |
+| `security:bouncer:monitor` | 5 | No | — |
+| `security:bouncer:event` | 5–7 | Conditional | — |
+| `security:bouncer:token_missing` | 6 | No | — |
+
+### Querying Bouncer Incidents
+
+```
+# All bouncer incidents
+GET /api/incident/incident?category__startswith=security:bouncer&sort=-created
+
+# Bouncer events (lower level, not incidents)
+GET /api/incident/event?category__startswith=security:bouncer&sort=-created
+```
+
+---
+
+## Bouncer Metrics
+
+Time-series metrics for bouncer activity are recorded under the `bouncer` category.
+
+### Available Metrics
+
+| Slug | Description |
+|------|-------------|
+| `bouncer:assessments` | Total scoring runs (volume indicator) |
+| `bouncer:blocks` | Full-scoring blocks |
+| `bouncer:blocks:country:{CC}` | Blocks by country code (e.g. `bouncer:blocks:country:CN`) |
+| `bouncer:monitors` | Suspicious but allowed (monitor decision) |
+| `bouncer:pre_screen_blocks` | Signature cache hits (served decoy without scoring) |
+| `bouncer:honeypot_catches` | Credential attempts on decoy pages |
+| `bouncer:signatures_learned` | Auto-created bot signatures |
+| `bouncer:campaigns` | Coordinated bot campaign detections |
+
+### Query Examples
+
+```
+# Blocks per hour over the last 24 hours
+GET /api/metrics/fetch?slug=bouncer:blocks&granularity=hours&dr_start=2026-03-27
+
+# All bouncer metrics for the last 7 days
+GET /api/metrics/fetch?category=bouncer&granularity=days&dr_start=2026-03-21
+
+# Pre-screen effectiveness (are signatures catching bots before scoring?)
+GET /api/metrics/fetch?slug=bouncer:pre_screen_blocks&granularity=hours&dr_start=2026-03-27
+
+# Assessment volume trend (is bot traffic increasing?)
+GET /api/metrics/fetch?slug=bouncer:assessments&granularity=hours&dr_start=2026-03-27
+```
+
+---
+
+## Dashboard Patterns
+
+### Bouncer Overview Card
+
+Poll these queries to build a summary card:
+
+```
+GET /api/account/bouncer/device?risk_tier=blocked&size=0    → count of blocked devices
+GET /api/account/bouncer/signature?is_active=true&size=0    → count of active signatures
+GET /api/account/bouncer/signal?decision=block&dr_start=2026-03-28&size=0  → blocks today
+```
+
+Use `size=0` to get just the count without fetching records.
+
+### Recent Block Feed
+
+```
+GET /api/account/bouncer/signal?decision=block&sort=-created&graph=list&size=20
+```
+
+### Device Investigation View
+
+For a single device, fetch in parallel:
+
+```
+GET /api/account/bouncer/device/{id}
+GET /api/account/bouncer/signal?search={muid}&sort=-created&graph=list
+GET /api/incident/event?category__startswith=security:bouncer&search={muid}&sort=-created
+```
+
+### Chart Ideas
+
+- **Block rate** — line chart of `bouncer:blocks` at hourly granularity
+- **Pre-screen vs full scoring** — stacked chart comparing `bouncer:pre_screen_blocks` and `bouncer:blocks`
+- **Assessment volume** — area chart of `bouncer:assessments` to show traffic patterns
+- **Top blocked countries** — query `bouncer:blocks:country:*` slugs and rank
+- **Signature effectiveness** — table of signatures sorted by `hit_count`
+- **Decision breakdown** — pie chart from signal list grouped by `decision`
+
+### Graphs
+
+| Graph | Use for |
+|-------|---------|
+| `list` | Compact list views — core fields only |
+| `default` | Standard views — all fields, linked device on signals |
+| `detail` | Investigation views — full signal payloads, linked device + GeoIP (signals only) |
