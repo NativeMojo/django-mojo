@@ -19,6 +19,7 @@ CATEGORY_MAP = {
         ('mojo.apps.account.models.bouncer_signal', 'BouncerSignal'),
         ('mojo.apps.account.models.bot_signature', 'BotSignature'),
         ('mojo.apps.account.models.geolocated_ip', 'GeoLocatedIP'),
+        ('mojo.apps.logit.models.log', 'Log'),
     ],
     'users': [
         ('mojo.apps.account.models.user', 'User'),
@@ -33,16 +34,25 @@ CATEGORY_MAP = {
         ('mojo.apps.account.models.api_key', 'ApiKey'),
         ('mojo.apps.account.models.setting', 'Setting'),
     ],
-    'push': [
+    'comms': [
         ('mojo.apps.account.models.push.config', 'PushConfig'),
         ('mojo.apps.account.models.push.template', 'NotificationTemplate'),
         ('mojo.apps.account.models.push.delivery', 'NotificationDelivery'),
         ('mojo.apps.account.models.push.device', 'RegisteredDevice'),
-    ],
-    'phone': [
         ('mojo.apps.phonehub.models.phone', 'PhoneNumber'),
         ('mojo.apps.phonehub.models.config', 'PhoneConfig'),
         ('mojo.apps.phonehub.models.sms', 'SMS'),
+        ('mojo.apps.aws.models.mailbox', 'Mailbox'),
+        ('mojo.apps.aws.models.email_domain', 'EmailDomain'),
+        ('mojo.apps.aws.models.email_template', 'EmailTemplate'),
+        ('mojo.apps.aws.models.sent_message', 'SentMessage'),
+        ('mojo.apps.aws.models.incoming_email', 'IncomingEmail'),
+        ('mojo.apps.aws.models.email_attachment', 'EmailAttachment'),
+        ('mojo.apps.chat.models.room', 'ChatRoom'),
+        ('mojo.apps.chat.models.message', 'ChatMessage'),
+        ('mojo.apps.chat.models.membership', 'ChatMembership'),
+        ('mojo.apps.chat.models.read_receipt', 'ChatReadReceipt'),
+        ('mojo.apps.chat.models.reaction', 'ChatReaction'),
     ],
     'files': [
         ('mojo.apps.fileman.models.manager', 'FileManager'),
@@ -51,16 +61,10 @@ CATEGORY_MAP = {
         ('mojo.apps.filevault.models.file', 'VaultFile'),
         ('mojo.apps.filevault.models.data', 'VaultData'),
     ],
-    'email': [
-        ('mojo.apps.aws.models.mailbox', 'Mailbox'),
-        ('mojo.apps.aws.models.email_domain', 'EmailDomain'),
-        ('mojo.apps.aws.models.email_template', 'EmailTemplate'),
-        ('mojo.apps.aws.models.sent_message', 'SentMessage'),
-        ('mojo.apps.aws.models.incoming_email', 'IncomingEmail'),
-        ('mojo.apps.aws.models.email_attachment', 'EmailAttachment'),
-    ],
-    'logs': [
-        ('mojo.apps.logit.models.log', 'Log'),
+    'jobs': [
+        ('mojo.apps.jobs.models.job', 'Job'),
+        ('mojo.apps.jobs.models.job', 'JobEvent'),
+        ('mojo.apps.jobs.models.job', 'JobLog'),
     ],
 }
 
@@ -98,38 +102,6 @@ def test_category_perms_in_save_perms(opts):
                 continue
             assert category in save, \
                 f"{class_name} SAVE_PERMS missing '{category}': {save}"
-
-
-# ---------------------------------------------------------------------------
-# Chat uses 'chat' as both fine-grained and category (already existed)
-# ---------------------------------------------------------------------------
-
-@th.django_unit_test()
-def test_chat_category_in_save_perms(opts):
-    """Chat writable models should have 'chat' in SAVE_PERMS."""
-    from mojo.apps.chat.models.room import ChatRoom
-    from mojo.apps.chat.models.membership import ChatMembership
-
-    for model in [ChatRoom, ChatMembership]:
-        save = model.RestMeta.SAVE_PERMS
-        assert 'chat' in save or 'manage_chat' in save, \
-            f"{model.__name__} SAVE_PERMS missing chat access: {save}"
-
-
-# ---------------------------------------------------------------------------
-# Docs — VIEW is 'all', category only in SAVE
-# ---------------------------------------------------------------------------
-
-@th.django_unit_test()
-def test_docs_category_in_save_perms(opts):
-    """Docit models should have 'docs' in SAVE_PERMS."""
-    from mojo.apps.docit.models.book import Book
-    from mojo.apps.docit.models.asset import Asset
-    from mojo.apps.docit.models.page_revision import PageRevision
-
-    for model in [Book, Asset, PageRevision]:
-        save = model.RestMeta.SAVE_PERMS
-        assert 'docs' in save, f"{model.__name__} SAVE_PERMS missing 'docs': {save}"
 
 
 # ---------------------------------------------------------------------------
@@ -220,3 +192,19 @@ def test_write_perms_subset_of_view_perms(opts):
             missing = save_check - view
             assert not missing, \
                 f"{class_name}: SAVE_PERMS {missing} not in VIEW_PERMS"
+
+
+# ---------------------------------------------------------------------------
+# Docs — VIEW is 'all', category only in SAVE (fine-grained, not a category toggle)
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test()
+def test_docs_save_perms(opts):
+    """Docit models should have 'docs' in SAVE_PERMS."""
+    from mojo.apps.docit.models.book import Book
+    from mojo.apps.docit.models.asset import Asset
+    from mojo.apps.docit.models.page_revision import PageRevision
+
+    for model in [Book, Asset, PageRevision]:
+        save = model.RestMeta.SAVE_PERMS
+        assert 'docs' in save, f"{model.__name__} SAVE_PERMS missing 'docs': {save}"

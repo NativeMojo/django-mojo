@@ -18,8 +18,7 @@ class IncidentHistory(models.Model, MojoModel):
                     ("get_priority_display", "priority_display"),
                 ],
                 "graphs": {
-                    "by": "basic",
-                    "to": "basic",
+                    "user": "basic",
                     "media": "basic"
                 }
             },
@@ -32,10 +31,13 @@ class IncidentHistory(models.Model, MojoModel):
     kind = models.CharField(max_length=80, blank=True, null=True, default=None, db_index=True)
 
     to = models.ForeignKey("account.User", blank=True, null=True, default=None, related_name="+", on_delete=models.CASCADE)
-    by = models.ForeignKey("account.User", blank=True, null=True, default=None, related_name="+", on_delete=models.CASCADE)
+    user = models.ForeignKey("account.User", blank=True, null=True, default=None, related_name="+", on_delete=models.CASCADE)
 
     state = models.IntegerField(default=0)
     priority = models.IntegerField(default=0)
 
     note = models.TextField(blank=True, null=True, default=None)
     media = models.ForeignKey("fileman.File", related_name="+", null=True, default=None, on_delete=models.CASCADE)
+
+    def set_incident(self, value):
+        self.parent = value

@@ -126,9 +126,9 @@ class IncomingEmail(models.Model, MojoModel):
         ordering = ["-received_at", "-created"]
 
     class RestMeta:
-        VIEW_PERMS = ["manage_aws", "email"]
-        SAVE_PERMS = ["manage_aws", "email"]
-        DELETE_PERMS = ["manage_aws", "email"]
+        VIEW_PERMS = ["manage_aws", "comms"]
+        SAVE_PERMS = ["manage_aws", "comms"]
+        DELETE_PERMS = ["manage_aws", "comms"]
         SEARCH_FIELDS = ["subject", "from_address", "message_id"]
         GRAPHS = {
             "basic": {

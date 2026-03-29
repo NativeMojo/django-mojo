@@ -47,16 +47,13 @@ Category permissions grant full read+write access to an entire domain. Use these
 
 | Permission | Domain | Grants access to |
 |-----------|--------|-----------------|
-| `security` | Security | All incidents, events, rules, tickets, IPSets, bouncer devices/signals/signatures, GeoLocatedIP |
+| `security` | Security & Logs | Incidents, events, rules, tickets, IPSets, bouncer devices/signals/signatures, GeoLocatedIP, system logs |
 | `users` | Users | All user records, passkeys, TOTP, API keys, OAuth, devices, locations, bouncer/GeoLocatedIP |
 | `groups` | Groups | Groups, members, group API keys, settings |
-| `phone` | Phone | Phone numbers, phone config, SMS |
-| `push` | Push | Push config, notification templates, delivery records, registered devices |
-| `files` | Files | File managers, files, renditions, vault files, vault data |
-| `chat` | Chat | Chat rooms, messages, reactions, receipts, membership |
-| `email` | Email | Mailboxes, domains, templates, sent/incoming messages, attachments |
-| `logs` | Logs | All log entries (read + write) |
-| `docs` | Docs | Books, pages, assets, revisions (write — read is public) |
+| `comms` | Communications | Email (mailboxes, domains, templates, messages), phone (numbers, config, SMS), push (config, templates, delivery, devices), chat (rooms, messages, reactions, receipts, membership) |
+| `jobs` | Job System | Jobs, job events, job logs, runners, queue control, system stats |
+| `metrics` | Metrics | All metrics operations — recording, fetching, categories, values, permissions management |
+| `files` | Files | File managers, files, renditions, vault files, vault data, S3 buckets |
 
 **Note:** `is_superuser` bypasses all permission checks. No need for a "system_admin" category.
 
@@ -77,25 +74,32 @@ Use these when you need read-only access or scoped access within a domain:
 | `view_security` | Security | Read incidents, events, rules, firewall, bouncer data |
 | `manage_security` | Security | Write access to incidents, rules, tickets, IP blocks |
 | `manage_aws` | Email | SES email templates, domains, mailboxes |
-| `manage_chat` | Chat | Create/manage chat rooms and membership |
+| `manage_chat` | Communications | Create/manage chat rooms and membership |
 | `view_fileman` | Files | Read file manager records |
 | `manage_files` | Files | Upload and manage files |
 | `view_vault` | Files | Read vault files and data |
 | `manage_vault` | Files | Write vault files and data |
 | `manage_docit` | Docs | Manage documentation books, pages, assets |
-| `view_logs` | Logs | Read logit entries |
-| `manage_logs` | Logs | Write/delete logit entries |
-| `admin` | Logs | Full admin access to logit |
-| `manage_notifications` | Push | Manage notification templates and delivery |
-| `view_notifications` | Push | Read notification delivery records |
-| `manage_devices` | Push | Manage registered push devices |
-| `view_devices` | Push | Read registered push devices |
-| `manage_push_config` | Push | Push notification configuration |
-| `view_phone_numbers` | Phone | Read phone number records |
-| `manage_phone_numbers` | Phone | Manage phone numbers |
-| `manage_phone_config` | Phone | Phone hub configuration |
-| `view_sms` | Phone | Read SMS records |
-| `manage_sms` | Phone | Send and manage SMS |
+| `view_logs` | Security | Read logit entries |
+| `manage_logs` | Security | Write/delete logit entries |
+| `admin` | Security | Full admin access to logit |
+| `manage_notifications` | Communications | Manage notification templates and delivery |
+| `view_notifications` | Communications | Read notification delivery records |
+| `manage_devices` | Communications | Manage registered push devices |
+| `view_devices` | Communications | Read registered push devices |
+| `manage_push_config` | Communications | Push notification configuration |
+| `view_phone_numbers` | Communications | Read phone number records |
+| `manage_phone_numbers` | Communications | Manage phone numbers |
+| `manage_phone_config` | Communications | Phone hub configuration |
+| `view_sms` | Communications | Read SMS records |
+| `manage_sms` | Communications | Send and manage SMS |
+| `send_sms` | Communications | Send SMS messages |
+| `send_notifications` | Communications | Send push notifications |
+| `view_jobs` | Jobs | Read-only job monitoring, queue sizes, runner info |
+| `manage_jobs` | Jobs | Full job system control — create, cancel, retry, purge, runner management |
+| `view_metrics` | Metrics | Read metrics data and categories |
+| `manage_metrics` | Metrics | Manage metrics permissions and accounts |
+| `write_metrics` | Metrics | Record metrics data |
 | `manage_shortlinks` | Shortlink | Manage short links |
 
 ## Permission Map — All Models
@@ -134,41 +138,34 @@ Use these when you need read-only access or scoped access within a domain:
 | Ticket | view_security, **security** | manage_security, **security** | |
 | TicketNote | view_security, **security** | manage_security, **security** | |
 
-### Push Notifications
+### Communications (Push, Chat, Email, Phone)
 
 | Model | VIEW_PERMS | SAVE_PERMS | Notes |
 |-------|-----------|-----------|-------|
-| PushConfig | manage_push_config, manage_groups, **push** | manage_push_config, manage_groups, **push** | |
-| NotificationTemplate | manage_notifications, manage_groups, **push**, owner, manage_users | manage_notifications, manage_groups, **push** | |
-| NotificationDelivery | view_notifications, manage_notifications, **push**, owner, manage_users | manage_notifications, **push** | |
-| RegisteredDevice | view_devices, manage_devices, **push**, owner, manage_users | manage_devices, **push**, owner | |
-
-### Chat App
-
-| Model | VIEW_PERMS | SAVE_PERMS | Notes |
-|-------|-----------|-----------|-------|
-| ChatRoom | chat, manage_chat, owner | manage_chat, **chat**, owner | CREATE_PERMS = authenticated |
-| ChatMessage | chat, manage_chat | (read-only) | Created via WebSocket |
-| ChatReaction | chat, manage_chat | (read-only) | Created via WebSocket |
-| ChatReadReceipt | chat, manage_chat | (read-only) | Created via WebSocket |
-| ChatMembership | chat, manage_chat | manage_chat, **chat** | |
-
-### Email App (AWS)
-
-| Model | VIEW_PERMS | SAVE_PERMS | Notes |
-|-------|-----------|-----------|-------|
-| Mailbox | manage_aws, **email** | manage_aws, **email** | |
-| EmailDomain | manage_aws, **email** | manage_aws, **email** | |
-| EmailTemplate | manage_aws, **email** | manage_aws, **email** | |
-| SentMessage | manage_aws, **email** | manage_aws, **email** | |
-| IncomingEmail | manage_aws, **email** | manage_aws, **email** | |
-| EmailAttachment | manage_aws, **email** | manage_aws, **email** | |
+| PushConfig | manage_push_config, manage_groups, **comms** | manage_push_config, manage_groups, **comms** | |
+| NotificationTemplate | manage_notifications, manage_groups, **comms**, owner, manage_users | manage_notifications, manage_groups, **comms** | |
+| NotificationDelivery | view_notifications, manage_notifications, **comms**, owner, manage_users | manage_notifications, **comms** | |
+| RegisteredDevice | view_devices, manage_devices, **comms**, owner, manage_users | manage_devices, **comms**, owner | |
+| ChatRoom | **comms**, manage_chat, owner | manage_chat, **comms**, owner | CREATE_PERMS = authenticated |
+| ChatMessage | **comms**, manage_chat | (read-only) | Created via WebSocket |
+| ChatReaction | **comms**, manage_chat | (read-only) | Created via WebSocket |
+| ChatReadReceipt | **comms**, manage_chat | (read-only) | Created via WebSocket |
+| ChatMembership | **comms**, manage_chat | manage_chat, **comms** | |
+| Mailbox | manage_aws, **comms** | manage_aws, **comms** | |
+| EmailDomain | manage_aws, **comms** | manage_aws, **comms** | |
+| EmailTemplate | manage_aws, **comms** | manage_aws, **comms** | |
+| SentMessage | manage_aws, **comms** | manage_aws, **comms** | |
+| IncomingEmail | manage_aws, **comms** | manage_aws, **comms** | |
+| EmailAttachment | manage_aws, **comms** | manage_aws, **comms** | |
+| PhoneNumber | view_phone_numbers, manage_phone_numbers, **comms**, manage_users | manage_phone_numbers, **comms**, manage_users | |
+| PhoneConfig | manage_phone_config, manage_groups, **comms** | manage_phone_config, manage_groups, **comms** | |
+| SMS | view_sms, manage_sms, **comms**, owner, manage_notifications | manage_sms, **comms**, manage_notifications | |
 
 ### Logit App
 
 | Model | VIEW_PERMS | SAVE_PERMS | Notes |
 |-------|-----------|-----------|-------|
-| Log | manage_logs, view_logs, **logs**, admin | admin, **logs** | |
+| Log | manage_logs, view_logs, **security**, admin | admin, **security** | Logs are part of the security category |
 
 ### File Apps
 
@@ -180,24 +177,32 @@ Use these when you need read-only access or scoped access within a domain:
 | VaultFile | view_vault, manage_vault, **files**, owner | manage_vault, **files**, owner | |
 | VaultData | view_vault, manage_vault, **files**, owner | manage_vault, **files**, owner | |
 
-### Docit App
+### Jobs App
 
 | Model | VIEW_PERMS | SAVE_PERMS | Notes |
 |-------|-----------|-----------|-------|
-| Book | all | manage_docit, **docs**, owner | Public read |
-| Asset | all | manage_docit, **docs**, owner | |
-| PageRevision | all | manage_docit, **docs**, owner | |
-| Page | all | manage_docit, **docs**, owner | |
+| Job | view_jobs, manage_jobs, **jobs** | manage_jobs, **jobs** | |
+| JobEvent | manage_jobs, view_jobs, **jobs** | (system-created) | SAVE_PERMS = [] |
+| JobLog | manage_jobs, view_jobs, **jobs** | (system-created) | SAVE_PERMS = [] |
+
+**REST endpoints (non-RestMeta):** All 26 `@md.requires_perms()` endpoints in jobs/rest/ also accept `jobs`.
+
+### Metrics App
+
+Metrics does not use RestMeta models. Permission checking is handled via `check_view_permissions()` and `check_write_permissions()` in `mojo/apps/metrics/rest/helpers.py`. See [Metrics Permissions](../metrics/permissions.md) for details.
+
+The `metrics` category grants full read+write access to all metrics operations. Fine-grained: `view_metrics` (read), `write_metrics` (record), `manage_metrics` (admin).
 
 ### Other Apps
 
 | Model | VIEW_PERMS | SAVE_PERMS | Notes |
 |-------|-----------|-----------|-------|
-| PhoneNumber | view_phone_numbers, manage_phone_numbers, **phone**, manage_users | manage_phone_numbers, **phone**, manage_users | |
-| PhoneConfig | manage_phone_config, manage_groups, **phone** | manage_phone_config, manage_groups, **phone** | |
-| SMS | view_sms, manage_sms, **phone**, owner, manage_notifications | manage_sms, **phone**, manage_notifications | |
 | ShortLink | manage_shortlinks, owner | manage_shortlinks, owner | |
 | ShortLinkClick | manage_shortlinks | (read-only) | Analytics |
+| Book | all | manage_docit, docs, owner | Public read |
+| Asset | all | manage_docit, docs, owner | |
+| Page | all | manage_docit, docs, owner | |
+| PageRevision | all | manage_docit, docs, owner | |
 
 ## Resolved Issues
 
@@ -223,7 +228,7 @@ The Event model allows anyone to create security events via `POST /api/incident/
 
 When adding permissions to a new model:
 
-1. **Always add the category permission** — every model should include its domain's category perm (`security`, `users`, `groups`, `phone`, `push`, `files`, `chat`, `email`, `logs`, `docs`) in both VIEW_PERMS and SAVE_PERMS
+1. **Always add the category permission** — every model should include its domain's category perm (`security`, `users`, `groups`, `comms`, `jobs`, `metrics`, `files`) in both VIEW_PERMS and SAVE_PERMS
 2. **Use view/manage pairs for fine-grained access** — `view_X` for read-only, `manage_X` for write
 3. **Always include manage in view** — if `manage_X` is in SAVE_PERMS, add it to VIEW_PERMS too
 4. **Use `owner` sparingly** — only for user-facing models where users manage their own records

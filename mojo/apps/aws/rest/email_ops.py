@@ -22,7 +22,7 @@ def _get_json(request) -> Dict[str, Any]:
 
 
 @md.URL("email/domain/<int:pk>/onboard")
-@md.requires_perms("manage_aws")
+@md.requires_perms("manage_aws", "comms")
 def on_email_domain_onboard(request, pk: int):
     """
     Kick off domain onboarding:
@@ -82,7 +82,7 @@ def on_email_domain_onboard(request, pk: int):
 
 
 @md.URL("email/domain/<int:pk>/audit")
-@md.requires_perms("manage_aws")
+@md.requires_perms("manage_aws", "comms")
 def on_email_domain_audit(request, pk: int):
     """
     Audit SES/SNS/S3 configuration for the domain and return a drift report.
@@ -130,7 +130,7 @@ def on_email_domain_audit(request, pk: int):
 
 
 @md.URL("email/domain/<int:pk>/reconcile")
-@md.requires_perms("manage_aws")
+@md.requires_perms("manage_aws", "comms")
 def on_email_domain_reconcile(request, pk: int):
     """
     Attempt to reconcile SES/SNS for the domain:

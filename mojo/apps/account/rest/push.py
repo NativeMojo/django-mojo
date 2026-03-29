@@ -125,7 +125,7 @@ def on_notification_deliveries(request, pk=None):
 
 @md.POST('account/devices/push/send')
 @md.requires_auth()
-@md.requires_perms("send_notifications")
+@md.requires_perms("send_notifications", "comms")
 def send_notification(request):
     """
     Send push notification directly.
@@ -240,7 +240,7 @@ def push_stats(request):
 
 @md.POST('account/devices/push/config/<int:pk>/test')
 @md.requires_auth()
-@md.requires_perms("manage_push_config")
+@md.requires_perms("manage_push_config", "comms")
 def test_push_config_connection(request, pk):
     """
     Test FCM configuration by attempting to send a test notification.

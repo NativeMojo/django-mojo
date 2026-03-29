@@ -110,9 +110,9 @@ class Job(models.Model, MojoModel):
 
     class RestMeta:
         # Permissions - jobs system specific permissions
-        VIEW_PERMS = ['view_jobs', 'manage_jobs']
-        SAVE_PERMS = ['manage_jobs']
-        DELETE_PERMS = ['manage_jobs']
+        VIEW_PERMS = ['view_jobs', 'manage_jobs', 'jobs']
+        SAVE_PERMS = ['manage_jobs', 'jobs']
+        DELETE_PERMS = ['manage_jobs', 'jobs']
         POST_SAVE_ACTIONS = ["cancel_request", "retry_request", "get_status", "publish_job"]
 
         # Graphs for different use cases
@@ -358,9 +358,9 @@ class JobEvent(models.Model, MojoModel):
 
     class RestMeta:
         # Permissions - restricted to system users only
-        VIEW_PERMS = ['manage_jobs', 'view_jobs']
+        VIEW_PERMS = ['manage_jobs', 'view_jobs', 'jobs']
         SAVE_PERMS = []  # Events are system-created only
-        DELETE_PERMS = ['manage_jobs']
+        DELETE_PERMS = ['manage_jobs', 'jobs']
 
         # Graphs
         GRAPHS = {
@@ -435,9 +435,9 @@ class JobLog(models.Model, MojoModel):
         ]
 
     class RestMeta:
-        VIEW_PERMS = ['manage_jobs', 'view_jobs']
+        VIEW_PERMS = ['manage_jobs', 'view_jobs', 'jobs']
         SAVE_PERMS = []  # Logs should be written via add_log / system actions
-        DELETE_PERMS = ['manage_jobs']
+        DELETE_PERMS = ['manage_jobs', 'jobs']
         GRAPHS = {
             'default': {
                 'fields': ['id', 'job_id', 'created', 'kind', 'message']

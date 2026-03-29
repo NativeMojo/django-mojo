@@ -14,7 +14,7 @@ def on_sms(request, pk=None):
 
 
 @md.POST('sms/send')
-@md.requires_perms("send_sms")
+@md.requires_perms("send_sms", "comms")
 @md.requires_params(['to_number', 'body'])
 def on_sms_send(request):
     """

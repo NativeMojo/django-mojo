@@ -6,7 +6,7 @@ import mojo.errors
 
 @md.URL('permissions')
 @md.URL('permissions/<str:account>')
-@md.requires_perms("manage_incidents")
+@md.requires_perms("manage_incidents", "metrics", "manage_metrics")
 def on_permissions(request, account=None):
     if request.method == 'GET':
         if account is None:

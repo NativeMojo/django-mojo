@@ -21,13 +21,13 @@ permission checks, graphs, and default CRUD behavior.
 
 @md.URL('email/domain')
 @md.URL('email/domain/<int:pk>')
-@md.requires_perms("manage_aws")
+@md.requires_perms("manage_aws", "comms")
 def on_email_domain(request, pk=None):
     return EmailDomain.on_rest_request(request, pk)
 
 
 @md.URL('email/mailbox')
 @md.URL('email/mailbox/<int:pk>')
-@md.requires_perms("manage_aws")
+@md.requires_perms("manage_aws", "comms")
 def on_mailbox(request, pk=None):
     return Mailbox.on_rest_request(request, pk)

@@ -4,7 +4,7 @@ from mojo.models import MojoModel
 
 class ChatReaction(models.Model, MojoModel):
     class RestMeta:
-        VIEW_PERMS = ["chat", "manage_chat"]
+        VIEW_PERMS = ["comms", "manage_chat"]
         GRAPHS = {
             "default": {
                 "fields": ["id", "message", "user", "emoji"],

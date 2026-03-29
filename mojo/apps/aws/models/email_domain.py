@@ -26,8 +26,9 @@ class EmailDomain(MojoSecrets, MojoModel):
     name = models.CharField(max_length=255, unique=True, db_index=True)
     region = models.CharField(
         max_length=64,
-        default=getattr(settings, 'AWS_REGION', 'us-east-1'),
-        help_text="AWS region for SES operations"
+        default='',
+        blank=True,
+        help_text="AWS region for SES operations. Leave blank to use AWS_REGION setting."
     )
 
     status = models.CharField(
@@ -107,9 +108,9 @@ class EmailDomain(MojoSecrets, MojoModel):
         ordering = ["name"]
 
     class RestMeta:
-        VIEW_PERMS = ["manage_aws", "email"]
-        SAVE_PERMS = ["manage_aws", "email"]
-        DELETE_PERMS = ["manage_aws", "email"]
+        VIEW_PERMS = ["manage_aws", "comms"]
+        SAVE_PERMS = ["manage_aws", "comms"]
+        DELETE_PERMS = ["manage_aws", "comms"]
         SEARCH_FIELDS = ["name", "region", "status"]
         GRAPHS = {
             "basic": {

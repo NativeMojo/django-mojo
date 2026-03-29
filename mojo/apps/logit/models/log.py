@@ -36,8 +36,8 @@ class Log(dm.Model, MojoModel):
         ]
 
     class RestMeta:
-        VIEW_PERMS = ["manage_logs", "view_logs", "logs", "admin"]
-        SAVE_PERMS = ["admin", "logs"]  # Only admins should create/edit logs manually
+        VIEW_PERMS = ["manage_logs", "view_logs", "security", "admin"]
+        SAVE_PERMS = ["admin", "security"]  # Only admins should create/edit logs manually
         DELETE_PERMS = ["admin"]  # Only admins can delete logs
         CAN_DELETE = True  # Allow deletion for cleanup purposes
 

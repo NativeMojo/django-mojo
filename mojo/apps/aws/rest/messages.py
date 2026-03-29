@@ -20,13 +20,13 @@ for CRUD operations, leveraging RestMeta permissions and graphs.
 
 @md.URL('email/incoming')
 @md.URL('email/incoming/<int:pk>')
-@md.requires_perms("manage_aws")
+@md.requires_perms("manage_aws", "comms")
 def on_incoming_email(request, pk=None):
     return IncomingEmail.on_rest_request(request, pk)
 
 
 @md.URL('email/sent')
 @md.URL('email/sent/<int:pk>')
-@md.requires_perms("manage_aws")
+@md.requires_perms("manage_aws", "comms")
 def on_sent_message(request, pk=None):
     return SentMessage.on_rest_request(request, pk)

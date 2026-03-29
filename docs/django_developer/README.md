@@ -16,6 +16,7 @@ Companion track for REST integrators: [docs/web_developer/README.md](../web_deve
 | Section | Description |
 |---|---|
 | [account/](account/README.md) | User, Group, JWT authentication, permissions, push notifications |
+| [security/](security/README.md) | Security system — incidents, events, rules, handlers, LLM agent, firewall, bouncer integration, health monitoring |
 | [logging/](logging/README.md) | Database logging (logit app), security incidents, fleet-wide IP blocking |
 | [files/](files/README.md) | File upload, storage backends, renditions |
 | [email/](email/README.md) | AWS SES email, templates, mailboxes, inbound handling |
