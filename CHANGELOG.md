@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## v1.1.2 - March 30, 2026
+
+fixing bug in endpoints
+
+
 ## v1.1.1 - March 30, 2026
 
 huge changes in how security is handled, better login tracking, better audit trails, more compliant for industry systems like health and kyc.

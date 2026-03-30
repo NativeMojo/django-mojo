@@ -5,8 +5,8 @@ from mojo.helpers import dates
 from mojo.apps.account.models.login_event import UserLoginEvent
 
 
-@md.URL('logins')
-@md.URL('logins/<int:pk>')
+@md.URL('account/logins')
+@md.URL('account/logins/<int:pk>')
 @md.uses_model_security(UserLoginEvent)
 def on_login_event(request, pk=None):
     return UserLoginEvent.on_rest_request(request, pk)
@@ -63,7 +63,7 @@ def _build_aggregation(qs, country_code, drill_region):
     return list(rows)
 
 
-@md.GET('logins/summary')
+@md.GET('account/logins/summary')
 @md.requires_perms('manage_users', 'security', 'users')
 def on_login_geo_summary(request):
     qs = UserLoginEvent.objects.exclude(country_code__isnull=True).exclude(country_code='')
@@ -75,7 +75,7 @@ def on_login_geo_summary(request):
     return {"status": True, "data": _build_aggregation(qs, country_code, drill_region)}
 
 
-@md.GET('logins/user')
+@md.GET('account/logins/user')
 @md.requires_perms('manage_users', 'security', 'users')
 @md.requires_params('user_id')
 def on_login_geo_user(request):
