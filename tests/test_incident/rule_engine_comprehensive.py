@@ -1185,19 +1185,21 @@ def test_handler_chaining(opts):
 
 @th.django_unit_test()
 def test_handler_ticket_creation(opts):
-    """Test that ticket handler creates tickets via execute_handler.
+    """Test that ticket handler creates tickets via the real job path.
 
-    Handlers run as async jobs, so we call execute_handler directly
-    to verify the ticket handler logic without needing a job worker.
+    Uses jobs.publish() + th.run_pending_jobs() to exercise the same
+    calling convention as the production job engine (func(job)).
     """
     from mojo.apps.incident.models import Event, RuleSet, Rule, Incident, Ticket
-    from mojo.apps.incident.handlers.event_handlers import execute_handler
+    from mojo.apps.jobs.models import Job
+    from mojo.apps import jobs
 
     # Clean up
     RuleSet.objects.filter(category="ticket_test").delete()
     Event.objects.filter(category="ticket_test").delete()
     Incident.objects.filter(category="ticket_test").delete()
     Ticket.objects.filter(category="ticket_test").delete()
+    Job.objects.filter(channel__in=["incident_handlers", "default"]).delete()
 
     # Create ruleset with ticket handler
     handler_spec = "ticket://?status=open&priority=8&category=ticket_test"
@@ -1237,12 +1239,20 @@ def test_handler_ticket_creation(opts):
     event.incident = incident
     event.save(update_fields=["incident"])
 
-    # Call execute_handler directly (simulates what the job worker does)
-    execute_handler({
-        "handler_spec": handler_spec,
-        "event_id": event.pk,
-        "incident_id": incident.pk,
-    })
+    # Publish handler job via the real job queue (same as RuleSet.run_handler)
+    jobs.publish(
+        "mojo.apps.incident.handlers.event_handlers.execute_handler",
+        {
+            "handler_spec": handler_spec,
+            "event_id": event.pk,
+            "incident_id": incident.pk,
+        },
+        channel="default",
+    )
+
+    # Execute pending jobs using the real calling convention: func(job)
+    executed = th.run_pending_jobs(channel="default")
+    assert executed >= 1, f"Expected at least 1 job executed, got {executed}"
 
     # Check that ticket was created
     tickets = Ticket.objects.filter(category="ticket_test")

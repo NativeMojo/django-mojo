@@ -468,17 +468,19 @@ HANDLER_MAP = {
 }
 
 
-def execute_handler(payload):
+def execute_handler(job):
     """
-    Job function called by the job queue to execute a single handler spec.
+    Job function called by the job engine to execute a single handler spec.
 
-    Payload keys:
+    The job engine calls func(job) where job is a Job model instance.
+    The actual data is in job.payload with keys:
         handler_spec: The full handler URL string (e.g. "email://perm@manage_security?template=critical")
         event_id: ID of the Event that triggered this handler
         incident_id: ID of the associated Incident (optional)
     """
     from urllib.parse import urlparse, parse_qs
 
+    payload = job.payload
     spec = payload.get("handler_spec")
     event_id = payload.get("event_id")
     incident_id = payload.get("incident_id")
