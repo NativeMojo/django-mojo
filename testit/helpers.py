@@ -458,6 +458,40 @@ def expect(value, got, name="field"):
     assert value == got, f"{name} expected {value} got {got}"
 
 
+def run_pending_jobs(channel=None, status="pending"):
+    """
+    Execute pending jobs from the DB the same way the job engine does.
+    No Redis or running engine needed.
+
+    Queries Job.objects.filter(status=status), optionally filtered by channel.
+    For each job: imports the function via load_job_function(job.func),
+    calls func(job) — exactly like job_engine.py:642.
+    Marks job completed on success, failed on exception.
+
+    Returns count of jobs executed.
+    """
+    from mojo.apps.jobs.models import Job
+    from mojo.apps.jobs.job_engine import load_job_function
+
+    qs = Job.objects.filter(status=status)
+    if channel:
+        qs = qs.filter(channel=channel)
+    qs = qs.order_by("created")
+
+    count = 0
+    for job in qs:
+        func = load_job_function(job.func)
+        try:
+            func(job)
+            job.status = "completed"
+            job.save(update_fields=["status", "modified"])
+        except Exception:
+            job.status = "failed"
+            job.save(update_fields=["status", "modified"])
+        count += 1
+    return count
+
+
 def _format_conf_value(value):
     if isinstance(value, bool):
         return 'True' if value else 'False'
