@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## v1.1.1 - March 30, 2026
+
+huge changes in how security is handled, better login tracking, better audit trails, more compliant for industry systems like health and kyc.
+
+
 ### Added
 - **`UserLoginEvent`** — New model recording every successful login with denormalized geo data from `GeoLocatedIP`
   - Fields: `ip_address`, `country_code`, `region`, `city`, `latitude`, `longitude`, `source`, `user_agent_info`, `is_new_country`, `is_new_region`, `device`
