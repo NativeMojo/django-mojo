@@ -1,7 +1,7 @@
 # Failing Tests After Security System + Permission Changes
 
 **Type**: issue
-**Status**: open
+**Status**: resolved
 **Date**: 2026-03-29
 **Priority**: high
 
