@@ -2,7 +2,14 @@
 
 ## v1.1.2 - March 30, 2026
 
-fixing bug in endpoints
+### Fixed
+- **`execute_handler` in `mojo.apps.incident.handlers.event_handlers`** — function now correctly accepts a `Job` model instance and reads `job.payload`, matching the job engine's calling convention (`func(job)`). Previously it expected a plain dict, causing all incident handlers dispatched via the job queue to fail at runtime.
+- **`execute_llm_handler` and `execute_llm_ticket_reply` in `mojo.apps.incident.handlers.llm_agent`** — same job signature bug: both functions now correctly accept a `Job` instance and read `job.payload`. Previously they crashed at runtime when dispatched via the job queue, preventing the LLM agent from ever running in production.
+
+### Added
+- **`th.run_pending_jobs(channel=None, status="pending")`** — New testit helper that executes pending jobs from the database using the real job engine calling convention (`func(job)`). No Redis or running engine required. Returns the count of jobs executed. Use this in tests instead of calling job functions directly with a dict — it exercises the full publish→dispatch pipeline and will catch job function signature mismatches.
+- **Anthropic Python SDK** (`anthropic>=0.52.0`) — `_call_claude()` in the LLM agent now uses the official `anthropic` SDK instead of raw `httpx` calls. The SDK handles retries, error types, and API versioning. `LLM_HANDLER_API_KEY` and `LLM_HANDLER_MODEL` are now read at call time (via `settings.get()`) rather than at module import, so runtime settings changes take effect without a restart.
+- **LLM agent mocked flow tests** — 4 tests in `tests/test_incident/llm_agent.py` covering the full `jobs.publish()` → `th.run_pending_jobs()` → mocked `_call_claude` → real tool dispatch → DB side effects pipeline.
 
 
 ## v1.1.1 - March 30, 2026

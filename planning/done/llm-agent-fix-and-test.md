@@ -1,7 +1,7 @@
 # Fix LLM agent job signatures, use Anthropic SDK, add mocked flow tests
 
 **Type**: request
-**Status**: planned
+**Status**: resolved
 **Date**: 2026-03-30
 
 ## Description
@@ -116,5 +116,28 @@ Create `tests/test_incident/llm_agent.py` with:
 - Assert: new TicketNote created with "[LLM Agent]" prefix
 
 All tests use `from unittest.mock import patch` on `mojo.apps.incident.handlers.llm_agent._call_claude`.
+
+### Step 5: Run tests, commit
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-03-30
+
+### What Was Built
+Fixed LLM agent job payload signatures, replaced raw httpx with Anthropic SDK, and added 4 mocked agent flow tests that validate the full pipeline from job dispatch through tool execution to DB side effects.
+
+### Files Changed
+- `mojo/apps/incident/handlers/llm_agent.py` — Fixed `execute_llm_handler(job)` and `execute_llm_ticket_reply(job)` to read `job.payload`; replaced httpx with `anthropic.Anthropic` SDK in `_call_claude()`
+- `pyproject.toml` — Added `anthropic>=0.52.0` dependency
+- `tests/test_incident/llm_agent.py` — 4 mocked agent flow tests
+- `uv.lock` — Updated lockfile
+
+### Tests
+- `tests/test_incident/llm_agent.py` — 4 tests: investigate+ignore, investigate+block, create ticket, ticket reply
+- Run: `bin/run_tests -t test_incident.llm_agent`
+
+### Follow-up
+- None
 
 ### Step 5: Run tests, commit

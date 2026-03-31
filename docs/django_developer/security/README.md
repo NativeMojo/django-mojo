@@ -313,7 +313,7 @@ Invokes the LLM security agent for autonomous triage. No parameters — the agen
 llm://
 ```
 
-**Requires:** `LLM_HANDLER_API_KEY` setting.
+**Requires:** `LLM_HANDLER_API_KEY` setting and the `anthropic` Python package (`anthropic>=0.52.0`).
 
 #### `job://<module.function>?<params>`
 
@@ -426,6 +426,10 @@ The LLM agent provides autonomous security triage. When invoked via the `llm://`
 | `LLM_HANDLER_MODEL` | `claude-sonnet-4-20250514` | Model to use for triage |
 
 If `LLM_HANDLER_API_KEY` is not set, `llm://` handlers silently skip.
+
+Both settings are read at invocation time (not at startup), so changes take effect on the next LLM job without a server restart.
+
+**Dependency:** The LLM agent requires the `anthropic` Python package (`anthropic>=0.52.0`), which is included as a framework dependency.
 
 ### Available Tools (12)
 
@@ -643,9 +647,11 @@ These jobs are dispatched to all servers in the fleet:
 | Job | Trigger | What it does |
 |-----|---------|--------------|
 | `execute_handler` | Rule match | Parses handler URL, dispatches to handler class |
-| `execute_llm_handler` | `llm://` handler | Runs LLM agent loop |
-| `execute_llm_ticket_reply` | Ticket note added | Re-invokes LLM on ticket conversation |
+| `execute_llm_handler` | `llm://` handler | Runs LLM agent loop (receives `Job` instance) |
+| `execute_llm_ticket_reply` | Ticket note added | Re-invokes LLM on ticket conversation (receives `Job` instance) |
 | `learn_from_block` | Bouncer block | Runs signature learning analysis |
+
+All job functions follow the engine's calling convention: `func(job)` where `job` is a `Job` model instance. The payload data is in `job.payload`.
 
 ## 12. Configuration Reference
 

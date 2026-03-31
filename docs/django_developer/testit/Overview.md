@@ -205,6 +205,7 @@ All other keys (e.g. `periods`, `slug`, `status`, `data`, `id`) are safe to acce
 - **Using `obj.values`, `obj.keys`, or `obj.items` on an `objict`** — returns the dict built-in method, not your key. Use `obj["values"]` instead.
 - Skipping the `--extra` gate on expensive tasks (cron jobs, third-party calls).
 - Writing custom business logic in tests instead of exercising the real APIs.
+- **Calling job functions directly with a plain dict** — job functions receive a `Job` instance (`func(job)`), not a dict. Call `jobs.publish(...)` then `th.run_pending_jobs()` to exercise the real path and catch signature mismatches.
 
 ---
 
@@ -223,6 +224,58 @@ All other keys (e.g. `periods`, `slug`, `status`, `data`, `id`) are safe to acce
 
 ---
 
+## Testing Async Jobs — `th.run_pending_jobs()`
+
+```python
+count = th.run_pending_jobs(channel=None, status="pending")
+```
+
+Executes pending jobs from the database using the same calling convention as the production job engine — `func(job)` where `job` is a `Job` model instance. No Redis or running engine process is required.
+
+**Parameters:**
+
+| Parameter | Default | Description |
+|---|---|---|
+| `channel` | `None` | Filter to jobs on a specific channel. Omit to run all pending jobs. |
+| `status` | `"pending"` | Job status to filter on. |
+
+**Behavior:**
+- Queries `Job.objects.filter(status=status)` ordered by `created`
+- For each job: resolves the function via `load_job_function(job.func)`, calls `func(job)`
+- Marks each job `completed` on success, `failed` on exception
+- Returns the count of jobs executed
+
+**Why use this instead of calling job functions directly:**
+
+Job functions receive a `Job` model instance, not a plain dict. Calling a job function directly with a dict bypasses that calling convention and will not catch signature mismatches. Using `th.run_pending_jobs()` exercises the full pipeline — publish, DB row, function dispatch — exactly as production does.
+
+```python
+@th.django_unit_test()
+def test_handler_fires(opts):
+    from mojo.apps import jobs
+    from mojo.apps.jobs.models import Job
+
+    # Clean up any leftover jobs from previous runs
+    Job.objects.filter(channel="default").delete()
+
+    # Publish the job the same way production code does
+    jobs.publish(
+        "myapp.tasks.send_notification",
+        {"user_id": opts.user.pk, "message": "hello"},
+        channel="default",
+    )
+
+    # Run pending jobs using the real engine calling convention
+    executed = th.run_pending_jobs(channel="default")
+    assert executed >= 1, f"Expected at least 1 job executed, got {executed}"
+
+    # Assert side effects here
+```
+
+**Setup tip:** delete relevant jobs at the top of your test to prevent leftover rows from previous runs from inflating counts or interfering with assertions.
+
+---
+
 ## Prompting / Pairing Checklist
 
 1. Identify the module and create or update numbered files.
@@ -231,7 +284,8 @@ All other keys (e.g. `periods`, `slug`, `status`, `data`, `id`) are safe to acce
 4. For high-cost paths, add `@requires_extra("...")` and document the flag.
 5. **Every `assert` must include a descriptive failure message string.** No bare asserts.
 6. **Use `obj["values"]` not `obj.values` for any key that shadows a dict built-in.**
-7. Before implementing workarounds, question the upstream API — document friction for follow-up.
-8. Run with `./bin/run_tests -v -e` (or via config) when validating locally.
+7. **For async job flows**, call `jobs.publish(...)` then `th.run_pending_jobs()` — never call job functions directly with a plain dict.
+8. Before implementing workarounds, question the upstream API — document friction for follow-up.
+9. Run with `./bin/run_tests -v -e` (or via config) when validating locally.
 
 Keeping these habits makes the suite predictable for both humans and models, highlights design gaps early, and keeps TestIt simple.
