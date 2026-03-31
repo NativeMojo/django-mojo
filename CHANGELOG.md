@@ -2,6 +2,11 @@
 
 ## v1.1.4 - March 31, 2026
 
+fixed logging bug, fixed iptables blocking
+
+
+## v1.1.4 - March 31, 2026
+
 ### Changed
 - **Logging convention enforced across framework** — all `import logging` / `logging.getLogger()` calls in `mojo/apps/` and `mojo/helpers/aws/` replaced with `from mojo.helpers import logit`. Ensures all framework logs route to `var/log/` files (`mojo.log`, `error.log`, `debug.log`), benefit from sensitive data masking, and appear in structured format. The only file permitted to import stdlib `logging` is `mojo/helpers/logit.py`. Rule added to `.claude/rules/core.md` to prevent regressions.
 - **Broadcast job functions renamed** — `block_ip`, `unblock_ip`, `sync_ipset`, and `remove_ipset` in `mojo.apps.incident.asyncjobs` renamed to `broadcast_block_ip`, `broadcast_unblock_ip`, `broadcast_sync_ipset`, and `broadcast_remove_ipset`. The new names reflect that broadcast handlers receive a plain `dict` from pub/sub (not a `Job` instance). All callers updated.
