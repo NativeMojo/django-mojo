@@ -245,11 +245,14 @@ handler = "block://?ttl=3600,ticket://?priority=9,notify://perm@manage_security"
 
 #### `block://?ttl=<seconds>`
 
-Blocks the event's `source_ip` across the entire fleet. Creates a `GeoLocatedIP` block record, then broadcasts an iptables block to all servers.
+Blocks the event's `source_ip` across the entire fleet. Creates a `GeoLocatedIP` block record, broadcasts an iptables block to all servers, records the action in `IncidentHistory`, and auto-resolves the incident.
+
+`geo.block()` is idempotent — if the IP is already actively blocked the call returns `True` without re-broadcasting or incrementing `block_count`.
 
 | Param | Default | Description |
 |-------|---------|-------------|
 | `ttl` | `3600` | Block duration in seconds (0 = permanent) |
+| `reason` | `auto:ruleset` | Base reason string. Incident and event IDs are appended automatically: `auto:ruleset:incident:42:event:87` |
 
 ```
 block://?ttl=600      # Block for 10 minutes
@@ -492,14 +495,15 @@ The agent's response is posted as a new `[LLM Agent]` note on the ticket.
 ### Single IP Blocking
 
 When a `block://` handler fires:
-1. `GeoLocatedIP.block(ip, ttl, reason)` updates the database record
-2. An async `block_ip` job is broadcast to all servers in the fleet
+1. `GeoLocatedIP.block(ip, ttl, reason)` updates the database record — idempotent: skips re-blocking if the IP is already actively blocked
+2. An async `broadcast_block_ip` broadcast is sent to all servers in the fleet
 3. Each server runs `iptables -I INPUT -s {ip} -j DROP`
 4. If `blocked_until` is set, the sweep cron auto-unblocks when TTL expires
+5. The handler records the block action in `IncidentHistory` and auto-resolves the incident
 
 ### Unblocking
 
-Automatic: The `sweep_expired_blocks` cron runs every minute, finds IPs where `blocked_until < now()`, updates the database, and broadcasts `unblock_ip` to the fleet.
+Automatic: The `sweep_expired_blocks` cron runs every minute, finds IPs where `blocked_until < now()`, updates the database, and broadcasts `broadcast_unblock_ip` to the fleet.
 
 Manual: Via GeoLocatedIP POST_SAVE_ACTIONS (`unblock`, `whitelist`).
 
@@ -633,14 +637,14 @@ Default health rules are auto-created on first health check run. They send notif
 
 ### Async Jobs (Broadcast)
 
-These jobs are dispatched to all servers in the fleet:
+These jobs are dispatched to all servers in the fleet. Broadcast handlers receive a plain dict (not a `Job` instance) from the pub/sub system.
 
-| Job | Trigger | Payload |
-|-----|---------|---------|
-| `block_ip` | `block://` handler | `{"ips": ["1.2.3.4"], "ttl": 600}` |
-| `unblock_ip` | Sweep cron or manual | `{"ips": ["1.2.3.4"]}` |
-| `sync_ipset` | IPSet refresh | `{"name": "country_cn", "cidrs": [...]}` |
-| `remove_ipset` | IPSet disabled | `{"name": "country_cn"}` |
+| Job | Trigger | Data |
+|-----|---------|------|
+| `broadcast_block_ip` | `block://` handler | `{"ips": ["1.2.3.4"], "ttl": 600}` |
+| `broadcast_unblock_ip` | Sweep cron or manual | `{"ips": ["1.2.3.4"]}` |
+| `broadcast_sync_ipset` | IPSet refresh | `{"name": "country_cn", "cidrs": [...]}` |
+| `broadcast_remove_ipset` | IPSet disabled | `{"name": "country_cn"}` |
 
 ### Async Jobs (Single Server)
 
@@ -651,7 +655,7 @@ These jobs are dispatched to all servers in the fleet:
 | `execute_llm_ticket_reply` | Ticket note added | Re-invokes LLM on ticket conversation (receives `Job` instance) |
 | `learn_from_block` | Bouncer block | Runs signature learning analysis |
 
-All job functions follow the engine's calling convention: `func(job)` where `job` is a `Job` model instance. The payload data is in `job.payload`.
+Single-server job functions follow the engine's calling convention: `func(job)` where `job` is a `Job` model instance with `job.payload` holding the data. Broadcast handlers use `func(data)` where `data` is a plain dict.
 
 ## 12. Configuration Reference
 
