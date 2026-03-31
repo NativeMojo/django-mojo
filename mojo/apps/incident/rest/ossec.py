@@ -60,7 +60,7 @@ def on_ossec_alert(request):
 
 @md.POST('ossec/alert/batch')
 @md.public_endpoint()
-@md.rate_limit("ossec_alert_batch", ip_limit=10)
+@md.rate_limit("ossec_alert_batch", ip_limit=100)
 def on_ossec_alert_batch(request):
     auth_error = _check_ossec_secret(request)
     if auth_error:
