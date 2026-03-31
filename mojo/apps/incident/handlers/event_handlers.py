@@ -349,11 +349,12 @@ class BlockHandler:
             ttl = int(self.params.get("ttl", 600)) or None
 
             # Build reason with incident/event reference for traceability
+            # Use | separator to avoid ambiguity with colons in reason values
             reason_parts = [self.params.get("reason", "auto:ruleset")]
             if event.incident_id:
                 reason_parts.append(f"incident:{event.incident_id}")
             reason_parts.append(f"event:{event.pk}")
-            reason = ":".join(reason_parts)
+            reason = "|".join(reason_parts)
 
             from mojo.apps.account.models import GeoLocatedIP
             geo = GeoLocatedIP.geolocate(ip, auto_refresh=False)
