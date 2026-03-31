@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## v1.1.3 - March 31, 2026
+
+bug fixes in new llm security agent, added anthropic requirement
+
+
 ## v1.1.2 - March 30, 2026
 
 ### Fixed
