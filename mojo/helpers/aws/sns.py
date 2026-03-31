@@ -13,7 +13,7 @@ from .client import get_session
 from mojo.helpers.settings import settings
 from mojo.helpers import logit
 
-logger = logit.get_logger(__name__)
+logger = logit.get_logger(__name__, "aws.log")
 
 
 class SNSTopic:
