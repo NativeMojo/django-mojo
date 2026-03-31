@@ -7,27 +7,36 @@
 
 ## Description
 
-Production shows `firewall:block` log entries with block_count climbing rapidly (132→141 in ~1 second) for the same IP, yet `iptables -L` shows zero rules. Three related problems:
+Production shows `firewall:block` log entries with block_count climbing rapidly (132→141 in ~1 second) for the same IP, yet `iptables -L` shows zero rules. The execute_handler job completes successfully (status=completed, 35ms, no errors), confirming the DB side works end-to-end. The problem is somewhere between the `broadcast_execute()` call and iptables application.
 
-1. **iptables rules never applied** — `geo.block()` updates the DB and logs successfully, then calls `jobs.broadcast_execute("...asyncjobs.block_ip", data)`. The broadcast function `block_ip(job)` calls `job.payload` but receives a plain dict from the broadcast system, causing `AttributeError` on the runner. The error is logged to the runner's logger (job_engine.py:414) but not to the web/DB logs, so it's invisible from the admin side.
+### Confirmed problems
 
-2. **Repeated blocking of already-blocked IPs** — `geo.block()` has no idempotency check. It doesn't check `self.is_blocked` before re-blocking, so every event from the same IP triggers a new block call, incrementing `block_count`, writing duplicate logs, and firing redundant broadcasts.
+1. **Repeated blocking of already-blocked IPs** — `geo.block()` has no idempotency check. It doesn't check `self.is_blocked` before re-blocking, so every event from the same IP triggers a new block call, incrementing `block_count`, writing duplicate logs, and firing redundant broadcasts.
 
-3. **Block reason has no incident/event reference** — `BlockHandler` passes `reason="auto:ruleset"` with no incident or event ID, making it hard to trace which incident triggered the block.
+2. **Block reason has no incident/event reference** — `BlockHandler` passes `reason="auto:ruleset"` with no incident or event ID, making it hard to trace which incident triggered the block.
 
-4. **Block handler doesn't resolve the incident** — when a `block://` handler fires and successfully blocks an IP, the incident remains in whatever state it was in. It should be resolved (or at least have a history entry recording the action).
+3. **Block handler doesn't resolve the incident** — when a `block://` handler fires and successfully blocks an IP, the incident remains in whatever state it was in. It should be resolved (or at least have a history entry recording the action).
+
+4. **iptables rules never applied (CONFIRMED)** — `geo.block()` calls `jobs.broadcast_execute("...asyncjobs.block_ip", data)` which is fire-and-forget via Redis pub/sub. Runner logs confirm: `AttributeError: 'dict' object has no attribute 'payload'` — the broadcast functions receive a plain dict but try to access `job.payload`.
+
+5. **Broadcast functions need clear naming convention** — broadcast functions receive a plain dict (not a Job), but nothing in their name or signature makes this obvious. Rename with `broadcast_` prefix and add docstrings to prevent future mistakes.
 
 ## Context
 
-The DB side of blocking works — `GeoLocatedIP.is_blocked=True`, `blocked_until` is set, `block_count` increments, logit entries are written. But the fleet-wide iptables enforcement never happens because the broadcast function crashes. This means the security pipeline detects threats and records them but fails to actually enforce the block at the network level.
+The DB side of blocking works — `GeoLocatedIP.is_blocked=True`, `blocked_until` is set, `block_count` increments, logit entries are written. The execute_handler job completes successfully. But the fleet-wide iptables enforcement never happens.
 
-The repeated blocking is a secondary issue — without the catch-all bundling or dedup, rapid-fire events from the same IP each trigger the handler independently.
+The `broadcast_execute` is fire-and-forget: it publishes to Redis pub/sub with no persistence, no acknowledgement, and no retry. Any failure on the runner side is invisible from the web/DB layer. The root cause could be in the broadcast receive path, the runner subscription, or the firewall execution — **runner-side logs are needed to narrow this down**.
+
+The repeated blocking is a confirmed secondary issue — without idempotency, rapid-fire events from the same IP each trigger the handler independently.
 
 ## Acceptance Criteria
 
-### 1. Fix broadcast functions to accept dict (not Job)
-- `block_ip`, `unblock_ip`, `sync_ipset`, `remove_ipset` in `asyncjobs.py` receive a dict from `broadcast_execute`, not a Job instance
-- They should use `data.get(...)` directly, not `data.payload`
+### 1. Fix and rename broadcast functions
+- Rename `block_ip` → `broadcast_block_ip`, `unblock_ip` → `broadcast_unblock_ip`, `sync_ipset` → `broadcast_sync_ipset`, `remove_ipset` → `broadcast_remove_ipset`
+- Change param from `job` to `data`, use `data.get(...)` directly
+- Add docstring: `"""Broadcast handler — receives plain dict from pub/sub, not a Job."""`
+- Replace any `job.add_log()` calls with `logit`
+- Update all `broadcast_execute()` call sites to reference new function names
 
 ### 2. Add idempotency to `geo.block()`
 - If `self.is_blocked` is already True and the block hasn't expired, skip the re-block
@@ -44,11 +53,11 @@ The repeated blocking is a secondary issue — without the catch-all bundling or
 
 ## Investigation
 
-**Likely root cause (iptables empty)**: `broadcast_execute` at `manager.py:396` calls `func(message.get('data', {}))` passing a plain dict. But `block_ip` at `asyncjobs.py:29` calls `job.payload` which fails because dicts have no `.payload` attribute. The exception is caught at `job_engine.py:413-414` and logged to the runner logger only.
+**Confirmed (repeated blocking)**: `geo.block()` at `geolocated_ip.py:326` unconditionally sets `is_blocked=True` and increments `block_count` without checking if already blocked. Production data confirms this (block_count 132→141 in ~1 second).
 
-**Likely root cause (repeated blocking)**: `geo.block()` at `geolocated_ip.py:326` unconditionally sets `is_blocked=True` and increments `block_count` without checking if already blocked.
+**Confirmed (iptables empty)**: Runner logs show `AttributeError: 'dict' object has no attribute 'payload'` in `asyncjobs.block_ip`. The broadcast system passes a plain dict but the function tries to access `job.payload`. All four broadcast functions in `asyncjobs.py` have this same bug.
 
-**Confidence**: high — code analysis confirms both paths
+**Confidence**: high for all confirmed problems
 
 **Code path (iptables)**:
 1. `event_handlers.py:354` — `geo.block(reason=reason, ttl=ttl)`
@@ -74,8 +83,8 @@ The repeated blocking is a secondary issue — without the catch-all bundling or
 
 ## Plan
 
-### Step 1: Fix broadcast functions to accept dict
-Rename param to `data`, use `data.get(...)` directly for all four broadcast functions.
+### Step 1: Fix and rename broadcast functions
+Rename all four broadcast functions with `broadcast_` prefix, change param to `data`, use `data.get(...)`. Replace `job.add_log()` with `logit`. Update all `broadcast_execute()` call sites.
 
 ### Step 2: Add idempotency to geo.block()
 Early return if `self.is_blocked and not self.is_expired` — skip re-block, don't increment count, don't re-broadcast.

@@ -97,7 +97,7 @@ class IPSet(models.Model, MojoModel):
         self.save(update_fields=["is_enabled"])
         from mojo.apps import jobs
         jobs.broadcast_execute(
-            "mojo.apps.incident.asyncjobs.remove_ipset",
+            "mojo.apps.incident.asyncjobs.broadcast_remove_ipset",
             {"name": self.name},
         )
 
@@ -112,7 +112,7 @@ class IPSet(models.Model, MojoModel):
             return
         from mojo.apps import jobs
         jobs.broadcast_execute(
-            "mojo.apps.incident.asyncjobs.sync_ipset",
+            "mojo.apps.incident.asyncjobs.broadcast_sync_ipset",
             {"name": self.name, "cidrs": self.cidrs},
         )
         self.last_synced = dates.utcnow()

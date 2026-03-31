@@ -323,6 +323,10 @@ class GeoLocatedIP(models.Model, MojoModel):
         if self.is_whitelisted:
             return False
 
+        # Idempotency: skip if already blocked and block hasn't expired
+        if self.is_blocked and self.block_active:
+            return True
+
         self.is_blocked = True
         self.blocked_at = dates.utcnow()
         self.blocked_reason = reason
@@ -357,7 +361,7 @@ class GeoLocatedIP(models.Model, MojoModel):
         if broadcast:
             try:
                 jobs.broadcast_execute(
-                    "mojo.apps.incident.asyncjobs.block_ip",
+                    "mojo.apps.incident.asyncjobs.broadcast_block_ip",
                     {"ips": [self.ip_address], "ttl": ttl},
                 )
                 metrics.record("firewall:broadcasts", category="firewall")
@@ -389,7 +393,7 @@ class GeoLocatedIP(models.Model, MojoModel):
         if broadcast:
             try:
                 jobs.broadcast_execute(
-                    "mojo.apps.incident.asyncjobs.unblock_ip",
+                    "mojo.apps.incident.asyncjobs.broadcast_unblock_ip",
                     {"ips": [self.ip_address]},
                 )
             except Exception:
@@ -425,7 +429,7 @@ class GeoLocatedIP(models.Model, MojoModel):
         if was_blocked:
             try:
                 jobs.broadcast_execute(
-                    "mojo.apps.incident.asyncjobs.unblock_ip",
+                    "mojo.apps.incident.asyncjobs.broadcast_unblock_ip",
                     {"ips": [self.ip_address]},
                 )
             except Exception:
