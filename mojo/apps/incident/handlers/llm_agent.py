@@ -6,8 +6,8 @@ IP history, related incidents, metrics), and takes action: ignore noise,
 resolve real threats (block IPs, send alerts), or escalate to humans via tickets.
 
 Entry points:
-    - execute_llm_handler(payload)  — called by the job queue when llm:// handler fires
-    - execute_llm_ticket_reply(payload) — called when a human replies to an llm_linked ticket
+    - execute_llm_handler(job)  — called by the job engine when llm:// handler fires
+    - execute_llm_ticket_reply(job) — called when a human replies to an llm_linked ticket
 
 Prompt hierarchy:
     1. SYSTEM_PROMPT (always loaded) — generic security context + tool instructions
@@ -21,8 +21,12 @@ from mojo.helpers.settings import settings
 
 logger = logging.getLogger(__name__)
 
-LLM_API_KEY = settings.get_static("LLM_HANDLER_API_KEY", None)
-LLM_MODEL = settings.get_static("LLM_HANDLER_MODEL", "claude-sonnet-4-20250514")
+
+def _get_llm_api_key():
+    return settings.get("LLM_HANDLER_API_KEY", None)
+
+def _get_llm_model():
+    return settings.get("LLM_HANDLER_MODEL", "claude-sonnet-4-20250514")
 
 SYSTEM_PROMPT = """You are a security operations agent responsible for triaging incidents in a web application fleet.
 
@@ -629,27 +633,18 @@ TOOL_DISPATCH = {
 # ---------------------------------------------------------------------------
 
 def _call_claude(messages, system_prompt):
-    """Call Claude API with tool use. Returns the full response."""
-    import httpx
+    """Call Claude API with tool use. Returns the response as a dict."""
+    import anthropic
 
-    response = httpx.post(
-        "https://api.anthropic.com/v1/messages",
-        headers={
-            "x-api-key": LLM_API_KEY,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        },
-        json={
-            "model": LLM_MODEL,
-            "max_tokens": 4096,
-            "system": system_prompt,
-            "tools": TOOLS,
-            "messages": messages,
-        },
-        timeout=120.0,
+    client = anthropic.Anthropic(api_key=_get_llm_api_key())
+    response = client.messages.create(
+        model=_get_llm_model(),
+        max_tokens=4096,
+        system=system_prompt,
+        tools=TOOLS,
+        messages=messages,
     )
-    response.raise_for_status()
-    return response.json()
+    return response.model_dump()
 
 
 def _run_agent_loop(messages, system_prompt, max_iterations=15):
@@ -766,19 +761,21 @@ def _build_incident_message(event, incident):
 # Job entry points
 # ---------------------------------------------------------------------------
 
-def execute_llm_handler(payload):
+def execute_llm_handler(job):
     """
     Job function: triage an incident via the LLM agent.
 
-    Payload keys:
+    The job engine calls func(job) where job is a Job model instance.
+    The actual data is in job.payload with keys:
         event_id: ID of the Event
         incident_id: ID of the Incident
         ruleset_id: ID of the RuleSet that triggered this (optional)
     """
-    if not LLM_API_KEY:
+    if not _get_llm_api_key():
         logger.warning("LLM handler called but LLM_HANDLER_API_KEY not configured")
         return
 
+    payload = job.payload
     event_id = payload.get("event_id")
     incident_id = payload.get("incident_id")
     ruleset_id = payload.get("ruleset_id")
@@ -835,17 +832,19 @@ def execute_llm_handler(payload):
                 note="[LLM Agent] Triage failed due to an error")
 
 
-def execute_llm_ticket_reply(payload):
+def execute_llm_ticket_reply(job):
     """
     Job function: re-invoke the LLM when a human replies to an llm_linked ticket.
 
-    Payload keys:
+    The job engine calls func(job) where job is a Job model instance.
+    The actual data is in job.payload with keys:
         ticket_id: ID of the Ticket
         note_id: ID of the new TicketNote that triggered this
     """
-    if not LLM_API_KEY:
+    if not _get_llm_api_key():
         return
 
+    payload = job.payload
     ticket_id = payload.get("ticket_id")
 
     try:
