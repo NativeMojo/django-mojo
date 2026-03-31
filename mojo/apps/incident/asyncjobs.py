@@ -15,23 +15,23 @@ def prune_events(job):
     qset.delete()
 
 
-def block_ip(job):
-    """
-    Broadcast job: applies iptables blocks on the local instance.
+def broadcast_block_ip(data):
+    """Broadcast handler — receives plain dict from pub/sub, not a Job.
+
+    Applies iptables blocks on the local instance.
     Called via jobs.broadcast_execute() so it runs on every runner.
 
-    Expected payload:
+    Expected data keys:
         ips: list of IP strings to block
         ttl: seconds before auto-unblock (default 600, 0 = permanent)
     """
     from mojo.apps.incident import firewall
 
-    payload = job.payload or {}
-    ips = payload.get("ips", [])
-    ttl = payload.get("ttl", 600)
+    ips = data.get("ips", [])
+    ttl = data.get("ttl", 600)
 
     if not ips:
-        job.add_log("block_ip called with no IPs", kind="warning")
+        logit.warning("broadcast_block_ip called with no IPs")
         return
 
     blocked = []
@@ -42,23 +42,23 @@ def block_ip(job):
         if firewall.block(ip):
             blocked.append(ip)
 
-    job.add_log(f"Blocked {len(blocked)}/{len(ips)} IPs (ttl={ttl}s): {blocked}")
+    logit.info("broadcast_block_ip: blocked %d/%d IPs (ttl=%ds): %s", len(blocked), len(ips), ttl, blocked)
     # No delayed unblock scheduled here — the sweep_expired_blocks cron
     # handles expiry every minute via GeoLocatedIP.blocked_until
 
 
-def unblock_ip(job):
-    """
-    Broadcast job: removes iptables blocks on the local instance.
+def broadcast_unblock_ip(data):
+    """Broadcast handler — receives plain dict from pub/sub, not a Job.
+
+    Removes iptables blocks on the local instance.
     Called by sweep_expired_blocks or manually via admin unblock.
 
-    Expected payload:
+    Expected data keys:
         ips: list of IP strings to unblock
     """
     from mojo.apps.incident import firewall
 
-    payload = job.payload or {}
-    ips = payload.get("ips", [])
+    ips = data.get("ips", [])
 
     if not ips:
         return
@@ -71,7 +71,7 @@ def unblock_ip(job):
         if firewall.unblock(ip):
             unblocked.append(ip)
 
-    job.add_log(f"Unblocked {len(unblocked)}/{len(ips)} IPs: {unblocked}")
+    logit.info("broadcast_unblock_ip: unblocked %d/%d IPs: %s", len(unblocked), len(ips), unblocked)
 
 
 def sweep_expired_blocks(job):
@@ -105,53 +105,53 @@ def sweep_expired_blocks(job):
 
     # Single broadcast to remove all expired blocks fleet-wide
     jobs.broadcast_execute(
-        "mojo.apps.incident.asyncjobs.unblock_ip",
+        "mojo.apps.incident.asyncjobs.broadcast_unblock_ip",
         {"ips": expired},
     )
 
     job.add_log(f"Swept {len(expired)} expired blocks: {expired}")
 
 
-def sync_ipset(job):
-    """
-    Broadcast job: loads an ipset on the local instance.
+def broadcast_sync_ipset(data):
+    """Broadcast handler — receives plain dict from pub/sub, not a Job.
+
+    Loads an ipset on the local instance.
     Called via jobs.broadcast_execute() so every instance gets the same set.
 
-    Expected payload:
+    Expected data keys:
         name: ipset name (e.g. "country_cn")
         cidrs: list of CIDR strings
     """
     from mojo.apps.incident import firewall
 
-    payload = job.payload or {}
-    name = payload.get("name")
-    cidrs = payload.get("cidrs", [])
+    name = data.get("name")
+    cidrs = data.get("cidrs", [])
 
     if not name:
-        job.add_log("sync_ipset called with no name", kind="warning")
+        logit.warning("broadcast_sync_ipset called with no name")
         return
 
     ok, loaded = firewall.ipset_load(name, cidrs)
-    job.add_log(f"ipset {name}: loaded {loaded} CIDRs, success={ok}")
+    logit.info("broadcast_sync_ipset: ipset %s loaded %d CIDRs, success=%s", name, loaded, ok)
 
 
-def remove_ipset(job):
-    """
-    Broadcast job: removes an ipset from the local instance.
+def broadcast_remove_ipset(data):
+    """Broadcast handler — receives plain dict from pub/sub, not a Job.
 
-    Expected payload:
+    Removes an ipset from the local instance.
+
+    Expected data keys:
         name: ipset name to remove
     """
     from mojo.apps.incident import firewall
 
-    payload = job.payload or {}
-    name = payload.get("name")
+    name = data.get("name")
 
     if not name:
         return
 
     firewall.ipset_remove(name)
-    job.add_log(f"ipset {name}: removed")
+    logit.info("broadcast_remove_ipset: ipset %s removed", name)
 
 
 def refresh_ipsets(job):

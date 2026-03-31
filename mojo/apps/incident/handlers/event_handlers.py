@@ -347,11 +347,35 @@ class BlockHandler:
                 return False
 
             ttl = int(self.params.get("ttl", 600)) or None
-            reason = self.params.get("reason", "auto:ruleset")
+
+            # Build reason with incident/event reference for traceability
+            reason_parts = [self.params.get("reason", "auto:ruleset")]
+            if event.incident_id:
+                reason_parts.append(f"incident:{event.incident_id}")
+            reason_parts.append(f"event:{event.pk}")
+            reason = ":".join(reason_parts)
 
             from mojo.apps.account.models import GeoLocatedIP
             geo = GeoLocatedIP.geolocate(ip, auto_refresh=False)
-            return geo.block(reason=reason, ttl=ttl)
+            result = geo.block(reason=reason, ttl=ttl)
+
+            # Record action on incident and resolve it
+            if result and event.incident_id:
+                try:
+                    from mojo.apps.incident.models import Incident
+                    incident = Incident.objects.get(pk=event.incident_id)
+                    ttl_display = f"{ttl}s" if ttl else "permanent"
+                    incident.add_history("handler:block",
+                        note=f"IP {ip} blocked ({ttl_display}), reason: {reason}")
+                    if incident.status not in ("resolved", "ignored"):
+                        incident.status = "resolved"
+                        incident.save(update_fields=["status"])
+                        incident.add_history("status_changed",
+                            note=f"Auto-resolved: IP {ip} blocked by block handler")
+                except Exception:
+                    logger.exception("BlockHandler: failed to update incident %s", event.incident_id)
+
+            return result
         except Exception:
             logger.exception("BlockHandler failed for event %s", event.pk)
             return False
