@@ -15,11 +15,11 @@ Prompt hierarchy:
     3. RuleSet.metadata.agent_memory — LLM's own learnings for this rule type
     4. Event/incident context — structured data in the user message
 """
-import logging
 import ujson
 from mojo.helpers.settings import settings
+from mojo.helpers import logit
 
-logger = logging.getLogger(__name__)
+logger = logit.get_logger(__name__, "incident.log")
 
 
 def _get_llm_api_key():

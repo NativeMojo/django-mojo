@@ -4,7 +4,6 @@ AWS EC2 Helper Module
 Provides simple interfaces for managing AWS EC2 (Elastic Compute Cloud) resources.
 """
 
-import logging
 import time
 import boto3
 import botocore

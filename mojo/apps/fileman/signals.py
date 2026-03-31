@@ -1,10 +1,10 @@
-import logging
 from django.db.models.signals import post_save, post_delete
 from django.dispatch import receiver
 from mojo.apps.fileman.models import File
 from mojo.apps.fileman.tasks import process_file_renditions, cleanup_renditions
+from mojo.helpers import logit
 
-logger = logging.getLogger(__name__)
+logger = logit.get_logger(__name__, "fileman.log")
 
 @receiver(post_save, sender=File)
 def handle_file_upload_completed(sender, instance, created, **kwargs):

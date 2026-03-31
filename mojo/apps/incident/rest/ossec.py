@@ -1,11 +1,11 @@
-import logging
 from mojo import decorators as md
 from mojo.apps.incident.parsers import ossec
 from mojo import JsonResponse
 from mojo.apps.incident import reporter
 from mojo.helpers.settings import settings
+from mojo.helpers import logit
 
-logger = logging.getLogger(__name__)
+logger = logit.get_logger(__name__, "incident.log")
 
 OSSEC_SECRET = settings.get_static("OSSEC_SECRET", None)
 

@@ -12,8 +12,6 @@ Exposed capabilities:
 Note: WebSocket authentication is message-only; header/query parsing helpers were removed.
 """
 
-import logging
-
 from asgiref.sync import sync_to_async
 
 # Reuse the same handler maps as the HTTP middleware for a single source of truth
@@ -23,8 +21,9 @@ from mojo.middleware.auth import (
     AUTH_BEARER_NAME_MAP,
 )
 from mojo.helpers import modules
+from mojo.helpers import logit
 
-logger = logging.getLogger(__name__)
+logger = logit.get_logger(__name__, "realtime.log")
 
 # Public API surface
 __all__ = [

@@ -8,7 +8,6 @@ Key principles (KISS):
 - User can have multiple passkeys for different portals
 """
 import json
-import logging
 import uuid
 from typing import List, Tuple
 from urllib.parse import urlparse
@@ -32,8 +31,9 @@ from mojo import errors as merrors
 from mojo.helpers import dates
 from mojo.helpers.redis import get_connection
 from mojo.helpers.settings import settings
+from mojo.helpers import logit
 
-logger = logging.getLogger(__name__)
+logger = logit.get_logger(__name__, "account.log")
 
 CHALLENGE_TTL = 300  # 5 minutes
 

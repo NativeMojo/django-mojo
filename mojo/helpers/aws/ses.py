@@ -5,7 +5,6 @@ Provides simple interfaces for managing AWS SES (Simple Email Service).
 """
 
 import json
-import logging
 import boto3
 import botocore
 from typing import Dict, List, Optional, Union, Any

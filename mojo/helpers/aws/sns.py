@@ -5,7 +5,6 @@ Provides simple interfaces for managing AWS SNS (Simple Notification Service).
 """
 
 import json
-import logging
 import boto3
 import botocore
 from typing import Dict, List, Optional, Union, Any

@@ -1,11 +1,11 @@
 import os
-import logging
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Tuple, Any, Union
 from mojo.helpers.settings import settings
+from mojo.helpers import logit
 from mojo.apps.fileman.models import File, FileRendition
 
-logger = logging.getLogger(__name__)
+logger = logit.get_logger(__name__, "fileman.log")
 
 class RenditionRole:
     """

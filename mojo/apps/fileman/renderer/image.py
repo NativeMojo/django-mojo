@@ -3,12 +3,12 @@ import io
 from typing import Dict, Optional, Tuple, Union, BinaryIO
 from PIL import Image, ImageOps
 import mimetypes
-import logging
 
 from mojo.apps.fileman.models import File, FileRendition
 from mojo.apps.fileman.renderer.base import BaseRenderer, RenditionRole
+from mojo.helpers import logit
 
-logger = logging.getLogger(__name__)
+logger = logit.get_logger(__name__, "fileman.log")
 
 class ImageRenderer(BaseRenderer):
     """

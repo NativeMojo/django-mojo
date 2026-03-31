@@ -1,9 +1,8 @@
-import logging
 from django.db import models
 from mojo.models import MojoModel
 from mojo.helpers import logit
 
-logger = logging.getLogger(__name__)
+logger = logit.get_logger(__name__, "incident.log")
 
 class Ticket(models.Model, MojoModel):
     class Meta:
