@@ -8,6 +8,7 @@ These rules apply to all work in this repository. Non-negotiable.
 ## Forbidden Actions
 - Never use Python type hints in framework code.
 - Never make blind edits — read target files first.
+- Never use `import logging` or `logging.getLogger()`. Use `from mojo.helpers import logit` instead — `logit.info()`, `logit.error()`, etc. for convenience, or `logger = logit.get_logger(name, "app.log")` for named loggers. The only file allowed to import stdlib logging is `mojo/helpers/logit.py`.
 
 ## Migrations & Test Infrastructure
 - django-mojo ships its own migrations. After adding or changing models, run `bin/create_testproject` to regenerate the test project with proper migrations.

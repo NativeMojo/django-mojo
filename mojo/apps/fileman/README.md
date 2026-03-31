@@ -520,8 +520,8 @@ export KMS_KEY_ID="arn:aws:kms:us-east-1:123456789012:key/12345678-1234-1234-123
 
 ```python
 # Enable debug logging
-import logging
-logging.getLogger('mojo.apps.fileman').setLevel(logging.DEBUG)
+from mojo.helpers import logit
+logger = logit.get_logger('mojo.apps.fileman', 'fileman.log', debug=True)
 
 # Check file status
 file_obj = File.objects.get(upload_token='abc123...')

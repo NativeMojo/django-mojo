@@ -1,4 +1,3 @@
-import logging
 from typing import Dict, List, Optional, Tuple, Any, Union
 
 # Import renderer classes
@@ -8,8 +7,9 @@ from mojo.apps.fileman.renderer.image import ImageRenderer
 from mojo.apps.fileman.renderer.video import VideoRenderer
 from mojo.apps.fileman.renderer.document import DocumentRenderer
 from mojo.apps.fileman.renderer.audio import AudioRenderer
+from mojo.helpers import logit
 
-logger = logging.getLogger(__name__)
+logger = logit.get_logger(__name__, "fileman.log")
 
 # Register renderers in order of preference
 RENDERERS = [

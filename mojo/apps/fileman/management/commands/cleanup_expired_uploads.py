@@ -2,13 +2,12 @@ from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 from datetime import datetime, timedelta
 from django.db import transaction
-import logging
 
 from mojo.apps.fileman.models import File, FileManager
 from mojo.apps.fileman.backends import get_backend
+from mojo.helpers import logit
 
-
-logger = logging.getLogger(__name__)
+logger = logit.get_logger(__name__, "fileman.log")
 
 
 class Command(BaseCommand):

@@ -1,9 +1,9 @@
-import logging
 from celery import shared_task
 from mojo.apps.fileman.models import File, FileRendition
 from mojo.apps.fileman.renderer import process_new_file, get_renderer_for_file
+from mojo.helpers import logit
 
-logger = logging.getLogger(__name__)
+logger = logit.get_logger(__name__, "fileman.log")
 
 @shared_task
 def process_file_renditions(file_id):

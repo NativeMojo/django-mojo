@@ -1,12 +1,12 @@
 import os
 import mimetypes
 import tempfile
-import logging
 import shutil
 import hashlib
 from typing import Dict, List, Tuple, Optional, Union, Any
+from mojo.helpers import logit
 
-logger = logging.getLogger(__name__)
+logger = logit.get_logger(__name__, "fileman.log")
 
 # Additional MIME type mappings that might not be in the standard library
 ADDITIONAL_MIME_TYPES = {

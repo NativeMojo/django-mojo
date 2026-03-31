@@ -27,10 +27,10 @@ Target resolution (comma-separated, mix and match):
 All notification handlers resolve targets to Users.
 No notifications are sent to addresses not associated with a User.
 """
-import logging
 from mojo.helpers.settings import settings
+from mojo.helpers import logit
 
-logger = logging.getLogger(__name__)
+logger = logit.get_logger(__name__, "incident.log")
 
 INCIDENT_EMAIL_FROM = settings.get_static("INCIDENT_EMAIL_FROM", None)
 ADMIN_PORTAL_URL = settings.get_static("ADMIN_PORTAL_URL", None)

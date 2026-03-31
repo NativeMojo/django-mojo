@@ -1,8 +1,8 @@
 from django.db import models
 from mojo.models import MojoModel
-import logging
+from mojo.helpers import logit
 
-logger = logging.getLogger(__name__)
+logger = logit.get_logger(__name__, "incident.log")
 
 
 class Incident(models.Model, MojoModel):

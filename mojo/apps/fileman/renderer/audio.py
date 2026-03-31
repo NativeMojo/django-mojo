@@ -1,7 +1,6 @@
 import os
 import subprocess
 import io
-import logging
 import mimetypes
 import tempfile
 from typing import Dict, Optional, Tuple, Union, BinaryIO, List
@@ -11,8 +10,9 @@ from PIL import Image
 from mojo.apps.fileman.models import File, FileRendition
 from mojo.apps.fileman.renderer.base import BaseRenderer, RenditionRole
 from mojo.apps.fileman.renderer.utils import get_audio_duration
+from mojo.helpers import logit
 
-logger = logging.getLogger(__name__)
+logger = logit.get_logger(__name__, "fileman.log")
 
 class AudioRenderer(BaseRenderer):
     """
