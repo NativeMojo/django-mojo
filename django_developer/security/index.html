@@ -5042,7 +5042,7 @@
 <p>Invokes the LLM security agent for autonomous triage. No parameters — the agent receives the event and incident context and decides what to do.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>llm://
 </code></pre></div>
-<p><strong>Requires:</strong> <code>LLM_HANDLER_API_KEY</code> setting.</p>
+<p><strong>Requires:</strong> <code>LLM_HANDLER_API_KEY</code> setting and the <code>anthropic</code> Python package (<code>anthropic&gt;=0.52.0</code>).</p>
 <h4 id="jobmodulefunctionparams"><code>job://&lt;module.function&gt;?&lt;params&gt;</code><a class="headerlink" href="#jobmodulefunctionparams" title="Permanent link">&para;</a></h4>
 <p>Dispatches a custom async job.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>job://myapp.jobs.analyze_traffic?window=3600
@@ -5243,6 +5243,8 @@
 </tbody>
 </table>
 <p>If <code>LLM_HANDLER_API_KEY</code> is not set, <code>llm://</code> handlers silently skip.</p>
+<p>Both settings are read at invocation time (not at startup), so changes take effect on the next LLM job without a server restart.</p>
+<p><strong>Dependency:</strong> The LLM agent requires the <code>anthropic</code> Python package (<code>anthropic&gt;=0.52.0</code>), which is included as a framework dependency.</p>
 <h3 id="available-tools-12">Available Tools (12)<a class="headerlink" href="#available-tools-12" title="Permanent link">&para;</a></h3>
 <p>The agent has access to these tools for investigation and action:</p>
 <p><strong>Investigation:</strong></p>
@@ -5625,12 +5627,12 @@
 <tr>
 <td><code>execute_llm_handler</code></td>
 <td><code>llm://</code> handler</td>
-<td>Runs LLM agent loop</td>
+<td>Runs LLM agent loop (receives <code>Job</code> instance)</td>
 </tr>
 <tr>
 <td><code>execute_llm_ticket_reply</code></td>
 <td>Ticket note added</td>
-<td>Re-invokes LLM on ticket conversation</td>
+<td>Re-invokes LLM on ticket conversation (receives <code>Job</code> instance)</td>
 </tr>
 <tr>
 <td><code>learn_from_block</code></td>
@@ -5639,6 +5641,7 @@
 </tr>
 </tbody>
 </table>
+<p>All job functions follow the engine's calling convention: <code>func(job)</code> where <code>job</code> is a <code>Job</code> model instance. The payload data is in <code>job.payload</code>.</p>
 <h2 id="12-configuration-reference">12. Configuration Reference<a class="headerlink" href="#12-configuration-reference" title="Permanent link">&para;</a></h2>
 <h3 id="required-settings">Required Settings<a class="headerlink" href="#required-settings" title="Permanent link">&para;</a></h3>
 <table>

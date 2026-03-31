@@ -3737,6 +3737,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#testing-async-jobs-thrun_pending_jobs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Testing Async Jobs — th.run_pending_jobs()
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#prompting-pairing-checklist" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3942,6 +3953,7 @@ It is intentionally lightweight so both humans and LLM agents can reason about a
 <li><strong>Using <code>obj.values</code>, <code>obj.keys</code>, or <code>obj.items</code> on an <code>objict</code></strong> — returns the dict built-in method, not your key. Use <code>obj["values"]</code> instead.</li>
 <li>Skipping the <code>--extra</code> gate on expensive tasks (cron jobs, third-party calls).</li>
 <li>Writing custom business logic in tests instead of exercising the real APIs.</li>
+<li><strong>Calling job functions directly with a plain dict</strong> — job functions receive a <code>Job</code> instance (<code>func(job)</code>), not a dict. Call <code>jobs.publish(...)</code> then <code>th.run_pending_jobs()</code> to exercise the real path and catch signature mismatches.</li>
 </ul>
 <hr />
 <h2 id="outputs-tooling">Outputs &amp; Tooling<a class="headerlink" href="#outputs-tooling" title="Permanent link">&para;</a></h2>
@@ -3958,6 +3970,62 @@ It is intentionally lightweight so both humans and LLM agents can reason about a
 <li>Shared generator for generating deterministic-looking fixtures.</li>
 </ul>
 <hr />
+<h2 id="testing-async-jobs-thrun_pending_jobs">Testing Async Jobs — <code>th.run_pending_jobs()</code><a class="headerlink" href="#testing-async-jobs-thrun_pending_jobs" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="n">count</span> <span class="o">=</span> <span class="n">th</span><span class="o">.</span><span class="n">run_pending_jobs</span><span class="p">(</span><span class="n">channel</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">status</span><span class="o">=</span><span class="s2">&quot;pending&quot;</span><span class="p">)</span>
+</code></pre></div>
+<p>Executes pending jobs from the database using the same calling convention as the production job engine — <code>func(job)</code> where <code>job</code> is a <code>Job</code> model instance. No Redis or running engine process is required.</p>
+<p><strong>Parameters:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>channel</code></td>
+<td><code>None</code></td>
+<td>Filter to jobs on a specific channel. Omit to run all pending jobs.</td>
+</tr>
+<tr>
+<td><code>status</code></td>
+<td><code>"pending"</code></td>
+<td>Job status to filter on.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Behavior:</strong>
+- Queries <code>Job.objects.filter(status=status)</code> ordered by <code>created</code>
+- For each job: resolves the function via <code>load_job_function(job.func)</code>, calls <code>func(job)</code>
+- Marks each job <code>completed</code> on success, <code>failed</code> on exception
+- Returns the count of jobs executed</p>
+<p><strong>Why use this instead of calling job functions directly:</strong></p>
+<p>Job functions receive a <code>Job</code> model instance, not a plain dict. Calling a job function directly with a dict bypasses that calling convention and will not catch signature mismatches. Using <code>th.run_pending_jobs()</code> exercises the full pipeline — publish, DB row, function dispatch — exactly as production does.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nd">@th</span><span class="o">.</span><span class="n">django_unit_test</span><span class="p">()</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_handler_fires</span><span class="p">(</span><span class="n">opts</span><span class="p">):</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>    <span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps</span><span class="w"> </span><span class="kn">import</span> <span class="n">jobs</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>    <span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.jobs.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">Job</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>    <span class="c1"># Clean up any leftover jobs from previous runs</span>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>    <span class="n">Job</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">channel</span><span class="o">=</span><span class="s2">&quot;default&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">delete</span><span class="p">()</span>
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a>
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>    <span class="c1"># Publish the job the same way production code does</span>
+<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a>    <span class="n">jobs</span><span class="o">.</span><span class="n">publish</span><span class="p">(</span>
+<a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a>        <span class="s2">&quot;myapp.tasks.send_notification&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a>        <span class="p">{</span><span class="s2">&quot;user_id&quot;</span><span class="p">:</span> <span class="n">opts</span><span class="o">.</span><span class="n">user</span><span class="o">.</span><span class="n">pk</span><span class="p">,</span> <span class="s2">&quot;message&quot;</span><span class="p">:</span> <span class="s2">&quot;hello&quot;</span><span class="p">},</span>
+<a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a>        <span class="n">channel</span><span class="o">=</span><span class="s2">&quot;default&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-14" name="__codelineno-8-14" href="#__codelineno-8-14"></a>    <span class="p">)</span>
+<a id="__codelineno-8-15" name="__codelineno-8-15" href="#__codelineno-8-15"></a>
+<a id="__codelineno-8-16" name="__codelineno-8-16" href="#__codelineno-8-16"></a>    <span class="c1"># Run pending jobs using the real engine calling convention</span>
+<a id="__codelineno-8-17" name="__codelineno-8-17" href="#__codelineno-8-17"></a>    <span class="n">executed</span> <span class="o">=</span> <span class="n">th</span><span class="o">.</span><span class="n">run_pending_jobs</span><span class="p">(</span><span class="n">channel</span><span class="o">=</span><span class="s2">&quot;default&quot;</span><span class="p">)</span>
+<a id="__codelineno-8-18" name="__codelineno-8-18" href="#__codelineno-8-18"></a>    <span class="k">assert</span> <span class="n">executed</span> <span class="o">&gt;=</span> <span class="mi">1</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;Expected at least 1 job executed, got </span><span class="si">{</span><span class="n">executed</span><span class="si">}</span><span class="s2">&quot;</span>
+<a id="__codelineno-8-19" name="__codelineno-8-19" href="#__codelineno-8-19"></a>
+<a id="__codelineno-8-20" name="__codelineno-8-20" href="#__codelineno-8-20"></a>    <span class="c1"># Assert side effects here</span>
+</code></pre></div>
+<p><strong>Setup tip:</strong> delete relevant jobs at the top of your test to prevent leftover rows from previous runs from inflating counts or interfering with assertions.</p>
+<hr />
 <h2 id="prompting-pairing-checklist">Prompting / Pairing Checklist<a class="headerlink" href="#prompting-pairing-checklist" title="Permanent link">&para;</a></h2>
 <ol>
 <li>Identify the module and create or update numbered files.</li>
@@ -3966,6 +4034,7 @@ It is intentionally lightweight so both humans and LLM agents can reason about a
 <li>For high-cost paths, add <code>@requires_extra("...")</code> and document the flag.</li>
 <li><strong>Every <code>assert</code> must include a descriptive failure message string.</strong> No bare asserts.</li>
 <li><strong>Use <code>obj["values"]</code> not <code>obj.values</code> for any key that shadows a dict built-in.</strong></li>
+<li><strong>For async job flows</strong>, call <code>jobs.publish(...)</code> then <code>th.run_pending_jobs()</code> — never call job functions directly with a plain dict.</li>
 <li>Before implementing workarounds, question the upstream API — document friction for follow-up.</li>
 <li>Run with <code>./bin/run_tests -v -e</code> (or via config) when validating locally.</li>
 </ol>
