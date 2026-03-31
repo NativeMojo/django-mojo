@@ -1,7 +1,7 @@
 # IP blocks recorded in DB but not applied to iptables + repeated blocking
 
 **Type**: bug
-**Status**: open
+**Status**: resolved
 **Date**: 2026-03-30
 **Severity**: critical
 
@@ -94,3 +94,38 @@ Pass event/incident info through to `geo.block()` reason string.
 
 ### Step 4: Record block action on incident
 Add `incident.add_history()` call when block succeeds. Consider auto-resolve param.
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-03-31
+
+### What Was Built
+Fixed broadcast functions that crashed with `AttributeError: 'dict' object has no attribute 'payload'` because they expected a Job instance but broadcast_execute passes a plain dict. Added block idempotency, incident/event traceability in block reasons, and auto-incident-resolution on successful block.
+
+### Files Changed
+- `mojo/apps/incident/asyncjobs.py` — Renamed 4 broadcast functions with `broadcast_` prefix, changed param to `data`, replaced `job.add_log()` with `logit`
+- `mojo/apps/account/models/geolocated_ip.py` — Added idempotency guard to `block()`, updated 3 broadcast_execute call sites
+- `mojo/apps/incident/handlers/event_handlers.py` — BlockHandler builds reason with incident/event IDs, auto-resolves incident after block
+- `mojo/apps/incident/models/ipset.py` — Updated 2 broadcast_execute call sites
+- `docs/django_developer/logging/incidents.md` — Updated function references and documented new behavior
+- `docs/django_developer/security/README.md` — Updated blocking flow and broadcast job table
+- `docs/django_developer/account/geoip.md` — Documented idempotency in block flow
+- `CHANGELOG.md` — Added v1.1.4 entries
+
+### Tests
+- `tests/test_incident/broadcast_and_block.py` — 11 tests covering broadcast dict acceptance, block idempotency, expiry re-block, whitelist refusal, reason traceability, incident auto-resolve, and skip-resolve-if-already-resolved
+- Run: `bin/run_tests -t test_incident.broadcast_and_block`
+
+### Full Suite
+- 1073 total, 1034 passed, 39 skipped, 0 failed
+
+### Security Review
+- Race condition in idempotency check under concurrent workers (pre-existing pattern, follow-up)
+- Broadcast errors silently swallowed with `except Exception: pass` (follow-up: add logit.exception)
+- No critical findings
+
+### Follow-up
+- Add `select_for_update()` or atomic conditional update to `geo.block()` for race-safe idempotency
+- Replace `except Exception: pass` in broadcast calls with `logit.exception(...)` for observability
+- Consider structured separator for reason string to avoid ambiguity with colons

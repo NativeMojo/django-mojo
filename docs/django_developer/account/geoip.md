@@ -75,9 +75,10 @@ Caches geolocation results per IP to reduce redundant API calls. Tracks security
 
 `GeoLocatedIP` is the single source of truth for IP blocking. When `block()` is called, it:
 
-1. Updates the database record (`is_blocked`, `blocked_at`, `blocked_until`, `blocked_reason`, `block_count`)
-2. Broadcasts `block_ip` to all instances via `jobs.broadcast_execute()`
-3. Each instance's job runner (as `ec2-user`) applies the iptables DROP rule
+1. Returns `True` immediately if `is_blocked` is already `True` and the block has not expired (idempotent — no re-broadcast, no `block_count` increment)
+2. Updates the database record (`is_blocked`, `blocked_at`, `blocked_until`, `blocked_reason`, `block_count`)
+3. Broadcasts `broadcast_block_ip` to all instances via `jobs.broadcast_execute()`
+4. Each instance's job runner (as `ec2-user`) applies the iptables DROP rule
 
 ### block(reason, ttl, broadcast)
 
@@ -87,6 +88,7 @@ geo.block(reason="ssh_brute_force", ttl=3600)  # Block for 1 hour fleet-wide
 geo.block(reason="repeat_offender")             # Permanent block (no ttl)
 ```
 
+- Returns `True` if the block succeeded or the IP was already actively blocked
 - Returns `False` if the IP is whitelisted (whitelisting always wins)
 - `ttl` in seconds. `None` or `0` = permanent (no auto-unblock)
 - `broadcast=False` to update DB only (used during bulk operations)

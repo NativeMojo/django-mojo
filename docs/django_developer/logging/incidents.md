@@ -47,7 +47,7 @@ OSSEC detects suspicious activity
   → RuleSet with block:// handler fires
   → GeoLocatedIP.block(reason, ttl) called
     → DB updated (is_blocked=True, blocked_until, blocked_reason)
-    → jobs.broadcast_execute("mojo.apps.incident.asyncjobs.block_ip", {ips, ttl})
+    → jobs.broadcast_execute("mojo.apps.incident.asyncjobs.broadcast_block_ip", {ips, ttl})
     → Every instance's job runner picks up the broadcast
     → firewall.block(ip) applies iptables DROP rule via sudo
 ```
@@ -58,7 +58,7 @@ OSSEC detects suspicious activity
 Cron (every minute): sweep_expired_blocks
   → Finds GeoLocatedIP where is_blocked=True AND blocked_until <= now
   → Bulk DB update: is_blocked=False
-  → jobs.broadcast_execute("mojo.apps.incident.asyncjobs.unblock_ip", {ips})
+  → jobs.broadcast_execute("mojo.apps.incident.asyncjobs.broadcast_unblock_ip", {ips})
   → Every instance removes the iptables rule
 ```
 
@@ -82,8 +82,8 @@ All IPs are validated against a strict regex before touching iptables. Commands 
 
 | Job | Type | Description |
 |---|---|---|
-| `block_ip` | Broadcast | Applies iptables blocks on the local instance. Payload: `{ips: [...], ttl: 600}` |
-| `unblock_ip` | Broadcast | Removes iptables blocks on the local instance. Payload: `{ips: [...]}` |
+| `broadcast_block_ip` | Broadcast | Applies iptables blocks on the local instance. Receives plain dict: `{"ips": [...], "ttl": 600}` |
+| `broadcast_unblock_ip` | Broadcast | Removes iptables blocks on the local instance. Receives plain dict: `{"ips": [...]}` |
 | `sweep_expired_blocks` | Cron (every minute) | Finds expired blocks in DB, updates DB, broadcasts fleet-wide unblock |
 | `prune_events` | Cron (daily 9:45) | Deletes events older than `INCIDENT_EVENT_PRUNE_DAYS` with level < 6 |
 
@@ -162,8 +162,8 @@ A weekly cron job (Sunday 3:00 AM) calls `refresh_ipsets`, which iterates all en
 
 | Job | Type | Description |
 |---|---|---|
-| `sync_ipset` | Broadcast | Loads ipset data on the local instance (creates ipset, loads CIDRs, adds iptables rule) |
-| `remove_ipset` | Broadcast | Removes an ipset and its iptables rule from the local instance |
+| `broadcast_sync_ipset` | Broadcast | Loads ipset data on the local instance (creates ipset, loads CIDRs, adds iptables rule). Receives plain dict: `{"name": ..., "cidrs": [...]}` |
+| `broadcast_remove_ipset` | Broadcast | Removes an ipset and its iptables rule from the local instance. Receives plain dict: `{"name": ...}` |
 | `refresh_ipsets` | Cron (weekly, Sunday 3:00 AM) | Re-fetches source data for all enabled IPSets and syncs fleet-wide |
 
 ---
@@ -402,9 +402,19 @@ block://?ttl=3600,ticket://?status=new&priority=9&category=security,email://secu
 | Param | Default | Description |
 |---|---|---|
 | `ttl` | `600` | Seconds until auto-unblock (0 or omit = permanent) |
-| `reason` | `auto:ruleset` | Reason recorded in `GeoLocatedIP.blocked_reason` |
+| `reason` | `auto:ruleset` | Base reason string recorded in `GeoLocatedIP.blocked_reason` |
 
 The block handler extracts `source_ip` from the event, calls `GeoLocatedIP.geolocate()` to get or create the record, then calls `geo.block()` which handles both the DB update and the fleet-wide broadcast.
+
+The final `blocked_reason` value is constructed by appending the incident and event IDs to the base reason for traceability:
+
+```
+auto:ruleset:incident:42:event:87
+```
+
+After a successful block, the handler also:
+- Records a `handler:block` entry in `IncidentHistory` noting the IP and TTL
+- Automatically resolves the incident (sets `status = "resolved"`) unless it is already `resolved` or `ignored`
 
 ### Ticket Handler Parameters
 
