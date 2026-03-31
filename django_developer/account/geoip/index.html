@@ -4142,8 +4142,9 @@
 <h2 id="fleet-wide-ip-blocking">Fleet-Wide IP Blocking<a class="headerlink" href="#fleet-wide-ip-blocking" title="Permanent link">&para;</a></h2>
 <p><code>GeoLocatedIP</code> is the single source of truth for IP blocking. When <code>block()</code> is called, it:</p>
 <ol>
+<li>Returns <code>True</code> immediately if <code>is_blocked</code> is already <code>True</code> and the block has not expired (idempotent — no re-broadcast, no <code>block_count</code> increment)</li>
 <li>Updates the database record (<code>is_blocked</code>, <code>blocked_at</code>, <code>blocked_until</code>, <code>blocked_reason</code>, <code>block_count</code>)</li>
-<li>Broadcasts <code>block_ip</code> to all instances via <code>jobs.broadcast_execute()</code></li>
+<li>Broadcasts <code>broadcast_block_ip</code> to all instances via <code>jobs.broadcast_execute()</code></li>
 <li>Each instance's job runner (as <code>ec2-user</code>) applies the iptables DROP rule</li>
 </ol>
 <h3 id="blockreason-ttl-broadcast">block(reason, ttl, broadcast)<a class="headerlink" href="#blockreason-ttl-broadcast" title="Permanent link">&para;</a></h3>
@@ -4152,6 +4153,7 @@
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">geo</span><span class="o">.</span><span class="n">block</span><span class="p">(</span><span class="n">reason</span><span class="o">=</span><span class="s2">&quot;repeat_offender&quot;</span><span class="p">)</span>             <span class="c1"># Permanent block (no ttl)</span>
 </code></pre></div>
 <ul>
+<li>Returns <code>True</code> if the block succeeded or the IP was already actively blocked</li>
 <li>Returns <code>False</code> if the IP is whitelisted (whitelisting always wins)</li>
 <li><code>ttl</code> in seconds. <code>None</code> or <code>0</code> = permanent (no auto-unblock)</li>
 <li><code>broadcast=False</code> to update DB only (used during bulk operations)</li>

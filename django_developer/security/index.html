@@ -4963,7 +4963,8 @@
 </code></pre></div>
 <h3 id="handler-types">Handler Types<a class="headerlink" href="#handler-types" title="Permanent link">&para;</a></h3>
 <h4 id="blockttlseconds"><code>block://?ttl=&lt;seconds&gt;</code><a class="headerlink" href="#blockttlseconds" title="Permanent link">&para;</a></h4>
-<p>Blocks the event's <code>source_ip</code> across the entire fleet. Creates a <code>GeoLocatedIP</code> block record, then broadcasts an iptables block to all servers.</p>
+<p>Blocks the event's <code>source_ip</code> across the entire fleet. Creates a <code>GeoLocatedIP</code> block record, broadcasts an iptables block to all servers, records the action in <code>IncidentHistory</code>, and auto-resolves the incident.</p>
+<p><code>geo.block()</code> is idempotent — if the IP is already actively blocked the call returns <code>True</code> without re-broadcasting or incrementing <code>block_count</code>.</p>
 <table>
 <thead>
 <tr>
@@ -4977,6 +4978,11 @@
 <td><code>ttl</code></td>
 <td><code>3600</code></td>
 <td>Block duration in seconds (0 = permanent)</td>
+</tr>
+<tr>
+<td><code>reason</code></td>
+<td><code>auto:ruleset</code></td>
+<td>Base reason string. Incident and event IDs are appended automatically: <code>auto:ruleset:incident:42:event:87</code></td>
 </tr>
 </tbody>
 </table>
@@ -5347,12 +5353,13 @@
 <h2 id="7-enforcement-ip-blocking-firewall">7. Enforcement — IP Blocking &amp; Firewall<a class="headerlink" href="#7-enforcement-ip-blocking-firewall" title="Permanent link">&para;</a></h2>
 <h3 id="single-ip-blocking">Single IP Blocking<a class="headerlink" href="#single-ip-blocking" title="Permanent link">&para;</a></h3>
 <p>When a <code>block://</code> handler fires:
-1. <code>GeoLocatedIP.block(ip, ttl, reason)</code> updates the database record
-2. An async <code>block_ip</code> job is broadcast to all servers in the fleet
+1. <code>GeoLocatedIP.block(ip, ttl, reason)</code> updates the database record — idempotent: skips re-blocking if the IP is already actively blocked
+2. An async <code>broadcast_block_ip</code> broadcast is sent to all servers in the fleet
 3. Each server runs <code>iptables -I INPUT -s {ip} -j DROP</code>
-4. If <code>blocked_until</code> is set, the sweep cron auto-unblocks when TTL expires</p>
+4. If <code>blocked_until</code> is set, the sweep cron auto-unblocks when TTL expires
+5. The handler records the block action in <code>IncidentHistory</code> and auto-resolves the incident</p>
 <h3 id="unblocking">Unblocking<a class="headerlink" href="#unblocking" title="Permanent link">&para;</a></h3>
-<p>Automatic: The <code>sweep_expired_blocks</code> cron runs every minute, finds IPs where <code>blocked_until &lt; now()</code>, updates the database, and broadcasts <code>unblock_ip</code> to the fleet.</p>
+<p>Automatic: The <code>sweep_expired_blocks</code> cron runs every minute, finds IPs where <code>blocked_until &lt; now()</code>, updates the database, and broadcasts <code>broadcast_unblock_ip</code> to the fleet.</p>
 <p>Manual: Via GeoLocatedIP POST_SAVE_ACTIONS (<code>unblock</code>, <code>whitelist</code>).</p>
 <h3 id="ipsets-bulk-blocking">IPSets (Bulk Blocking)<a class="headerlink" href="#ipsets-bulk-blocking" title="Permanent link">&para;</a></h3>
 <p>IPSets block large sets of IPs using kernel-level ipset (much faster than individual iptables rules). Used for country blocks, abuse lists, etc.</p>
@@ -5577,33 +5584,33 @@
 </tbody>
 </table>
 <h3 id="async-jobs-broadcast">Async Jobs (Broadcast)<a class="headerlink" href="#async-jobs-broadcast" title="Permanent link">&para;</a></h3>
-<p>These jobs are dispatched to all servers in the fleet:</p>
+<p>These jobs are dispatched to all servers in the fleet. Broadcast handlers receive a plain dict (not a <code>Job</code> instance) from the pub/sub system.</p>
 <table>
 <thead>
 <tr>
 <th>Job</th>
 <th>Trigger</th>
-<th>Payload</th>
+<th>Data</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>block_ip</code></td>
+<td><code>broadcast_block_ip</code></td>
 <td><code>block://</code> handler</td>
 <td><code>{"ips": ["1.2.3.4"], "ttl": 600}</code></td>
 </tr>
 <tr>
-<td><code>unblock_ip</code></td>
+<td><code>broadcast_unblock_ip</code></td>
 <td>Sweep cron or manual</td>
 <td><code>{"ips": ["1.2.3.4"]}</code></td>
 </tr>
 <tr>
-<td><code>sync_ipset</code></td>
+<td><code>broadcast_sync_ipset</code></td>
 <td>IPSet refresh</td>
 <td><code>{"name": "country_cn", "cidrs": [...]}</code></td>
 </tr>
 <tr>
-<td><code>remove_ipset</code></td>
+<td><code>broadcast_remove_ipset</code></td>
 <td>IPSet disabled</td>
 <td><code>{"name": "country_cn"}</code></td>
 </tr>
@@ -5641,7 +5648,7 @@
 </tr>
 </tbody>
 </table>
-<p>All job functions follow the engine's calling convention: <code>func(job)</code> where <code>job</code> is a <code>Job</code> model instance. The payload data is in <code>job.payload</code>.</p>
+<p>Single-server job functions follow the engine's calling convention: <code>func(job)</code> where <code>job</code> is a <code>Job</code> model instance with <code>job.payload</code> holding the data. Broadcast handlers use <code>func(data)</code> where <code>data</code> is a plain dict.</p>
 <h2 id="12-configuration-reference">12. Configuration Reference<a class="headerlink" href="#12-configuration-reference" title="Permanent link">&para;</a></h2>
 <h3 id="required-settings">Required Settings<a class="headerlink" href="#required-settings" title="Permanent link">&para;</a></h3>
 <table>
