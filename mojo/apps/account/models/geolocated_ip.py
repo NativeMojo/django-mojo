@@ -2,7 +2,7 @@ from datetime import timedelta
 from django.db import models
 from mojo.helpers.settings import settings
 from mojo.models import MojoModel
-from mojo.helpers import dates
+from mojo.helpers import dates, logit
 from mojo.apps import jobs
 from mojo.apps import metrics
 import ujson
@@ -327,16 +327,29 @@ class GeoLocatedIP(models.Model, MojoModel):
         if self.is_blocked and self.block_active:
             return True
 
-        self.is_blocked = True
-        self.blocked_at = dates.utcnow()
-        self.blocked_reason = reason
-        self.block_count = (self.block_count or 0) + 1
+        # Atomic conditional update to prevent concurrent workers from
+        # double-blocking the same IP (race-safe idempotency).
+        # Match IPs that are either not blocked or have an expired block.
+        now = dates.utcnow()
         ttl = int(ttl) if ttl else 0
-        self.blocked_until = dates.utcnow() + timedelta(seconds=ttl) if ttl else None
-        self.save(update_fields=[
-            'is_blocked', 'blocked_at', 'blocked_until',
-            'blocked_reason', 'block_count',
-        ])
+        blocked_until = now + timedelta(seconds=ttl) if ttl else None
+        updated = GeoLocatedIP.objects.filter(
+            pk=self.pk,
+        ).filter(
+            models.Q(is_blocked=False) | models.Q(blocked_until__lte=now),
+        ).update(
+            is_blocked=True,
+            blocked_at=now,
+            blocked_reason=reason,
+            block_count=models.F('block_count') + 1,
+            blocked_until=blocked_until,
+        )
+        if not updated:
+            # Already actively blocked (by us or a concurrent worker)
+            self.refresh_from_db()
+            return True
+
+        self.refresh_from_db()
 
         # Structured logit entry
         trigger = "auto:incident_rule" if reason == "auto:ruleset" else "manual"
@@ -366,7 +379,8 @@ class GeoLocatedIP(models.Model, MojoModel):
                 )
                 metrics.record("firewall:broadcasts", category="firewall")
             except Exception:
-                pass
+                logit.exception("Failed to broadcast block for %s", self.ip_address)
+                metrics.record("firewall:broadcast_errors", category="firewall")
 
         return True
 
@@ -397,7 +411,8 @@ class GeoLocatedIP(models.Model, MojoModel):
                     {"ips": [self.ip_address]},
                 )
             except Exception:
-                pass
+                logit.exception("Failed to broadcast unblock for %s", self.ip_address)
+                metrics.record("firewall:broadcast_errors", category="firewall")
 
     def whitelist(self, reason="manual"):
         """
@@ -433,7 +448,8 @@ class GeoLocatedIP(models.Model, MojoModel):
                     {"ips": [self.ip_address]},
                 )
             except Exception:
-                pass
+                logit.exception("Failed to broadcast unblock for %s", self.ip_address)
+                metrics.record("firewall:broadcast_errors", category="firewall")
 
     def unwhitelist(self):
         """Remove whitelist status."""
