@@ -114,6 +114,12 @@ class RuleSet(models.Model, MojoModel):
     # notify://perm@permission,user@example.com | ticket://?status=open
     # Chains split on ',(job|email|notify|ticket)://'
     handler = models.TextField(default=None, null=True)
+    trigger_count = models.IntegerField(null=True, blank=True,
+        help_text="Fire handler when incident reaches this many events. Null = fire immediately on first event.")
+    trigger_window = models.IntegerField(null=True, blank=True,
+        help_text="Only count events within this many minutes for the trigger threshold. Null = count all events on the incident.")
+    retrigger_every = models.IntegerField(null=True, blank=True,
+        help_text="Re-fire handler every N additional events after the initial trigger. Null = fire once only.")
     metadata = models.JSONField(default=dict, blank=True)
 
     class RestMeta:
@@ -123,6 +129,7 @@ class RuleSet(models.Model, MojoModel):
         SAVE_PERMS = ["manage_security", "security"]
         DELETE_PERMS = ["manage_security", "security"]
         CAN_DELETE = True
+
 
     def run_handler(self, event, incident=None):
         """
