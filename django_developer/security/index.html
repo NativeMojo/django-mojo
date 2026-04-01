@@ -3986,6 +3986,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#llm-analysis-post_save_action" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        LLM Analysis (POST_SAVE_ACTION)
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -4065,10 +4076,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#available-tools-12" class="md-nav__link">
+  <a href="#available-tools" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Available Tools (12)
+        Available Tools
       
     </span>
   </a>
@@ -4102,6 +4113,17 @@
     <span class="md-ellipsis">
       
         Ticket Re-Invocation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deep-analysis-mode-execute_llm_analysis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deep Analysis Mode (execute_llm_analysis)
       
     </span>
   </a>
@@ -5169,6 +5191,19 @@
 <p>Every state change is recorded in <code>IncidentHistory</code> — status changes, handler executions, LLM actions, manual notes. This provides a full audit trail.</p>
 <h3 id="merging">Merging<a class="headerlink" href="#merging" title="Permanent link">&para;</a></h3>
 <p>Duplicate incidents can be merged via the <code>merge</code> POST_SAVE_ACTION. The target incident absorbs all events and history from the source.</p>
+<h3 id="llm-analysis-post_save_action">LLM Analysis (POST_SAVE_ACTION)<a class="headerlink" href="#llm-analysis-post_save_action" title="Permanent link">&para;</a></h3>
+<p>The <code>analyze</code> action triggers deep LLM analysis on an incident — finding related incidents, proposing merge candidates, and creating a new (disabled) RuleSet for human approval. It runs asynchronously via the job queue.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="c1"># How the action is triggered via REST:</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="c1"># POST /api/incident/incident/&lt;id&gt;  {&quot;action&quot;: &quot;analyze&quot;}</span>
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="c1"># Programmatically:</span>
+<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="n">incident</span><span class="o">.</span><span class="n">on_action_analyze</span><span class="p">(</span><span class="kc">None</span><span class="p">)</span>
+</code></pre></div>
+<p><strong>Guard behavior:</strong>
+- Returns <code>{"status": False, "error": "..."}</code> if <code>LLM_HANDLER_API_KEY</code> is not configured.
+- Returns <code>{"status": False, "error": "Analysis already in progress"}</code> if <code>metadata.analysis_in_progress</code> is <code>True</code>.
+- Sets <code>metadata.analysis_in_progress = True</code> before dispatching the job; clears it when the job finishes (success or failure).</p>
+<p><strong>Result storage:</strong> When analysis completes, the agent's final summary is stored in <code>incident.metadata["llm_analysis"]["summary"]</code> (truncated to 3000 characters) and a <code>handler:llm</code> entry is added to <code>IncidentHistory</code>.</p>
 <h2 id="5-tickets">5. Tickets<a class="headerlink" href="#5-tickets" title="Permanent link">&para;</a></h2>
 <p>Tickets are actionable work items created by <code>ticket://</code> handlers or the LLM agent.</p>
 <h3 id="structure">Structure<a class="headerlink" href="#structure" title="Permanent link">&para;</a></h3>
@@ -5251,36 +5286,54 @@
 <p>If <code>LLM_HANDLER_API_KEY</code> is not set, <code>llm://</code> handlers silently skip.</p>
 <p>Both settings are read at invocation time (not at startup), so changes take effect on the next LLM job without a server restart.</p>
 <p><strong>Dependency:</strong> The LLM agent requires the <code>anthropic</code> Python package (<code>anthropic&gt;=0.52.0</code>), which is included as a framework dependency.</p>
-<h3 id="available-tools-12">Available Tools (12)<a class="headerlink" href="#available-tools-12" title="Permanent link">&para;</a></h3>
-<p>The agent has access to these tools for investigation and action:</p>
+<h3 id="available-tools">Available Tools<a class="headerlink" href="#available-tools" title="Permanent link">&para;</a></h3>
+<p>The standard triage agent (<code>execute_llm_handler</code>) has 12 tools. The analysis agent (<code>execute_llm_analysis</code>) has all 14 — the 12 base tools plus 2 analysis-only tools.</p>
 <p><strong>Investigation:</strong></p>
 <table>
 <thead>
 <tr>
 <th>Tool</th>
 <th>Description</th>
+<th>Triage</th>
+<th>Analysis</th>
 </tr>
 </thead>
 <tbody>
 <tr>
 <td><code>query_events</code></td>
 <td>Search recent events by category, IP, hostname, time window</td>
+<td>Yes</td>
+<td>Yes</td>
 </tr>
 <tr>
 <td><code>query_event_counts</code></td>
 <td>Aggregate event counts grouped by category</td>
+<td>Yes</td>
+<td>Yes</td>
 </tr>
 <tr>
 <td><code>query_ip_history</code></td>
 <td>Look up GeoLocatedIP record — threat level, block history, country</td>
+<td>Yes</td>
+<td>Yes</td>
 </tr>
 <tr>
 <td><code>query_related_incidents</code></td>
 <td>Find other incidents from same IP or category</td>
+<td>Yes</td>
+<td>Yes</td>
 </tr>
 <tr>
 <td><code>query_incident_events</code></td>
 <td>List all events bundled into an incident</td>
+<td>Yes</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>query_open_incidents</code></td>
+<td>Query open/new/investigating incidents, filtered by category</td>
+<td>No</td>
+<td>Yes</td>
 </tr>
 </tbody>
 </table>
@@ -5290,28 +5343,46 @@
 <tr>
 <th>Tool</th>
 <th>Description</th>
+<th>Triage</th>
+<th>Analysis</th>
 </tr>
 </thead>
 <tbody>
 <tr>
 <td><code>update_incident</code></td>
 <td>Change status to investigating/resolved/ignored + add note</td>
+<td>Yes</td>
+<td>Yes</td>
 </tr>
 <tr>
 <td><code>block_ip</code></td>
 <td>Block IP fleet-wide with TTL and reason</td>
+<td>Yes</td>
+<td>Yes</td>
 </tr>
 <tr>
 <td><code>create_ticket</code></td>
 <td>Create ticket for human review with priority</td>
+<td>Yes</td>
+<td>Yes</td>
 </tr>
 <tr>
 <td><code>add_note</code></td>
 <td>Add investigation note to incident history</td>
+<td>Yes</td>
+<td>Yes</td>
 </tr>
 <tr>
 <td><code>send_alert</code></td>
 <td>Send email/SMS/notify to specific targets</td>
+<td>Yes</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>merge_incidents</code></td>
+<td>Merge related incidents into a target incident</td>
+<td>No</td>
+<td>Yes</td>
 </tr>
 </tbody>
 </table>
@@ -5321,28 +5392,37 @@
 <tr>
 <th>Tool</th>
 <th>Description</th>
+<th>Triage</th>
+<th>Analysis</th>
 </tr>
 </thead>
 <tbody>
 <tr>
 <td><code>create_rule</code></td>
 <td>Create a new RuleSet (created disabled, requires human approval)</td>
+<td>Yes</td>
+<td>Yes</td>
 </tr>
 <tr>
 <td><code>update_rule_memory</code></td>
 <td>Persist learnings to RuleSet metadata for future invocations</td>
+<td>Yes</td>
+<td>Yes</td>
 </tr>
 </tbody>
 </table>
+<p><strong>Analysis-only tool details:</strong></p>
+<p><code>merge_incidents</code> — Takes <code>target_incident_id</code> (int) and <code>incident_ids</code> (list of ints). Moves all events from the source incidents into the target and deletes the sources. Only merges incidents with the same <code>category</code>; already-resolved or ignored incidents are excluded automatically.</p>
+<p><code>query_open_incidents</code> — Takes optional <code>category</code> (string) and <code>limit</code> (int, max 100, default 50). Returns incidents in <code>new</code>, <code>open</code>, or <code>investigating</code> status with event counts. Used to identify merge candidates across the incident backlog.</p>
 <h3 id="agent-memory">Agent Memory<a class="headerlink" href="#agent-memory" title="Permanent link">&para;</a></h3>
 <p>Each RuleSet can have an <code>agent_memory</code> field in its metadata. The agent reads this at the start of each invocation and can update it with learnings. This provides continuity across invocations — the agent remembers patterns it has seen before for this rule type.</p>
 <h3 id="custom-agent-prompts">Custom Agent Prompts<a class="headerlink" href="#custom-agent-prompts" title="Permanent link">&para;</a></h3>
 <p>Add an <code>agent_prompt</code> field to a RuleSet's metadata to give the agent rule-specific instructions:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="n">ruleset</span><span class="o">.</span><span class="n">metadata</span> <span class="o">=</span> <span class="p">{</span>
-<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>    <span class="s2">&quot;agent_prompt&quot;</span><span class="p">:</span> <span class="s2">&quot;This rule fires on SSH brute force. Check if the IP has been seen before. If more than 3 incidents from this IP in 24h, block for 24h instead of 1h.&quot;</span><span class="p">,</span>
-<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>    <span class="s2">&quot;agent_memory&quot;</span><span class="p">:</span> <span class="s2">&quot;&quot;</span>  <span class="c1"># Agent will populate this</span>
-<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="p">}</span>
-<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="n">ruleset</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="n">ruleset</span><span class="o">.</span><span class="n">metadata</span> <span class="o">=</span> <span class="p">{</span>
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>    <span class="s2">&quot;agent_prompt&quot;</span><span class="p">:</span> <span class="s2">&quot;This rule fires on SSH brute force. Check if the IP has been seen before. If more than 3 incidents from this IP in 24h, block for 24h instead of 1h.&quot;</span><span class="p">,</span>
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>    <span class="s2">&quot;agent_memory&quot;</span><span class="p">:</span> <span class="s2">&quot;&quot;</span>  <span class="c1"># Agent will populate this</span>
+<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="p">}</span>
+<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a><span class="n">ruleset</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
 </code></pre></div>
 <h3 id="ticket-re-invocation">Ticket Re-Invocation<a class="headerlink" href="#ticket-re-invocation" title="Permanent link">&para;</a></h3>
 <p>When a ticket is <code>llm_linked</code> and a human adds a note, the full conversation history is sent back to the agent. This allows humans to:
@@ -5350,6 +5430,62 @@
 - Approve actions the agent proposed
 - Give the agent new instructions</p>
 <p>The agent's response is posted as a new <code>[LLM Agent]</code> note on the ticket.</p>
+<h3 id="deep-analysis-mode-execute_llm_analysis">Deep Analysis Mode (<code>execute_llm_analysis</code>)<a class="headerlink" href="#deep-analysis-mode-execute_llm_analysis" title="Permanent link">&para;</a></h3>
+<p>In addition to the real-time triage agent, there is a separate <strong>analysis job</strong> designed for manual on-demand investigation of an incident. It is triggered by the <code>analyze</code> POST_SAVE_ACTION on Incident (see section 4).</p>
+<p><strong>Entry point:</strong> <code>mojo.apps.incident.handlers.llm_agent.execute_llm_analysis</code></p>
+<p><strong>Job payload:</strong> <code>{"incident_id": &lt;int&gt;}</code></p>
+<p><strong>How it differs from triage:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Aspect</th>
+<th><code>execute_llm_handler</code> (triage)</th>
+<th><code>execute_llm_analysis</code> (analysis)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Trigger</td>
+<td>Automatic — <code>llm://</code> handler on rule match</td>
+<td>Manual — admin POST <code>{"action": "analyze"}</code></td>
+</tr>
+<tr>
+<td>Prompt</td>
+<td><code>TRIAGE_PROMPT</code> — classify, triage, act fast</td>
+<td><code>ANALYSIS_PROMPT</code> — deep pattern analysis</td>
+</tr>
+<tr>
+<td>Tools</td>
+<td>12 base tools</td>
+<td>14 tools (includes <code>merge_incidents</code>, <code>query_open_incidents</code>)</td>
+</tr>
+<tr>
+<td>Pre-loaded context</td>
+<td>Event + incident metadata</td>
+<td>Full event list (up to 50) + related open incidents (up to 20)</td>
+</tr>
+<tr>
+<td>Result</td>
+<td>Ticket + history note</td>
+<td><code>incident.metadata["llm_analysis"]["summary"]</code> + history note</td>
+</tr>
+</tbody>
+</table>
+<p><strong>ANALYSIS_PROMPT workflow:</strong> The agent is instructed to follow this sequence:
+1. Set the incident to <code>investigating</code>
+2. Review pre-loaded events and related open incidents
+3. Use <code>query_open_incidents</code> to find all open incidents in the same category
+4. Merge clearly related incidents using <code>merge_incidents</code>
+5. Identify the pattern and check existing rules to avoid duplication
+6. Create a new disabled RuleSet via <code>create_rule</code> with proper bundling
+7. Resolve the merged incident with a note explaining the new rule
+8. Summarize: how many merged, what rule was proposed, what pattern it covers</p>
+<p><strong>Merge constraints enforced by <code>ANALYSIS_PROMPT</code>:</strong>
+- Only merge incidents with the same category
+- Only merge if the pattern is clearly the same underlying cause
+- Do not merge already-resolved or ignored incidents
+- Always set <code>bundle_by</code> and <code>bundle_minutes</code> on any new rule to prevent future duplicates</p>
+<p><strong>Context pre-loading:</strong> Before the agent loop starts, <code>_build_analysis_message</code> fetches the 50 most recent events on the incident and up to 20 related open incidents in the same category. This avoids round-trip tool calls for information the agent almost always needs.</p>
 <h2 id="7-enforcement-ip-blocking-firewall">7. Enforcement — IP Blocking &amp; Firewall<a class="headerlink" href="#7-enforcement-ip-blocking-firewall" title="Permanent link">&para;</a></h2>
 <h3 id="single-ip-blocking">Single IP Blocking<a class="headerlink" href="#single-ip-blocking" title="Permanent link">&para;</a></h3>
 <p>When a <code>block://</code> handler fires:
@@ -5363,14 +5499,14 @@
 <p>Manual: Via GeoLocatedIP POST_SAVE_ACTIONS (<code>unblock</code>, <code>whitelist</code>).</p>
 <h3 id="ipsets-bulk-blocking">IPSets (Bulk Blocking)<a class="headerlink" href="#ipsets-bulk-blocking" title="Permanent link">&para;</a></h3>
 <p>IPSets block large sets of IPs using kernel-level ipset (much faster than individual iptables rules). Used for country blocks, abuse lists, etc.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.incident.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">IPSet</span>
-<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>
-<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="n">ipset</span> <span class="o">=</span> <span class="n">IPSet</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">create</span><span class="p">(</span>
-<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a>    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;country_cn&quot;</span><span class="p">,</span>
-<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a>    <span class="n">description</span><span class="o">=</span><span class="s2">&quot;Block all Chinese IPs&quot;</span><span class="p">,</span>
-<a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a>    <span class="n">source_url</span><span class="o">=</span><span class="s2">&quot;https://example.com/cn-cidrs.txt&quot;</span><span class="p">,</span>
-<a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a>    <span class="n">is_enabled</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
-<a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.incident.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">IPSet</span>
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>
+<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a><span class="n">ipset</span> <span class="o">=</span> <span class="n">IPSet</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">create</span><span class="p">(</span>
+<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a>    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;country_cn&quot;</span><span class="p">,</span>
+<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a>    <span class="n">description</span><span class="o">=</span><span class="s2">&quot;Block all Chinese IPs&quot;</span><span class="p">,</span>
+<a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a>    <span class="n">source_url</span><span class="o">=</span><span class="s2">&quot;https://example.com/cn-cidrs.txt&quot;</span><span class="p">,</span>
+<a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a>    <span class="n">is_enabled</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+<a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a><span class="p">)</span>
 </code></pre></div>
 <p>The <code>refresh_ipsets</code> cron fetches CIDRs from source URLs weekly and syncs to all servers.</p>
 <h3 id="firewall-requirements">Firewall Requirements<a class="headerlink" href="#firewall-requirements" title="Permanent link">&para;</a></h3>
@@ -5384,17 +5520,17 @@
 <h2 id="8-bouncer-integration">8. Bouncer Integration<a class="headerlink" href="#8-bouncer-integration" title="Permanent link">&para;</a></h2>
 <p>Bouncer (the bot detection system) feeds events into the incident pipeline. See <a href="../account/bouncer/">Bouncer docs</a> for the full bouncer architecture.</p>
 <h3 id="how-bouncer-events-flow-into-incidents">How Bouncer Events Flow into Incidents<a class="headerlink" href="#how-bouncer-events-flow-into-incidents" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>Bouncer assess → risk_score ≥ block threshold
-<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>    │
-<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>    ├─→ report_event(category=&quot;security:bouncer:block&quot;, level=10)
-<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a>    │       → Rule engine matches → block:// handler → IP blocked fleet-wide
-<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a>    │
-<a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a>    ├─→ report_event(category=&quot;security:bouncer:honeypot&quot;, level=10)
-<a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a>    │       → When POST received on decoy page
-<a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a>    │
-<a id="__codelineno-16-9" name="__codelineno-16-9" href="#__codelineno-16-9"></a>    └─→ Learner job runs → signatures learned
-<a id="__codelineno-16-10" name="__codelineno-16-10" href="#__codelineno-16-10"></a>            → report_event(category=&quot;security:bouncer:campaign&quot;, level=10)
-<a id="__codelineno-16-11" name="__codelineno-16-11" href="#__codelineno-16-11"></a>                → When 5+ blocks share same signal pattern
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>Bouncer assess → risk_score ≥ block threshold
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>    │
+<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a>    ├─→ report_event(category=&quot;security:bouncer:block&quot;, level=10)
+<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a>    │       → Rule engine matches → block:// handler → IP blocked fleet-wide
+<a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a>    │
+<a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a>    ├─→ report_event(category=&quot;security:bouncer:honeypot&quot;, level=10)
+<a id="__codelineno-17-7" name="__codelineno-17-7" href="#__codelineno-17-7"></a>    │       → When POST received on decoy page
+<a id="__codelineno-17-8" name="__codelineno-17-8" href="#__codelineno-17-8"></a>    │
+<a id="__codelineno-17-9" name="__codelineno-17-9" href="#__codelineno-17-9"></a>    └─→ Learner job runs → signatures learned
+<a id="__codelineno-17-10" name="__codelineno-17-10" href="#__codelineno-17-10"></a>            → report_event(category=&quot;security:bouncer:campaign&quot;, level=10)
+<a id="__codelineno-17-11" name="__codelineno-17-11" href="#__codelineno-17-11"></a>                → When 5+ blocks share same signal pattern
 </code></pre></div>
 <h3 id="bouncer-metrics">Bouncer Metrics<a class="headerlink" href="#bouncer-metrics" title="Permanent link">&para;</a></h3>
 <p>8 metrics are recorded for monitoring:</p>
@@ -5488,11 +5624,11 @@
 <li>Default rules handle common OSSEC patterns (bot scanners, SSH brute force, web attacks)</li>
 </ol>
 <h3 id="alert-flow">Alert Flow<a class="headerlink" href="#alert-flow" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>OSSEC → POST /api/incident/ossec/alert
-<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>    → Validates secret
-<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a>    → Normalizes alert fields (rule_id, level, description, source_ip)
-<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a>    → report_event(category=&quot;ossec:alert&quot;, level=ossec_level, metadata={rule_id, ...})
-<a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a>    → Rule engine matches on rule_id field
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>OSSEC → POST /api/incident/ossec/alert
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>    → Validates secret
+<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a>    → Normalizes alert fields (rule_id, level, description, source_ip)
+<a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a>    → report_event(category=&quot;ossec:alert&quot;, level=ossec_level, metadata={rule_id, ...})
+<a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a>    → Rule engine matches on rule_id field
 </code></pre></div>
 <h2 id="10-health-monitoring">10. Health Monitoring<a class="headerlink" href="#10-health-monitoring" title="Permanent link">&para;</a></h2>
 <p>The health monitoring system runs every 3 minutes (when enabled) and reports infrastructure events.</p>
@@ -5546,8 +5682,8 @@
 </tbody>
 </table>
 <h3 id="enable-health-monitoring">Enable Health Monitoring<a class="headerlink" href="#enable-health-monitoring" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="c1"># In Django settings</span>
-<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="n">HEALTH_MONITORING_ENABLED</span> <span class="o">=</span> <span class="kc">True</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="c1"># In Django settings</span>
+<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a><span class="n">HEALTH_MONITORING_ENABLED</span> <span class="o">=</span> <span class="kc">True</span>
 </code></pre></div>
 <p>Default health rules are auto-created on first health check run. They send notifications and create tickets — they never block IPs (health issues are not attacks).</p>
 <h2 id="11-cronjobs-background-jobs">11. Cronjobs &amp; Background Jobs<a class="headerlink" href="#11-cronjobs-background-jobs" title="Permanent link">&para;</a></h2>
@@ -5634,7 +5770,12 @@
 <tr>
 <td><code>execute_llm_handler</code></td>
 <td><code>llm://</code> handler</td>
-<td>Runs LLM agent loop (receives <code>Job</code> instance)</td>
+<td>Runs LLM triage agent loop (receives <code>Job</code> instance)</td>
+</tr>
+<tr>
+<td><code>execute_llm_analysis</code></td>
+<td><code>analyze</code> POST_SAVE_ACTION</td>
+<td>Deep LLM analysis: merge candidates, pattern detection, rule proposal (receives <code>Job</code> instance)</td>
 </tr>
 <tr>
 <td><code>execute_llm_ticket_reply</code></td>

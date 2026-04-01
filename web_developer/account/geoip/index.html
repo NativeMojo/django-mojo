@@ -3765,10 +3765,10 @@
 
 <h1 id="geoip-rest-api-reference">GeoIP — REST API Reference<a class="headerlink" href="#geoip-rest-api-reference" title="Permanent link">&para;</a></h1>
 <p>IP geolocation and time lookup endpoints.</p>
-<p>All endpoints are under the <code>account</code> app prefix.</p>
+<p>The account app sets <code>APP_NAME = ""</code>, so these endpoints have no app prefix — they register directly under <code>/api/system/</code>.</p>
 <hr />
 <h2 id="get-systemgeoip-list-geoip-records"><code>GET system/geoip</code> — List GeoIP Records<a class="headerlink" href="#get-systemgeoip-list-geoip-records" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>GET /api/account/system/geoip
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>GET /api/system/geoip
 </code></pre></div>
 <p><strong>Requires:</strong> <code>manage_users</code> permission.</p>
 <p>Returns a paginated list of cached GeoIP records. Supports standard query parameters (<code>search</code>, <code>sort</code>, <code>start</code>, <code>size</code>, <code>graph</code>).</p>
@@ -3798,7 +3798,7 @@
 </table>
 <hr />
 <h2 id="get-systemgeoippk-geoip-detail"><code>GET system/geoip/&lt;pk&gt;</code> — GeoIP Detail<a class="headerlink" href="#get-systemgeoippk-geoip-detail" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>GET /api/account/system/geoip/123
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>GET /api/system/geoip/123
 </code></pre></div>
 <p><strong>Requires:</strong> <code>manage_users</code> permission.</p>
 <p>Returns a single GeoIP record. Supports <code>?graph=</code> parameter.</p>
@@ -3847,7 +3847,7 @@
 <p>See <a href="../firewall/">firewall.md</a> for full firewall management and security dashboard guide.</p>
 <hr />
 <h2 id="get-systemgeoiplookup-public-ip-lookup"><code>GET system/geoip/lookup</code> — Public IP Lookup<a class="headerlink" href="#get-systemgeoiplookup-public-ip-lookup" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>GET /api/account/system/geoip/lookup?ip=1.2.3.4
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>GET /api/system/geoip/lookup?ip=1.2.3.4
 </code></pre></div>
 <p><strong>Public</strong> — no authentication required. Rate limited to <strong>30 requests/minute</strong> per IP.</p>
 <table>
@@ -3893,7 +3893,7 @@
 </code></pre></div>
 <hr />
 <h2 id="get-systemgeoiptime-public-ip-time-lookup"><code>GET system/geoip/time</code> — Public IP Time Lookup<a class="headerlink" href="#get-systemgeoiptime-public-ip-time-lookup" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>GET /api/account/system/geoip/time
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>GET /api/system/geoip/time
 </code></pre></div>
 <p><strong>Public</strong> — no authentication required. Rate limited to <strong>30 requests/minute</strong> per IP.</p>
 <p>No parameters required. Uses the caller's IP address automatically to determine timezone and return the current time.</p>

@@ -6067,12 +6067,12 @@ deployment grants this to ordinary users is a product decision. The
 endpoints below are available when it is granted.</p>
 </blockquote>
 <h3 id="list-own-activity">List own activity<a class="headerlink" href="#list-own-activity" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-87-1" name="__codelineno-87-1" href="#__codelineno-87-1"></a>GET /api/logit/log?uid=&lt;me&gt;&amp;sort=-created&amp;size=50
+<div class="highlight"><pre><span></span><code><a id="__codelineno-87-1" name="__codelineno-87-1" href="#__codelineno-87-1"></a>GET /api/logs?uid=&lt;me&gt;&amp;sort=-created&amp;size=50
 </code></pre></div>
 <p>Filter by kind prefix to show specific categories:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-88-1" name="__codelineno-88-1" href="#__codelineno-88-1"></a>GET /api/logit/log?uid=&lt;me&gt;&amp;kind__startswith=email:
-<a id="__codelineno-88-2" name="__codelineno-88-2" href="#__codelineno-88-2"></a>GET /api/logit/log?uid=&lt;me&gt;&amp;kind__startswith=password
-<a id="__codelineno-88-3" name="__codelineno-88-3" href="#__codelineno-88-3"></a>GET /api/logit/log?uid=&lt;me&gt;&amp;kind__startswith=login
+<div class="highlight"><pre><span></span><code><a id="__codelineno-88-1" name="__codelineno-88-1" href="#__codelineno-88-1"></a>GET /api/logs?uid=&lt;me&gt;&amp;kind__startswith=email:
+<a id="__codelineno-88-2" name="__codelineno-88-2" href="#__codelineno-88-2"></a>GET /api/logs?uid=&lt;me&gt;&amp;kind__startswith=password
+<a id="__codelineno-88-3" name="__codelineno-88-3" href="#__codelineno-88-3"></a>GET /api/logs?uid=&lt;me&gt;&amp;kind__startswith=login
 </code></pre></div>
 <h3 id="common-audit-kinds-for-user-self-management">Common audit kinds for user self-management<a class="headerlink" href="#common-audit-kinds-for-user-self-management" title="Permanent link">&para;</a></h3>
 <table>
@@ -6130,7 +6130,7 @@ endpoints below are available when it is granted.</p>
 </tbody>
 </table>
 <h3 id="date-range">Date range<a class="headerlink" href="#date-range" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-89-1" name="__codelineno-89-1" href="#__codelineno-89-1"></a>GET /api/logit/log?uid=&lt;me&gt;&amp;dr_start=2026-01-01&amp;dr_end=2026-01-31
+<div class="highlight"><pre><span></span><code><a id="__codelineno-89-1" name="__codelineno-89-1" href="#__codelineno-89-1"></a>GET /api/logs?uid=&lt;me&gt;&amp;dr_start=2026-01-01&amp;dr_end=2026-01-31
 </code></pre></div>
 <hr />
 <h2 id="18-qr-codes">18. QR Codes<a class="headerlink" href="#18-qr-codes" title="Permanent link">&para;</a></h2>
@@ -6553,7 +6553,7 @@ Refresh the user profile to pick up the updated <code>is_email_verified</code> o
 <tr>
 <td>View own activity log</td>
 <td>GET</td>
-<td><code>/api/logit/log</code></td>
+<td><code>/api/logs</code></td>
 <td>Required + <code>view_logs</code></td>
 </tr>
 <tr>

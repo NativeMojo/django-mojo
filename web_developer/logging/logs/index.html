@@ -3869,19 +3869,19 @@
 <tbody>
 <tr>
 <td>GET</td>
-<td><code>/api/logit/log</code></td>
+<td><code>/api/logs</code></td>
 <td>List log entries</td>
 </tr>
 <tr>
 <td>GET</td>
-<td><code>/api/logit/log/&lt;id&gt;</code></td>
+<td><code>/api/logs/&lt;id&gt;</code></td>
 <td>Get single log entry</td>
 </tr>
 </tbody>
 </table>
 <h2 id="list-logs">List Logs<a class="headerlink" href="#list-logs" title="Permanent link">&para;</a></h2>
-<p><strong>GET</strong> <code>/api/logit/log</code></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>GET /api/logit/log?level=error&amp;sort=-created&amp;size=50
+<p><strong>GET</strong> <code>/api/logs</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>GET /api/logs?level=error&amp;sort=-created&amp;size=50
 </code></pre></div>
 <p><strong>Response:</strong></p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span>
@@ -3955,7 +3955,7 @@
 </tbody>
 </table>
 <h2 id="date-range">Date Range<a class="headerlink" href="#date-range" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>GET /api/logit/log?dr_start=2024-01-01&amp;dr_end=2024-01-31&amp;level=error
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>GET /api/logs?dr_start=2024-01-01&amp;dr_end=2024-01-31&amp;level=error
 </code></pre></div>
 <h2 id="available-graphs">Available Graphs<a class="headerlink" href="#available-graphs" title="Permanent link">&para;</a></h2>
 <table>

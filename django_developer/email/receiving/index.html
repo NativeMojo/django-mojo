@@ -3942,7 +3942,7 @@
 <h2 id="ses-inbound-configuration">SES Inbound Configuration<a class="headerlink" href="#ses-inbound-configuration" title="Permanent link">&para;</a></h2>
 <ol>
 <li>In AWS SES, configure a receipt rule for your domain</li>
-<li>Set the rule to call the webhook endpoint: <code>POST /api/aws/inbound</code></li>
+<li>Set the rule to call the webhook endpoint: <code>POST /api/aws/email/sns/inbound</code></li>
 <li>The framework parses the SES notification and calls the mailbox handler</li>
 </ol>
 

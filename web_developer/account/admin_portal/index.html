@@ -4168,7 +4168,7 @@
 <p>An admin portal is a frontend that calls privileged REST endpoints. Access is controlled by permissions stored on each user. Always design UI and API calls around explicit permission checks. A logged-in user is not automatically an admin.</p>
 <h2 id="base-pattern">Base Pattern<a class="headerlink" href="#base-pattern" title="Permanent link">&para;</a></h2>
 <ol>
-<li>Authenticate user (<code>POST /api/account/login</code>).</li>
+<li>Authenticate user (<code>POST /api/login</code>).</li>
 <li>Store JWT securely and send <code>Authorization: Bearer &lt;token&gt;</code>.</li>
 <li>Pass <code>group=&lt;id&gt;</code> when operating on group-scoped resources.</li>
 <li>Handle <code>403</code> as "authenticated but missing permission".</li>
@@ -4401,7 +4401,7 @@
 </tr>
 <tr>
 <td>System logs</td>
-<td><code>GET /api/logit/log</code></td>
+<td><code>GET /api/logs</code></td>
 <td><code>security</code></td>
 </tr>
 <tr>
@@ -4521,7 +4521,7 @@
 <div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="kd">const</span><span class="w"> </span><span class="nx">headers</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">Authorization</span><span class="o">:</span><span class="w"> </span><span class="sb">`Bearer </span><span class="si">${</span><span class="nx">token</span><span class="si">}</span><span class="sb">`</span><span class="w"> </span><span class="p">};</span>
 <a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>
 <a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="c1">// Fetch current user to check their permissions</span>
-<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="kd">const</span><span class="w"> </span><span class="nx">me</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">fetch</span><span class="p">(</span><span class="s1">&#39;/api/account/me&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">headers</span><span class="w"> </span><span class="p">}).</span><span class="nx">then</span><span class="p">(</span><span class="nx">r</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">json</span><span class="p">());</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="kd">const</span><span class="w"> </span><span class="nx">me</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">fetch</span><span class="p">(</span><span class="s1">&#39;/api/user/me&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">headers</span><span class="w"> </span><span class="p">}).</span><span class="nx">then</span><span class="p">(</span><span class="nx">r</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">json</span><span class="p">());</span>
 <a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="kd">const</span><span class="w"> </span><span class="nx">perms</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">me</span><span class="p">.</span><span class="nx">data</span><span class="p">.</span><span class="nx">permissions</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="p">{};</span>
 <a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>
 <a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="c1">// Show/hide admin sections based on category permissions</span>

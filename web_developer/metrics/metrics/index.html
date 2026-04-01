@@ -3875,13 +3875,13 @@
 </tr>
 <tr>
 <td>GET</td>
-<td><code>/api/metrics/values</code></td>
+<td><code>/api/metrics/value/get</code></td>
 <td>Fetch current values for slugs</td>
 </tr>
 <tr>
 <td>GET</td>
-<td><code>/api/metrics/accounts</code></td>
-<td>List metric accounts</td>
+<td><code>/api/metrics/categories</code></td>
+<td>List metric categories</td>
 </tr>
 <tr>
 <td>GET</td>
@@ -3959,8 +3959,8 @@
 <a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="p">}</span>
 </code></pre></div>
 <h2 id="fetch-current-values">Fetch Current Values<a class="headerlink" href="#fetch-current-values" title="Permanent link">&para;</a></h2>
-<p><strong>GET</strong> <code>/api/metrics/values</code></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>GET /api/metrics/values?slugs=page_views,user_signups&amp;granularity=hours
+<p><strong>GET</strong> <code>/api/metrics/value/get</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>GET /api/metrics/value/get?slugs=page_views,user_signups&amp;granularity=hours
 </code></pre></div>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span>
 <a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>

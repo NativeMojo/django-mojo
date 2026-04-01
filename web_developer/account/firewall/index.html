@@ -4103,11 +4103,11 @@
 </thead>
 <tbody>
 <tr>
-<td><code>GET /api/account/system/geoip</code></td>
+<td><code>GET /api/system/geoip</code></td>
 <td>IP records with block status, threat level, geolocation</td>
 </tr>
 <tr>
-<td><code>GET /api/logit/log</code></td>
+<td><code>GET /api/logs</code></td>
 <td>Firewall event history (blocks, unblocks, whitelist changes)</td>
 </tr>
 <tr>
@@ -4118,7 +4118,7 @@
 </table>
 <h2 id="ip-block-management">IP Block Management<a class="headerlink" href="#ip-block-management" title="Permanent link">&para;</a></h2>
 <h3 id="list-blocked-ips">List Blocked IPs<a class="headerlink" href="#list-blocked-ips" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>GET /api/account/system/geoip?is_blocked=true&amp;graph=basic&amp;sort=-blocked_at
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>GET /api/system/geoip?is_blocked=true&amp;graph=basic&amp;sort=-blocked_at
 </code></pre></div>
 <p>Response includes block details:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span>
@@ -4198,7 +4198,7 @@
 </table>
 <h3 id="block-an-ip">Block an IP<a class="headerlink" href="#block-an-ip" title="Permanent link">&para;</a></h3>
 <p>Use the <code>block</code> action on a GeoIP record:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>POST /api/account/system/geoip/42
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>POST /api/system/geoip/42
 </code></pre></div>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span>
 <a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">&quot;action&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;block&quot;</span><span class="p">,</span>
@@ -4231,7 +4231,7 @@
 </table>
 <p>The block is broadcast to all servers in the fleet automatically.</p>
 <h3 id="unblock-an-ip">Unblock an IP<a class="headerlink" href="#unblock-an-ip" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>POST /api/account/system/geoip/42
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>POST /api/system/geoip/42
 </code></pre></div>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span>
 <a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">&quot;action&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;unblock&quot;</span><span class="p">,</span>
@@ -4241,7 +4241,7 @@
 <p>The <code>value</code> is a string reason. The unblock is broadcast fleet-wide.</p>
 <h3 id="whitelist-an-ip">Whitelist an IP<a class="headerlink" href="#whitelist-an-ip" title="Permanent link">&para;</a></h3>
 <p>Whitelisted IPs are never blocked, even by automatic threat escalation:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>POST /api/account/system/geoip/42
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>POST /api/system/geoip/42
 </code></pre></div>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span>
 <a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="nt">&quot;action&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;whitelist&quot;</span><span class="p">,</span>
@@ -4250,7 +4250,7 @@
 </code></pre></div>
 <p>If the IP is currently blocked, whitelisting also unblocks it fleet-wide.</p>
 <h3 id="remove-whitelist">Remove Whitelist<a class="headerlink" href="#remove-whitelist" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>POST /api/account/system/geoip/42
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>POST /api/system/geoip/42
 </code></pre></div>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="p">{</span>
 <a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span><span class="nt">&quot;action&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;unwhitelist&quot;</span>
@@ -4258,7 +4258,7 @@
 </code></pre></div>
 <h3 id="refresh-threat-data">Refresh Threat Data<a class="headerlink" href="#refresh-threat-data" title="Permanent link">&para;</a></h3>
 <p>Re-fetch geolocation and run threat intelligence checks:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>POST /api/account/system/geoip/42
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>POST /api/system/geoip/42
 </code></pre></div>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="p">{</span>
 <a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">  </span><span class="nt">&quot;action&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;threat_analysis&quot;</span>
@@ -4266,32 +4266,32 @@
 </code></pre></div>
 <h2 id="useful-queries">Useful Queries<a class="headerlink" href="#useful-queries" title="Permanent link">&para;</a></h2>
 <h3 id="currently-active-blocks">Currently Active Blocks<a class="headerlink" href="#currently-active-blocks" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>GET /api/account/system/geoip?is_blocked=true&amp;sort=-blocked_at&amp;graph=basic
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>GET /api/system/geoip?is_blocked=true&amp;sort=-blocked_at&amp;graph=basic
 </code></pre></div>
 <p>Note: <code>is_blocked=true</code> includes expired blocks. Check the <code>block_active</code> computed field in the response to determine if the block is still in effect.</p>
 <h3 id="high-threat-ips">High-Threat IPs<a class="headerlink" href="#high-threat-ips" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>GET /api/account/system/geoip?threat_level=high&amp;sort=-modified
-<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>GET /api/account/system/geoip?threat_level=critical&amp;sort=-modified
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>GET /api/system/geoip?threat_level=high&amp;sort=-modified
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>GET /api/system/geoip?threat_level=critical&amp;sort=-modified
 </code></pre></div>
 <h3 id="torvpnproxy-traffic">Tor/VPN/Proxy Traffic<a class="headerlink" href="#torvpnproxy-traffic" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>GET /api/account/system/geoip?is_tor=true
-<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>GET /api/account/system/geoip?is_vpn=true
-<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>GET /api/account/system/geoip?is_proxy=true
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>GET /api/system/geoip?is_tor=true
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>GET /api/system/geoip?is_vpn=true
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>GET /api/system/geoip?is_proxy=true
 </code></pre></div>
 <h3 id="whitelisted-ips">Whitelisted IPs<a class="headerlink" href="#whitelisted-ips" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>GET /api/account/system/geoip?is_whitelisted=true
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>GET /api/system/geoip?is_whitelisted=true
 </code></pre></div>
 <h3 id="ips-by-country">IPs by Country<a class="headerlink" href="#ips-by-country" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>GET /api/account/system/geoip?country_code=CN&amp;is_blocked=true
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>GET /api/system/geoip?country_code=CN&amp;is_blocked=true
 </code></pre></div>
 <h3 id="search-by-ip-city-isp">Search by IP, City, ISP<a class="headerlink" href="#search-by-ip-city-isp" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>GET /api/account/system/geoip?search=203.0.113
-<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>GET /api/account/system/geoip?search=cloudflare
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>GET /api/system/geoip?search=203.0.113
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>GET /api/system/geoip?search=cloudflare
 </code></pre></div>
 <h2 id="firewall-activity-log">Firewall Activity Log<a class="headerlink" href="#firewall-activity-log" title="Permanent link">&para;</a></h2>
 <p>All firewall actions are logged to logit with <code>kind</code> values prefixed by <code>firewall:</code>.</p>
 <h3 id="list-all-firewall-activity">List All Firewall Activity<a class="headerlink" href="#list-all-firewall-activity" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>GET /api/logit/log?kind__startswith=firewall:&amp;sort=-created&amp;size=50
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>GET /api/logs?kind__startswith=firewall:&amp;sort=-created&amp;size=50
 </code></pre></div>
 <h3 id="filter-by-action-type">Filter by Action Type<a class="headerlink" href="#filter-by-action-type" title="Permanent link">&para;</a></h3>
 <table>
@@ -4334,13 +4334,13 @@
 </table>
 <h3 id="activity-for-a-specific-ip">Activity for a Specific IP<a class="headerlink" href="#activity-for-a-specific-ip" title="Permanent link">&para;</a></h3>
 <p>Use <code>model_id</code> to get all firewall events for a GeoIP record:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>GET /api/logit/log?kind__startswith=firewall:&amp;model_id=42&amp;sort=-created
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>GET /api/logs?kind__startswith=firewall:&amp;model_id=42&amp;sort=-created
 </code></pre></div>
 <h3 id="activity-by-admin-user">Activity by Admin User<a class="headerlink" href="#activity-by-admin-user" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>GET /api/logit/log?kind__startswith=firewall:&amp;uid=5&amp;sort=-created
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>GET /api/logs?kind__startswith=firewall:&amp;uid=5&amp;sort=-created
 </code></pre></div>
 <h3 id="activity-in-date-range">Activity in Date Range<a class="headerlink" href="#activity-in-date-range" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>GET /api/logit/log?kind__startswith=firewall:&amp;dr_start=2026-03-26&amp;dr_end=2026-03-27
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>GET /api/logs?kind__startswith=firewall:&amp;dr_start=2026-03-26&amp;dr_end=2026-03-27
 </code></pre></div>
 <h3 id="log-entry-shape">Log Entry Shape<a class="headerlink" href="#log-entry-shape" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="p">{</span>
@@ -4364,26 +4364,26 @@
 <div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>GET /api/incident/incident?search=203.0.113.50&amp;sort=-created
 </code></pre></div>
 <h3 id="2-get-the-auto-block-log-for-that-ip">2. Get the auto-block log for that IP<a class="headerlink" href="#2-get-the-auto-block-log-for-that-ip" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>GET /api/logit/log?kind=firewall:auto_block&amp;model_id=42
+<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>GET /api/logs?kind=firewall:auto_block&amp;model_id=42
 </code></pre></div>
 <h3 id="3-get-the-geoip-record-for-current-state">3. Get the GeoIP record for current state<a class="headerlink" href="#3-get-the-geoip-record-for-current-state" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>GET /api/account/system/geoip/42?graph=detailed
+<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>GET /api/system/geoip/42?graph=detailed
 </code></pre></div>
 <h2 id="dashboard-patterns">Dashboard Patterns<a class="headerlink" href="#dashboard-patterns" title="Permanent link">&para;</a></h2>
 <h3 id="security-overview-widget">Security Overview Widget<a class="headerlink" href="#security-overview-widget" title="Permanent link">&para;</a></h3>
 <p>Poll these three queries to build a summary card:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a>GET /api/account/system/geoip?is_blocked=true&amp;size=0      → count of blocked IPs
-<a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a>GET /api/account/system/geoip?threat_level=critical&amp;size=0 → count of critical threats
-<a id="__codelineno-26-3" name="__codelineno-26-3" href="#__codelineno-26-3"></a>GET /api/account/system/geoip?is_whitelisted=true&amp;size=0   → count of whitelisted IPs
+<div class="highlight"><pre><span></span><code><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a>GET /api/system/geoip?is_blocked=true&amp;size=0      → count of blocked IPs
+<a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a>GET /api/system/geoip?threat_level=critical&amp;size=0 → count of critical threats
+<a id="__codelineno-26-3" name="__codelineno-26-3" href="#__codelineno-26-3"></a>GET /api/system/geoip?is_whitelisted=true&amp;size=0   → count of whitelisted IPs
 </code></pre></div>
 <p>Use <code>size=0</code> to get just the count without fetching records.</p>
 <h3 id="recent-activity-feed">Recent Activity Feed<a class="headerlink" href="#recent-activity-feed" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a>GET /api/logit/log?kind__startswith=firewall:&amp;sort=-created&amp;size=20
+<div class="highlight"><pre><span></span><code><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a>GET /api/logs?kind__startswith=firewall:&amp;sort=-created&amp;size=20
 </code></pre></div>
 <h3 id="ip-detail-view">IP Detail View<a class="headerlink" href="#ip-detail-view" title="Permanent link">&para;</a></h3>
 <p>For a single IP's full picture, fetch in parallel:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a>GET /api/account/system/geoip/42?graph=detailed
-<a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a>GET /api/logit/log?kind__startswith=firewall:&amp;model_id=42&amp;sort=-created
+<div class="highlight"><pre><span></span><code><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a>GET /api/system/geoip/42?graph=detailed
+<a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a>GET /api/logs?kind__startswith=firewall:&amp;model_id=42&amp;sort=-created
 <a id="__codelineno-28-3" name="__codelineno-28-3" href="#__codelineno-28-3"></a>GET /api/incident/incident?search={ip_address}&amp;sort=-created
 </code></pre></div>
 <h2 id="firewall-metrics">Firewall Metrics<a class="headerlink" href="#firewall-metrics" title="Permanent link">&para;</a></h2>
