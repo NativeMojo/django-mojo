@@ -1,10 +1,12 @@
 from mojo.apps.metrics import record
-from django.db import models
+from django.db import models, transaction
 from mojo.models import MojoModel
-from mojo.helpers import dates
+from mojo.helpers import dates, logit
 from mojo.helpers.settings import settings
 from mojo.apps import metrics
 from mojo.apps.account.models import GeoLocatedIP
+
+logger = logit.get_logger(__name__, "incident.log")
 
 
 INCIDENT_LEVEL_THRESHOLD = settings.get_static('INCIDENT_LEVEL_THRESHOLD', 7)
@@ -185,95 +187,98 @@ class Event(models.Model, MojoModel):
                 trigger_window = rule_set.bundle_minutes
 
         if rule_set or self.level >= INCIDENT_LEVEL_THRESHOLD:
-            incident, created = self.get_or_create_incident(rule_set)
+            with transaction.atomic():
+                incident, created = self.get_or_create_incident(rule_set)
 
-            # Capture status BEFORE any modifications for transition detection
-            prev_status = incident.status if incident.pk else None
+                # Capture status BEFORE any modifications for transition detection
+                prev_status = incident.status if incident.pk else None
 
-            # Count events already on this incident (before linking current event)
-            # +1 to include the event currently being published
-            meets_threshold = True
-            incident_event_count = 1
-            if trigger_count is not None:
-                try:
-                    qs = incident.events
-                    if trigger_window:
-                        qs = qs.filter(created__gte=dates.subtract(minutes=trigger_window))
-                    incident_event_count = qs.count() + 1
-                except Exception:
-                    incident_event_count = 1
-                meets_threshold = incident_event_count >= trigger_count
-
-            # Status transition based on trigger_count threshold
-            # - Below threshold: hold at (or set to) pending
-            # - Threshold met and was pending: transition to new
-            # - Threshold met and already past pending: leave status alone
-            if rule_set and trigger_count is not None:
-                try:
-                    if not meets_threshold:
-                        # Not yet at threshold — force/keep pending
-                        if incident.status != "pending":
-                            incident.status = "pending"
-                            incident.save(update_fields=["status"])
-                    elif incident.status == "pending":
-                        # Was pending, threshold just reached — transition to new
-                        incident.status = "new"
-                        incident.save(update_fields=["status"])
-                        incident.add_history("threshold_reached",
-                            note=f"Threshold met: {incident_event_count} events (trigger_count: {trigger_count})")
-                        if settings.INCIDENT_EVENT_METRICS:
-                            metrics.record('incidents:threshold_reached', account="incident",
-                                min_granularity=INCIDENT_METRICS_MIN_GRANULARITY)
-                except Exception:
-                    pass
-
-            self.link_to_incident(incident)
-
-            # Run handlers on creation or when transitioning from pending -> new
-            if rule_set:
-                transitioned_to_new = (prev_status == "pending" and incident.status == "new")
-                if (created and (trigger_count is None or meets_threshold)) or transitioned_to_new:
-                    rule_set.run_handler(self, incident)
-                    # Track event count at trigger so re-trigger knows the baseline
-                    if retrigger_every is not None:
-                        try:
-                            meta = dict(incident.metadata or {})
-                            meta["last_trigger_count"] = incident.events.count()
-                            incident.metadata = meta
-                            incident.save(update_fields=["metadata"])
-                        except Exception:
-                            pass
-                elif retrigger_every is not None and incident.status in ("new", "open", "investigating"):
+                # Count events already on this incident (before linking current event)
+                # +1 to include the event currently being published
+                meets_threshold = True
+                incident_event_count = 1
+                if trigger_count is not None:
                     try:
-                        total = incident.events.count()
-                        last = (incident.metadata or {}).get("last_trigger_count")
-                        if last is None:
-                            last = trigger_count or 1
-                        if total >= last + retrigger_every:
-                            meta = dict(incident.metadata or {})
-                            meta["last_trigger_count"] = total
-                            incident.metadata = meta
-                            incident.save(update_fields=["metadata"])
-                            incident.add_history("handler_retriggered",
-                                note=f"Re-triggered: {total} events (retrigger_every: {retrigger_every})")
-                            rule_set.run_handler(self, incident)
+                        qs = incident.events
+                        if trigger_window:
+                            qs = qs.filter(created__gte=dates.subtract(minutes=trigger_window))
+                        incident_event_count = qs.count() + 1
+                    except Exception:
+                        logger.exception("Error counting incident events for threshold (incident=%s)", incident.pk)
+                        incident_event_count = 1
+                    meets_threshold = incident_event_count >= trigger_count
+
+                # Status transition based on trigger_count threshold
+                # - Below threshold: hold at (or set to) pending
+                # - Threshold met and was pending: transition to new
+                # - Threshold met and already past pending: leave status alone
+                if rule_set and trigger_count is not None:
+                    try:
+                        if not meets_threshold:
+                            # Not yet at threshold — force/keep pending
+                            if incident.status != "pending":
+                                incident.status = "pending"
+                                incident.save(update_fields=["status"])
+                        elif incident.status == "pending":
+                            # Was pending, threshold just reached — transition to new
+                            incident.status = "new"
+                            incident.save(update_fields=["status"])
+                            incident.add_history("threshold_reached",
+                                note=f"Threshold met: {incident_event_count} events (trigger_count: {trigger_count})")
+                            if settings.INCIDENT_EVENT_METRICS:
+                                metrics.record('incidents:threshold_reached', account="incident",
+                                    min_granularity=INCIDENT_METRICS_MIN_GRANULARITY)
+                    except Exception:
+                        logger.exception("Error during threshold status transition (incident=%s)", incident.pk)
+
+                self.link_to_incident(incident)
+
+                # Run handlers on creation or when transitioning from pending -> new
+                if rule_set:
+                    transitioned_to_new = (prev_status == "pending" and incident.status == "new")
+                    if (created and (trigger_count is None or meets_threshold)) or transitioned_to_new:
+                        rule_set.run_handler(self, incident)
+                        # Track event count at trigger so re-trigger knows the baseline
+                        if retrigger_every is not None:
+                            try:
+                                meta = dict(incident.metadata or {})
+                                meta["last_trigger_count"] = incident.events.count()
+                                incident.metadata = meta
+                                incident.save(update_fields=["metadata"])
+                            except Exception:
+                                logger.exception("Error recording last_trigger_count (incident=%s)", incident.pk)
+                    elif retrigger_every is not None and incident.status in ("new", "open", "investigating"):
+                        try:
+                            total = incident.events.count()
+                            last = (incident.metadata or {}).get("last_trigger_count")
+                            # Guard against tampered/missing value
+                            if not isinstance(last, int) or last < 1:
+                                last = trigger_count or 1
+                            if total >= last + retrigger_every:
+                                meta = dict(incident.metadata or {})
+                                meta["last_trigger_count"] = total
+                                incident.metadata = meta
+                                incident.save(update_fields=["metadata"])
+                                incident.add_history("handler_retriggered",
+                                    note=f"Re-triggered: {total} events (retrigger_every: {retrigger_every})")
+                                rule_set.run_handler(self, incident)
+                        except Exception:
+                            logger.exception("Error during re-trigger check (incident=%s)", incident.pk)
+                elif created and LLM_API_KEY:
+                    # No rule matched but level exceeded threshold — default to LLM triage
+                    try:
+                        from mojo.apps import jobs
+                        jobs.publish(
+                            "mojo.apps.incident.handlers.llm_agent.execute_llm_handler",
+                            {
+                                "event_id": self.pk,
+                                "incident_id": incident.pk,
+                                "ruleset_id": None,
+                            },
+                            channel="incident_handlers",
+                        )
                     except Exception:
                         pass
-            elif created and LLM_API_KEY:
-                # No rule matched but level exceeded threshold — default to LLM triage
-                try:
-                    from mojo.apps import jobs
-                    jobs.publish(
-                        "mojo.apps.incident.handlers.llm_agent.execute_llm_handler",
-                        {
-                            "event_id": self.pk,
-                            "incident_id": incident.pk,
-                            "ruleset_id": None,
-                        },
-                        channel="incident_handlers",
-                    )
-                except Exception:
-                    pass
 
     def record_event_metrics(self):
         if settings.INCIDENT_EVENT_METRICS:
@@ -305,7 +310,7 @@ class Event(models.Model, MojoModel):
         created = False
         if rule_set is not None and rule_set.bundle_by > 0:
             bundle_criteria = self.determine_bundle_criteria(rule_set)
-            incident = Incident.objects.filter(**bundle_criteria).first()
+            incident = Incident.objects.select_for_update().filter(**bundle_criteria).first()
             # Escalate priority when reusing an existing incident
             if incident and self.level > incident.priority:
                 old_priority = incident.priority

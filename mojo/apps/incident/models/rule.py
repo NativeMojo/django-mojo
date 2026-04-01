@@ -1,5 +1,6 @@
 import re
 from django.db import models
+from django.core.validators import MinValueValidator
 from mojo.models import MojoModel
 from urllib.parse import urlparse, parse_qs
 from mojo.helpers import logit
@@ -115,10 +116,13 @@ class RuleSet(models.Model, MojoModel):
     # Chains split on ',(job|email|notify|ticket)://'
     handler = models.TextField(default=None, null=True)
     trigger_count = models.IntegerField(null=True, blank=True,
+        validators=[MinValueValidator(1)],
         help_text="Fire handler when incident reaches this many events. Null = fire immediately on first event.")
     trigger_window = models.IntegerField(null=True, blank=True,
+        validators=[MinValueValidator(1)],
         help_text="Only count events within this many minutes for the trigger threshold. Null = count all events on the incident.")
     retrigger_every = models.IntegerField(null=True, blank=True,
+        validators=[MinValueValidator(1)],
         help_text="Re-fire handler every N additional events after the initial trigger. Null = fire once only.")
     metadata = models.JSONField(default=dict, blank=True)
 
