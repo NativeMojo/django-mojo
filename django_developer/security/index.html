@@ -5194,7 +5194,7 @@
 <h3 id="llm-analysis-post_save_action">LLM Analysis (POST_SAVE_ACTION)<a class="headerlink" href="#llm-analysis-post_save_action" title="Permanent link">&para;</a></h3>
 <p>The <code>analyze</code> action triggers deep LLM analysis on an incident — finding related incidents, proposing merge candidates, and creating a new (disabled) RuleSet for human approval. It runs asynchronously via the job queue.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="c1"># How the action is triggered via REST:</span>
-<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="c1"># POST /api/incident/incident/&lt;id&gt;  {&quot;action&quot;: &quot;analyze&quot;}</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="c1"># POST /api/incident/incident/&lt;id&gt;  {&quot;analyze&quot;: 1}</span>
 <a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>
 <a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="c1"># Programmatically:</span>
 <a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="n">incident</span><span class="o">.</span><span class="n">on_action_analyze</span><span class="p">(</span><span class="kc">None</span><span class="p">)</span>
@@ -5447,7 +5447,7 @@
 <tr>
 <td>Trigger</td>
 <td>Automatic — <code>llm://</code> handler on rule match</td>
-<td>Manual — admin POST <code>{"action": "analyze"}</code></td>
+<td>Manual — admin POST <code>{"analyze": 1}</code></td>
 </tr>
 <tr>
 <td>Prompt</td>

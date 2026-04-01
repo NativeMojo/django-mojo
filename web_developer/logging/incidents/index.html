@@ -4162,18 +4162,18 @@
 <h2 id="merge-incidents">Merge Incidents<a class="headerlink" href="#merge-incidents" title="Permanent link">&para;</a></h2>
 <p><strong>POST</strong> <code>/api/incident/incident/&lt;id&gt;</code></p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">&quot;action&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;merge&quot;</span><span class="p">,</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="mi">302</span><span class="p">,</span><span class="w"> </span><span class="mi">303</span><span class="p">]</span>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="p">}</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">&quot;merge&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="mi">302</span><span class="p">,</span><span class="w"> </span><span class="mi">303</span><span class="p">]</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="p">}</span>
 </code></pre></div>
-<p>Merges incidents 302 and 303 into incident <code>&lt;id&gt;</code>. Events are re-linked, source incidents are deleted.</p>
+<p>Merges incidents 302 and 303 into incident <code>&lt;id&gt;</code>. The value is passed to <code>on_action_merge</code>. Events are re-linked, source incidents are deleted.</p>
 <h2 id="request-llm-analysis">Request LLM Analysis<a class="headerlink" href="#request-llm-analysis" title="Permanent link">&para;</a></h2>
 <p><strong>POST</strong> <code>/api/incident/incident/&lt;id&gt;</code></p>
 <p><strong>Permission required:</strong> <code>manage_security</code></p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">&quot;action&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;analyze&quot;</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">&quot;analyze&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span>
 <a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="p">}</span>
 </code></pre></div>
+<p>The value is passed to <code>on_action_analyze</code> — any truthy value works.</p>
 <p>Triggers deep LLM analysis on the incident. The agent runs asynchronously — this call returns immediately.</p>
 <p><strong>Successful response:</strong></p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">}</span>

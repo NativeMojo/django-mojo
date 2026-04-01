@@ -4262,17 +4262,17 @@
 </tbody>
 </table>
 <h3 id="example-rest-calls">Example REST calls<a class="headerlink" href="#example-rest-calls" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>PUT /api/system/geoip/123
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>{&quot;action&quot;: &quot;block&quot;, &quot;block&quot;: {&quot;reason&quot;: &quot;confirmed attacker&quot;, &quot;ttl&quot;: 86400}}
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>POST /api/system/geoip/123
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>{&quot;block&quot;: {&quot;reason&quot;: &quot;confirmed attacker&quot;, &quot;ttl&quot;: 86400}}
 <a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>PUT /api/system/geoip/123
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>{&quot;action&quot;: &quot;unblock&quot;, &quot;unblock&quot;: &quot;false positive confirmed&quot;}
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>POST /api/system/geoip/123
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>{&quot;unblock&quot;: &quot;false positive confirmed&quot;}
 <a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>
-<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>PUT /api/system/geoip/123
-<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>{&quot;action&quot;: &quot;whitelist&quot;, &quot;whitelist&quot;: &quot;office VPN exit node&quot;}
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>POST /api/system/geoip/123
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>{&quot;whitelist&quot;: &quot;office VPN exit node&quot;}
 <a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>
-<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>PUT /api/system/geoip/123
-<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>{&quot;action&quot;: &quot;unwhitelist&quot;}
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>POST /api/system/geoip/123
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>{&quot;unwhitelist&quot;: 1}
 </code></pre></div>
 <p>All actions require <code>manage_users</code> permission (from RestMeta).</p>
 <hr />

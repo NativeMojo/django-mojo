@@ -4960,7 +4960,7 @@
 <h3 id="on-demand-deep-analysis">On-Demand Deep Analysis<a class="headerlink" href="#on-demand-deep-analysis" title="Permanent link">&para;</a></h3>
 <p>Admins can request a deeper analysis of any incident at any time. This is separate from the automatic triage — it runs a more thorough investigation designed to clean up related open incidents and propose rules.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>POST /api/incident/incident/&lt;id&gt;
-<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>{&quot;action&quot;: &quot;analyze&quot;}
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>{&quot;analyze&quot;: 1}
 </code></pre></div>
 <p><strong>Requires:</strong> <code>manage_security</code></p>
 <p>The call returns immediately. The agent runs in the background and:
@@ -5238,7 +5238,7 @@
 </tbody>
 </table>
 <h3 id="actions-post_save_actions">Actions (POST_SAVE_ACTIONS)<a class="headerlink" href="#actions-post_save_actions" title="Permanent link">&para;</a></h3>
-<p>Trigger actions by POSTing <code>{"action": "&lt;name&gt;"}</code> to <code>/api/incident/ipset/&lt;id&gt;</code>:</p>
+<p>Trigger actions by POSTing <code>{"&lt;action_name&gt;": 1}</code> to <code>/api/incident/ipset/&lt;id&gt;</code>:</p>
 <table>
 <thead>
 <tr>
@@ -5267,11 +5267,11 @@
 </table>
 <p><strong>Example — sync after manual CIDR edit:</strong></p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>POST /api/incident/ipset/3
-<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>{&quot;action&quot;: &quot;sync&quot;}
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>{&quot;sync&quot;: 1}
 </code></pre></div>
 <p><strong>Example — disable a country block:</strong></p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>POST /api/incident/ipset/3
-<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a>{&quot;action&quot;: &quot;disable&quot;}
+<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a>{&quot;disable&quot;: 1}
 </code></pre></div>
 <h3 id="workflow-block-a-country">Workflow: Block a Country<a class="headerlink" href="#workflow-block-a-country" title="Permanent link">&para;</a></h3>
 <p>Block all traffic from China (<code>cn</code>):</p>
@@ -5287,7 +5287,7 @@
 </code></pre></div>
 <p>Then fetch the latest CIDRs and load them onto all instances:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>POST /api/incident/ipset/&lt;id&gt;
-<a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a>{&quot;action&quot;: &quot;refresh_source&quot;}
+<a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a>{&quot;refresh_source&quot;: 1}
 </code></pre></div>
 <p><code>refresh_source</code> fetches the zone file, stores the CIDRs in <code>data</code>, and immediately syncs to all instances. A weekly cron also runs <code>refresh_source</code> automatically on all enabled IPSets.</p>
 <p>Common country codes: <code>cn</code> (China), <code>ru</code> (Russia), <code>ir</code> (Iran), <code>kp</code> (North Korea).</p>
@@ -5305,7 +5305,7 @@
 </code></pre></div>
 <p>Then load the current blacklist:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>POST /api/incident/ipset/&lt;id&gt;
-<a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>{&quot;action&quot;: &quot;refresh_source&quot;}
+<a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>{&quot;refresh_source&quot;: 1}
 </code></pre></div>
 <p>This fetches up to 10,000 IPv4 addresses with confidence ≥ 100% and syncs them fleet-wide. The weekly cron refreshes this automatically.</p>
 <h3 id="workflow-manual-cidr-list">Workflow: Manual CIDR List<a class="headerlink" href="#workflow-manual-cidr-list" title="Permanent link">&para;</a></h3>
@@ -5327,7 +5327,7 @@
 </code></pre></div>
 <p>Then sync to load onto all instances:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a>POST /api/incident/ipset/&lt;id&gt;
-<a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a>{&quot;action&quot;: &quot;sync&quot;}
+<a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a>{&quot;sync&quot;: 1}
 </code></pre></div>
 <p>The <code>data</code> field is plain text, one CIDR per line. Lines starting with <code>#</code> are treated as comments and ignored.</p>
 <h3 id="listing-and-filtering">Listing and Filtering<a class="headerlink" href="#listing-and-filtering" title="Permanent link">&para;</a></h3>
