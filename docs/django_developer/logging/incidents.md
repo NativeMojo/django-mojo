@@ -512,6 +512,45 @@ These endpoints only create events — they have no blocking authority.
 | `source_ip` | `source_ip` |
 | `hostname` | `hostname` |
 
+### Default OSSEC rulesets — `ensure_ossec_rules()`
+
+Call `RuleSet.ensure_ossec_rules()` during deployment or migrations to install the framework's built-in OSSEC rulesets. The method is idempotent — it creates missing rulesets and skips ones that already exist.
+
+These rulesets exist to absorb the high-volume, low-value events that OSSEC generates constantly. Without them, each unmatched event either creates its own incident (when `level >= INCIDENT_LEVEL_THRESHOLD`) or falls through to the LLM triage handler — neither of which is useful for routine internet background noise.
+
+**Priority order (lower = checked first, first match wins):**
+
+| Priority | Name | Matches | Action |
+|---|---|---|---|
+| 1 | OSSEC - Bot/Scanner Patterns | `details` regex matches PHP, `.git`, `.asp`, `.env`, `cgi-bin`, `wp-content`, `wlwmanifest`, `locale.json`, `.jsp`, `.cfm`, `.cgi`, `dns-query`, `/vendor/phpunit`, `eval-stdin` | `block://?ttl=3600&fleet_wide=1`, no incident |
+| 2 | OSSEC - Login Session Noise | `details` regex matches `Login session (opened\|closed).` | `ignore`, no incident |
+| 3 | OSSEC - SSH Single Probe (5710) | `rule_id == 5710` | `block://?ttl=3600&fleet_wide=1`, no incident |
+| 5 | OSSEC - SSH Brute Force | `rule_id` in `[5712, 5720, 5551, 5758]` | `block://?ttl=3600&fleet_wide=1`, no incident |
+| 6 | OSSEC - Generic Web Errors | `details` regex matches `Web (Attack )?4(00\|04\|05)` | `block://?ttl=300&fleet_wide=1`, no incident |
+| 10 | OSSEC 31104 - Web Attack Detection | `rule_id == 31104` | `block://?ttl=3600&fleet_wide=1`, no incident |
+| 50 | OSSEC - Critical Severity | `level >= 12` | `block://?ttl=3600&fleet_wide=1` + incident created for review |
+
+**Why each ruleset exists:**
+
+- **Priority 1 — Bot/Scanner Patterns**: Matches known automated scanner paths and blocks the IP for one hour. The regex was extended in v1.1.4 to include `/vendor/phpunit` and `eval-stdin` paths used by PHP exploit scanners.
+- **Priority 2 — Login Session Noise**: PAM `session opened` / `session closed` log entries have no source IP and are pure local audit bookkeeping. They are not attacks. Without this ruleset, OSSEC level 3 events for these messages were hitting the catch-all and generating admin-visible incidents at the rate of hundreds per day.
+- **Priority 3 — SSH Single Probe (5710)**: OSSEC rule 5710 fires on the first SSH attempt with a non-existent username. Scanners typically probe once and move on, so they never accumulate enough events to trip the multi-attempt brute-force rule (priority 5). Without this ruleset, each single-probe scanner IP created its own unmatched incident. Block it immediately.
+- **Priority 5 — SSH Brute Force**: Multi-attempt SSH brute force (rules 5712/5720/5551/5758). Immediate block, no incident.
+- **Priority 6 — Generic Web Errors**: Any Web 400/404/405 that is not already caught by the bot/scanner URL pattern check (priority 1). Catches phpunit/vendor scanner sweeps and other generic HTTP probers. Short block (5 minutes) — these are internet noise, not targeted attacks.
+- **Priority 10 — Web Attack Detection**: OSSEC rule 31104 specifically. One-hour block, no incident.
+- **Priority 50 — Critical Severity**: Level 12+ is unusual. Only this default creates an incident — something genuinely unexpected happened and warrants human review.
+
+**Usage:**
+
+```python
+from mojo.apps.incident.models import RuleSet
+
+# Called once at deployment time, safe to call repeatedly
+RuleSet.ensure_ossec_rules()
+```
+
+Rulesets installed by `ensure_ossec_rules()` are identified by name. If you need to modify a default ruleset's behavior (e.g., change a TTL or priority), edit it via the admin interface or REST API after installation — the method will not overwrite existing records.
+
 ---
 
 ## Integration with GeoLocatedIP
