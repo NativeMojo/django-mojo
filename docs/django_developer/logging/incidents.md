@@ -136,7 +136,7 @@ The `IPSet` model manages ipset-based bulk IP blocking for entire countries, dat
 
 | Endpoint | Auth | Description |
 |---|---|---|
-| `/api/incident/ipset` | `manage_users` | Standard CRUD + POST_SAVE_ACTIONS for IPSet management |
+| `/api/incident/ipset` | `view_security` / `security` (read), `manage_security` / `security` (write) | Standard CRUD + POST_SAVE_ACTIONS for IPSet management |
 
 ### Setup Examples
 
