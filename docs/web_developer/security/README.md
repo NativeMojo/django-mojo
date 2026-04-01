@@ -33,7 +33,8 @@ Detection → Event → Rules → Incident → Handlers → Enforcement
 | History | `/api/incident/incidenthistory` | Audit trail for each incident |
 | Tickets | `/api/incident/ticket` | Human review items, LLM conversation threads |
 | Ticket Notes | `/api/incident/ticketnote` | Ticket conversation (human + LLM) |
-| Rules | `/api/incident/ruleset` | Rule engine configuration |
+| RuleSets | `/api/incident/ruleset` | Rule engine configuration — categories, bundling, trigger thresholds, handlers |
+| Rules | `/api/incident/rule` | Conditions within a RuleSet (field comparisons) |
 | GeoIP | `/api/account/system/geoip` | IP records, block status, threat level, geolocation |
 | Logs | `/api/logit/log` | Audit logs, firewall history |
 | Metrics | `/api/metrics/fetch` | Time-series data for dashboards |
@@ -245,6 +246,180 @@ These are the built-in detection sources. Your app can add custom events via the
 | MFA failures | `totp:login_failed` | 1 | MFA bypass attempt |
 | OSSEC alerts | `ossec` | varies | OS-level threats |
 | System health | `system:health:{type}` | 5-10 | Infrastructure issues |
+
+## Configuring RuleSets
+
+RuleSets are the core of the rule engine. Each RuleSet watches a specific event category, groups related events into incidents, and fires a handler when enough events accumulate. You create and manage them via the REST API — no code deployment required.
+
+### Endpoints
+
+| Method | Path | Description | Permission |
+|--------|------|-------------|------------|
+| `GET` | `/api/incident/ruleset` | List all rulesets | `view_security` |
+| `GET` | `/api/incident/ruleset/<id>` | Get a single ruleset | `view_security` |
+| `POST` | `/api/incident/ruleset` | Create a ruleset | `manage_security` |
+| `POST` | `/api/incident/ruleset/<id>` | Update a ruleset | `manage_security` |
+| `DELETE` | `/api/incident/ruleset/<id>` | Delete a ruleset | `manage_security` |
+
+Rules (the conditions within a ruleset) are managed at `/api/incident/rule`.
+
+### RuleSet Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Human-readable label |
+| `category` | string | Event category to match. Use `*` as a catch-all fallback. |
+| `priority` | int | Evaluation order — lower number = higher priority. First match wins. |
+| `match_by` | int | `0` = ALL rules must match, `1` = ANY rule can match |
+| `bundle_by` | int | How to group events into one incident (see below) |
+| `bundle_minutes` | int | Time window for bundling. `0` = each event gets its own incident, `null` = bundle forever, `>0` = bundle within N minutes |
+| `handler` | string | Handler chain to fire (see [Handlers](#incident-handlers)) |
+| `trigger_count` | int | Hold incident at `pending` until this many events accumulate. `null` = fire on first event. |
+| `trigger_window` | int | Only count events within this many minutes when evaluating `trigger_count`. `null` = count all events on the incident. |
+| `retrigger_every` | int | Re-fire the handler every N additional events while the incident stays active. `null` = fire once only. |
+
+### bundle_by Values
+
+| Value | Name | Group events by | When to use |
+|-------|------|-----------------|-------------|
+| `0` | NONE | — (no grouping) | Each event creates its own incident. Use for one-shot alerts like health checks. |
+| `1` | HOSTNAME | Same server | Server-level problems (disk full, CPU spike) that should be tracked per machine. |
+| `2` | MODEL_NAME | Same model type | Permission denials across all instances of a model (e.g. all `Order` edits). |
+| `3` | MODEL_NAME_AND_ID | Same model instance | Activity on a specific record (e.g. repeated edits to one user account). |
+| `4` | SOURCE_IP | Same source IP | Attack patterns from one IP — brute force, scanning, credential stuffing. |
+| `5` | HOSTNAME_AND_MODEL_NAME | Same server + model | Server-specific model errors. |
+| `6` | HOSTNAME_AND_MODEL_NAME_AND_ID | Same server + model instance | Very specific server-scoped activity. |
+| `7` | SOURCE_IP_AND_MODEL_NAME | Same IP + model | IP attacking a specific model type. |
+| `8` | SOURCE_IP_AND_MODEL_NAME_AND_ID | Same IP + model instance | IP targeting a specific record. |
+| `9` | SOURCE_IP_AND_HOSTNAME | Same IP + server | IP causing problems on a specific instance (distributed attack targeting one node). |
+
+For most security rules, `bundle_by=4` (SOURCE_IP) is the right choice.
+
+### trigger_count + trigger_window: Suppress Until Threshold
+
+Without `trigger_count`, the handler fires on the very first event. That's right for critical one-off alerts, but creates noise for gradual attacks. Use `trigger_count` to suppress until you're sure something is real:
+
+**How it works:**
+1. Events arrive and get bundled into one incident (which sits at `pending`)
+2. Once the incident accumulates `trigger_count` events, it transitions to `new` and the handler fires
+3. The `pending` incident is invisible in the main admin queue — it only surfaces when it becomes `new`
+
+`trigger_window` scopes the count to recent events only. Events on the incident older than `trigger_window` minutes don't count toward the threshold.
+
+**Example — block after 10 failed logins in 5 minutes:**
+
+```
+POST /api/incident/ruleset
+{
+  "name": "Brute Force Detection",
+  "category": "auth:failed",
+  "priority": 5,
+  "match_by": 0,
+  "bundle_by": 4,
+  "bundle_minutes": 30,
+  "trigger_count": 10,
+  "trigger_window": 5,
+  "handler": "block://?ttl=3600"
+}
+```
+
+Events 1–9 from the same IP sit quietly at `pending`. Event 10 trips the threshold → incident goes `new` → IP gets blocked fleet-wide.
+
+### retrigger_every: Keep Alerting as Things Escalate
+
+Sometimes you want the handler to fire again if the attack keeps going. `retrigger_every` re-fires the handler every N additional events after the initial trigger, as long as the incident is still active (`new`, `open`, or `investigating`).
+
+**Example — ticket at 5 payment failures, then escalate every 10 more:**
+
+```
+POST /api/incident/ruleset
+{
+  "name": "Payment Failure Escalation",
+  "category": "payment:declined",
+  "priority": 10,
+  "match_by": 0,
+  "bundle_by": 4,
+  "bundle_minutes": 60,
+  "trigger_count": 5,
+  "retrigger_every": 10,
+  "handler": "ticket://?priority=7,email://perm@manage_security"
+}
+```
+
+- 5 failures → ticket created + email sent (initial trigger)
+- 15 failures → ticket + email again
+- 25 failures → ticket + email again
+- etc.
+
+Re-triggers add a `handler_retriggered` history entry on the incident so you can see the escalation trail.
+
+### Handler Chains
+
+Multiple handlers are chained with commas:
+
+```
+block://?ttl=3600,ticket://?priority=9,email://perm@manage_security
+```
+
+**Block handler parameters:**
+
+| Param | Default | Description |
+|-------|---------|-------------|
+| `ttl` | `600` | Seconds until auto-unblock. `0` = permanent. |
+| `reason` | `auto:ruleset` | Reason recorded on the GeoLocatedIP block record |
+
+**Ticket handler parameters:**
+
+| Param | Description |
+|-------|-------------|
+| `priority` | Ticket priority (1–15, defaults to event level) |
+| `status` | Initial status (`open`, `new`) |
+| `title` | Override ticket title |
+| `category` | Ticket category (default: `incident`) |
+
+**Notification targets** (for `email://`, `sms://`, `notify://`):
+
+| Syntax | Who gets notified |
+|--------|-------------------|
+| `perm@manage_security` | All users with the `manage_security` permission |
+| `protected@alerts` | Users who opted into `metadata.protected.alerts` |
+| `admin` | Specific user by username |
+
+### Common Patterns
+
+| Scenario | bundle_by | trigger_count | trigger_window | retrigger_every | handler |
+|----------|-----------|---------------|----------------|-----------------|---------|
+| Block after 10 SSH failures in 5 min | SOURCE_IP (4) | 10 | 5 | — | `block://?ttl=3600` |
+| Block on first credential-stuffing attempt | SOURCE_IP (4) | — | — | — | `block://?ttl=1800` |
+| Ticket after 3 payment declines | SOURCE_IP (4) | 3 | 60 | — | `ticket://?priority=7` |
+| Notify on first health alert | HOSTNAME (1) | — | — | — | `notify://perm@manage_security` |
+| Email at 5 auth failures, re-alert every 10 | SOURCE_IP (4) | 5 | 30 | 10 | `email://perm@manage_security` |
+| Block bot + create ticket for review | SOURCE_IP (4) | — | — | — | `block://?ttl=3600,ticket://?priority=8` |
+| Silent audit (no handler) | MODEL_NAME_AND_ID (3) | — | — | — | — |
+
+### Rule Conditions
+
+Each ruleset can have zero or more `Rule` records that filter which events it applies to. Create them at `/api/incident/rule`:
+
+```
+POST /api/incident/rule
+{
+  "parent": 42,
+  "name": "Level >= 7",
+  "field_name": "level",
+  "comparator": ">=",
+  "value": "7",
+  "value_type": "int"
+}
+```
+
+**Comparators**: `==`, `>`, `>=`, `<`, `<=`, `contains`, `regex`
+
+**value_type**: `str`, `int`, `float`, `bool`
+
+`field_name` can be any field on the event (`level`, `source_ip`, `hostname`, `country_code`) or any key in `event.metadata` (e.g. `risk_score`, `http_url`, `rule_id` for OSSEC).
+
+A ruleset with no rules never matches. Always add at least one rule.
 
 ## Incident Handlers
 
