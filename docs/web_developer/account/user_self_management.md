@@ -1471,15 +1471,15 @@ These are readable by the user themselves as a "recent activity" feed.
 ### List own activity
 
 ```
-GET /api/logit/log?uid=<me>&sort=-created&size=50
+GET /api/logs?uid=<me>&sort=-created&size=50
 ```
 
 Filter by kind prefix to show specific categories:
 
 ```
-GET /api/logit/log?uid=<me>&kind__startswith=email:
-GET /api/logit/log?uid=<me>&kind__startswith=password
-GET /api/logit/log?uid=<me>&kind__startswith=login
+GET /api/logs?uid=<me>&kind__startswith=email:
+GET /api/logs?uid=<me>&kind__startswith=password
+GET /api/logs?uid=<me>&kind__startswith=login
 ```
 
 ### Common audit kinds for user self-management
@@ -1501,7 +1501,7 @@ GET /api/logit/log?uid=<me>&kind__startswith=login
 ### Date range
 
 ```
-GET /api/logit/log?uid=<me>&dr_start=2026-01-01&dr_end=2026-01-31
+GET /api/logs?uid=<me>&dr_start=2026-01-01&dr_end=2026-01-31
 ```
 
 ---
@@ -1644,5 +1644,5 @@ Refresh the user profile to pick up the updated `is_email_verified` or
 | Delete own file | DELETE | `/api/fileman/file/<id>` | Required |
 | Upload encrypted file | POST | `/api/filevault/file/upload` | Required |
 | Download encrypted file (get token) | POST | `/api/filevault/file/<id>/unlock` | Required |
-| View own activity log | GET | `/api/logit/log` | Required + `view_logs` |
+| View own activity log | GET | `/api/logs` | Required + `view_logs` |
 | Generate QR code | GET/POST | `/api/qrcode` | Public |

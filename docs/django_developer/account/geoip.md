@@ -160,16 +160,16 @@ All blocking and management operations are exposed as POST_SAVE_ACTIONS on the m
 ### Example REST calls
 
 ```
-PUT /api/account/system/geoip/123
+PUT /api/system/geoip/123
 {"action": "block", "block": {"reason": "confirmed attacker", "ttl": 86400}}
 
-PUT /api/account/system/geoip/123
+PUT /api/system/geoip/123
 {"action": "unblock", "unblock": "false positive confirmed"}
 
-PUT /api/account/system/geoip/123
+PUT /api/system/geoip/123
 {"action": "whitelist", "whitelist": "office VPN exit node"}
 
-PUT /api/account/system/geoip/123
+PUT /api/system/geoip/123
 {"action": "unwhitelist"}
 ```
 
@@ -199,13 +199,13 @@ All graphs include `is_threat`, `is_suspicious`, and `risk_score` as extras. The
 
 ## REST Endpoints
 
-All endpoints are under the `account` app prefix (e.g. `/api/account/system/geoip`).
+The account app sets `APP_NAME = ""`, so these endpoints register directly under `/api/system/`.
 
 ### `GET/POST system/geoip` — List / Create
 
 ```
-GET  /api/account/system/geoip
-POST /api/account/system/geoip
+GET  /api/system/geoip
+POST /api/system/geoip
 ```
 
 Standard CRUD via `GeoLocatedIP.on_rest_request`. Requires `manage_users` permission.
@@ -213,9 +213,9 @@ Standard CRUD via `GeoLocatedIP.on_rest_request`. Requires `manage_users` permis
 ### `GET/PUT/DELETE system/geoip/<pk>` — Detail / Update / Delete
 
 ```
-GET    /api/account/system/geoip/123
-PUT    /api/account/system/geoip/123
-DELETE /api/account/system/geoip/123
+GET    /api/system/geoip/123
+PUT    /api/system/geoip/123
+DELETE /api/system/geoip/123
 ```
 
 Requires `manage_users` permission. PUT supports POST_SAVE_ACTIONS for block/unblock/whitelist.
@@ -223,7 +223,7 @@ Requires `manage_users` permission. PUT supports POST_SAVE_ACTIONS for block/unb
 ### `GET system/geoip/lookup` — Public IP Lookup
 
 ```
-GET /api/account/system/geoip/lookup?ip=1.2.3.4
+GET /api/system/geoip/lookup?ip=1.2.3.4
 ```
 
 **Public endpoint** — no authentication required. Rate limited to 30 requests/minute per IP.
@@ -238,7 +238,7 @@ Returns the `GeoLocatedIP` record via `on_rest_get` (default graph).
 ### `GET system/geoip/time` — Public IP Time Lookup
 
 ```
-GET /api/account/system/geoip/time
+GET /api/system/geoip/time
 ```
 
 **Public endpoint** — no authentication required. Rate limited to 30 requests/minute per IP. Uses the caller's IP address automatically.

@@ -135,7 +135,7 @@ Long-lived JWTs restricted by IP allowlist.
 **Generate own key:** `POST /api/auth/generate_api_key`
 - Required: `allowed_ips` (list), `expire_days` (max 360)
 
-**Admin generate for another user:** `POST /api/auth/manage/generate_api_key`
+**Admin generate for another user:** `POST /api/auth/generate_api_key`
 - Required: `allowed_ips`, `expire_days`, `uid`
 - Requires: `manage_users` permission
 

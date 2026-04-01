@@ -30,13 +30,13 @@ Detection → Event → Rules → Incident → Handlers → Enforcement
 |-----|------|-----------------|
 | Incidents | `/api/incident/incident` | Security incidents with status, priority, category |
 | Events | `/api/incident/event` | Raw security events that feed into incidents |
-| History | `/api/incident/incidenthistory` | Audit trail for each incident |
+| History | `/api/incident/incident/history` | Audit trail for each incident |
 | Tickets | `/api/incident/ticket` | Human review items, LLM conversation threads |
-| Ticket Notes | `/api/incident/ticketnote` | Ticket conversation (human + LLM) |
+| Ticket Notes | `/api/incident/ticket/note` | Ticket conversation (human + LLM) |
 | RuleSets | `/api/incident/event/ruleset` | Rule engine configuration — categories, bundling, trigger thresholds, handlers |
 | Rules | `/api/incident/event/ruleset/rule` | Conditions within a RuleSet (field comparisons) |
 | GeoIP | `/api/system/geoip` | IP records, block status, threat level, geolocation |
-| Logs | `/api/logit/log` | Audit logs, firewall history |
+| Logs | `/api/logs` | Audit logs, firewall history |
 | Metrics | `/api/metrics/fetch` | Time-series data for dashboards |
 | Bouncer (client) | `/api/account/bouncer/assess` | Bot detection (called by bouncer JS, not your app) |
 | Bouncer Devices | `/api/account/bouncer/device` | Device reputation, risk tiers, block counts |
@@ -85,7 +85,7 @@ For a single incident, fetch the incident + its history + its events:
 
 ```
 GET /api/incident/incident/301
-GET /api/incident/incidenthistory?parent=301&sort=created
+GET /api/incident/incident/history?parent=301&sort=created
 GET /api/incident/event?incident=301&sort=-created
 ```
 
@@ -97,7 +97,7 @@ Show currently blocked IPs and recent firewall activity:
 
 ```
 GET /api/system/geoip?is_blocked=true&sort=-blocked_at
-GET /api/logit/log?kind=firewall:block&sort=-created&size=20
+GET /api/logs?kind=firewall:block&sort=-created&size=20
 ```
 
 **Firewall log `kind` values:**
@@ -200,7 +200,7 @@ GET /api/incident/ticket?status=open&sort=-priority
 Tickets with `metadata.llm_linked=true` are part of an LLM conversation. When you post a note, the LLM reads it and responds:
 
 ```
-POST /api/incident/ticketnote
+POST /api/incident/ticket/note
 {
   "parent": 10,
   "note": "Approved. Enable the rule with threshold 10."

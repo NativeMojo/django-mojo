@@ -10,8 +10,8 @@
 | Method | Path | Description |
 |---|---|---|
 | GET | `/api/metrics/fetch` | Fetch time-series data |
-| GET | `/api/metrics/values` | Fetch current values for slugs |
-| GET | `/api/metrics/accounts` | List metric accounts |
+| GET | `/api/metrics/value/get` | Fetch current values for slugs |
+| GET | `/api/metrics/categories` | List metric categories |
 | GET | `/api/metrics/categories` | List categories |
 
 ## Fetch Time-Series
@@ -62,10 +62,10 @@ GET /api/metrics/fetch?slug=page_views&granularity=days&dr_start=2024-01-01&dr_e
 
 ## Fetch Current Values
 
-**GET** `/api/metrics/values`
+**GET** `/api/metrics/value/get`
 
 ```
-GET /api/metrics/values?slugs=page_views,user_signups&granularity=hours
+GET /api/metrics/value/get?slugs=page_views,user_signups&granularity=hours
 ```
 
 ```json

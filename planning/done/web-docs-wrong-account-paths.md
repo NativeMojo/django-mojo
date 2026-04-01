@@ -1,7 +1,7 @@
 # Web Developer Docs Have Wrong API Paths for Account Endpoints
 
 **Type**: bug
-**Status**: open
+**Status**: resolved
 **Date**: 2026-04-01
 **Severity**: high
 

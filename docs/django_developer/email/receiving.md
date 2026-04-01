@@ -64,5 +64,5 @@ for attachment in incoming_email.attachments.all():
 ## SES Inbound Configuration
 
 1. In AWS SES, configure a receipt rule for your domain
-2. Set the rule to call the webhook endpoint: `POST /api/aws/inbound`
+2. Set the rule to call the webhook endpoint: `POST /api/aws/email/sns/inbound`
 3. The framework parses the SES notification and calls the mailbox handler

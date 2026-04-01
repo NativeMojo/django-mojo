@@ -8,15 +8,15 @@
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/logit/log` | List log entries |
-| GET | `/api/logit/log/<id>` | Get single log entry |
+| GET | `/api/logs` | List log entries |
+| GET | `/api/logs/<id>` | Get single log entry |
 
 ## List Logs
 
-**GET** `/api/logit/log`
+**GET** `/api/logs`
 
 ```
-GET /api/logit/log?level=error&sort=-created&size=50
+GET /api/logs?level=error&sort=-created&size=50
 ```
 
 **Response:**
@@ -61,7 +61,7 @@ GET /api/logit/log?level=error&sort=-created&size=50
 ## Date Range
 
 ```
-GET /api/logit/log?dr_start=2024-01-01&dr_end=2024-01-31&level=error
+GET /api/logs?dr_start=2024-01-01&dr_end=2024-01-31&level=error
 ```
 
 ## Available Graphs

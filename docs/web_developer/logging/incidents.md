@@ -14,14 +14,14 @@
 | GET | `/api/incident/incident` | List incidents |
 | GET | `/api/incident/incident/<id>` | Get incident |
 | POST | `/api/incident/incident/<id>` | Update incident |
-| GET | `/api/incident/incidenthistory` | List incident history |
+| GET | `/api/incident/incident/history` | List incident history |
 | GET | `/api/incident/event/ruleset` | List rule sets |
 | GET | `/api/incident/event/ruleset/rule` | List rules |
 | GET | `/api/incident/ticket` | List tickets |
 | GET | `/api/incident/ticket/<id>` | Get ticket |
 | POST | `/api/incident/ticket` | Create ticket |
-| GET | `/api/incident/ticketnote` | List ticket notes |
-| POST | `/api/incident/ticketnote` | Create ticket note |
+| GET | `/api/incident/ticket/note` | List ticket notes |
+| POST | `/api/incident/ticket/note` | Create ticket note |
 
 ## List Incidents
 
@@ -104,7 +104,7 @@ Merges incidents 302 and 303 into incident `<id>`. Events are re-linked, source 
 
 ## Incident History
 
-**GET** `/api/incident/incidenthistory?parent=301&sort=-created`
+**GET** `/api/incident/incident/history?parent=301&sort=-created`
 
 Returns the audit trail for an incident — every state change, handler execution, LLM assessment, and admin edit.
 
@@ -183,7 +183,7 @@ Tickets are the bridge between automated systems and human operators.
 
 Tickets with `metadata.llm_linked=true` are managed by the LLM agent. When you post a note to these tickets, the LLM is automatically re-invoked to continue the conversation.
 
-**POST** `/api/incident/ticketnote`
+**POST** `/api/incident/ticket/note`
 
 ```json
 {
