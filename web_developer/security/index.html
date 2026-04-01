@@ -3759,6 +3759,111 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#configuring-rulesets" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configuring RuleSets
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuring RuleSets">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#endpoints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Endpoints
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ruleset-fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RuleSet Fields
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#bundle_by-values" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        bundle_by Values
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#trigger_count-trigger_window-suppress-until-threshold" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        trigger_count + trigger_window: Suppress Until Threshold
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#retrigger_every-keep-alerting-as-things-escalate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        retrigger_every: Keep Alerting as Things Escalate
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#handler-chains" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Handler Chains
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#common-patterns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Common Patterns
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rule-conditions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rule Conditions
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#incident-handlers" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3799,6 +3904,122 @@
       
     </span>
   </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ipset-bulk-blocking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        IPSet Bulk Blocking
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="IPSet Bulk Blocking">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#endpoints_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Endpoints
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#permissions_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Permissions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#field-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Field Reference
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#graphs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Graphs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#actions-post_save_actions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Actions (POST_SAVE_ACTIONS)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#workflow-block-a-country" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Workflow: Block a Country
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#workflow-block-abuse-ips-via-abuseipdb" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Workflow: Block Abuse IPs via AbuseIPDB
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#workflow-manual-cidr-list" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Workflow: Manual CIDR List
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#listing-and-filtering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Listing and Filtering
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -3891,9 +4112,14 @@
 <td>Ticket conversation (human + LLM)</td>
 </tr>
 <tr>
-<td>Rules</td>
+<td>RuleSets</td>
 <td><code>/api/incident/ruleset</code></td>
-<td>Rule engine configuration</td>
+<td>Rule engine configuration — categories, bundling, trigger thresholds, handlers</td>
+</tr>
+<tr>
+<td>Rules</td>
+<td><code>/api/incident/rule</code></td>
+<td>Conditions within a RuleSet (field comparisons)</td>
 </tr>
 <tr>
 <td>GeoIP</td>
@@ -3929,6 +4155,11 @@
 <td>Bot Signatures</td>
 <td><code>/api/account/bouncer/signature</code></td>
 <td>Manage bot signatures (auto-learned + manual)</td>
+</tr>
+<tr>
+<td>IPSet</td>
+<td><code>/api/incident/ipset</code></td>
+<td>Bulk CIDR blocking: countries, datacenters, abuse lists</td>
 </tr>
 </tbody>
 </table>
@@ -4256,6 +4487,396 @@
 </tr>
 </tbody>
 </table>
+<h2 id="configuring-rulesets">Configuring RuleSets<a class="headerlink" href="#configuring-rulesets" title="Permanent link">&para;</a></h2>
+<p>RuleSets are the core of the rule engine. Each RuleSet watches a specific event category, groups related events into incidents, and fires a handler when enough events accumulate. You create and manage them via the REST API — no code deployment required.</p>
+<h3 id="endpoints">Endpoints<a class="headerlink" href="#endpoints" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>Description</th>
+<th>Permission</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/incident/ruleset</code></td>
+<td>List all rulesets</td>
+<td><code>view_security</code></td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/incident/ruleset/&lt;id&gt;</code></td>
+<td>Get a single ruleset</td>
+<td><code>view_security</code></td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/incident/ruleset</code></td>
+<td>Create a ruleset</td>
+<td><code>manage_security</code></td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/incident/ruleset/&lt;id&gt;</code></td>
+<td>Update a ruleset</td>
+<td><code>manage_security</code></td>
+</tr>
+<tr>
+<td><code>DELETE</code></td>
+<td><code>/api/incident/ruleset/&lt;id&gt;</code></td>
+<td>Delete a ruleset</td>
+<td><code>manage_security</code></td>
+</tr>
+</tbody>
+</table>
+<p>Rules (the conditions within a ruleset) are managed at <code>/api/incident/rule</code>.</p>
+<h3 id="ruleset-fields">RuleSet Fields<a class="headerlink" href="#ruleset-fields" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>name</code></td>
+<td>string</td>
+<td>Human-readable label</td>
+</tr>
+<tr>
+<td><code>category</code></td>
+<td>string</td>
+<td>Event category to match. Use <code>*</code> as a catch-all fallback.</td>
+</tr>
+<tr>
+<td><code>priority</code></td>
+<td>int</td>
+<td>Evaluation order — lower number = higher priority. First match wins.</td>
+</tr>
+<tr>
+<td><code>match_by</code></td>
+<td>int</td>
+<td><code>0</code> = ALL rules must match, <code>1</code> = ANY rule can match</td>
+</tr>
+<tr>
+<td><code>bundle_by</code></td>
+<td>int</td>
+<td>How to group events into one incident (see below)</td>
+</tr>
+<tr>
+<td><code>bundle_minutes</code></td>
+<td>int</td>
+<td>Time window for bundling. <code>0</code> = each event gets its own incident, <code>null</code> = bundle forever, <code>&gt;0</code> = bundle within N minutes</td>
+</tr>
+<tr>
+<td><code>handler</code></td>
+<td>string</td>
+<td>Handler chain to fire (see <a href="#incident-handlers">Handlers</a>)</td>
+</tr>
+<tr>
+<td><code>trigger_count</code></td>
+<td>int</td>
+<td>Hold incident at <code>pending</code> until this many events accumulate. <code>null</code> = fire on first event.</td>
+</tr>
+<tr>
+<td><code>trigger_window</code></td>
+<td>int</td>
+<td>Only count events within this many minutes when evaluating <code>trigger_count</code>. <code>null</code> = count all events on the incident.</td>
+</tr>
+<tr>
+<td><code>retrigger_every</code></td>
+<td>int</td>
+<td>Re-fire the handler every N additional events while the incident stays active. <code>null</code> = fire once only.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="bundle_by-values">bundle_by Values<a class="headerlink" href="#bundle_by-values" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Name</th>
+<th>Group events by</th>
+<th>When to use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0</code></td>
+<td>NONE</td>
+<td>— (no grouping)</td>
+<td>Each event creates its own incident. Use for one-shot alerts like health checks.</td>
+</tr>
+<tr>
+<td><code>1</code></td>
+<td>HOSTNAME</td>
+<td>Same server</td>
+<td>Server-level problems (disk full, CPU spike) that should be tracked per machine.</td>
+</tr>
+<tr>
+<td><code>2</code></td>
+<td>MODEL_NAME</td>
+<td>Same model type</td>
+<td>Permission denials across all instances of a model (e.g. all <code>Order</code> edits).</td>
+</tr>
+<tr>
+<td><code>3</code></td>
+<td>MODEL_NAME_AND_ID</td>
+<td>Same model instance</td>
+<td>Activity on a specific record (e.g. repeated edits to one user account).</td>
+</tr>
+<tr>
+<td><code>4</code></td>
+<td>SOURCE_IP</td>
+<td>Same source IP</td>
+<td>Attack patterns from one IP — brute force, scanning, credential stuffing.</td>
+</tr>
+<tr>
+<td><code>5</code></td>
+<td>HOSTNAME_AND_MODEL_NAME</td>
+<td>Same server + model</td>
+<td>Server-specific model errors.</td>
+</tr>
+<tr>
+<td><code>6</code></td>
+<td>HOSTNAME_AND_MODEL_NAME_AND_ID</td>
+<td>Same server + model instance</td>
+<td>Very specific server-scoped activity.</td>
+</tr>
+<tr>
+<td><code>7</code></td>
+<td>SOURCE_IP_AND_MODEL_NAME</td>
+<td>Same IP + model</td>
+<td>IP attacking a specific model type.</td>
+</tr>
+<tr>
+<td><code>8</code></td>
+<td>SOURCE_IP_AND_MODEL_NAME_AND_ID</td>
+<td>Same IP + model instance</td>
+<td>IP targeting a specific record.</td>
+</tr>
+<tr>
+<td><code>9</code></td>
+<td>SOURCE_IP_AND_HOSTNAME</td>
+<td>Same IP + server</td>
+<td>IP causing problems on a specific instance (distributed attack targeting one node).</td>
+</tr>
+</tbody>
+</table>
+<p>For most security rules, <code>bundle_by=4</code> (SOURCE_IP) is the right choice.</p>
+<h3 id="trigger_count-trigger_window-suppress-until-threshold">trigger_count + trigger_window: Suppress Until Threshold<a class="headerlink" href="#trigger_count-trigger_window-suppress-until-threshold" title="Permanent link">&para;</a></h3>
+<p>Without <code>trigger_count</code>, the handler fires on the very first event. That's right for critical one-off alerts, but creates noise for gradual attacks. Use <code>trigger_count</code> to suppress until you're sure something is real:</p>
+<p><strong>How it works:</strong>
+1. Events arrive and get bundled into one incident (which sits at <code>pending</code>)
+2. Once the incident accumulates <code>trigger_count</code> events, it transitions to <code>new</code> and the handler fires
+3. The <code>pending</code> incident is invisible in the main admin queue — it only surfaces when it becomes <code>new</code></p>
+<p><code>trigger_window</code> scopes the count to recent events only. Events on the incident older than <code>trigger_window</code> minutes don't count toward the threshold.</p>
+<p><strong>Example — block after 10 failed logins in 5 minutes:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>POST /api/incident/ruleset
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>{
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>  &quot;name&quot;: &quot;Brute Force Detection&quot;,
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>  &quot;category&quot;: &quot;auth:failed&quot;,
+<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a>  &quot;priority&quot;: 5,
+<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a>  &quot;match_by&quot;: 0,
+<a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a>  &quot;bundle_by&quot;: 4,
+<a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a>  &quot;bundle_minutes&quot;: 30,
+<a id="__codelineno-13-9" name="__codelineno-13-9" href="#__codelineno-13-9"></a>  &quot;trigger_count&quot;: 10,
+<a id="__codelineno-13-10" name="__codelineno-13-10" href="#__codelineno-13-10"></a>  &quot;trigger_window&quot;: 5,
+<a id="__codelineno-13-11" name="__codelineno-13-11" href="#__codelineno-13-11"></a>  &quot;handler&quot;: &quot;block://?ttl=3600&quot;
+<a id="__codelineno-13-12" name="__codelineno-13-12" href="#__codelineno-13-12"></a>}
+</code></pre></div>
+<p>Events 1–9 from the same IP sit quietly at <code>pending</code>. Event 10 trips the threshold → incident goes <code>new</code> → IP gets blocked fleet-wide.</p>
+<h3 id="retrigger_every-keep-alerting-as-things-escalate">retrigger_every: Keep Alerting as Things Escalate<a class="headerlink" href="#retrigger_every-keep-alerting-as-things-escalate" title="Permanent link">&para;</a></h3>
+<p>Sometimes you want the handler to fire again if the attack keeps going. <code>retrigger_every</code> re-fires the handler every N additional events after the initial trigger, as long as the incident is still active (<code>new</code>, <code>open</code>, or <code>investigating</code>).</p>
+<p><strong>Example — ticket at 5 payment failures, then escalate every 10 more:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>POST /api/incident/ruleset
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>{
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>  &quot;name&quot;: &quot;Payment Failure Escalation&quot;,
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>  &quot;category&quot;: &quot;payment:declined&quot;,
+<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a>  &quot;priority&quot;: 10,
+<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a>  &quot;match_by&quot;: 0,
+<a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a>  &quot;bundle_by&quot;: 4,
+<a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a>  &quot;bundle_minutes&quot;: 60,
+<a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a>  &quot;trigger_count&quot;: 5,
+<a id="__codelineno-14-10" name="__codelineno-14-10" href="#__codelineno-14-10"></a>  &quot;retrigger_every&quot;: 10,
+<a id="__codelineno-14-11" name="__codelineno-14-11" href="#__codelineno-14-11"></a>  &quot;handler&quot;: &quot;ticket://?priority=7,email://perm@manage_security&quot;
+<a id="__codelineno-14-12" name="__codelineno-14-12" href="#__codelineno-14-12"></a>}
+</code></pre></div>
+<ul>
+<li>5 failures → ticket created + email sent (initial trigger)</li>
+<li>15 failures → ticket + email again</li>
+<li>25 failures → ticket + email again</li>
+<li>etc.</li>
+</ul>
+<p>Re-triggers add a <code>handler_retriggered</code> history entry on the incident so you can see the escalation trail.</p>
+<h3 id="handler-chains">Handler Chains<a class="headerlink" href="#handler-chains" title="Permanent link">&para;</a></h3>
+<p>Multiple handlers are chained with commas:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>block://?ttl=3600,ticket://?priority=9,email://perm@manage_security
+</code></pre></div>
+<p><strong>Block handler parameters:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Param</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ttl</code></td>
+<td><code>600</code></td>
+<td>Seconds until auto-unblock. <code>0</code> = permanent.</td>
+</tr>
+<tr>
+<td><code>reason</code></td>
+<td><code>auto:ruleset</code></td>
+<td>Reason recorded on the GeoLocatedIP block record</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Ticket handler parameters:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Param</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>priority</code></td>
+<td>Ticket priority (1–15, defaults to event level)</td>
+</tr>
+<tr>
+<td><code>status</code></td>
+<td>Initial status (<code>open</code>, <code>new</code>)</td>
+</tr>
+<tr>
+<td><code>title</code></td>
+<td>Override ticket title</td>
+</tr>
+<tr>
+<td><code>category</code></td>
+<td>Ticket category (default: <code>incident</code>)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Notification targets</strong> (for <code>email://</code>, <code>sms://</code>, <code>notify://</code>):</p>
+<table>
+<thead>
+<tr>
+<th>Syntax</th>
+<th>Who gets notified</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>perm@manage_security</code></td>
+<td>All users with the <code>manage_security</code> permission</td>
+</tr>
+<tr>
+<td><code>protected@alerts</code></td>
+<td>Users who opted into <code>metadata.protected.alerts</code></td>
+</tr>
+<tr>
+<td><code>admin</code></td>
+<td>Specific user by username</td>
+</tr>
+</tbody>
+</table>
+<h3 id="common-patterns">Common Patterns<a class="headerlink" href="#common-patterns" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Scenario</th>
+<th>bundle_by</th>
+<th>trigger_count</th>
+<th>trigger_window</th>
+<th>retrigger_every</th>
+<th>handler</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Block after 10 SSH failures in 5 min</td>
+<td>SOURCE_IP (4)</td>
+<td>10</td>
+<td>5</td>
+<td>—</td>
+<td><code>block://?ttl=3600</code></td>
+</tr>
+<tr>
+<td>Block on first credential-stuffing attempt</td>
+<td>SOURCE_IP (4)</td>
+<td>—</td>
+<td>—</td>
+<td>—</td>
+<td><code>block://?ttl=1800</code></td>
+</tr>
+<tr>
+<td>Ticket after 3 payment declines</td>
+<td>SOURCE_IP (4)</td>
+<td>3</td>
+<td>60</td>
+<td>—</td>
+<td><code>ticket://?priority=7</code></td>
+</tr>
+<tr>
+<td>Notify on first health alert</td>
+<td>HOSTNAME (1)</td>
+<td>—</td>
+<td>—</td>
+<td>—</td>
+<td><code>notify://perm@manage_security</code></td>
+</tr>
+<tr>
+<td>Email at 5 auth failures, re-alert every 10</td>
+<td>SOURCE_IP (4)</td>
+<td>5</td>
+<td>30</td>
+<td>10</td>
+<td><code>email://perm@manage_security</code></td>
+</tr>
+<tr>
+<td>Block bot + create ticket for review</td>
+<td>SOURCE_IP (4)</td>
+<td>—</td>
+<td>—</td>
+<td>—</td>
+<td><code>block://?ttl=3600,ticket://?priority=8</code></td>
+</tr>
+<tr>
+<td>Silent audit (no handler)</td>
+<td>MODEL_NAME_AND_ID (3)</td>
+<td>—</td>
+<td>—</td>
+<td>—</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<h3 id="rule-conditions">Rule Conditions<a class="headerlink" href="#rule-conditions" title="Permanent link">&para;</a></h3>
+<p>Each ruleset can have zero or more <code>Rule</code> records that filter which events it applies to. Create them at <code>/api/incident/rule</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>POST /api/incident/rule
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>{
+<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>  &quot;parent&quot;: 42,
+<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a>  &quot;name&quot;: &quot;Level &gt;= 7&quot;,
+<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a>  &quot;field_name&quot;: &quot;level&quot;,
+<a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a>  &quot;comparator&quot;: &quot;&gt;=&quot;,
+<a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a>  &quot;value&quot;: &quot;7&quot;,
+<a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a>  &quot;value_type&quot;: &quot;int&quot;
+<a id="__codelineno-16-9" name="__codelineno-16-9" href="#__codelineno-16-9"></a>}
+</code></pre></div>
+<p><strong>Comparators</strong>: <code>==</code>, <code>&gt;</code>, <code>&gt;=</code>, <code>&lt;</code>, <code>&lt;=</code>, <code>contains</code>, <code>regex</code></p>
+<p><strong>value_type</strong>: <code>str</code>, <code>int</code>, <code>float</code>, <code>bool</code></p>
+<p><code>field_name</code> can be any field on the event (<code>level</code>, <code>source_ip</code>, <code>hostname</code>, <code>country_code</code>) or any key in <code>event.metadata</code> (e.g. <code>risk_score</code>, <code>http_url</code>, <code>rule_id</code> for OSSEC).</p>
+<p>A ruleset with no rules never matches. Always add at least one rule.</p>
 <h2 id="incident-handlers">Incident Handlers<a class="headerlink" href="#incident-handlers" title="Permanent link">&para;</a></h2>
 <p>Rules can fire these handlers when incidents are created:</p>
 <table>
@@ -4412,6 +5033,283 @@
 </tr>
 </tbody>
 </table>
+<h2 id="ipset-bulk-blocking">IPSet Bulk Blocking<a class="headerlink" href="#ipset-bulk-blocking" title="Permanent link">&para;</a></h2>
+<p>IPSets are the primary mechanism for blocking entire countries, datacenters, or large abuse lists at the kernel level. Each IPSet record maps to a Linux <code>ipset</code> hash:net — lookups are O(1) regardless of set size, making it practical to block tens of thousands of CIDRs without performance impact.</p>
+<h3 id="endpoints_1">Endpoints<a class="headerlink" href="#endpoints_1" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/incident/ipset</code></td>
+<td>List all IPSets</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/incident/ipset/&lt;id&gt;</code></td>
+<td>Get a single IPSet</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/incident/ipset</code></td>
+<td>Create a new IPSet</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/incident/ipset/&lt;id&gt;</code></td>
+<td>Update an IPSet</td>
+</tr>
+<tr>
+<td><code>DELETE</code></td>
+<td><code>/api/incident/ipset/&lt;id&gt;</code></td>
+<td>Delete an IPSet</td>
+</tr>
+</tbody>
+</table>
+<h3 id="permissions_1">Permissions<a class="headerlink" href="#permissions_1" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Permission</th>
+<th>Access</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>view_security</code> or <code>security</code></td>
+<td>Read (list, detail)</td>
+</tr>
+<tr>
+<td><code>manage_security</code> or <code>security</code></td>
+<td>Create, update, actions</td>
+</tr>
+<tr>
+<td><code>manage_security</code> (required)</td>
+<td>Delete</td>
+</tr>
+</tbody>
+</table>
+<h3 id="field-reference">Field Reference<a class="headerlink" href="#field-reference" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Writable</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>id</code></td>
+<td>int</td>
+<td>No</td>
+<td>Primary key</td>
+</tr>
+<tr>
+<td><code>name</code></td>
+<td>string</td>
+<td>Yes</td>
+<td>Unique ipset name, e.g. <code>country_cn</code>, <code>abuse_ips</code>. Used as the kernel ipset identifier — no spaces or special characters.</td>
+</tr>
+<tr>
+<td><code>kind</code></td>
+<td>string</td>
+<td>Yes</td>
+<td>Type: <code>country</code>, <code>datacenter</code>, <code>abuse</code>, <code>custom</code></td>
+</tr>
+<tr>
+<td><code>description</code></td>
+<td>string</td>
+<td>Yes</td>
+<td>Human-readable label</td>
+</tr>
+<tr>
+<td><code>source</code></td>
+<td>string</td>
+<td>Yes</td>
+<td>Data source: <code>ipdeny</code>, <code>abuseipdb</code>, <code>manual</code></td>
+</tr>
+<tr>
+<td><code>source_url</code></td>
+<td>string</td>
+<td>Yes</td>
+<td>URL to fetch CIDR data from (auto-populated for ipdeny country sets)</td>
+</tr>
+<tr>
+<td><code>source_key</code></td>
+<td>string</td>
+<td>Yes (write-only)</td>
+<td>API key or identifier for the source. For AbuseIPDB this is the API key. Never returned in any response graph.</td>
+</tr>
+<tr>
+<td><code>is_enabled</code></td>
+<td>bool</td>
+<td>Yes</td>
+<td>Whether this set is active in iptables on all instances</td>
+</tr>
+<tr>
+<td><code>cidr_count</code></td>
+<td>int</td>
+<td>No</td>
+<td>Number of CIDRs currently loaded (auto-updated on sync)</td>
+</tr>
+<tr>
+<td><code>last_synced</code></td>
+<td>datetime</td>
+<td>No</td>
+<td>Timestamp of last successful fleet sync</td>
+</tr>
+<tr>
+<td><code>sync_error</code></td>
+<td>string</td>
+<td>No</td>
+<td>Last error message if a sync or refresh failed, null on success</td>
+</tr>
+<tr>
+<td><code>created</code></td>
+<td>datetime</td>
+<td>No</td>
+<td>Creation timestamp</td>
+</tr>
+<tr>
+<td><code>modified</code></td>
+<td>datetime</td>
+<td>No</td>
+<td>Last modification timestamp</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>Note</strong>: The <code>data</code> field (raw CIDR list) is excluded from the default response graph. Use <code>?graph=detailed</code> to include it.</p>
+</blockquote>
+<h3 id="graphs">Graphs<a class="headerlink" href="#graphs" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Graph</th>
+<th>What's included</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>default</code> (no parameter)</td>
+<td>All fields except <code>data</code> and <code>source_key</code> — suitable for list and summary views</td>
+</tr>
+<tr>
+<td><code>detailed</code> (<code>?graph=detailed</code>)</td>
+<td>All fields including <code>data</code> (the full CIDR list, one per line); <code>source_key</code> is always excluded</td>
+</tr>
+</tbody>
+</table>
+<h3 id="actions-post_save_actions">Actions (POST_SAVE_ACTIONS)<a class="headerlink" href="#actions-post_save_actions" title="Permanent link">&para;</a></h3>
+<p>Trigger actions by POSTing <code>{"action": "&lt;name&gt;"}</code> to <code>/api/incident/ipset/&lt;id&gt;</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Action</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>sync</code></td>
+<td>Broadcast the current CIDR data to all instances — loads into kernel ipset and adds iptables DROP rule</td>
+</tr>
+<tr>
+<td><code>enable</code></td>
+<td>Set <code>is_enabled=true</code> and sync fleet-wide</td>
+</tr>
+<tr>
+<td><code>disable</code></td>
+<td>Set <code>is_enabled=false</code> and remove the ipset + iptables rule from all instances</td>
+</tr>
+<tr>
+<td><code>refresh_source</code></td>
+<td>Re-fetch CIDRs from <code>source_url</code> or the AbuseIPDB API, update <code>data</code> and <code>cidr_count</code>, then sync fleet-wide</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Example — sync after manual CIDR edit:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>POST /api/incident/ipset/3
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>{&quot;action&quot;: &quot;sync&quot;}
+</code></pre></div>
+<p><strong>Example — disable a country block:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>POST /api/incident/ipset/3
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>{&quot;action&quot;: &quot;disable&quot;}
+</code></pre></div>
+<h3 id="workflow-block-a-country">Workflow: Block a Country<a class="headerlink" href="#workflow-block-a-country" title="Permanent link">&para;</a></h3>
+<p>Block all traffic from China (<code>cn</code>):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>POST /api/incident/ipset
+<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a>{
+<a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a>  &quot;name&quot;: &quot;country_cn&quot;,
+<a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a>  &quot;kind&quot;: &quot;country&quot;,
+<a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a>  &quot;description&quot;: &quot;Block country: CN&quot;,
+<a id="__codelineno-19-6" name="__codelineno-19-6" href="#__codelineno-19-6"></a>  &quot;source&quot;: &quot;ipdeny&quot;,
+<a id="__codelineno-19-7" name="__codelineno-19-7" href="#__codelineno-19-7"></a>  &quot;source_url&quot;: &quot;https://www.ipdeny.com/ipblocks/data/countries/cn.zone&quot;,
+<a id="__codelineno-19-8" name="__codelineno-19-8" href="#__codelineno-19-8"></a>  &quot;is_enabled&quot;: true
+<a id="__codelineno-19-9" name="__codelineno-19-9" href="#__codelineno-19-9"></a>}
+</code></pre></div>
+<p>Then fetch the latest CIDRs and load them onto all instances:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>POST /api/incident/ipset/&lt;id&gt;
+<a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a>{&quot;action&quot;: &quot;refresh_source&quot;}
+</code></pre></div>
+<p><code>refresh_source</code> fetches the zone file, stores the CIDRs in <code>data</code>, and immediately syncs to all instances. A weekly cron also runs <code>refresh_source</code> automatically on all enabled IPSets.</p>
+<p>Common country codes: <code>cn</code> (China), <code>ru</code> (Russia), <code>ir</code> (Iran), <code>kp</code> (North Korea).</p>
+<h3 id="workflow-block-abuse-ips-via-abuseipdb">Workflow: Block Abuse IPs via AbuseIPDB<a class="headerlink" href="#workflow-block-abuse-ips-via-abuseipdb" title="Permanent link">&para;</a></h3>
+<p>Block IPs with 100% confidence score from <a href="https://www.abuseipdb.com/">AbuseIPDB</a>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>POST /api/incident/ipset
+<a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a>{
+<a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a>  &quot;name&quot;: &quot;abuse_ips&quot;,
+<a id="__codelineno-21-4" name="__codelineno-21-4" href="#__codelineno-21-4"></a>  &quot;kind&quot;: &quot;abuse&quot;,
+<a id="__codelineno-21-5" name="__codelineno-21-5" href="#__codelineno-21-5"></a>  &quot;description&quot;: &quot;AbuseIPDB blacklist (confidence 100%)&quot;,
+<a id="__codelineno-21-6" name="__codelineno-21-6" href="#__codelineno-21-6"></a>  &quot;source&quot;: &quot;abuseipdb&quot;,
+<a id="__codelineno-21-7" name="__codelineno-21-7" href="#__codelineno-21-7"></a>  &quot;source_key&quot;: &quot;&lt;your-abuseipdb-api-key&gt;&quot;,
+<a id="__codelineno-21-8" name="__codelineno-21-8" href="#__codelineno-21-8"></a>  &quot;is_enabled&quot;: true
+<a id="__codelineno-21-9" name="__codelineno-21-9" href="#__codelineno-21-9"></a>}
+</code></pre></div>
+<p>Then load the current blacklist:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>POST /api/incident/ipset/&lt;id&gt;
+<a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a>{&quot;action&quot;: &quot;refresh_source&quot;}
+</code></pre></div>
+<p>This fetches up to 10,000 IPv4 addresses with confidence ≥ 100% and syncs them fleet-wide. The weekly cron refreshes this automatically.</p>
+<h3 id="workflow-manual-cidr-list">Workflow: Manual CIDR List<a class="headerlink" href="#workflow-manual-cidr-list" title="Permanent link">&para;</a></h3>
+<p>For custom ranges (e.g., a specific datacenter or known attacker range):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>POST /api/incident/ipset
+<a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>{
+<a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a>  &quot;name&quot;: &quot;custom_block&quot;,
+<a id="__codelineno-23-4" name="__codelineno-23-4" href="#__codelineno-23-4"></a>  &quot;kind&quot;: &quot;custom&quot;,
+<a id="__codelineno-23-5" name="__codelineno-23-5" href="#__codelineno-23-5"></a>  &quot;description&quot;: &quot;Blocked datacenter ranges&quot;,
+<a id="__codelineno-23-6" name="__codelineno-23-6" href="#__codelineno-23-6"></a>  &quot;source&quot;: &quot;manual&quot;,
+<a id="__codelineno-23-7" name="__codelineno-23-7" href="#__codelineno-23-7"></a>  &quot;is_enabled&quot;: true
+<a id="__codelineno-23-8" name="__codelineno-23-8" href="#__codelineno-23-8"></a>}
+</code></pre></div>
+<p>Then update with <code>graph=detailed</code> to set the CIDR data:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>POST /api/incident/ipset/&lt;id&gt;?graph=detailed
+<a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a>{
+<a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a>  &quot;data&quot;: &quot;192.0.2.0/24\n198.51.100.0/24\n203.0.113.0/24&quot;
+<a id="__codelineno-24-4" name="__codelineno-24-4" href="#__codelineno-24-4"></a>}
+</code></pre></div>
+<p>Then sync to load onto all instances:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>POST /api/incident/ipset/&lt;id&gt;
+<a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a>{&quot;action&quot;: &quot;sync&quot;}
+</code></pre></div>
+<p>The <code>data</code> field is plain text, one CIDR per line. Lines starting with <code>#</code> are treated as comments and ignored.</p>
+<h3 id="listing-and-filtering">Listing and Filtering<a class="headerlink" href="#listing-and-filtering" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a>GET /api/incident/ipset
+<a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a>GET /api/incident/ipset?kind=country
+<a id="__codelineno-26-3" name="__codelineno-26-3" href="#__codelineno-26-3"></a>GET /api/incident/ipset?is_enabled=true
+<a id="__codelineno-26-4" name="__codelineno-26-4" href="#__codelineno-26-4"></a>GET /api/incident/ipset?search=abuse
+</code></pre></div>
+<p>Standard sort and pagination apply:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a>GET /api/incident/ipset?sort=-cidr_count&amp;size=20
+</code></pre></div>
 
 
 

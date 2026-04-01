@@ -3033,6 +3033,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#ruleset-fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RuleSet Fields
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#filtering" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3910,6 +3921,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#ruleset-fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RuleSet Fields
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#filtering" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4172,7 +4194,7 @@
 </tr>
 <tr>
 <td><code>threshold_reached</code></td>
-<td>Pending → new (min_count met)</td>
+<td>Pending → new (trigger_count met)</td>
 </tr>
 <tr>
 <td><code>handler:block</code></td>
@@ -4233,6 +4255,48 @@
 <a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span><span class="nt">&quot;note&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Approved. Enable the rule.&quot;</span>
 <a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="p">}</span>
 </code></pre></div>
+<h2 id="ruleset-fields">RuleSet Fields<a class="headerlink" href="#ruleset-fields" title="Permanent link">&para;</a></h2>
+<p>When reading or writing rules via <code>/api/incident/ruleset</code>, these fields control threshold and retrigger behavior:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>trigger_count</code></td>
+<td>int or null</td>
+<td>Fire the handler when the incident reaches this many events. <code>null</code> = fire immediately on the first event.</td>
+</tr>
+<tr>
+<td><code>trigger_window</code></td>
+<td>int or null</td>
+<td>Only count events within this many minutes when evaluating <code>trigger_count</code>. <code>null</code> = count all events on the incident.</td>
+</tr>
+<tr>
+<td><code>retrigger_every</code></td>
+<td>int or null</td>
+<td>Re-fire the handler every N additional events after the initial trigger. <code>null</code> = fire once only.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Example — block after 10 failed logins in 10 minutes, re-alert every 20 more:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>POST /api/incident/ruleset
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>{
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>  &quot;category&quot;: &quot;auth:failed&quot;,
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>  &quot;name&quot;: &quot;Brute Force Detection&quot;,
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>  &quot;bundle_by&quot;: 4,
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>  &quot;bundle_minutes&quot;: 10,
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>  &quot;handler&quot;: &quot;block://?ttl=3600,notify://perm@manage_security&quot;,
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a>  &quot;trigger_count&quot;: 10,
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>  &quot;trigger_window&quot;: 10,
+<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a>  &quot;retrigger_every&quot;: 20
+<a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a>}
+</code></pre></div>
+<p>Incidents stay at <code>pending</code> until <code>trigger_count</code> is reached, then transition to <code>new</code> and the handler fires. With <code>retrigger_every=20</code>, the handler fires again at 30 events, 50, 70, and so on.</p>
 <h2 id="filtering">Filtering<a class="headerlink" href="#filtering" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
