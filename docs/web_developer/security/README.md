@@ -336,7 +336,8 @@ IPSets are the primary mechanism for blocking entire countries, datacenters, or 
 | Permission | Access |
 |------------|--------|
 | `view_security` or `security` | Read (list, detail) |
-| `manage_security` or `security` | Write (create, update, delete, actions) |
+| `manage_security` or `security` | Create, update, actions |
+| `manage_security` (required) | Delete |
 
 ### Field Reference
 
@@ -348,7 +349,7 @@ IPSets are the primary mechanism for blocking entire countries, datacenters, or 
 | `description` | string | Yes | Human-readable label |
 | `source` | string | Yes | Data source: `ipdeny`, `abuseipdb`, `manual` |
 | `source_url` | string | Yes | URL to fetch CIDR data from (auto-populated for ipdeny country sets) |
-| `source_key` | string | Yes | API key or identifier for the source. For AbuseIPDB this is the API key — treat as a secret. |
+| `source_key` | string | Yes (write-only) | API key or identifier for the source. For AbuseIPDB this is the API key. Never returned in any response graph. |
 | `is_enabled` | bool | Yes | Whether this set is active in iptables on all instances |
 | `cidr_count` | int | No | Number of CIDRs currently loaded (auto-updated on sync) |
 | `last_synced` | datetime | No | Timestamp of last successful fleet sync |
@@ -362,8 +363,8 @@ IPSets are the primary mechanism for blocking entire countries, datacenters, or 
 
 | Graph | What's included |
 |-------|----------------|
-| `default` (no parameter) | All fields except `data` — suitable for list and summary views |
-| `detailed` (`?graph=detailed`) | All fields including `data` (the full CIDR list, one per line) |
+| `default` (no parameter) | All fields except `data` and `source_key` — suitable for list and summary views |
+| `detailed` (`?graph=detailed`) | All fields including `data` (the full CIDR list, one per line); `source_key` is always excluded |
 
 ### Actions (POST_SAVE_ACTIONS)
 
