@@ -102,6 +102,58 @@ Incidents move through these statuses:
 
 Merges incidents 302 and 303 into incident `<id>`. Events are re-linked, source incidents are deleted.
 
+## Request LLM Analysis
+
+**POST** `/api/incident/incident/<id>`
+
+**Permission required:** `manage_security`
+
+```json
+{
+  "action": "analyze"
+}
+```
+
+Triggers deep LLM analysis on the incident. The agent runs asynchronously — this call returns immediately.
+
+**Successful response:**
+
+```json
+{"status": true}
+```
+
+**Error responses:**
+
+| Condition | Response |
+|-----------|----------|
+| `LLM_HANDLER_API_KEY` not configured | `{"status": false, "error": "LLM_HANDLER_API_KEY not configured"}` |
+| Analysis already running | `{"status": false, "error": "Analysis already in progress"}` |
+
+**What the agent does:**
+1. Sets incident to `investigating`
+2. Reviews all events on the incident and related open incidents in the same category
+3. Merges incidents that clearly represent the same underlying pattern
+4. Proposes a new (disabled) RuleSet to auto-handle this pattern in the future
+5. Resolves the merged incident with a summary note
+
+**How to check progress:**
+
+Poll `metadata.analysis_in_progress`:
+
+```
+GET /api/incident/incident/<id>
+```
+
+When `metadata.analysis_in_progress` is `false` and `metadata.llm_analysis` is present, the analysis is complete.
+
+**Reading the result:**
+
+The agent's summary is stored in `metadata.llm_analysis.summary` (up to 3000 characters). The full action trail is in `IncidentHistory` with `kind=handler:llm`.
+
+```
+GET /api/incident/incident/history?parent=<id>&sort=created
+```
+
 ## Incident History
 
 **GET** `/api/incident/incident/history?parent=301&sort=-created`

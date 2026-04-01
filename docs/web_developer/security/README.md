@@ -454,6 +454,26 @@ High-level events that don't match any rule are automatically sent to the LLM if
 
 The LLM creates rules in a **disabled** state and opens a ticket for human approval. Respond to the ticket to approve, modify, or reject the proposed rule.
 
+### On-Demand Deep Analysis
+
+Admins can request a deeper analysis of any incident at any time. This is separate from the automatic triage — it runs a more thorough investigation designed to clean up related open incidents and propose rules.
+
+```
+POST /api/incident/incident/<id>
+{"action": "analyze"}
+```
+
+**Requires:** `manage_security`
+
+The call returns immediately. The agent runs in the background and:
+- Merges related open incidents in the same category
+- Proposes a new disabled RuleSet to cover the pattern
+- Stores its summary in `incident.metadata.llm_analysis.summary`
+
+Check progress by polling `metadata.analysis_in_progress` on the incident. When it becomes `false`, the result is ready.
+
+See [Incident API: Request LLM Analysis](../logging/incidents.md#request-llm-analysis) for full request/response reference.
+
 ## Dashboard Chart Ideas
 
 **Overview cards:**
