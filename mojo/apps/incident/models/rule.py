@@ -302,7 +302,10 @@ class RuleSet(models.Model, MojoModel):
 
         Priority order (lower = checked first):
           1  - Known bot/scanner patterns → block, no incident
-          5  - SSH brute force → block, no incident
+          2  - Local audit noise (login session opened/closed) → ignore, no incident
+          3  - SSH single probe (5710) → block, no incident
+          5  - SSH brute force (5712/5720/5551/5758) → block, no incident
+          6  - Generic web errors (400/404/405) → block short, no incident
          10  - Web attack 31104 → block, no incident
          50  - Critical severity (level >= 12) → block + incident (unusual, worth reviewing)
         """
@@ -331,12 +334,49 @@ class RuleSet(models.Model, MojoModel):
                 {"name": "Suspicious in details",
                  "field_name": "details",
                  "comparator": "regex",
-                 "value": r"\.php\d*\b|\.git[x]?\b|\.asp[x]?\b|\.env[x]?\b|\bcgi-bin\b|wp-content\b|wlwmanifest\b|locale\.json\b|\.jsp\b|\.cfm\b|\.pl\b|\.cgi[x]?\b|dns\-query\b",
+                 "value": r"\.php\d*\b|\.git[x]?\b|\.asp[x]?\b|\.env[x]?\b|\bcgi-bin\b|wp-content\b|wlwmanifest\b|locale\.json\b|\.jsp\b|\.cfm\b|\.pl\b|\.cgi[x]?\b|dns\-query\b|/vendor/phpunit\b|/vendor/[^/]+/[^/]+/eval-stdin",
                  "value_type": "str"},
             ],
         )
 
-        # 2) SSH Brute Force — block and ignore, this is just noise
+        # 2) Local audit noise — PAM login session events carry no source IP and are not
+        # attacks. Just ignore them so they never surface as admin-visible incidents.
+        cls._create_ruleset(
+            category="ossec",
+            name="OSSEC - Login Session Noise",
+            priority=2,
+            match_by=MatchBy.ALL,
+            bundle_by=BundleBy.NONE,
+            bundle_minutes=0,
+            handler="ignore",
+            rules=[
+                {"name": "Login session opened/closed",
+                 "field_name": "details",
+                 "comparator": "regex",
+                 "value": r"Login session (opened|closed)\.",
+                 "value_type": "str"},
+            ],
+        )
+
+        # 3) SSH single probe — OSSEC rule 5710 fires on the FIRST attempt with a
+        # non-existent username. One probe per scanner IP, so they never trip the
+        # multi-attempt brute-force rules. Block the IP and move on — no incident needed.
+        cls._create_ruleset(
+            category="ossec",
+            name="OSSEC - SSH Single Probe (5710)",
+            priority=3,
+            match_by=MatchBy.ALL,
+            bundle_by=BundleBy.SOURCE_IP,
+            bundle_minutes=0,
+            handler="block://?ttl=3600&fleet_wide=1",
+            rules=[
+                {"name": "Non-existent user first probe (5710)",
+                 "field_name": "rule_id",
+                 "comparator": "==", "value": "5710", "value_type": "int"},
+            ],
+        )
+
+        # 4) SSH Brute Force — block and ignore, this is just noise
         cls._create_ruleset(
             category="ossec",
             name="OSSEC - SSH Brute Force",
@@ -361,7 +401,28 @@ class RuleSet(models.Model, MojoModel):
             ],
         )
 
-        # 3) Web Attack Detection (rule 31104) — block and ignore
+        # 5) Generic web errors (400/404/405) — scanner probes hitting arbitrary paths.
+        # Not targeted attacks, just internet background noise. Short block and discard.
+        # This runs AFTER the bot/scanner URL pattern check (priority 1) so specific
+        # URL patterns that deserve a longer block are already handled above.
+        cls._create_ruleset(
+            category="ossec",
+            name="OSSEC - Generic Web Errors",
+            priority=6,
+            match_by=MatchBy.ALL,
+            bundle_by=BundleBy.SOURCE_IP,
+            bundle_minutes=0,
+            handler="block://?ttl=300&fleet_wide=1",
+            rules=[
+                {"name": "Web 400/404/405 in details",
+                 "field_name": "details",
+                 "comparator": "regex",
+                 "value": r"^Web (Attack )?4(?:0[045])\b",
+                 "value_type": "str"},
+            ],
+        )
+
+        # 6) Web Attack Detection (rule 31104) — block and ignore
         cls._create_ruleset(
             category="ossec",
             name="OSSEC 31104 - Web Attack Detection",
@@ -376,7 +437,7 @@ class RuleSet(models.Model, MojoModel):
             ],
         )
 
-        # 4) Critical Severity — level 12+ is unusual, create incident for review
+        # 7) Critical Severity — level 12+ is unusual, create incident for review
         # This is the only default that creates an incident — something unexpected happened
         cls._create_ruleset(
             category="ossec",
