@@ -62,6 +62,39 @@ When creating rules, ALWAYS configure bundling to prevent duplicate incidents:
 Without proper bundling, rapid-fire events (like OSSEC bursts) create hundreds of separate incidents.
 """
 
+ANALYSIS_PROMPT = """You are a security operations agent performing a deep analysis of an incident.
+
+Your goal is to identify the pattern behind this incident, find and merge related incidents, and propose
+a RuleSet that will auto-handle this pattern in the future — so no new open incidents pile up.
+
+## Your Workflow
+1. Set the target incident to "investigating".
+2. Review the pre-loaded events and related incidents below.
+3. Use query_open_incidents to find all open incidents in this category.
+4. For incidents that clearly represent the same pattern, merge them into the target incident using merge_incidents.
+5. Identify the pattern: what category, fields, levels, and bundling would match these events?
+6. Check existing rulesets (query_events with the category) — don't duplicate an existing rule.
+7. Create a new rule (disabled, for human approval) via create_rule with proper bundling config.
+8. Resolve the merged incident with a note explaining the new rule.
+9. Summarize: how many incidents merged, what rule was proposed, what pattern it covers.
+
+## Rules for Merging
+- Only merge incidents with the SAME category.
+- Only merge if you're confident they represent the same underlying pattern.
+- Don't merge incidents that are already resolved or ignored.
+
+## Rules for Rule Creation
+- Always set bundle_by and bundle_minutes to prevent duplicate incidents.
+- Choose a handler chain that matches the threat level (block for attacks, notify for health issues).
+- The rule is created DISABLED — a human will review and approve it via a ticket.
+
+## Event Deduplication & Bundling Reference
+- bundle_by: 0=none, 1=hostname, 2=model_name, 3=model_name+id, 4=source_ip, 5=hostname+model_name,
+  7=source_ip+model_name, 8=source_ip+model_name+id, 9=source_ip+hostname
+- bundle_minutes: time window for grouping (30-60 min typical)
+- min_count + window_minutes: threshold before handlers fire
+"""
+
 # Claude API tool definitions
 TOOLS = [
     {
@@ -247,6 +280,37 @@ TOOLS = [
                 "memory": {"type": "string", "description": "What you learned (appended to existing memory)"},
             },
             "required": ["ruleset_id", "memory"],
+        },
+    },
+]
+
+# Additional tools available only during analysis mode
+ANALYSIS_TOOLS = [
+    {
+        "name": "merge_incidents",
+        "description": "Merge related incidents into a target incident. Moves all events from the source incidents into the target and deletes the source incidents. Only merge incidents with the same category.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "target_incident_id": {"type": "integer", "description": "The incident to merge INTO (keeps this one)"},
+                "incident_ids": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": "List of incident IDs to merge FROM (these get deleted)",
+                },
+            },
+            "required": ["target_incident_id", "incident_ids"],
+        },
+    },
+    {
+        "name": "query_open_incidents",
+        "description": "Query open/new/investigating incidents, optionally filtered by category. Returns incidents with event counts. Use this to find incidents that could be merged or covered by a new rule.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "category": {"type": "string", "description": "Filter by category (optional)"},
+                "limit": {"type": "integer", "description": "Max incidents to return (default 50)", "default": 50},
+            },
         },
     },
 ]
@@ -612,6 +676,59 @@ def _tool_update_rule_memory(params):
     return {"ok": True, "ruleset_id": ruleset.pk}
 
 
+def _tool_merge_incidents(params):
+    from mojo.apps.incident.models import Incident
+
+    target = Incident.objects.get(pk=params["target_incident_id"])
+    incident_ids = params["incident_ids"]
+    if not incident_ids:
+        return {"ok": False, "error": "No incident IDs provided"}
+
+    # Filter to only merge same-category, non-resolved incidents
+    mergeable = Incident.objects.filter(
+        pk__in=incident_ids, category=target.category,
+    ).exclude(pk=target.pk).exclude(status__in=["resolved", "ignored"])
+
+    merge_ids = list(mergeable.values_list("pk", flat=True))
+    if not merge_ids:
+        return {"ok": True, "merged": 0, "note": "No eligible incidents to merge"}
+
+    target.on_action_merge(merge_ids)
+    return {"ok": True, "merged": len(merge_ids), "target_incident_id": target.pk}
+
+
+def _tool_query_open_incidents(params):
+    from mojo.apps.incident.models import Incident
+    from django.db.models import Count
+
+    criteria = {"status__in": ["new", "open", "investigating"]}
+    if params.get("category"):
+        criteria["category"] = params["category"]
+
+    limit = min(params.get("limit", 50), 100)
+    incidents = (
+        Incident.objects.filter(**criteria)
+        .annotate(event_count=Count("events"))
+        .order_by("-created")[:limit]
+    )
+
+    return [
+        {
+            "id": i.pk,
+            "status": i.status,
+            "priority": i.priority,
+            "category": i.category,
+            "source_ip": i.source_ip,
+            "hostname": i.hostname,
+            "created": str(i.created),
+            "title": i.title,
+            "event_count": i.event_count,
+            "rule_set_id": i.rule_set_id,
+        }
+        for i in incidents
+    ]
+
+
 TOOL_DISPATCH = {
     "query_events": _tool_query_events,
     "query_event_counts": _tool_query_event_counts,
@@ -625,6 +742,8 @@ TOOL_DISPATCH = {
     "send_alert": _tool_send_alert,
     "create_rule": _tool_create_rule,
     "update_rule_memory": _tool_update_rule_memory,
+    "merge_incidents": _tool_merge_incidents,
+    "query_open_incidents": _tool_query_open_incidents,
 }
 
 
@@ -632,7 +751,7 @@ TOOL_DISPATCH = {
 # Agent execution
 # ---------------------------------------------------------------------------
 
-def _call_claude(messages, system_prompt):
+def _call_claude(messages, system_prompt, tools=None):
     """Call Claude API with tool use. Returns the response as a dict."""
     import anthropic
 
@@ -641,19 +760,19 @@ def _call_claude(messages, system_prompt):
         model=_get_llm_model(),
         max_tokens=4096,
         system=system_prompt,
-        tools=TOOLS,
+        tools=tools or TOOLS,
         messages=messages,
     )
     return response.model_dump()
 
 
-def _run_agent_loop(messages, system_prompt, max_iterations=15):
+def _run_agent_loop(messages, system_prompt, max_iterations=15, tools=None):
     """
     Run the agent loop: call Claude, execute tools, feed results back,
     repeat until Claude stops calling tools.
     """
     for _ in range(max_iterations):
-        result = _call_claude(messages, system_prompt)
+        result = _call_claude(messages, system_prompt, tools=tools)
         stop_reason = result.get("stop_reason")
 
         # Add assistant response to messages
@@ -830,6 +949,142 @@ def execute_llm_handler(job):
         if incident:
             incident.add_history("handler:llm",
                 note="[LLM Agent] Triage failed due to an error")
+
+
+def _build_analysis_message(incident):
+    """Build a rich user message for analysis mode with pre-loaded context."""
+    from mojo.apps.incident.models import Event, Incident
+
+    parts = [
+        "## Analysis Request\n",
+        "An admin has requested deep analysis of the following incident.\n",
+        f"## Target Incident #{incident.pk}",
+        f"- **Category**: {incident.category}",
+        f"- **Status**: {incident.status}",
+        f"- **Priority**: {incident.priority}",
+        f"- **Source IP**: {incident.source_ip or 'N/A'}",
+        f"- **Hostname**: {incident.hostname or 'N/A'}",
+        f"- **Title**: {incident.title or 'N/A'}",
+        f"- **Details**: {incident.details or 'N/A'}",
+        f"- **Created**: {incident.created}",
+        f"- **RuleSet ID**: {incident.rule_set_id or 'None'}",
+    ]
+
+    # Pre-load events
+    events = Event.objects.filter(incident=incident).order_by("-created")[:50]
+    if events:
+        parts.append(f"\n## Events in This Incident ({events.count()} shown)\n")
+        for e in events:
+            parts.append(
+                f"- [{e.pk}] {e.created} | level={e.level} | ip={e.source_ip} | "
+                f"{e.title or ''} | {(e.details or '')[:200]}"
+            )
+
+    # Pre-load related open incidents
+    related_criteria = {"status__in": ["new", "open", "investigating"], "category": incident.category}
+    related = Incident.objects.filter(**related_criteria).exclude(pk=incident.pk).order_by("-created")[:20]
+    if related:
+        parts.append(f"\n## Related Open Incidents (same category: {incident.category})\n")
+        for r in related:
+            event_count = r.events.count()
+            parts.append(
+                f"- [#{r.pk}] status={r.status} priority={r.priority} ip={r.source_ip} "
+                f"events={event_count} | {r.title or 'N/A'}"
+            )
+
+    parts.append(
+        "\nPlease analyze this incident, merge related incidents if appropriate, "
+        "and propose a rule to auto-handle this pattern."
+    )
+
+    return "\n".join(parts)
+
+
+def execute_llm_analysis(job):
+    """
+    Job function: deep analysis of an incident via the LLM agent.
+
+    Triggered by the 'analyze' POST_SAVE_ACTION on Incident.
+    The agent investigates the incident, merges related incidents,
+    and proposes rulesets for auto-handling.
+
+    job.payload keys:
+        incident_id: ID of the Incident to analyze
+    """
+    if not _get_llm_api_key():
+        logger.warning("LLM analysis called but LLM_HANDLER_API_KEY not configured")
+        return
+
+    payload = job.payload
+    incident_id = payload.get("incident_id")
+
+    try:
+        from mojo.apps.incident.models import Incident
+        incident = Incident.objects.get(pk=incident_id)
+    except Exception:
+        logger.exception("LLM analysis: failed to load incident %s", incident_id)
+        return
+
+    # Load ruleset for custom prompt context
+    ruleset = None
+    if incident.rule_set_id:
+        try:
+            from mojo.apps.incident.models import RuleSet
+            ruleset = RuleSet.objects.get(pk=incident.rule_set_id)
+        except Exception:
+            pass
+
+    # Build prompt with analysis-specific instructions
+    system_parts = [ANALYSIS_PROMPT]
+    if ruleset:
+        agent_prompt = (ruleset.metadata or {}).get("agent_prompt")
+        if agent_prompt:
+            system_parts.append(f"\n## Rule-Specific Instructions\n{agent_prompt}")
+        agent_memory = (ruleset.metadata or {}).get("agent_memory")
+        if agent_memory:
+            system_parts.append(f"\n## Your Past Learnings for This Rule Type\n{agent_memory}")
+    system_prompt = "\n".join(system_parts)
+
+    user_message = _build_analysis_message(incident)
+    messages = [{"role": "user", "content": user_message}]
+
+    # Use all tools (base + analysis-specific)
+    all_tools = TOOLS + ANALYSIS_TOOLS
+
+    try:
+        result = _run_agent_loop(messages, system_prompt, tools=all_tools)
+
+        # Store analysis result
+        text_parts = []
+        if result and result.get("content"):
+            for block in result["content"]:
+                if block.get("type") == "text":
+                    text_parts.append(block["text"])
+
+        if not incident.metadata:
+            incident.metadata = {}
+        incident.metadata["llm_analysis"] = {
+            "summary": "\n".join(text_parts)[:3000] if text_parts else "Analysis completed",
+        }
+        incident.metadata["analysis_in_progress"] = False
+        incident.save(update_fields=["metadata"])
+
+        if text_parts:
+            summary = "\n".join(text_parts)[:2000]
+            incident.add_history("handler:llm",
+                note=f"[LLM Agent] Analysis complete: {summary}")
+    except Exception:
+        logger.exception("LLM analysis failed for incident %s", incident_id)
+        # Clear in-progress flag
+        try:
+            if not incident.metadata:
+                incident.metadata = {}
+            incident.metadata["analysis_in_progress"] = False
+            incident.save(update_fields=["metadata"])
+            incident.add_history("handler:llm",
+                note="[LLM Agent] Analysis failed due to an error")
+        except Exception:
+            pass
 
 
 def execute_llm_ticket_reply(job):

@@ -41,7 +41,7 @@ class Incident(models.Model, MojoModel):
         CREATE_PERMS = None
         SAVE_PERMS = ["manage_security", "security"]
         DELETE_PERMS = ["manage_security"]
-        POST_SAVE_ACTIONS = ["merge"]
+        POST_SAVE_ACTIONS = ["merge", "analyze"]
         CAN_DELETE = True
         GRAPHS = {
             "default": {
@@ -145,6 +145,44 @@ class Incident(models.Model, MojoModel):
             self.add_history("updated",
                 note=f"Fields updated: {', '.join(sorted(other_fields))}",
                 by=by)
+
+    def on_action_analyze(self, value):
+        """
+        Trigger LLM analysis on this incident to find patterns, merge related
+        incidents, and propose rulesets for auto-handling.
+
+        Publishes an async job — the LLM work happens in the background.
+        """
+        from mojo.helpers.settings import settings
+
+        if not settings.get("LLM_HANDLER_API_KEY"):
+            return {"status": False, "error": "LLM_HANDLER_API_KEY not configured"}
+
+        if (self.metadata or {}).get("analysis_in_progress"):
+            return {"status": False, "error": "Analysis already in progress"}
+
+        # Set guard flag
+        if not self.metadata:
+            self.metadata = {}
+        self.metadata["analysis_in_progress"] = True
+        self.save(update_fields=["metadata"])
+
+        try:
+            from mojo.apps import jobs
+            jobs.publish(
+                "mojo.apps.incident.handlers.llm_agent.execute_llm_analysis",
+                {"incident_id": self.pk},
+                channel="incident_handlers",
+            )
+        except Exception:
+            # Clear flag on publish failure
+            self.metadata["analysis_in_progress"] = False
+            self.save(update_fields=["metadata"])
+            logger.exception("Failed to publish LLM analysis job for incident %s", self.pk)
+            return {"status": False, "error": "Failed to publish analysis job"}
+
+        self.add_history("handler:llm", note="LLM analysis requested by admin")
+        return {"status": True}
 
     def on_action_merge(self, value):
         """
