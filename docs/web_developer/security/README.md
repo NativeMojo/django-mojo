@@ -460,7 +460,7 @@ Admins can request a deeper analysis of any incident at any time. This is separa
 
 ```
 POST /api/incident/incident/<id>
-{"action": "analyze"}
+{"analyze": 1}
 ```
 
 **Requires:** `manage_security`
