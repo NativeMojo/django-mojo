@@ -12,7 +12,7 @@ Authorization: Bearer <your-jwt-token>
 
 ## Obtaining a Token
 
-**POST** `/api/account/login`
+**POST** `/api/login`
 
 ```json
 {

@@ -8,7 +8,7 @@ An admin portal is a frontend that calls privileged REST endpoints. Access is co
 
 ## Base Pattern
 
-1. Authenticate user (`POST /api/account/login`).
+1. Authenticate user (`POST /api/login`).
 2. Store JWT securely and send `Authorization: Bearer <token>`.
 3. Pass `group=<id>` when operating on group-scoped resources.
 4. Handle `403` as "authenticated but missing permission".
@@ -227,7 +227,7 @@ GET /api/settings?search=WEBAPP&sort=key
 const headers = { Authorization: `Bearer ${token}` };
 
 // Fetch current user to check their permissions
-const me = await fetch('/api/account/me', { headers }).then(r => r.json());
+const me = await fetch('/api/user/me', { headers }).then(r => r.json());
 const perms = me.data.permissions || {};
 
 // Show/hide admin sections based on category permissions

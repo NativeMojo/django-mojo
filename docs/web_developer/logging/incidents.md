@@ -15,8 +15,8 @@
 | GET | `/api/incident/incident/<id>` | Get incident |
 | POST | `/api/incident/incident/<id>` | Update incident |
 | GET | `/api/incident/incidenthistory` | List incident history |
-| GET | `/api/incident/ruleset` | List rule sets |
-| GET | `/api/incident/rule` | List rules |
+| GET | `/api/incident/event/ruleset` | List rule sets |
+| GET | `/api/incident/event/ruleset/rule` | List rules |
 | GET | `/api/incident/ticket` | List tickets |
 | GET | `/api/incident/ticket/<id>` | Get ticket |
 | POST | `/api/incident/ticket` | Create ticket |
@@ -194,7 +194,7 @@ Tickets with `metadata.llm_linked=true` are managed by the LLM agent. When you p
 
 ## RuleSet Fields
 
-When reading or writing rules via `/api/incident/ruleset`, these fields control threshold and retrigger behavior:
+When reading or writing rules via `/api/incident/event/ruleset`, these fields control threshold and retrigger behavior:
 
 | Field | Type | Description |
 |---|---|---|
@@ -205,7 +205,7 @@ When reading or writing rules via `/api/incident/ruleset`, these fields control 
 **Example — block after 10 failed logins in 10 minutes, re-alert every 20 more:**
 
 ```
-POST /api/incident/ruleset
+POST /api/incident/event/ruleset
 {
   "category": "auth:failed",
   "name": "Brute Force Detection",

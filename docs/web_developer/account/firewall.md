@@ -10,7 +10,7 @@ Three existing APIs combine to give you full firewall visibility:
 
 | API | What it provides |
 |-----|-----------------|
-| `GET /api/account/system/geoip` | IP records with block status, threat level, geolocation |
+| `GET /api/system/geoip` | IP records with block status, threat level, geolocation |
 | `GET /api/logit/log` | Firewall event history (blocks, unblocks, whitelist changes) |
 | `GET /api/incident/incident` | Security incidents that triggered auto-blocks |
 
@@ -19,7 +19,7 @@ Three existing APIs combine to give you full firewall visibility:
 ### List Blocked IPs
 
 ```
-GET /api/account/system/geoip?is_blocked=true&graph=basic&sort=-blocked_at
+GET /api/system/geoip?is_blocked=true&graph=basic&sort=-blocked_at
 ```
 
 Response includes block details:
@@ -70,7 +70,7 @@ Response includes block details:
 Use the `block` action on a GeoIP record:
 
 ```
-POST /api/account/system/geoip/42
+POST /api/system/geoip/42
 ```
 
 ```json
@@ -93,7 +93,7 @@ The block is broadcast to all servers in the fleet automatically.
 ### Unblock an IP
 
 ```
-POST /api/account/system/geoip/42
+POST /api/system/geoip/42
 ```
 
 ```json
@@ -110,7 +110,7 @@ The `value` is a string reason. The unblock is broadcast fleet-wide.
 Whitelisted IPs are never blocked, even by automatic threat escalation:
 
 ```
-POST /api/account/system/geoip/42
+POST /api/system/geoip/42
 ```
 
 ```json
@@ -125,7 +125,7 @@ If the IP is currently blocked, whitelisting also unblocks it fleet-wide.
 ### Remove Whitelist
 
 ```
-POST /api/account/system/geoip/42
+POST /api/system/geoip/42
 ```
 
 ```json
@@ -139,7 +139,7 @@ POST /api/account/system/geoip/42
 Re-fetch geolocation and run threat intelligence checks:
 
 ```
-POST /api/account/system/geoip/42
+POST /api/system/geoip/42
 ```
 
 ```json
@@ -153,7 +153,7 @@ POST /api/account/system/geoip/42
 ### Currently Active Blocks
 
 ```
-GET /api/account/system/geoip?is_blocked=true&sort=-blocked_at&graph=basic
+GET /api/system/geoip?is_blocked=true&sort=-blocked_at&graph=basic
 ```
 
 Note: `is_blocked=true` includes expired blocks. Check the `block_active` computed field in the response to determine if the block is still in effect.
@@ -161,35 +161,35 @@ Note: `is_blocked=true` includes expired blocks. Check the `block_active` comput
 ### High-Threat IPs
 
 ```
-GET /api/account/system/geoip?threat_level=high&sort=-modified
-GET /api/account/system/geoip?threat_level=critical&sort=-modified
+GET /api/system/geoip?threat_level=high&sort=-modified
+GET /api/system/geoip?threat_level=critical&sort=-modified
 ```
 
 ### Tor/VPN/Proxy Traffic
 
 ```
-GET /api/account/system/geoip?is_tor=true
-GET /api/account/system/geoip?is_vpn=true
-GET /api/account/system/geoip?is_proxy=true
+GET /api/system/geoip?is_tor=true
+GET /api/system/geoip?is_vpn=true
+GET /api/system/geoip?is_proxy=true
 ```
 
 ### Whitelisted IPs
 
 ```
-GET /api/account/system/geoip?is_whitelisted=true
+GET /api/system/geoip?is_whitelisted=true
 ```
 
 ### IPs by Country
 
 ```
-GET /api/account/system/geoip?country_code=CN&is_blocked=true
+GET /api/system/geoip?country_code=CN&is_blocked=true
 ```
 
 ### Search by IP, City, ISP
 
 ```
-GET /api/account/system/geoip?search=203.0.113
-GET /api/account/system/geoip?search=cloudflare
+GET /api/system/geoip?search=203.0.113
+GET /api/system/geoip?search=cloudflare
 ```
 
 ## Firewall Activity Log
@@ -273,7 +273,7 @@ GET /api/logit/log?kind=firewall:auto_block&model_id=42
 ### 3. Get the GeoIP record for current state
 
 ```
-GET /api/account/system/geoip/42?graph=detailed
+GET /api/system/geoip/42?graph=detailed
 ```
 
 ## Dashboard Patterns
@@ -283,9 +283,9 @@ GET /api/account/system/geoip/42?graph=detailed
 Poll these three queries to build a summary card:
 
 ```
-GET /api/account/system/geoip?is_blocked=true&size=0      → count of blocked IPs
-GET /api/account/system/geoip?threat_level=critical&size=0 → count of critical threats
-GET /api/account/system/geoip?is_whitelisted=true&size=0   → count of whitelisted IPs
+GET /api/system/geoip?is_blocked=true&size=0      → count of blocked IPs
+GET /api/system/geoip?threat_level=critical&size=0 → count of critical threats
+GET /api/system/geoip?is_whitelisted=true&size=0   → count of whitelisted IPs
 ```
 
 Use `size=0` to get just the count without fetching records.
@@ -301,7 +301,7 @@ GET /api/logit/log?kind__startswith=firewall:&sort=-created&size=20
 For a single IP's full picture, fetch in parallel:
 
 ```
-GET /api/account/system/geoip/42?graph=detailed
+GET /api/system/geoip/42?graph=detailed
 GET /api/logit/log?kind__startswith=firewall:&model_id=42&sort=-created
 GET /api/incident/incident?search={ip_address}&sort=-created
 ```

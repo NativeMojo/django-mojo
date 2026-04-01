@@ -33,9 +33,9 @@ Detection → Event → Rules → Incident → Handlers → Enforcement
 | History | `/api/incident/incidenthistory` | Audit trail for each incident |
 | Tickets | `/api/incident/ticket` | Human review items, LLM conversation threads |
 | Ticket Notes | `/api/incident/ticketnote` | Ticket conversation (human + LLM) |
-| RuleSets | `/api/incident/ruleset` | Rule engine configuration — categories, bundling, trigger thresholds, handlers |
-| Rules | `/api/incident/rule` | Conditions within a RuleSet (field comparisons) |
-| GeoIP | `/api/account/system/geoip` | IP records, block status, threat level, geolocation |
+| RuleSets | `/api/incident/event/ruleset` | Rule engine configuration — categories, bundling, trigger thresholds, handlers |
+| Rules | `/api/incident/event/ruleset/rule` | Conditions within a RuleSet (field comparisons) |
+| GeoIP | `/api/system/geoip` | IP records, block status, threat level, geolocation |
 | Logs | `/api/logit/log` | Audit logs, firewall history |
 | Metrics | `/api/metrics/fetch` | Time-series data for dashboards |
 | Bouncer (client) | `/api/account/bouncer/assess` | Bot detection (called by bouncer JS, not your app) |
@@ -96,7 +96,7 @@ The history shows the full timeline: creation, handler execution, LLM assessment
 Show currently blocked IPs and recent firewall activity:
 
 ```
-GET /api/account/system/geoip?is_blocked=true&sort=-blocked_at
+GET /api/system/geoip?is_blocked=true&sort=-blocked_at
 GET /api/logit/log?kind=firewall:block&sort=-created&size=20
 ```
 
@@ -255,13 +255,13 @@ RuleSets are the core of the rule engine. Each RuleSet watches a specific event 
 
 | Method | Path | Description | Permission |
 |--------|------|-------------|------------|
-| `GET` | `/api/incident/ruleset` | List all rulesets | `view_security` |
-| `GET` | `/api/incident/ruleset/<id>` | Get a single ruleset | `view_security` |
-| `POST` | `/api/incident/ruleset` | Create a ruleset | `manage_security` |
-| `POST` | `/api/incident/ruleset/<id>` | Update a ruleset | `manage_security` |
-| `DELETE` | `/api/incident/ruleset/<id>` | Delete a ruleset | `manage_security` |
+| `GET` | `/api/incident/event/ruleset` | List all rulesets | `view_security` |
+| `GET` | `/api/incident/event/ruleset/<id>` | Get a single ruleset | `view_security` |
+| `POST` | `/api/incident/event/ruleset` | Create a ruleset | `manage_security` |
+| `POST` | `/api/incident/event/ruleset/<id>` | Update a ruleset | `manage_security` |
+| `DELETE` | `/api/incident/event/ruleset/<id>` | Delete a ruleset | `manage_security` |
 
-Rules (the conditions within a ruleset) are managed at `/api/incident/rule`.
+Rules (the conditions within a ruleset) are managed at `/api/incident/event/ruleset/rule`.
 
 ### RuleSet Fields
 
@@ -309,7 +309,7 @@ Without `trigger_count`, the handler fires on the very first event. That's right
 **Example — block after 10 failed logins in 5 minutes:**
 
 ```
-POST /api/incident/ruleset
+POST /api/incident/event/ruleset
 {
   "name": "Brute Force Detection",
   "category": "auth:failed",
@@ -332,7 +332,7 @@ Sometimes you want the handler to fire again if the attack keeps going. `retrigg
 **Example — ticket at 5 payment failures, then escalate every 10 more:**
 
 ```
-POST /api/incident/ruleset
+POST /api/incident/event/ruleset
 {
   "name": "Payment Failure Escalation",
   "category": "payment:declined",
@@ -399,10 +399,10 @@ block://?ttl=3600,ticket://?priority=9,email://perm@manage_security
 
 ### Rule Conditions
 
-Each ruleset can have zero or more `Rule` records that filter which events it applies to. Create them at `/api/incident/rule`:
+Each ruleset can have zero or more `Rule` records that filter which events it applies to. Create them at `/api/incident/event/ruleset/rule`:
 
 ```
-POST /api/incident/rule
+POST /api/incident/event/ruleset/rule
 {
   "parent": 42,
   "name": "Level >= 7",
@@ -459,7 +459,7 @@ The LLM creates rules in a **disabled** state and opens a ticket for human appro
 **Overview cards:**
 - Total incidents today (use `incidents` metric)
 - Unhandled count (`GET /api/incident/incident?status=new` → `count`)
-- Active blocks (`GET /api/account/system/geoip?is_blocked=true` → `count`)
+- Active blocks (`GET /api/system/geoip?is_blocked=true` → `count`)
 - Events/hour trend (use `incident_events` metric)
 
 **Time-series charts:**
