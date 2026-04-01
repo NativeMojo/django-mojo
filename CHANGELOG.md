@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## v1.1.5 - April 01, 2026
+
+BUGFIX cron scheduler broken
+
+
 ## v1.1.4 - March 31, 2026
 
 fixed logging bug, fixed iptables blocking

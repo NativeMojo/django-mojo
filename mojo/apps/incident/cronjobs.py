@@ -35,7 +35,7 @@ def sweep_expired_blocks(force=False, verbose=False, now=None):
 
 
 # Weekly — refresh IPSet sources (countries, abuse lists) and sync to fleet
-@schedule(minutes="0", hours="3", days_of_week="0")
+@schedule(minutes="0", hours="3", weekdays="0")
 def refresh_ipsets(force=False, verbose=False, now=None):
     jobs.publish(
         func="mojo.apps.incident.asyncjobs.refresh_ipsets",
