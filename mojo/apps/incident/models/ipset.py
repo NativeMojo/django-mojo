@@ -61,9 +61,11 @@ class IPSet(models.Model, MojoModel):
         CAN_DELETE = True
         GRAPHS = {
             "default": {
-                "exclude": ["data"],
+                "exclude": ["data", "source_key"],
             },
-            "detailed": {},
+            "detailed": {
+                "exclude": ["source_key"],
+            },
         }
 
     def __str__(self):
