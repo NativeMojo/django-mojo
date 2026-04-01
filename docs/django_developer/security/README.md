@@ -388,6 +388,25 @@ Every state change is recorded in `IncidentHistory` — status changes, handler 
 
 Duplicate incidents can be merged via the `merge` POST_SAVE_ACTION. The target incident absorbs all events and history from the source.
 
+### LLM Analysis (POST_SAVE_ACTION)
+
+The `analyze` action triggers deep LLM analysis on an incident — finding related incidents, proposing merge candidates, and creating a new (disabled) RuleSet for human approval. It runs asynchronously via the job queue.
+
+```python
+# How the action is triggered via REST:
+# POST /api/incident/incident/<id>  {"action": "analyze"}
+
+# Programmatically:
+incident.on_action_analyze(None)
+```
+
+**Guard behavior:**
+- Returns `{"status": False, "error": "..."}` if `LLM_HANDLER_API_KEY` is not configured.
+- Returns `{"status": False, "error": "Analysis already in progress"}` if `metadata.analysis_in_progress` is `True`.
+- Sets `metadata.analysis_in_progress = True` before dispatching the job; clears it when the job finishes (success or failure).
+
+**Result storage:** When analysis completes, the agent's final summary is stored in `incident.metadata["llm_analysis"]["summary"]` (truncated to 3000 characters) and a `handler:llm` entry is added to `IncidentHistory`.
+
 ## 5. Tickets
 
 Tickets are actionable work items created by `ticket://` handlers or the LLM agent.
@@ -434,36 +453,44 @@ Both settings are read at invocation time (not at startup), so changes take effe
 
 **Dependency:** The LLM agent requires the `anthropic` Python package (`anthropic>=0.52.0`), which is included as a framework dependency.
 
-### Available Tools (12)
+### Available Tools
 
-The agent has access to these tools for investigation and action:
+The standard triage agent (`execute_llm_handler`) has 12 tools. The analysis agent (`execute_llm_analysis`) has all 14 — the 12 base tools plus 2 analysis-only tools.
 
 **Investigation:**
 
-| Tool | Description |
-|------|-------------|
-| `query_events` | Search recent events by category, IP, hostname, time window |
-| `query_event_counts` | Aggregate event counts grouped by category |
-| `query_ip_history` | Look up GeoLocatedIP record — threat level, block history, country |
-| `query_related_incidents` | Find other incidents from same IP or category |
-| `query_incident_events` | List all events bundled into an incident |
+| Tool | Description | Triage | Analysis |
+|------|-------------|--------|----------|
+| `query_events` | Search recent events by category, IP, hostname, time window | Yes | Yes |
+| `query_event_counts` | Aggregate event counts grouped by category | Yes | Yes |
+| `query_ip_history` | Look up GeoLocatedIP record — threat level, block history, country | Yes | Yes |
+| `query_related_incidents` | Find other incidents from same IP or category | Yes | Yes |
+| `query_incident_events` | List all events bundled into an incident | Yes | Yes |
+| `query_open_incidents` | Query open/new/investigating incidents, filtered by category | No | Yes |
 
 **Action:**
 
-| Tool | Description |
-|------|-------------|
-| `update_incident` | Change status to investigating/resolved/ignored + add note |
-| `block_ip` | Block IP fleet-wide with TTL and reason |
-| `create_ticket` | Create ticket for human review with priority |
-| `add_note` | Add investigation note to incident history |
-| `send_alert` | Send email/SMS/notify to specific targets |
+| Tool | Description | Triage | Analysis |
+|------|-------------|--------|----------|
+| `update_incident` | Change status to investigating/resolved/ignored + add note | Yes | Yes |
+| `block_ip` | Block IP fleet-wide with TTL and reason | Yes | Yes |
+| `create_ticket` | Create ticket for human review with priority | Yes | Yes |
+| `add_note` | Add investigation note to incident history | Yes | Yes |
+| `send_alert` | Send email/SMS/notify to specific targets | Yes | Yes |
+| `merge_incidents` | Merge related incidents into a target incident | No | Yes |
 
 **Configuration:**
 
-| Tool | Description |
-|------|-------------|
-| `create_rule` | Create a new RuleSet (created disabled, requires human approval) |
-| `update_rule_memory` | Persist learnings to RuleSet metadata for future invocations |
+| Tool | Description | Triage | Analysis |
+|------|-------------|--------|----------|
+| `create_rule` | Create a new RuleSet (created disabled, requires human approval) | Yes | Yes |
+| `update_rule_memory` | Persist learnings to RuleSet metadata for future invocations | Yes | Yes |
+
+**Analysis-only tool details:**
+
+`merge_incidents` — Takes `target_incident_id` (int) and `incident_ids` (list of ints). Moves all events from the source incidents into the target and deletes the sources. Only merges incidents with the same `category`; already-resolved or ignored incidents are excluded automatically.
+
+`query_open_incidents` — Takes optional `category` (string) and `limit` (int, max 100, default 50). Returns incidents in `new`, `open`, or `investigating` status with event counts. Used to identify merge candidates across the incident backlog.
 
 ### Agent Memory
 
@@ -489,6 +516,42 @@ When a ticket is `llm_linked` and a human adds a note, the full conversation his
 - Give the agent new instructions
 
 The agent's response is posted as a new `[LLM Agent]` note on the ticket.
+
+### Deep Analysis Mode (`execute_llm_analysis`)
+
+In addition to the real-time triage agent, there is a separate **analysis job** designed for manual on-demand investigation of an incident. It is triggered by the `analyze` POST_SAVE_ACTION on Incident (see section 4).
+
+**Entry point:** `mojo.apps.incident.handlers.llm_agent.execute_llm_analysis`
+
+**Job payload:** `{"incident_id": <int>}`
+
+**How it differs from triage:**
+
+| Aspect | `execute_llm_handler` (triage) | `execute_llm_analysis` (analysis) |
+|--------|-------------------------------|-----------------------------------|
+| Trigger | Automatic — `llm://` handler on rule match | Manual — admin POST `{"action": "analyze"}` |
+| Prompt | `TRIAGE_PROMPT` — classify, triage, act fast | `ANALYSIS_PROMPT` — deep pattern analysis |
+| Tools | 12 base tools | 14 tools (includes `merge_incidents`, `query_open_incidents`) |
+| Pre-loaded context | Event + incident metadata | Full event list (up to 50) + related open incidents (up to 20) |
+| Result | Ticket + history note | `incident.metadata["llm_analysis"]["summary"]` + history note |
+
+**ANALYSIS_PROMPT workflow:** The agent is instructed to follow this sequence:
+1. Set the incident to `investigating`
+2. Review pre-loaded events and related open incidents
+3. Use `query_open_incidents` to find all open incidents in the same category
+4. Merge clearly related incidents using `merge_incidents`
+5. Identify the pattern and check existing rules to avoid duplication
+6. Create a new disabled RuleSet via `create_rule` with proper bundling
+7. Resolve the merged incident with a note explaining the new rule
+8. Summarize: how many merged, what rule was proposed, what pattern it covers
+
+**Merge constraints enforced by `ANALYSIS_PROMPT`:**
+- Only merge incidents with the same category
+- Only merge if the pattern is clearly the same underlying cause
+- Do not merge already-resolved or ignored incidents
+- Always set `bundle_by` and `bundle_minutes` on any new rule to prevent future duplicates
+
+**Context pre-loading:** Before the agent loop starts, `_build_analysis_message` fetches the 50 most recent events on the incident and up to 20 related open incidents in the same category. This avoids round-trip tool calls for information the agent almost always needs.
 
 ## 7. Enforcement — IP Blocking & Firewall
 
@@ -651,7 +714,8 @@ These jobs are dispatched to all servers in the fleet. Broadcast handlers receiv
 | Job | Trigger | What it does |
 |-----|---------|--------------|
 | `execute_handler` | Rule match | Parses handler URL, dispatches to handler class |
-| `execute_llm_handler` | `llm://` handler | Runs LLM agent loop (receives `Job` instance) |
+| `execute_llm_handler` | `llm://` handler | Runs LLM triage agent loop (receives `Job` instance) |
+| `execute_llm_analysis` | `analyze` POST_SAVE_ACTION | Deep LLM analysis: merge candidates, pattern detection, rule proposal (receives `Job` instance) |
 | `execute_llm_ticket_reply` | Ticket note added | Re-invokes LLM on ticket conversation (receives `Job` instance) |
 | `learn_from_block` | Bouncer block | Runs signature learning analysis |
 

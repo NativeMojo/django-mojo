@@ -1,5 +1,13 @@
 ## v1.1.0 - (current)
 
+## v1.1.6 - April 01, 2026
+
+### Added
+- **LLM deep analysis for incidents** — new `analyze` POST_SAVE_ACTION on `Incident`. Admins can POST `{"action": "analyze"}` to `/api/incident/incident/<id>` to trigger an async agent that investigates the incident, merges related open incidents in the same category, and proposes a disabled RuleSet for human approval. Requires `manage_security` and `LLM_HANDLER_API_KEY`.
+- **`execute_llm_analysis` job** — new job entry point (`mojo.apps.incident.handlers.llm_agent.execute_llm_analysis`) for the analysis agent. Uses `ANALYSIS_PROMPT` and a 14-tool set (12 base tools plus `merge_incidents` and `query_open_incidents`). Stores the agent's summary in `incident.metadata["llm_analysis"]["summary"]`.
+- **`merge_incidents` LLM tool** — available in analysis mode only. Merges a list of source incidents into a target incident; enforces same-category and excludes resolved/ignored sources.
+- **`query_open_incidents` LLM tool** — available in analysis mode only. Returns all `new`/`open`/`investigating` incidents, optionally filtered by category, with event counts.
+
 ## v1.1.5 - April 01, 2026
 
 BUGFIX cron scheduler broken
