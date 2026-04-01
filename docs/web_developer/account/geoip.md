@@ -2,14 +2,14 @@
 
 IP geolocation and time lookup endpoints.
 
-All endpoints are under the `account` app prefix.
+The account app sets `APP_NAME = ""`, so these endpoints have no app prefix — they register directly under `/api/system/`.
 
 ---
 
 ## `GET system/geoip` — List GeoIP Records
 
 ```
-GET /api/account/system/geoip
+GET /api/system/geoip
 ```
 
 **Requires:** `manage_users` permission.
@@ -31,7 +31,7 @@ Returns a paginated list of cached GeoIP records. Supports standard query parame
 ## `GET system/geoip/<pk>` — GeoIP Detail
 
 ```
-GET /api/account/system/geoip/123
+GET /api/system/geoip/123
 ```
 
 **Requires:** `manage_users` permission.
@@ -56,7 +56,7 @@ See [firewall.md](firewall.md) for full firewall management and security dashboa
 ## `GET system/geoip/lookup` — Public IP Lookup
 
 ```
-GET /api/account/system/geoip/lookup?ip=1.2.3.4
+GET /api/system/geoip/lookup?ip=1.2.3.4
 ```
 
 **Public** — no authentication required. Rate limited to **30 requests/minute** per IP.
@@ -94,7 +94,7 @@ GET /api/account/system/geoip/lookup?ip=1.2.3.4
 ## `GET system/geoip/time` — Public IP Time Lookup
 
 ```
-GET /api/account/system/geoip/time
+GET /api/system/geoip/time
 ```
 
 **Public** — no authentication required. Rate limited to **30 requests/minute** per IP.
