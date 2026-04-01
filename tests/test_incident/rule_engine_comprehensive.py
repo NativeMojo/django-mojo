@@ -281,11 +281,8 @@ def test_bug_handler_transition_detection_broken(opts):
         bundle_by=1,  # Bundle by hostname
         bundle_minutes=10,
         handler="job://test_handler",
-        metadata={
-            "min_count": 3,
-            "window_minutes": 10,
-            "pending_status": "pending"
-        }
+        trigger_count=3,
+        trigger_window=10,
     )
 
     Rule.objects.create(
@@ -930,7 +927,7 @@ def test_threshold_min_count(opts):
     Event.objects.filter(category="threshold_test").delete()
     Incident.objects.filter(category="threshold_test").delete()
 
-    # Create ruleset with min_count=3
+    # Create ruleset with trigger_count=3
     ruleset = RuleSet.objects.create(
         name="Threshold Test",
         category="threshold_test",
@@ -938,11 +935,8 @@ def test_threshold_min_count(opts):
         match_by=0,
         bundle_by=1,
         bundle_minutes=10,
-        metadata={
-            "min_count": 3,
-            "window_minutes": 10,
-            "pending_status": "pending"
-        }
+        trigger_count=3,
+        trigger_window=10,
     )
 
     Rule.objects.create(
@@ -1004,7 +998,7 @@ def test_threshold_window_minutes(opts):
     Event.objects.filter(category="window_test").delete()
     Incident.objects.filter(category="window_test").delete()
 
-    # Create ruleset with min_count=2 within 5 minutes
+    # Create ruleset with trigger_count=2 within 5 minutes
     ruleset = RuleSet.objects.create(
         name="Window Test",
         category="window_test",
@@ -1012,11 +1006,8 @@ def test_threshold_window_minutes(opts):
         match_by=0,
         bundle_by=1,
         bundle_minutes=10,
-        metadata={
-            "min_count": 2,
-            "window_minutes": 5,
-            "pending_status": "pending"
-        }
+        trigger_count=2,
+        trigger_window=5,
     )
 
     Rule.objects.create(
