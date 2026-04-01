@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## v1.1.7 - April 01, 2026
+
+lot of cleanup
+
+
 ## v1.1.6 - April 01, 2026
 
 bug fixes in security system
