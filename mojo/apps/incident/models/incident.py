@@ -161,11 +161,16 @@ class Incident(models.Model, MojoModel):
         if (self.metadata or {}).get("analysis_in_progress"):
             return {"status": False, "error": "Analysis already in progress"}
 
-        # Set guard flag
-        if not self.metadata:
-            self.metadata = {}
-        self.metadata["analysis_in_progress"] = True
-        self.save(update_fields=["metadata"])
+        # Atomic check-and-set to prevent race conditions on double-click
+        from django.db.models import Q
+        from django.db.models.functions import Coalesce
+        updated = Incident.objects.filter(
+            Q(pk=self.pk),
+            Q(metadata__analysis_in_progress=False) | ~Q(metadata__has_key="analysis_in_progress"),
+        ).update(metadata={**(self.metadata or {}), "analysis_in_progress": True})
+        if not updated:
+            return {"status": False, "error": "Analysis already in progress"}
+        self.refresh_from_db(fields=["metadata"])
 
         try:
             from mojo.apps import jobs

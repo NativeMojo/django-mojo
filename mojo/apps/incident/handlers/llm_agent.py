@@ -684,9 +684,9 @@ def _tool_merge_incidents(params):
     if not incident_ids:
         return {"ok": False, "error": "No incident IDs provided"}
 
-    # Filter to only merge same-category, non-resolved incidents
+    # Filter to only merge same-category, same-scope, non-resolved incidents
     mergeable = Incident.objects.filter(
-        pk__in=incident_ids, category=target.category,
+        pk__in=incident_ids, category=target.category, scope=target.scope,
     ).exclude(pk=target.pk).exclude(status__in=["resolved", "ignored"])
 
     merge_ids = list(mergeable.values_list("pk", flat=True))
