@@ -47,4 +47,5 @@ You read the git diff of recent changes and update documentation automatically.
 - Keep docs concise — decisions and structure, not narrative
 - Include code examples where they add clarity
 - For REST endpoints: always document the permission required, request format, and response format
+- Make sure to confirm the endpoints, if not sure ask.
 - Return a summary of what you updated and why
