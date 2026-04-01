@@ -1,7 +1,7 @@
 # IPSet _fetch_ipdeny does not set source_url
 
 **Type**: bug
-**Status**: planned
+**Status**: resolved
 **Date**: 2026-04-01
 **Severity**: medium
 
@@ -39,7 +39,7 @@ This means country-based IP blocking only works if the IPSet was created via the
 
 ## Plan
 
-**Status**: planned
+**Status**: resolved
 **Planned**: 2026-04-01
 
 ### Objective
@@ -68,3 +68,29 @@ Make `_fetch_ipdeny` auto-construct and persist `source_url` from the ipset name
 ### Docs
 
 - No changes needed — `docs/django_developer/logging/incidents.md` already states `source_url` is "auto-populated for known sources" (line 111).
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-04-02
+
+### What Was Built
+`_fetch_ipdeny` now auto-derives `source_url` from the ipset name when not set, with strict 2-letter country code validation and HTTPS.
+
+### Files Changed
+- `mojo/apps/incident/models/ipset.py` — `_fetch_ipdeny` auto-constructs and persists `source_url`, validates country code with `[a-z]{2}` regex, uses `https://`
+- `tests/test_incident/test_ipset.py` — 6 tests covering derivation, error cases, path traversal rejection, and existing URL preservation
+
+### Tests
+- `tests/test_incident/test_ipset.py` — URL derivation, bad names, empty codes, invalid codes (traversal/uppercase/too long), sync_error storage, existing URL preservation
+- Run: `bin/run_tests -t test_incident.test_ipset`
+
+### Docs Updated
+- None needed — existing docs already accurate
+
+### Security Review
+- Added `[a-z]{2}` regex validation to prevent path traversal and URL injection via crafted names
+- Changed `http://` to `https://` to match `create_country()` and prevent MITM tampering of CIDR data
+
+### Follow-up
+- None
