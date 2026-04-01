@@ -563,7 +563,7 @@ IPSets are the primary mechanism for blocking entire countries, datacenters, or 
 
 ### Actions (POST_SAVE_ACTIONS)
 
-Trigger actions by POSTing `{"action": "<name>"}` to `/api/incident/ipset/<id>`:
+Trigger actions by POSTing `{"<action_name>": 1}` to `/api/incident/ipset/<id>`:
 
 | Action | Description |
 |--------|-------------|
@@ -576,14 +576,14 @@ Trigger actions by POSTing `{"action": "<name>"}` to `/api/incident/ipset/<id>`:
 
 ```
 POST /api/incident/ipset/3
-{"action": "sync"}
+{"sync": 1}
 ```
 
 **Example — disable a country block:**
 
 ```
 POST /api/incident/ipset/3
-{"action": "disable"}
+{"disable": 1}
 ```
 
 ### Workflow: Block a Country
@@ -606,7 +606,7 @@ Then fetch the latest CIDRs and load them onto all instances:
 
 ```
 POST /api/incident/ipset/<id>
-{"action": "refresh_source"}
+{"refresh_source": 1}
 ```
 
 `refresh_source` fetches the zone file, stores the CIDRs in `data`, and immediately syncs to all instances. A weekly cron also runs `refresh_source` automatically on all enabled IPSets.
@@ -633,7 +633,7 @@ Then load the current blacklist:
 
 ```
 POST /api/incident/ipset/<id>
-{"action": "refresh_source"}
+{"refresh_source": 1}
 ```
 
 This fetches up to 10,000 IPv4 addresses with confidence ≥ 100% and syncs them fleet-wide. The weekly cron refreshes this automatically.
@@ -666,7 +666,7 @@ Then sync to load onto all instances:
 
 ```
 POST /api/incident/ipset/<id>
-{"action": "sync"}
+{"sync": 1}
 ```
 
 The `data` field is plain text, one CIDR per line. Lines starting with `#` are treated as comments and ignored.

@@ -75,8 +75,7 @@ POST /api/system/geoip/42
 
 ```json
 {
-  "action": "block",
-  "value": {
+  "block": {
     "reason": "Brute force attack",
     "ttl": 600
   }
@@ -98,12 +97,11 @@ POST /api/system/geoip/42
 
 ```json
 {
-  "action": "unblock",
-  "value": "Verified as legitimate traffic"
+  "unblock": "Verified as legitimate traffic"
 }
 ```
 
-The `value` is a string reason. The unblock is broadcast fleet-wide.
+The value is a string reason. The unblock is broadcast fleet-wide.
 
 ### Whitelist an IP
 
@@ -115,8 +113,7 @@ POST /api/system/geoip/42
 
 ```json
 {
-  "action": "whitelist",
-  "value": "Office IP — verified safe"
+  "whitelist": "Office IP — verified safe"
 }
 ```
 
@@ -130,7 +127,7 @@ POST /api/system/geoip/42
 
 ```json
 {
-  "action": "unwhitelist"
+  "unwhitelist": 1
 }
 ```
 
@@ -144,7 +141,7 @@ POST /api/system/geoip/42
 
 ```json
 {
-  "action": "threat_analysis"
+  "threat_analysis": 1
 }
 ```
 

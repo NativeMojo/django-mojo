@@ -160,17 +160,17 @@ All blocking and management operations are exposed as POST_SAVE_ACTIONS on the m
 ### Example REST calls
 
 ```
-PUT /api/system/geoip/123
-{"action": "block", "block": {"reason": "confirmed attacker", "ttl": 86400}}
+POST /api/system/geoip/123
+{"block": {"reason": "confirmed attacker", "ttl": 86400}}
 
-PUT /api/system/geoip/123
-{"action": "unblock", "unblock": "false positive confirmed"}
+POST /api/system/geoip/123
+{"unblock": "false positive confirmed"}
 
-PUT /api/system/geoip/123
-{"action": "whitelist", "whitelist": "office VPN exit node"}
+POST /api/system/geoip/123
+{"whitelist": "office VPN exit node"}
 
-PUT /api/system/geoip/123
-{"action": "unwhitelist"}
+POST /api/system/geoip/123
+{"unwhitelist": 1}
 ```
 
 All actions require `manage_users` permission (from RestMeta).
