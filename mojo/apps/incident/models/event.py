@@ -172,58 +172,17 @@ class Event(models.Model, MojoModel):
         if rule_set and rule_set.handler == "ignore":
             return
 
-        # Threshold-based pending/new logic
-        min_count = None
-        window_minutes = None
-        pending_status = "pending"
-        if rule_set and isinstance(rule_set.metadata, dict):
-            try:
-                min_count = int(rule_set.metadata.get("min_count")) if rule_set.metadata.get("min_count") is not None else None
-            except Exception:
-                min_count = None
-            try:
-                window_minutes = int(rule_set.metadata.get("window_minutes")) if rule_set.metadata.get("window_minutes") is not None else None
-            except Exception:
-                window_minutes = None
-            pending_status = rule_set.metadata.get("pending_status", "pending")
-
-        # Fallback to ruleset bundling window when not provided
-        # Only use bundle_minutes if it's > 0 (0 means disabled)
-        if window_minutes is None and rule_set and rule_set.bundle_minutes and rule_set.bundle_minutes > 0:
-            window_minutes = rule_set.bundle_minutes
-
-        # Count recent matching events to evaluate threshold
-        meets_threshold = True
-        event_count = 1
-        if rule_set and (min_count or window_minutes) and rule_set.bundle_by > 0:
-            from mojo.apps.incident.models.rule import BundleBy
-
-            criteria = {"category": self.category}
-            if window_minutes:
-                criteria["created__gte"] = dates.subtract(minutes=window_minutes)
-
-            # Use same bundling logic as determine_bundle_criteria
-            if rule_set.bundle_by in [BundleBy.HOSTNAME, BundleBy.HOSTNAME_AND_MODEL_NAME,
-                                       BundleBy.HOSTNAME_AND_MODEL_NAME_AND_ID, BundleBy.SOURCE_IP_AND_HOSTNAME]:
-                criteria["hostname"] = self.hostname
-            if rule_set.bundle_by in [BundleBy.MODEL_NAME, BundleBy.MODEL_NAME_AND_ID,
-                                       BundleBy.HOSTNAME_AND_MODEL_NAME, BundleBy.HOSTNAME_AND_MODEL_NAME_AND_ID,
-                                       BundleBy.SOURCE_IP_AND_MODEL_NAME, BundleBy.SOURCE_IP_AND_MODEL_NAME_AND_ID]:
-                criteria["model_name"] = self.model_name
-                if rule_set.bundle_by in [BundleBy.MODEL_NAME_AND_ID, BundleBy.HOSTNAME_AND_MODEL_NAME_AND_ID,
-                                           BundleBy.SOURCE_IP_AND_MODEL_NAME_AND_ID]:
-                    criteria["model_id"] = self.model_id
-            if rule_set.bundle_by in [BundleBy.SOURCE_IP, BundleBy.SOURCE_IP_AND_MODEL_NAME,
-                                       BundleBy.SOURCE_IP_AND_MODEL_NAME_AND_ID, BundleBy.SOURCE_IP_AND_HOSTNAME]:
-                criteria["source_ip"] = self.source_ip
-
-            try:
-                event_count = self.__class__.objects.filter(**criteria).count()
-            except Exception:
-                event_count = 1
-
-            if min_count:
-                meets_threshold = event_count >= min_count
+        # Read trigger config from model fields
+        trigger_count = None
+        trigger_window = None
+        retrigger_every = None
+        if rule_set:
+            trigger_count = rule_set.trigger_count
+            trigger_window = rule_set.trigger_window
+            retrigger_every = rule_set.retrigger_every
+            # Fall back to bundle_minutes for the count window if trigger_window not set
+            if trigger_window is None and rule_set.bundle_minutes and rule_set.bundle_minutes > 0:
+                trigger_window = rule_set.bundle_minutes
 
         if rule_set or self.level >= INCIDENT_LEVEL_THRESHOLD:
             incident, created = self.get_or_create_incident(rule_set)
@@ -231,23 +190,40 @@ class Event(models.Model, MojoModel):
             # Capture status BEFORE any modifications for transition detection
             prev_status = incident.status if incident.pk else None
 
-            # Determine status transitions for pending/new
-            if rule_set and (min_count or window_minutes):
+            # Count events already on this incident (before linking current event)
+            # +1 to include the event currently being published
+            meets_threshold = True
+            incident_event_count = 1
+            if trigger_count is not None:
                 try:
-                    desired_status = "new" if meets_threshold else pending_status
-                    if incident.status != desired_status:
-                        old_status = incident.status
-                        incident.status = desired_status
+                    qs = incident.events
+                    if trigger_window:
+                        qs = qs.filter(created__gte=dates.subtract(minutes=trigger_window))
+                    incident_event_count = qs.count() + 1
+                except Exception:
+                    incident_event_count = 1
+                meets_threshold = incident_event_count >= trigger_count
+
+            # Status transition based on trigger_count threshold
+            # - Below threshold: hold at (or set to) pending
+            # - Threshold met and was pending: transition to new
+            # - Threshold met and already past pending: leave status alone
+            if rule_set and trigger_count is not None:
+                try:
+                    if not meets_threshold:
+                        # Not yet at threshold — force/keep pending
+                        if incident.status != "pending":
+                            incident.status = "pending"
+                            incident.save(update_fields=["status"])
+                    elif incident.status == "pending":
+                        # Was pending, threshold just reached — transition to new
+                        incident.status = "new"
                         incident.save(update_fields=["status"])
-                        if desired_status == "new" and old_status == pending_status:
-                            incident.add_history("threshold_reached",
-                                note=f"Threshold met: {event_count} events in {window_minutes or 'unlimited'} min (min_count: {min_count})")
-                            if settings.INCIDENT_EVENT_METRICS:
-                                metrics.record('incidents:threshold_reached', account="incident",
-                                    min_granularity=INCIDENT_METRICS_MIN_GRANULARITY)
-                        else:
-                            incident.add_history("status_changed",
-                                note=f"Status changed from {old_status} to {desired_status}")
+                        incident.add_history("threshold_reached",
+                            note=f"Threshold met: {incident_event_count} events (trigger_count: {trigger_count})")
+                        if settings.INCIDENT_EVENT_METRICS:
+                            metrics.record('incidents:threshold_reached', account="incident",
+                                min_granularity=INCIDENT_METRICS_MIN_GRANULARITY)
                 except Exception:
                     pass
 
@@ -255,9 +231,34 @@ class Event(models.Model, MojoModel):
 
             # Run handlers on creation or when transitioning from pending -> new
             if rule_set:
-                transitioned_to_new = (prev_status == pending_status and incident.status == "new")
-                if (created and (min_count is None or meets_threshold)) or transitioned_to_new:
+                transitioned_to_new = (prev_status == "pending" and incident.status == "new")
+                if (created and (trigger_count is None or meets_threshold)) or transitioned_to_new:
                     rule_set.run_handler(self, incident)
+                    # Track event count at trigger so re-trigger knows the baseline
+                    if retrigger_every is not None:
+                        try:
+                            meta = dict(incident.metadata or {})
+                            meta["last_trigger_count"] = incident.events.count()
+                            incident.metadata = meta
+                            incident.save(update_fields=["metadata"])
+                        except Exception:
+                            pass
+                elif retrigger_every is not None and incident.status in ("new", "open", "investigating"):
+                    try:
+                        total = incident.events.count()
+                        last = (incident.metadata or {}).get("last_trigger_count")
+                        if last is None:
+                            last = trigger_count or 1
+                        if total >= last + retrigger_every:
+                            meta = dict(incident.metadata or {})
+                            meta["last_trigger_count"] = total
+                            incident.metadata = meta
+                            incident.save(update_fields=["metadata"])
+                            incident.add_history("handler_retriggered",
+                                note=f"Re-triggered: {total} events (retrigger_every: {retrigger_every})")
+                            rule_set.run_handler(self, incident)
+                    except Exception:
+                        pass
             elif created and LLM_API_KEY:
                 # No rule matched but level exceeded threshold — default to LLM triage
                 try:

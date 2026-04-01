@@ -23,11 +23,8 @@ def test_handler_transition_simple(opts):
         bundle_by=1,  # Bundle by hostname
         bundle_minutes=10,
         handler="job://test_handler",
-        metadata={
-            "min_count": 2,  # Only need 2 events
-            "window_minutes": 10,
-            "pending_status": "pending"
-        }
+        trigger_count=2,
+        trigger_window=10,
     )
 
     Rule.objects.create(
