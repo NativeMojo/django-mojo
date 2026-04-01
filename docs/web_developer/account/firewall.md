@@ -11,7 +11,7 @@ Three existing APIs combine to give you full firewall visibility:
 | API | What it provides |
 |-----|-----------------|
 | `GET /api/system/geoip` | IP records with block status, threat level, geolocation |
-| `GET /api/logit/log` | Firewall event history (blocks, unblocks, whitelist changes) |
+| `GET /api/logs` | Firewall event history (blocks, unblocks, whitelist changes) |
 | `GET /api/incident/incident` | Security incidents that triggered auto-blocks |
 
 ## IP Block Management
@@ -199,7 +199,7 @@ All firewall actions are logged to logit with `kind` values prefixed by `firewal
 ### List All Firewall Activity
 
 ```
-GET /api/logit/log?kind__startswith=firewall:&sort=-created&size=50
+GET /api/logs?kind__startswith=firewall:&sort=-created&size=50
 ```
 
 ### Filter by Action Type
@@ -219,19 +219,19 @@ GET /api/logit/log?kind__startswith=firewall:&sort=-created&size=50
 Use `model_id` to get all firewall events for a GeoIP record:
 
 ```
-GET /api/logit/log?kind__startswith=firewall:&model_id=42&sort=-created
+GET /api/logs?kind__startswith=firewall:&model_id=42&sort=-created
 ```
 
 ### Activity by Admin User
 
 ```
-GET /api/logit/log?kind__startswith=firewall:&uid=5&sort=-created
+GET /api/logs?kind__startswith=firewall:&uid=5&sort=-created
 ```
 
 ### Activity in Date Range
 
 ```
-GET /api/logit/log?kind__startswith=firewall:&dr_start=2026-03-26&dr_end=2026-03-27
+GET /api/logs?kind__startswith=firewall:&dr_start=2026-03-26&dr_end=2026-03-27
 ```
 
 ### Log Entry Shape
@@ -267,7 +267,7 @@ GET /api/incident/incident?search=203.0.113.50&sort=-created
 ### 2. Get the auto-block log for that IP
 
 ```
-GET /api/logit/log?kind=firewall:auto_block&model_id=42
+GET /api/logs?kind=firewall:auto_block&model_id=42
 ```
 
 ### 3. Get the GeoIP record for current state
@@ -293,7 +293,7 @@ Use `size=0` to get just the count without fetching records.
 ### Recent Activity Feed
 
 ```
-GET /api/logit/log?kind__startswith=firewall:&sort=-created&size=20
+GET /api/logs?kind__startswith=firewall:&sort=-created&size=20
 ```
 
 ### IP Detail View
@@ -302,7 +302,7 @@ For a single IP's full picture, fetch in parallel:
 
 ```
 GET /api/system/geoip/42?graph=detailed
-GET /api/logit/log?kind__startswith=firewall:&model_id=42&sort=-created
+GET /api/logs?kind__startswith=firewall:&model_id=42&sort=-created
 GET /api/incident/incident?search={ip_address}&sort=-created
 ```
 

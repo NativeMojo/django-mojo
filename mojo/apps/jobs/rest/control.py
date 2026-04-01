@@ -85,7 +85,7 @@ def on_clear_stuck_jobs(request):
 
 
 # Add a simpler manual reclaim endpoint
-@md.POST('jobs/control/manual-reclaim')
+@md.POST('control/manual-reclaim')
 @md.requires_perms('manage_jobs', 'jobs')
 @md.requires_params('channel')
 def on_manual_reclaim_jobs(request):

@@ -169,9 +169,9 @@ Users can always see their own metrics. Admins with `metrics` can see anyone's.
 | `/api/metrics/record` | POST | `check_write_permissions(request, account)` |
 | `/api/metrics/fetch` | GET | `check_view_permissions(request, account)` |
 | `/api/metrics/series` | GET/POST | `check_view_permissions(request, account)` |
-| `/api/metrics/value` | GET | `check_view_permissions(request, account)` |
-| `/api/metrics/value` | POST | `check_write_permissions(request, account)` |
+| `/api/metrics/value/get` | GET | `check_view_permissions(request, account)` |
+| `/api/metrics/value/set` | POST | `check_write_permissions(request, account)` |
 | `/api/metrics/categories` | GET | `check_view_permissions(request, account)` |
-| `/api/metrics/categories/<slug>` | GET | `check_view_permissions(request, account)` |
-| `/api/metrics/categories/<slug>` | DELETE | `check_write_permissions(request, account)` |
+| `/api/metrics/category_slugs` | GET | `check_view_permissions(request, account)` |
+| `/api/metrics/category_delete` | DELETE | `check_write_permissions(request, account)` |
 | `/api/metrics/permissions` | GET/POST/DELETE | `@md.requires_perms("manage_incidents", "metrics", "manage_metrics")` |

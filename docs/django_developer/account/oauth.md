@@ -255,7 +255,7 @@ GITHUB_CLIENT_SECRET = "your-github-app-client-secret"
 ```
 
 The new provider is immediately available at:
-- `GET /api/oauth/github/begin`
+- `GET /api/auth/oauth/github/begin`
 - `POST /api/oauth/github/complete`
 
 No URL registration or model changes are required.
