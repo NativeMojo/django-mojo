@@ -46,12 +46,14 @@ class Incident(models.Model, MojoModel):
         GRAPHS = {
             "default": {
                 "graphs": {
-                    "geo_ip": "basic",
+                    "rule_set": "basic",
                 },
             },
-            "basic": {
-                "fields": ["id", "created", "priority", "status", "scope", "category",
-                           "country_code", "title", "source_ip", "hostname"],
+            "detailed": {
+                "extra": ["ip_info"],
+                "graphs": {
+                    "rule_set": "basic",
+                },
             },
         }
 
@@ -66,6 +68,18 @@ class Incident(models.Model, MojoModel):
             except Exception:
                 pass
         return self._geo_ip
+
+    @property
+    def ip_info(self):
+        if self._geo_ip is None and self.source_ip:
+            from mojo.apps.account.models import GeoLocatedIP
+            try:
+                self._geo_ip = GeoLocatedIP.lookup(self.source_ip)
+            except Exception:
+                pass
+        if self._geo_ip:
+            return self._geo_ip.to_dict("default")
+        return None
 
     def add_history(self, kind, note=None, by=None, to=None, group=None, media=None):
         """

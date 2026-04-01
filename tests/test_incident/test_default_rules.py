@@ -200,6 +200,157 @@ def test_health_rules_never_block_ips(opts):
     RuleSet.objects.filter(category__startswith="system:health:").delete()
 
 
+# ---------------------------------------------------------------------------
+# New OSSEC noise-reduction rules
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test()
+def test_ossec_login_session_noise_ignores_event(opts):
+    """Login session opened/closed events should match the ignore ruleset."""
+    from mojo.apps.incident.models.rule import RuleSet
+    from mojo.apps.incident.models import Event
+
+    RuleSet.objects.filter(category="ossec", name="OSSEC - Login Session Noise").delete()
+    RuleSet.ensure_ossec_rules()
+
+    noise_rule = RuleSet.objects.filter(name="OSSEC - Login Session Noise").first()
+    assert noise_rule is not None, "OSSEC - Login Session Noise ruleset should exist"
+    assert noise_rule.handler == "ignore", f"Handler should be 'ignore', got {noise_rule.handler!r}"
+
+    event = Event.objects.create(
+        category="ossec", level=3, scope="ossec",
+        details="Login session opened.",
+        source_ip=None,
+    )
+    matched = RuleSet.check_by_category("ossec", event)
+    assert matched is not None, "Login session event should match a rule"
+    assert matched.handler == "ignore", f"Should match ignore rule, got {matched.handler!r}"
+
+    event.delete()
+    RuleSet.objects.filter(name="OSSEC - Login Session Noise").delete()
+
+
+@th.django_unit_test()
+def test_ossec_ssh_single_probe_matches_rule_5710(opts):
+    """SSH single-probe events (OSSEC rule 5710) should be caught and blocked."""
+    from mojo.apps.incident.models.rule import RuleSet
+    from mojo.apps.incident.models import Event
+
+    RuleSet.objects.filter(category="ossec", name="OSSEC - SSH Single Probe (5710)").delete()
+    RuleSet.ensure_ossec_rules()
+
+    probe_rule = RuleSet.objects.filter(name="OSSEC - SSH Single Probe (5710)").first()
+    assert probe_rule is not None, "OSSEC - SSH Single Probe (5710) ruleset should exist"
+    assert "block://" in probe_rule.handler, f"Should block, got {probe_rule.handler!r}"
+
+    event = Event.objects.create(
+        category="ossec", level=5, scope="ossec",
+        details="Attempt to login using a non-existent user Source IP: 1.2.3.4",
+        source_ip="1.2.3.4",
+        metadata={"rule_id": 5710},
+    )
+    matched = RuleSet.check_by_category("ossec", event)
+    assert matched is not None, "SSH single probe event should match a rule"
+    assert "Single Probe" in matched.name, f"Should match single-probe rule, got {matched.name!r}"
+
+    event.delete()
+    RuleSet.objects.filter(name="OSSEC - SSH Single Probe (5710)").delete()
+
+
+@th.django_unit_test()
+def test_ossec_generic_web_errors_matched_and_blocked(opts):
+    """Generic web 400/404/405 events should match the web errors ruleset."""
+    from mojo.apps.incident.models.rule import RuleSet
+    from mojo.apps.incident.models import Event
+
+    RuleSet.objects.filter(category="ossec", name="OSSEC - Generic Web Errors").delete()
+    RuleSet.ensure_ossec_rules()
+
+    web_rule = RuleSet.objects.filter(name="OSSEC - Generic Web Errors").first()
+    assert web_rule is not None, "OSSEC - Generic Web Errors ruleset should exist"
+    assert "block://" in web_rule.handler, f"Should block, got {web_rule.handler!r}"
+
+    for status, detail in [
+        (400, "Web 400 GET http://example.com/ from 1.2.3.4"),
+        (404, "Web 404 GET https://example.com/sitemap.xml from 1.2.3.4"),
+        (405, "Web 405 POST https://example.com/ from 1.2.3.4"),
+        (404, "Web Attack 404 GET https://example.com/vendor/phpunit/... from 1.2.3.4"),
+    ]:
+        event = Event.objects.create(
+            category="ossec", level=5, scope="ossec",
+            details=detail, source_ip="1.2.3.4",
+        )
+        matched = RuleSet.check_by_category("ossec", event)
+        assert matched is not None, f"Web {status} event should match a rule: {detail!r}"
+        assert "Web Error" in matched.name or "Bot/Scanner" in matched.name, \
+            f"Web {status} should match web error or bot/scanner rule, got {matched.name!r}"
+        event.delete()
+
+    RuleSet.objects.filter(name="OSSEC - Generic Web Errors").delete()
+
+
+@th.django_unit_test()
+def test_ossec_login_session_noise_does_not_match_sudo(opts):
+    """Sudo to root events should NOT be caught by the login session noise rule."""
+    from mojo.apps.incident.models.rule import RuleSet
+    from mojo.apps.incident.models import Event
+
+    RuleSet.objects.filter(category="ossec").delete()
+    RuleSet.ensure_ossec_rules()
+
+    event = Event.objects.create(
+        category="ossec", level=3, scope="ossec",
+        details="Successful sudo to ROOT executed",
+        source_ip=None,
+    )
+    matched = RuleSet.check_by_category("ossec", event)
+    # Should NOT match the ignore rule — sudo events are security-relevant
+    assert matched is None or matched.handler != "ignore", \
+        f"Sudo event should not be silently ignored, got {matched.name if matched else None!r}"
+
+    event.delete()
+    RuleSet.objects.filter(category="ossec").delete()
+
+
+@th.django_unit_test()
+def test_ossec_ssh_success_not_ignored(opts):
+    """SSHD authentication success events should not match the login session noise rule."""
+    from mojo.apps.incident.models.rule import RuleSet
+    from mojo.apps.incident.models import Event
+
+    RuleSet.objects.filter(category="ossec").delete()
+    RuleSet.ensure_ossec_rules()
+
+    event = Event.objects.create(
+        category="ossec", level=3, scope="ossec",
+        details="SSHD authentication success. Source IP: 88.184.56.101",
+        source_ip="88.184.56.101",
+    )
+    matched = RuleSet.check_by_category("ossec", event)
+    assert matched is None or matched.handler != "ignore", \
+        f"SSH success should not be silently ignored, got {matched.name if matched else None!r}"
+
+    event.delete()
+    RuleSet.objects.filter(category="ossec").delete()
+
+
+@th.django_unit_test()
+def test_ossec_ensure_idempotent_with_new_rules(opts):
+    """ensure_ossec_rules should create exactly 7 rulesets, idempotent on repeat calls."""
+    from mojo.apps.incident.models.rule import RuleSet
+
+    RuleSet.objects.filter(category="ossec").delete()
+    RuleSet.ensure_ossec_rules()
+    count1 = RuleSet.objects.filter(category="ossec").count()
+    RuleSet.ensure_ossec_rules()
+    count2 = RuleSet.objects.filter(category="ossec").count()
+
+    assert count1 == 7, f"Should create exactly 7 OSSEC rulesets, got {count1}"
+    assert count1 == count2, f"Second call should not create duplicates: {count1} vs {count2}"
+
+    RuleSet.objects.filter(category="ossec").delete()
+
+
 @th.django_unit_test()
 def test_health_runner_rule_matches_event(opts):
     """Runner down rule should match system:health:runner events."""

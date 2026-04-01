@@ -140,7 +140,7 @@ Returns the audit trail for an incident — every state change, handler executio
 | `created` | Incident created from event |
 | `priority_escalated` | Priority increased by new event |
 | `status_changed` | Status transition |
-| `threshold_reached` | Pending → new (min_count met) |
+| `threshold_reached` | Pending → new (trigger_count met) |
 | `handler:block` | Block handler fired |
 | `handler:email` | Email handler fired |
 | `handler:sms` | SMS handler fired |
@@ -191,6 +191,34 @@ Tickets with `metadata.llm_linked=true` are managed by the LLM agent. When you p
   "note": "Approved. Enable the rule."
 }
 ```
+
+## RuleSet Fields
+
+When reading or writing rules via `/api/incident/ruleset`, these fields control threshold and retrigger behavior:
+
+| Field | Type | Description |
+|---|---|---|
+| `trigger_count` | int or null | Fire the handler when the incident reaches this many events. `null` = fire immediately on the first event. |
+| `trigger_window` | int or null | Only count events within this many minutes when evaluating `trigger_count`. `null` = count all events on the incident. |
+| `retrigger_every` | int or null | Re-fire the handler every N additional events after the initial trigger. `null` = fire once only. |
+
+**Example — block after 10 failed logins in 10 minutes, re-alert every 20 more:**
+
+```
+POST /api/incident/ruleset
+{
+  "category": "auth:failed",
+  "name": "Brute Force Detection",
+  "bundle_by": 4,
+  "bundle_minutes": 10,
+  "handler": "block://?ttl=3600,notify://perm@manage_security",
+  "trigger_count": 10,
+  "trigger_window": 10,
+  "retrigger_every": 20
+}
+```
+
+Incidents stay at `pending` until `trigger_count` is reached, then transition to `new` and the handler fires. With `retrigger_every=20`, the handler fires again at 30 events, 50, 70, and so on.
 
 ## Filtering
 

@@ -311,7 +311,9 @@ A RuleSet defines:
 - **`bundle_by`** — How to group events into one incident (see bundling below)
 - **`bundle_minutes`** — Time window for bundling. `0` = disabled, `None` = unlimited, `>0` = window in minutes
 - **`handler`** — What to do when a RuleSet triggers (see handlers below)
-- **`metadata`** — Optional threshold configuration (`min_count`, `window_minutes`, `pending_status`)
+- **`trigger_count`** — Fire the handler when the incident reaches this many events. `null` = fire immediately on the first event.
+- **`trigger_window`** — Only count events within this many minutes when checking `trigger_count`. `null` = count all events on the incident regardless of age.
+- **`retrigger_every`** — Re-fire the handler every N additional events after the initial trigger. `null` = fire once only.
 
 ### Rule
 
@@ -344,9 +346,11 @@ Bundling controls how related events are collapsed into a single incident rather
 | `HOSTNAME_AND_MODEL_NAME` | Same server + model type |
 | `HOSTNAME_AND_MODEL_NAME_AND_ID` | Same server + model instance |
 
-### Thresholds (pending → new)
+### Thresholds (trigger_count)
 
-A RuleSet can hold incidents in `pending` status until a minimum event count is reached within a time window. This eliminates alerting on isolated events:
+A RuleSet can defer its handler until a minimum event count is reached. Until the threshold is crossed, the incident stays at `pending`. Once it is reached, the incident transitions to `new` and the handler fires.
+
+Use `trigger_window` to restrict the count to events within a recent time window — useful when the same incident might accumulate events over hours or days but you only want to trigger on a burst.
 
 ```python
 RuleSet.objects.create(
@@ -355,15 +359,30 @@ RuleSet.objects.create(
     bundle_by=BundleBy.SOURCE_IP,
     bundle_minutes=10,
     handler="block://?ttl=3600,ticket://?status=new&priority=8&category=security",
-    metadata={
-        "min_count": 10,           # Wait for 10 matching events
-        "window_minutes": 10,      # Within 10 minutes
-        "pending_status": "pending"
-    }
+    trigger_count=10,       # Wait for 10 events on this incident
+    trigger_window=10,      # Only count events from the last 10 minutes
 )
 ```
 
-Until 10 events accumulate, the incident sits at `pending`. Once the threshold is crossed, it transitions to `new` and the handler fires — blocking the IP fleet-wide and creating a ticket.
+Until 10 events accumulate within the window, the incident sits at `pending`. Once the threshold is crossed, it transitions to `new` and the handler fires — blocking the IP fleet-wide and creating a ticket.
+
+### Retriggering (retrigger_every)
+
+Set `retrigger_every` to re-fire the handler after additional events beyond the initial trigger. This is useful for escalating alerts on incidents that keep growing:
+
+```python
+RuleSet.objects.create(
+    category="auth:failed",
+    name="Brute Force - Escalating",
+    bundle_by=BundleBy.SOURCE_IP,
+    bundle_minutes=60,
+    handler="notify://perm@manage_security",
+    trigger_count=10,
+    retrigger_every=20,     # Re-notify every 20 additional events after the first trigger
+)
+```
+
+With this config: handler fires at 10 events, then again at 30, 50, 70, and so on.
 
 ---
 
@@ -534,7 +553,7 @@ incident.report_event(
 )
 ```
 
-A RuleSet bundling by `SOURCE_IP` with `min_count=20` and `window_minutes=1` fires only when a real abuse pattern emerges — not on a single slow request.
+A RuleSet bundling by `SOURCE_IP` with `trigger_count=20` and `trigger_window=1` fires only when a real abuse pattern emerges — not on a single slow request.
 
 ### Pattern: authentication failures
 
@@ -597,11 +616,8 @@ RuleSet.objects.create(
     bundle_by=BundleBy.SOURCE_IP,
     bundle_minutes=5,
     handler="block://?ttl=3600&reason=ssh_brute_force,ticket://?status=new&priority=9&category=security,email://security@example.com",
-    metadata={
-        "min_count": 10,
-        "window_minutes": 5,
-        "pending_status": "pending"
-    }
+    trigger_count=10,
+    trigger_window=5,
 )
 ```
 
