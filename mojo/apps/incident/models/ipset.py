@@ -121,6 +121,11 @@ class IPSet(models.Model, MojoModel):
         self.sync_error = None
         self.save(update_fields=["last_synced", "sync_error"])
 
+    def refresh(self):
+        """Refresh the ipset from the source and sync."""
+        if self.refresh_from_source():
+            self.sync()
+
     def refresh_from_source(self):
         """Fetch latest CIDR data from the configured source."""
         if self.source == "manual":
@@ -150,7 +155,18 @@ class IPSet(models.Model, MojoModel):
         """Fetch country zone file from ipdeny.com."""
         import requests
         if not self.source_url:
-            return None
+            if not self.name or not self.name.startswith("country_"):
+                raise ValueError(
+                    f"IPSet '{self.name}' has source=ipdeny but no source_url and "
+                    f"name does not start with 'country_' — cannot derive URL"
+                )
+            code = self.name[len("country_"):]
+            if not code:
+                raise ValueError(
+                    f"IPSet '{self.name}' has source=ipdeny but no country code after 'country_' prefix"
+                )
+            self.source_url = f"http://www.ipdeny.com/ipblocks/data/countries/{code}.zone"
+            self.save(update_fields=["source_url"])
         resp = requests.get(self.source_url, timeout=30)
         resp.raise_for_status()
         lines = [line.strip() for line in resp.text.splitlines() if line.strip() and not line.startswith("#")]
