@@ -151,3 +151,34 @@ Add an `analyze` POST_SAVE_ACTION on Incident that triggers the LLM agent to inv
 ### Docs
 - `docs/django_developer/security/README.md` — Document `analyze` action, `execute_llm_analysis` job, new LLM tools
 - `docs/web_developer/security/README.md` — Document `analyze` POST_SAVE_ACTION for frontend
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-04-01
+
+### What Was Built
+Admin can trigger LLM analysis on any incident via the `analyze` POST_SAVE_ACTION. The LLM agent investigates the incident's events, finds and merges related open incidents (same category + scope), and proposes disabled rulesets for human approval. Runs async via job queue.
+
+### Files Changed
+- `mojo/apps/incident/models/incident.py` — Added `analyze` to POST_SAVE_ACTIONS, `on_action_analyze` with atomic in-progress guard
+- `mojo/apps/incident/handlers/llm_agent.py` — Added ANALYSIS_PROMPT, `merge_incidents` tool, `query_open_incidents` tool, `_build_analysis_message`, `execute_llm_analysis` job entry point; `_call_claude` and `_run_agent_loop` now accept `tools` param
+- `docs/django_developer/security/README.md` — Analysis action, job, tools, triage vs analysis modes
+- `docs/web_developer/logging/incidents.md` — Request LLM analysis endpoint
+- `docs/web_developer/security/README.md` — On-demand deep analysis subsection
+- `CHANGELOG.md` — v1.1.6 entry
+
+### Tests
+- `tests/test_incident/test_analyze_action.py` — 7 tests covering action, rejection cases, merge tool, query tool, full agent loop
+- Run: `bin/run_tests -t test_incident.test_analyze_action`
+
+### Full Test Suite
+- 1094 run, 1055 passed, 39 skipped, 0 failed — no regressions
+
+### Security Review
+- Fixed: race condition on `analysis_in_progress` guard (now atomic filter+update)
+- Fixed: cross-scope merge (added `scope=target.scope` filter)
+- Pre-existing (not regressed): prompt injection surface in event details, broad `security` permission in SAVE_PERMS
+
+### Follow-up
+- None
