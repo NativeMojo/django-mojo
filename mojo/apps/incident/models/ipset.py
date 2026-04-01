@@ -160,12 +160,14 @@ class IPSet(models.Model, MojoModel):
                     f"IPSet '{self.name}' has source=ipdeny but no source_url and "
                     f"name does not start with 'country_' — cannot derive URL"
                 )
+            import re
             code = self.name[len("country_"):]
-            if not code:
+            if not re.fullmatch(r'[a-z]{2}', code):
                 raise ValueError(
-                    f"IPSet '{self.name}' has source=ipdeny but no country code after 'country_' prefix"
+                    f"IPSet '{self.name}': derived country code '{code}' is not a valid "
+                    f"2-letter code — cannot construct ipdeny URL"
                 )
-            self.source_url = f"http://www.ipdeny.com/ipblocks/data/countries/{code}.zone"
+            self.source_url = f"https://www.ipdeny.com/ipblocks/data/countries/{code}.zone"
             self.save(update_fields=["source_url"])
         resp = requests.get(self.source_url, timeout=30)
         resp.raise_for_status()

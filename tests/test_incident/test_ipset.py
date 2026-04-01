@@ -27,7 +27,7 @@ def test_fetch_ipdeny_derives_source_url(opts):
         pass
 
     ipset.refresh_from_db()
-    expected = "http://www.ipdeny.com/ipblocks/data/countries/cn.zone"
+    expected = "https://www.ipdeny.com/ipblocks/data/countries/cn.zone"
     assert ipset.source_url == expected, (
         f"source_url should be '{expected}', got '{ipset.source_url}'"
     )
@@ -79,7 +79,7 @@ def test_fetch_ipdeny_raises_on_empty_code(opts):
         ipset._fetch_ipdeny()
     except ValueError as e:
         raised = True
-        assert "country code" in str(e).lower(), f"Error should mention country code, got: {e}"
+        assert "2-letter" in str(e) or "country code" in str(e).lower(), f"Error should mention invalid code, got: {e}"
 
     assert raised, "_fetch_ipdeny should raise ValueError for empty country code"
 
@@ -109,6 +109,30 @@ def test_refresh_from_source_stores_error_on_bad_name(opts):
     )
 
     ipset.delete()
+
+
+@th.django_unit_test()
+def test_fetch_ipdeny_rejects_invalid_country_codes(opts):
+    """_fetch_ipdeny should reject codes that aren't exactly 2 lowercase letters."""
+    from mojo.apps.incident.models.ipset import IPSet
+
+    bad_names = [
+        "country_../../etc",
+        "country_CN",
+        "country_abc",
+        "country_c",
+        "country_c1",
+    ]
+    for name in bad_names:
+        IPSet.objects.filter(name=name).delete()
+        ipset = IPSet.objects.create(name=name, kind="country", source="ipdeny")
+        raised = False
+        try:
+            ipset._fetch_ipdeny()
+        except ValueError:
+            raised = True
+        assert raised, f"_fetch_ipdeny should reject name '{name}' but did not raise ValueError"
+        ipset.delete()
 
 
 @th.django_unit_test()
