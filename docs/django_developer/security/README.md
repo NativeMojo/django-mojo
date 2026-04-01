@@ -394,7 +394,7 @@ The `analyze` action triggers deep LLM analysis on an incident — finding relat
 
 ```python
 # How the action is triggered via REST:
-# POST /api/incident/incident/<id>  {"action": "analyze"}
+# POST /api/incident/incident/<id>  {"analyze": 1}
 
 # Programmatically:
 incident.on_action_analyze(None)
@@ -529,7 +529,7 @@ In addition to the real-time triage agent, there is a separate **analysis job** 
 
 | Aspect | `execute_llm_handler` (triage) | `execute_llm_analysis` (analysis) |
 |--------|-------------------------------|-----------------------------------|
-| Trigger | Automatic — `llm://` handler on rule match | Manual — admin POST `{"action": "analyze"}` |
+| Trigger | Automatic — `llm://` handler on rule match | Manual — admin POST `{"analyze": 1}` |
 | Prompt | `TRIAGE_PROMPT` — classify, triage, act fast | `ANALYSIS_PROMPT` — deep pattern analysis |
 | Tools | 12 base tools | 14 tools (includes `merge_incidents`, `query_open_incidents`) |
 | Pre-loaded context | Event + incident metadata | Full event list (up to 50) + related open incidents (up to 20) |

@@ -95,12 +95,11 @@ Incidents move through these statuses:
 
 ```json
 {
-  "action": "merge",
-  "value": [302, 303]
+  "merge": [302, 303]
 }
 ```
 
-Merges incidents 302 and 303 into incident `<id>`. Events are re-linked, source incidents are deleted.
+Merges incidents 302 and 303 into incident `<id>`. The value is passed to `on_action_merge`. Events are re-linked, source incidents are deleted.
 
 ## Request LLM Analysis
 
@@ -110,9 +109,11 @@ Merges incidents 302 and 303 into incident `<id>`. Events are re-linked, source 
 
 ```json
 {
-  "action": "analyze"
+  "analyze": 1
 }
 ```
+
+The value is passed to `on_action_analyze` — any truthy value works.
 
 Triggers deep LLM analysis on the incident. The agent runs asynchronously — this call returns immediately.
 
