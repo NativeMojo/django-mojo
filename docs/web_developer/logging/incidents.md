@@ -150,6 +150,44 @@ When `metadata.analysis_in_progress` is `false` and `metadata.llm_analysis` is p
 
 The agent's summary is stored in `metadata.llm_analysis.summary` (up to 3000 characters). The full action trail is in `IncidentHistory` with `kind=handler:llm`.
 
+**Example GET response after analysis completes:**
+
+```
+GET /api/incident/incident/<id>
+```
+
+```json
+{
+  "id": 301,
+  "status": "resolved",
+  "priority": 8,
+  "category": "ossec",
+  "title": "SSH brute force from 10.0.0.77",
+  "source_ip": "10.0.0.77",
+  "metadata": {
+    "analysis_in_progress": false,
+    "llm_analysis": {
+      "summary": "Analysis complete. Merged 3 related incidents (#302, #303, #304) — all SSH brute force from different IPs. Proposed rule: 'Auto-block SSH brute force' (disabled, pending approval). The rule bundles by source_ip with a 30-minute window and blocks for 1 hour. Ticket #45 created for human review."
+    },
+    "llm_assessment": {
+      "status": "resolved",
+      "note": "Merged 3 incidents, proposed auto-block rule."
+    }
+  }
+}
+```
+
+**Key metadata fields for the UI:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `metadata.analysis_in_progress` | `bool` | `true` while the agent is running. Poll until `false`. |
+| `metadata.llm_analysis.summary` | `string` | The agent's final summary (up to 3000 chars). Present only after analysis completes. |
+| `metadata.llm_assessment.status` | `string` | Final incident status set by the agent (`resolved`, `ignored`, `investigating`). |
+| `metadata.llm_assessment.note` | `string` | Agent's reasoning for the status change. |
+
+**History trail:**
+
 ```
 GET /api/incident/incident/history?parent=<id>&sort=created
 ```
