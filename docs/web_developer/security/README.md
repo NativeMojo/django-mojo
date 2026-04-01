@@ -41,6 +41,7 @@ Detection → Event → Rules → Incident → Handlers → Enforcement
 | Bouncer Devices | `/api/account/bouncer/device` | Device reputation, risk tiers, block counts |
 | Bouncer Signals | `/api/account/bouncer/signal` | Assessment audit trail with full signal payloads |
 | Bot Signatures | `/api/account/bouncer/signature` | Manage bot signatures (auto-learned + manual) |
+| IPSet | `/api/incident/ipset` | Bulk CIDR blocking: countries, datacenters, abuse lists |
 
 See individual API docs for full details:
 - [Incidents](../logging/incidents.md)
@@ -315,3 +316,176 @@ The LLM creates rules in a **disabled** state and opens a ticket for human appro
 | `LLM_HANDLER_MODEL` | `claude-sonnet-4-20250514` | Claude model for LLM agent |
 | `INCIDENT_EMAIL_FROM` | `None` | SES mailbox for incident emails |
 | `ADMIN_PORTAL_URL` | `None` | URL for deep links in notifications |
+
+## IPSet Bulk Blocking
+
+IPSets are the primary mechanism for blocking entire countries, datacenters, or large abuse lists at the kernel level. Each IPSet record maps to a Linux `ipset` hash:net — lookups are O(1) regardless of set size, making it practical to block tens of thousands of CIDRs without performance impact.
+
+### Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/incident/ipset` | List all IPSets |
+| `GET` | `/api/incident/ipset/<id>` | Get a single IPSet |
+| `POST` | `/api/incident/ipset` | Create a new IPSet |
+| `POST` | `/api/incident/ipset/<id>` | Update an IPSet |
+| `DELETE` | `/api/incident/ipset/<id>` | Delete an IPSet |
+
+### Permissions
+
+| Permission | Access |
+|------------|--------|
+| `view_security` or `security` | Read (list, detail) |
+| `manage_security` or `security` | Write (create, update, delete, actions) |
+
+### Field Reference
+
+| Field | Type | Writable | Description |
+|-------|------|----------|-------------|
+| `id` | int | No | Primary key |
+| `name` | string | Yes | Unique ipset name, e.g. `country_cn`, `abuse_ips`. Used as the kernel ipset identifier — no spaces or special characters. |
+| `kind` | string | Yes | Type: `country`, `datacenter`, `abuse`, `custom` |
+| `description` | string | Yes | Human-readable label |
+| `source` | string | Yes | Data source: `ipdeny`, `abuseipdb`, `manual` |
+| `source_url` | string | Yes | URL to fetch CIDR data from (auto-populated for ipdeny country sets) |
+| `source_key` | string | Yes | API key or identifier for the source. For AbuseIPDB this is the API key — treat as a secret. |
+| `is_enabled` | bool | Yes | Whether this set is active in iptables on all instances |
+| `cidr_count` | int | No | Number of CIDRs currently loaded (auto-updated on sync) |
+| `last_synced` | datetime | No | Timestamp of last successful fleet sync |
+| `sync_error` | string | No | Last error message if a sync or refresh failed, null on success |
+| `created` | datetime | No | Creation timestamp |
+| `modified` | datetime | No | Last modification timestamp |
+
+> **Note**: The `data` field (raw CIDR list) is excluded from the default response graph. Use `?graph=detailed` to include it.
+
+### Graphs
+
+| Graph | What's included |
+|-------|----------------|
+| `default` (no parameter) | All fields except `data` — suitable for list and summary views |
+| `detailed` (`?graph=detailed`) | All fields including `data` (the full CIDR list, one per line) |
+
+### Actions (POST_SAVE_ACTIONS)
+
+Trigger actions by POSTing `{"action": "<name>"}` to `/api/incident/ipset/<id>`:
+
+| Action | Description |
+|--------|-------------|
+| `sync` | Broadcast the current CIDR data to all instances — loads into kernel ipset and adds iptables DROP rule |
+| `enable` | Set `is_enabled=true` and sync fleet-wide |
+| `disable` | Set `is_enabled=false` and remove the ipset + iptables rule from all instances |
+| `refresh_source` | Re-fetch CIDRs from `source_url` or the AbuseIPDB API, update `data` and `cidr_count`, then sync fleet-wide |
+
+**Example — sync after manual CIDR edit:**
+
+```
+POST /api/incident/ipset/3
+{"action": "sync"}
+```
+
+**Example — disable a country block:**
+
+```
+POST /api/incident/ipset/3
+{"action": "disable"}
+```
+
+### Workflow: Block a Country
+
+Block all traffic from China (`cn`):
+
+```
+POST /api/incident/ipset
+{
+  "name": "country_cn",
+  "kind": "country",
+  "description": "Block country: CN",
+  "source": "ipdeny",
+  "source_url": "https://www.ipdeny.com/ipblocks/data/countries/cn.zone",
+  "is_enabled": true
+}
+```
+
+Then fetch the latest CIDRs and load them onto all instances:
+
+```
+POST /api/incident/ipset/<id>
+{"action": "refresh_source"}
+```
+
+`refresh_source` fetches the zone file, stores the CIDRs in `data`, and immediately syncs to all instances. A weekly cron also runs `refresh_source` automatically on all enabled IPSets.
+
+Common country codes: `cn` (China), `ru` (Russia), `ir` (Iran), `kp` (North Korea).
+
+### Workflow: Block Abuse IPs via AbuseIPDB
+
+Block IPs with 100% confidence score from [AbuseIPDB](https://www.abuseipdb.com/):
+
+```
+POST /api/incident/ipset
+{
+  "name": "abuse_ips",
+  "kind": "abuse",
+  "description": "AbuseIPDB blacklist (confidence 100%)",
+  "source": "abuseipdb",
+  "source_key": "<your-abuseipdb-api-key>",
+  "is_enabled": true
+}
+```
+
+Then load the current blacklist:
+
+```
+POST /api/incident/ipset/<id>
+{"action": "refresh_source"}
+```
+
+This fetches up to 10,000 IPv4 addresses with confidence ≥ 100% and syncs them fleet-wide. The weekly cron refreshes this automatically.
+
+### Workflow: Manual CIDR List
+
+For custom ranges (e.g., a specific datacenter or known attacker range):
+
+```
+POST /api/incident/ipset
+{
+  "name": "custom_block",
+  "kind": "custom",
+  "description": "Blocked datacenter ranges",
+  "source": "manual",
+  "is_enabled": true
+}
+```
+
+Then update with `graph=detailed` to set the CIDR data:
+
+```
+POST /api/incident/ipset/<id>?graph=detailed
+{
+  "data": "192.0.2.0/24\n198.51.100.0/24\n203.0.113.0/24"
+}
+```
+
+Then sync to load onto all instances:
+
+```
+POST /api/incident/ipset/<id>
+{"action": "sync"}
+```
+
+The `data` field is plain text, one CIDR per line. Lines starting with `#` are treated as comments and ignored.
+
+### Listing and Filtering
+
+```
+GET /api/incident/ipset
+GET /api/incident/ipset?kind=country
+GET /api/incident/ipset?is_enabled=true
+GET /api/incident/ipset?search=abuse
+```
+
+Standard sort and pagination apply:
+
+```
+GET /api/incident/ipset?sort=-cidr_count&size=20
+```

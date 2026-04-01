@@ -159,7 +159,7 @@ This prevents non-admin users from escalating their own access.
 | Group membership | `POST /api/group/member`, `POST /api/group/member/<id>` | `groups` |
 | Secure settings | `GET/POST /api/settings`, `DELETE /api/settings/<id>` | `groups` |
 | Security dashboard | `GET /api/incident/incident`, `GET /api/incident/event` | `security` |
-| Firewall / IP blocks | `GET/POST /api/incident/ipset` | `security` |
+| Firewall / IP blocks | `GET/POST /api/incident/ipset` — see [IPSet Bulk Blocking](../security/README.md#ipset-bulk-blocking) | `security` |
 | Bouncer devices | `GET /api/account/bouncer/device` | `security` or `users` |
 | Bot signatures | `GET/POST /api/account/bouncer/bot_signature` | `security` or `users` |
 | System logs | `GET /api/logit/log` | `security` |
