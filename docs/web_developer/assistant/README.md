@@ -103,15 +103,11 @@ The `blocks` array is only present when the LLM includes structured data. See [S
 GET /api/assistant/conversation
 ```
 
-List the requesting user's past conversations. Only returns conversations owned by the authenticated user.
+List the requesting user's past conversations. Admins see all conversations; non-admins see only their own.
 
 **Permission**: `view_admin`
 
-**Query parameters**:
-
-| Param | Type | Default | Description |
-|---|---|---|---|
-| `limit` | integer | 20 | Max conversations to return (max 50) |
+**Query parameters**: Standard RestMeta pagination (`limit`, `page`, `order_by`).
 
 **Response**:
 
@@ -135,13 +131,28 @@ List the requesting user's past conversations. Only returns conversations owned 
 
 ```
 GET /api/assistant/conversation/<id>
+GET /api/assistant/conversation/<id>?graph=detail
 ```
 
-Get a conversation with its full message history. Only accessible by the conversation owner.
+Get a conversation. Use `?graph=detail` to include the full message history. Without it, the response contains only the conversation fields (no messages).
 
 **Permission**: `view_admin` + owner
 
-**Response**:
+**Response** (default graph — no messages):
+
+```json
+{
+    "status": true,
+    "data": {
+        "id": 42,
+        "title": "Show me failed jobs",
+        "created": "2026-04-01 14:30:00+00:00",
+        "modified": "2026-04-01 14:32:15+00:00"
+    }
+}
+```
+
+**Response** (`?graph=detail` — includes messages):
 
 ```json
 {
@@ -156,12 +167,15 @@ Get a conversation with its full message history. Only accessible by the convers
                 "id": 1,
                 "role": "user",
                 "content": "Show me failed jobs in the last hour",
+                "tool_calls": null,
+                "blocks": null,
                 "created": "2026-04-01 14:30:00+00:00"
             },
             {
                 "id": 2,
                 "role": "assistant",
                 "content": "I found 3 failed jobs in the last hour...",
+                "tool_calls": null,
                 "blocks": [
                     {"type": "table", "title": "Failed Jobs", "columns": ["ID", "Error"], "rows": [["abc", "timeout"]]}
                 ],
@@ -172,6 +186,7 @@ Get a conversation with its full message history. Only accessible by the convers
                 "role": "tool_result",
                 "content": "",
                 "tool_calls": [{"type": "tool_result", "tool_use_id": "...", "content": "..."}],
+                "blocks": null,
                 "created": "2026-04-01 14:30:03+00:00"
             }
         ]
@@ -181,18 +196,21 @@ Get a conversation with its full message history. Only accessible by the convers
 
 **Message fields**:
 
-| Field | Present on | Description |
-|---|---|---|
-| `content` | All messages | Text content (block fences stripped for assistant messages) |
-| `blocks` | Assistant messages | Pre-parsed structured data blocks (table/chart/stat). Only present when blocks exist. |
-| `tool_calls` | Tool interaction messages | Raw tool_use/tool_result data from the LLM conversation. Only present on tool messages. |
+| Field | Description |
+|---|---|
+| `id` | Message ID |
+| `role` | `user`, `assistant`, `tool_use`, or `tool_result` |
+| `content` | Text content. For assistant messages, block fences are already stripped. |
+| `tool_calls` | Raw tool_use/tool_result data. `null` for non-tool messages. |
+| `blocks` | Pre-parsed structured data blocks (table/chart/stat). `null` when not present. Stored at write time — never re-parsed on read. |
+| `created` | ISO timestamp |
 
-**Response** (not found / not owner — HTTP 404):
+**Response** (not found or not owner — HTTP 404):
 
 ```json
 {
     "status": false,
-    "error": "Conversation not found"
+    "error": "not found"
 }
 ```
 
@@ -204,9 +222,9 @@ Get a conversation with its full message history. Only accessible by the convers
 DELETE /api/assistant/conversation/<id>
 ```
 
-Delete a conversation and all its messages. Only the conversation owner can delete.
+Delete a conversation and all its messages. The conversation owner or any user with `view_admin` can delete.
 
-**Permission**: `view_admin` + owner
+**Permission**: `view_admin` + owner (via `CAN_DELETE`)
 
 **Response**:
 
@@ -216,12 +234,12 @@ Delete a conversation and all its messages. Only the conversation owner can dele
 }
 ```
 
-**Response** (not found / not owner — HTTP 404):
+**Response** (not found or not owner — HTTP 404):
 
 ```json
 {
     "status": false,
-    "error": "Conversation not found"
+    "error": "not found"
 }
 ```
 

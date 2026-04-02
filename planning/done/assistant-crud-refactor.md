@@ -87,3 +87,43 @@ Replace hand-rolled conversation endpoints with standard CRUD using RestMeta per
 
 - `docs/web_developer/assistant/README.md` — Update conversation detail response format (blocks on messages, graph param)
 - `docs/django_developer/assistant/README.md` — Note blocks field on Message model
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-04-02
+
+### What Was Built
+
+Replaced hand-rolled conversation list/detail/delete endpoints with standard RestMeta CRUD via `Conversation.on_rest_request()`. Blocks are now parsed and stored at write time on `Message.blocks` instead of re-parsed on every read.
+
+### Files Changed
+
+- `mojo/apps/assistant/models/conversation.py` — Added `blocks` JSONField on Message; updated Conversation RestMeta with `"owner"` in VIEW_PERMS, `CAN_DELETE=True`, and `detail` graph with nested messages
+- `mojo/apps/assistant/services/agent.py` — Store `content=clean_text` and `blocks=blocks_list` at write time in both `run_assistant()` and `run_assistant_ws()`
+- `mojo/apps/assistant/rest/assistant.py` — Replaced 3 hand-rolled endpoints with single `on_conversation` using `@md.uses_model_security(Conversation)`
+- `mojo/apps/assistant/migrations/0002_message_blocks.py` — Migration for new blocks field
+
+### Tests
+
+- `tests/test_assistant/2_test_conversations.py` — 9 tests covering admin-sees-all, owner-only list, detail with messages+blocks, owner delete, non-owner denied, blocks stored at write time
+- `tests/test_assistant/3_test_live_assistant.py` — Updated to use `?graph=detail` for message history
+- Run: `bin/run_tests -t test_assistant`
+
+### Docs Updated
+
+- `docs/django_developer/assistant/README.md` — RestMeta config, blocks field, write-time parsing
+- `docs/web_developer/assistant/README.md` — Updated list/detail/delete endpoint docs, `?graph=detail`, response examples
+
+### Security Review
+
+- No injection risk in blocks JSONField
+- POST /api/assistant unchanged and properly gated
+- Suggestion: add explicit `DELETE_PERMS` and domain category permission for hardening (not blocking)
+- Suggestion: confirm tool_calls payloads don't contain sensitive internals for non-admin owners
+
+### Follow-up
+
+- Consider adding domain category permission (e.g. `"assistant"`) to VIEW_PERMS per project convention
+- Consider adding explicit `DELETE_PERMS = ["view_admin", "owner"]` for auditability
+- Pre-existing test failure in `test_realtime/basic.py:159` (Redis key isolation) — unrelated
