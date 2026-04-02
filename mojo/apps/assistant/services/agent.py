@@ -11,11 +11,44 @@ Flow:
     5. Store assistant response as Message(s)
     6. Return response dict
 """
+import re
 import ujson
 from mojo.helpers.settings import settings
 from mojo.helpers import logit
 
 logger = logit.get_logger(__name__, "assistant.log")
+
+# Regex to extract ```assistant_block ... ``` fences from LLM output
+_BLOCK_RE = re.compile(
+    r"```assistant_block\s*\n(.+?)\n\s*```",
+    re.DOTALL,
+)
+
+VALID_BLOCK_TYPES = {"table", "chart", "stat"}
+
+
+def _parse_blocks(text):
+    """
+    Extract structured data blocks from LLM response text.
+
+    Returns (clean_text, blocks) where clean_text has the fences removed
+    and blocks is a list of parsed dicts.
+    """
+    blocks = []
+    for match in _BLOCK_RE.finditer(text):
+        raw = match.group(1).strip()
+        try:
+            block = ujson.loads(raw)
+            if isinstance(block, dict) and block.get("type") in VALID_BLOCK_TYPES:
+                blocks.append(block)
+        except Exception:
+            logger.warning("Failed to parse assistant_block: %s", raw[:200])
+
+    # Remove the fences from the text
+    clean = _BLOCK_RE.sub("", text).strip()
+    # Collapse multiple blank lines left by removed blocks
+    clean = re.sub(r"\n{3,}", "\n\n", clean)
+    return clean, blocks
 
 
 SYSTEM_PROMPT = """You are an admin assistant for a web application platform. You help administrators query and manage their system through natural language.
@@ -30,6 +63,43 @@ You have access to tools that let you query security incidents, events, jobs, us
 - Bound your queries: use reasonable time ranges and limits. Don't query everything at once.
 - Never expose passwords, auth keys, or other secrets — the tools already filter these out.
 - If you don't have a tool for what the user is asking, say so clearly.
+
+## Structured Data Blocks
+
+When your response includes data that would be better shown as a table, chart, or stat card, include it as a structured JSON block using this exact format:
+
+```assistant_block
+{"type": "table", "title": "Failed Jobs", "columns": ["ID", "Function", "Error"], "rows": [["abc", "send_email", "timeout"]]}
+```
+
+Write your narrative text around the blocks normally. The blocks are extracted and rendered as visual components by the frontend.
+
+### Block Types
+
+**table** — for lists of records, query results, comparisons:
+```assistant_block
+{"type": "table", "title": "Open Incidents", "columns": ["ID", "Category", "Priority", "Status"], "rows": [[1, "auth", 8, "new"], [2, "ossec", 3, "investigating"]]}
+```
+
+**chart** — for time-series, trends, distributions:
+```assistant_block
+{"type": "chart", "chart_type": "line", "title": "Events (24h)", "labels": ["00:00", "06:00", "12:00", "18:00"], "series": [{"name": "events", "values": [12, 45, 32, 18]}]}
+```
+Supported chart_type values: line, bar, pie, area.
+
+**stat** — for single key metrics, counts, rates:
+```assistant_block
+{"type": "stat", "items": [{"label": "Open Incidents", "value": 42}, {"label": "Failed Jobs (24h)", "value": 7}, {"label": "Active Users", "value": 156}]}
+```
+
+### Rules
+- Always include narrative text — blocks supplement the text, they don't replace it.
+- Use tables for 3+ rows of data. For 1-2 items, just describe them in text.
+- Use stat blocks for dashboard-style overviews (system health, summaries).
+- Use chart blocks when the user asks about trends or when time-series data is available.
+- Keep table rows bounded — show the most relevant 20 rows max, mention the total if there are more.
+- Column names should be human-readable (Title Case).
+- The JSON must be valid and on a single line within the code fence.
 """
 
 
@@ -180,13 +250,14 @@ def run_assistant(user, message, conversation_id=None, on_event=None):
                     if block.get("type") == "text":
                         text_parts.append(block["text"])
 
-                response_text = "\n".join(text_parts) if text_parts else ""
+                raw_text = "\n".join(text_parts) if text_parts else ""
+                response_text, blocks = _parse_blocks(raw_text)
 
-                # Store assistant message
+                # Store full response (with block fences) for audit
                 Message.objects.create(
                     conversation=conversation,
                     role="assistant",
-                    content=response_text,
+                    content=raw_text,
                     tool_calls=result["content"] if any(
                         b.get("type") == "tool_use" for b in result["content"]
                     ) else None,
@@ -194,6 +265,7 @@ def run_assistant(user, message, conversation_id=None, on_event=None):
 
                 return {
                     "response": response_text,
+                    "blocks": blocks,
                     "conversation_id": conversation.pk,
                     "tool_calls_made": tool_calls_made,
                 }
@@ -326,12 +398,14 @@ def run_assistant_ws(user, message, conversation_id, on_event=None):
 
             if stop_reason != "tool_use":
                 text_parts = [b["text"] for b in result["content"] if b.get("type") == "text"]
-                response_text = "\n".join(text_parts) if text_parts else ""
+                raw_text = "\n".join(text_parts) if text_parts else ""
+                response_text, blocks = _parse_blocks(raw_text)
                 Message.objects.create(
-                    conversation=conversation, role="assistant", content=response_text,
+                    conversation=conversation, role="assistant", content=raw_text,
                 )
                 return {
                     "response": response_text,
+                    "blocks": blocks,
                     "conversation_id": conversation.pk,
                     "tool_calls_made": tool_calls_made,
                 }

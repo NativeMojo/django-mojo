@@ -141,10 +141,13 @@ def execute_assistant_job(job):
         if "error" in result:
             on_event("error", {"error": result["error"]})
         else:
-            on_event("response", {
+            response_data = {
                 "response": result["response"],
                 "tool_calls_made": result.get("tool_calls_made", []),
-            })
+            }
+            if result.get("blocks"):
+                response_data["blocks"] = result["blocks"]
+            on_event("response", response_data)
     except Exception:
         logger.exception("Assistant job failed for user %s", user_id)
         on_event("error", {"error": "Assistant encountered an unexpected error"})
