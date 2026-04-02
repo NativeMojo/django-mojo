@@ -1102,7 +1102,8 @@ def main(opts):
     all_modules = _collect_modules(opts, test_root, parent_test_root)
 
     # Determine if we use rich UI
-    use_rich = HAS_RICH and not opts.plain and not opts.verbose and opts.jobs > 1
+    use_parallel = opts.jobs > 1 and not opts.verbose
+    use_rich = HAS_RICH and not opts.plain and not opts.verbose and use_parallel
 
     # Load module configs and separate serial vs parallel
     parallel_modules = []
@@ -1207,8 +1208,51 @@ def main(opts):
         duration = time.time() - helpers.TEST_RUN.started_at
         _print_summary_rich(display, duration)
 
+    elif use_parallel:
+        # Plain text parallel mode — no rich UI, but still run modules in threads
+        helpers._set_display_fn(None)
+        display_ref = None
+
+        # Run file specs first (sequential)
+        for spec in file_specs:
+            module_name, test_name = spec.split('.', 1)
+            try:
+                run_module_tests_by_name(opts, module_name, test_name)
+            except helpers.TestitAbort:
+                pass
+
+        # Run parallel modules in threads (no display callback — output interleaves)
+        if parallel_modules:
+            with ThreadPoolExecutor(max_workers=opts.jobs) as executor:
+                futures = {}
+                for name in parallel_modules:
+                    tracker = _ModuleTracker(name, 0)
+                    future = executor.submit(
+                        _run_module_in_thread,
+                        opts, name, test_root, parent_test_root, tracker,
+                    )
+                    futures[future] = name
+                for future in as_completed(futures):
+                    try:
+                        future.result()
+                    except Exception:
+                        pass
+
+        # Run serial modules sequentially
+        for name in serial_modules:
+            if _resume.active and not _resume.reached:
+                if name != _resume.module:
+                    continue
+            try:
+                run_tests_for_module(opts, name, test_root, parent_test_root)
+            except helpers.TestitAbort:
+                break
+
+        duration = time.time() - helpers.TEST_RUN.started_at
+        _print_summary_plain(duration)
+
     else:
-        # Plain text mode (sequential or single-threaded)
+        # Plain text sequential mode
         helpers._set_display_fn(None)
         display_ref = None
 

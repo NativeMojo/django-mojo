@@ -14,11 +14,11 @@ def test_metrics_utils_generate_granulariities(opts):
 
     # test utils.generate_granulariities
     result = utils.generate_granularities("days", "months")
-    # write an assert statement to test that result is an array of ["days", "weeks", "months"]
+
     assert result == ["days", "weeks", "months"], "days -> months failed"
 
     result = utils.generate_granularities("minutes", "months")
-    # write an assert statement to test that result is an array of ["days", "weeks", "months"]
+
     assert result == ["minutes", "hours", "days", "weeks", "months"], "minutes -> months failed"
 
 
@@ -29,38 +29,38 @@ def test_metrics_utils_generate_slug(opts):
     now = datetime.datetime(year=2025, month=5, day=2, hour=1, minute=23)
     # test utils.generate_slug
     result = utils.generate_slug("example", now, "minutes")
-    # write an assert statement to test that result is an array of ["days", "weeks", "months"]
+
     assert result == "mets:global::example:min:2025-05-02T01-23", f"minutes slug: {result}"
 
     # test utils.generate_slug
     result = utils.generate_slug("example", now, "hours")
-    # write an assert statement to test that result is an array of ["days", "weeks", "months"]
+
     assert result == "mets:global::example:hr:2025-05-02T01", f"hours slug: {result}"
 
     # test utils.generate_slug
     result = utils.generate_slug("example", now, "days")
-    # write an assert statement to test that result is an array of ["days", "weeks", "months"]
+
     assert result == "mets:global::example:day:2025-05-02", f"days slug: {result}"
 
     # test utils.generate_slug
     result = utils.generate_slug("example", now, "weeks")
-    # write an assert statement to test that result is an array of ["days", "weeks", "months"]
+
     assert result == "mets:global::example:wk:2025-17", f"week slug: {result}"
 
     # test utils.generate_slug
     result = utils.generate_slug("example", now, "months")
-    # write an assert statement to test that result is an array of ["days", "weeks", "months"]
+
     assert result == "mets:global::example:mon:2025-05", f"months slug: {result}"
 
     # test utils.generate_slug
     result = utils.generate_slug("example", now, "years")
-    # write an assert statement to test that result is an array of ["days", "weeks", "months"]
+
     assert result == "mets:global::example:yr:2025", f"years slug: {result}"
 
 
     # test utils.generate_slug
     result = utils.generate_slug("example", now, "years", "mojo")
-    # write an assert statement to test that result is an array of ["days", "weeks", "months"]
+
     assert result == "mets:mojo::example:yr:2025", f"mojo years slug: {result}"
 
 
@@ -73,7 +73,7 @@ def test_metrics_utils_generate_slugs_for_range(opts):
     end = datetime.datetime(year=2025, month=5, day=2, hour=13, minute=0)
     # test utils.generate_slug
     result = utils.generate_slugs_for_range("example", start, end, "hours", "mojo")
-    # write an assert statement to test that result is an array of ["days", "weeks", "months"]
+
     exp = ['mets:mojo::example:hr:2025-05-02T01', 'mets:mojo::example:hr:2025-05-02T02',
         'mets:mojo::example:hr:2025-05-02T03', 'mets:mojo::example:hr:2025-05-02T04',
         'mets:mojo::example:hr:2025-05-02T05', 'mets:mojo::example:hr:2025-05-02T06',
