@@ -115,6 +115,64 @@ def _tool_get_group_activity(params, user):
     ]
 
 
+def _tool_create_group(params, user):
+    from mojo.apps.account.models import Group
+
+    name = params["name"]
+    kind = params.get("kind", "group")
+    parent_id = params.get("parent_id")
+
+    parent = None
+    if parent_id:
+        try:
+            parent = Group.objects.get(pk=parent_id)
+        except Group.DoesNotExist:
+            return {"error": f"Parent group {parent_id} not found"}
+
+    group = Group.objects.create(
+        name=name,
+        kind=kind,
+        parent=parent,
+        is_active=True,
+    )
+
+    return {
+        "ok": True,
+        "group_id": group.pk,
+        "name": group.name,
+        "kind": group.kind,
+        "parent_id": group.parent_id,
+    }
+
+
+def _tool_invite_to_group(params, user):
+    from mojo.apps.account.models import Group
+
+    group_id = params["group_id"]
+    email = params["email"]
+    permissions = params.get("permissions", [])
+
+    try:
+        group = Group.objects.get(pk=group_id)
+    except Group.DoesNotExist:
+        return {"error": f"Group {group_id} not found"}
+
+    ms = group.invite(email)
+    if ms and permissions:
+        perm_dict = {p: True for p in permissions}
+        ms.on_rest_update_jsonfield("permissions", perm_dict)
+        ms.save()
+
+    return {
+        "ok": True,
+        "group_id": group.pk,
+        "group_name": group.name,
+        "email": email,
+        "member_id": ms.pk if ms else None,
+        "permissions": permissions,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Tool definitions
 # ---------------------------------------------------------------------------
@@ -175,5 +233,41 @@ TOOLS = [
         },
         "handler": _tool_get_group_activity,
         "permission": "view_groups",
+    },
+    {
+        "name": "create_group",
+        "description": "Create a new group (organization, merchant, team, etc.). IMPORTANT: Confirm with the user before executing.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Group name"},
+                "kind": {"type": "string", "description": "Group type (e.g. 'org', 'merchant', 'team', 'group')", "default": "group"},
+                "parent_id": {"type": "integer", "description": "Parent group ID (for creating child groups under an org)"},
+            },
+            "required": ["name"],
+        },
+        "handler": _tool_create_group,
+        "permission": "manage_groups",
+        "mutates": True,
+    },
+    {
+        "name": "invite_to_group",
+        "description": "Invite a user to a group by email. Creates the user if they don't exist and sends an invite. IMPORTANT: Confirm with the user before executing.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "group_id": {"type": "integer", "description": "The group to invite the user to"},
+                "email": {"type": "string", "description": "Email address of the user to invite"},
+                "permissions": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Permission keys to grant (e.g. ['manage_users', 'view_security']). Empty for read-only access.",
+                },
+            },
+            "required": ["group_id", "email"],
+        },
+        "handler": _tool_invite_to_group,
+        "permission": "manage_groups",
+        "mutates": True,
     },
 ]
