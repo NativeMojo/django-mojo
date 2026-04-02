@@ -24,9 +24,20 @@ _check_project() {
 }
 
 _ensure_redis() {
-    if ! redis-cli ping > /dev/null 2>&1; then
+    # Look for redis-cli in PATH, then common Homebrew locations
+    REDIS_CLI="redis-cli"
+    REDIS_SERVER="redis-server"
+    for dir in /opt/homebrew/bin /usr/local/bin; do
+        if [ -x "$dir/redis-cli" ]; then
+            REDIS_CLI="$dir/redis-cli"
+            REDIS_SERVER="$dir/redis-server"
+            break
+        fi
+    done
+
+    if ! "$REDIS_CLI" ping > /dev/null 2>&1; then
         echo "==> Starting redis-server in background"
-        redis-server --daemonize yes
+        "$REDIS_SERVER" --daemonize yes
     fi
 }
 

@@ -1,5 +1,18 @@
 ## v1.1.0 - (current)
 
+## v1.1.8 - April 02, 2026
+
+### Added
+- **Parallel test execution (`-j N`)** — `bin/run_tests` now runs up to 3 modules in parallel by default using `ThreadPoolExecutor`. Set a specific thread count with `-j N`. Parallelism is forced to 1 when `-s`, `-v`, or `--continue` is active.
+- **Rich progress UI** — when the `rich` package is installed and `-j > 1`, the runner displays a live per-module progress table. Use `--plain` to disable (e.g. in CI).
+- **Agent mode (`--agent`)** — writes `var/test_failures.json` after the run with structured per-failure data: `test_source`, `file_path`, `line`, `traceback`, and the last 20 lines of the server error log. For use by LLM agents and CI pipelines.
+- **`TESTIT` module config in `__init__.py`** — each test package can declare a `TESTIT` dict to control parallel behaviour (`serial`), app requirements (`requires_apps`), server settings (`server_settings`), and extra guards (`requires_extra`). Read via AST — no import side effects.
+- **`opts.client.last_response`** — `RestClient` now captures every response as an `objict` with `method`, `path`, `status_code`, `body`, `headers`, and `elapsed_ms`. Available immediately after each request for test diagnostics.
+
+### Changed
+- **Thread-safe helpers** — `TEST_RUN` counters use a `Lock`; active test tracking uses `threading.local` so parallel modules do not overwrite each other's state.
+- **`jobs.publish()` channel fallback** — `jobs.publish()` no longer raises when a channel is not configured; it falls back gracefully.
+
 ## v1.1.7 - April 01, 2026
 
 lot of cleanup

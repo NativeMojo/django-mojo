@@ -1,4 +1,4 @@
 TESTIT = {
     "requires_apps": ["mojo.apps.account"],
-    "serial": True,  # bouncer.py uses server_settings()
+    "serial": True,  # oauth.py uses server_settings()
 }
