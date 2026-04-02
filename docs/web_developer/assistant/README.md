@@ -158,7 +158,7 @@ Get a conversation with its full message history. Only accessible by the convers
 }
 ```
 
-**Response** (not found / not owner):
+**Response** (not found / not owner — HTTP 404):
 
 ```json
 {
@@ -184,6 +184,15 @@ Delete a conversation and all its messages. Only the conversation owner can dele
 ```json
 {
     "status": true
+}
+```
+
+**Response** (not found / not owner — HTTP 404):
+
+```json
+{
+    "status": false,
+    "error": "Conversation not found"
 }
 ```
 
