@@ -2,11 +2,11 @@ from testit import helpers as th
 from testit import faker
 import datetime
 
-TEST_USER = "testit"
-TEST_PWORD = "testit##mojo"
+TEST_USER = "metrics_user"
+TEST_PWORD = "metrics##mojo99"
 
-ADMIN_USER = "tadmin"
-ADMIN_PWORD = "testit##mojo"
+ADMIN_USER = "metrics_admin"
+ADMIN_PWORD = "metrics##mojo99"
 
 @th.django_unit_test()
 def test_metrics_utils_generate_granulariities(opts):

@@ -1,45 +1,44 @@
 from testit import helpers as th
 from testit import faker
 
-TEST_USER = "testit"
-TEST_PWORD = "testit##mojo"
+TEST_USER = "auth_user"
+TEST_PWORD = "auth##mojo99"
 
-ADMIN_USER = "tadmin"
-ADMIN_PWORD = "testit##mojo"
+ADMIN_USER = "auth_admin"
+ADMIN_PWORD = "auth##mojo99"
+
+SUPER_USER = "auth_super"
 
 @th.django_unit_setup()
 def setup_users(opts):
     from mojo.apps.account.models import User
     from mojo.decorators.limits import clear_rate_limits
     clear_rate_limits(ip="127.0.0.1")
-    user = User.objects.filter(username=TEST_USER).last()
-    if user is None:
-        user = User(username=TEST_USER, display_name=TEST_USER, email=f"{TEST_USER}@example.com")
-        user.save()
+
+    User.objects.filter(username__in=[TEST_USER, ADMIN_USER, SUPER_USER]).delete()
+
+    user = User(username=TEST_USER, display_name=TEST_USER, email=f"{TEST_USER}@example.com")
+    user.save()
     user.is_email_verified = True
     user.save_password(TEST_PWORD)
     user.remove_all_permissions()
 
-    user = User.objects.filter(username=ADMIN_USER).last()
-    if user is None:
-        user = User(username=ADMIN_USER, display_name=ADMIN_USER, email=f"{ADMIN_USER}@example.com")
-        user.save()
-    user.is_email_verified = True
-    user.remove_permission(["manage_groups"])
-    user.add_permission(["manage_users", "view_global", "view_admin"])
-    user.is_staff = True
-    user.is_superuser = True
-    user.save_password(ADMIN_PWORD)
+    admin = User(username=ADMIN_USER, display_name=ADMIN_USER, email=f"{ADMIN_USER}@example.com")
+    admin.save()
+    admin.is_email_verified = True
+    admin.remove_permission(["manage_groups"])
+    admin.add_permission(["manage_users", "view_global", "view_admin"])
+    admin.is_staff = True
+    admin.is_superuser = True
+    admin.save_password(ADMIN_PWORD)
 
-    user = User.objects.filter(username="admin").last()
-    if user is None:
-        user = User(username="admin", display_name="System Admin", email=f"admin@example.com")
-        user.is_staff = True
-        user.is_superuser = True
-        user.save()
-        user.save_password(ADMIN_PWORD)
-    user.is_email_verified = True
-    user.add_permission(["manage_groups", "manage_users", "view_global", "view_admin"])
+    superuser = User(username=SUPER_USER, display_name="System Admin", email=f"{SUPER_USER}@example.com")
+    superuser.is_staff = True
+    superuser.is_superuser = True
+    superuser.save()
+    superuser.save_password(ADMIN_PWORD)
+    superuser.is_email_verified = True
+    superuser.add_permission(["manage_groups", "manage_users", "view_global", "view_admin"])
 
 
 @th.unit_test("user_jwt_login")

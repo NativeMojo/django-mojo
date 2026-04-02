@@ -11,8 +11,8 @@ from testit import helpers as th
 from unittest import mock
 
 
-TEST_USER = "testit"
-TEST_PWORD = "testit##mojo"
+TEST_USER = "incident_bb_user"
+TEST_PWORD = "incident##mojo99"
 
 
 # =============================================================================

@@ -23,8 +23,8 @@ Contracts enforced:
 from testit import helpers as th
 from testit.helpers import assert_true, assert_eq
 
-TEST_USER = "testit"
-TEST_PWORD = "testit##mojo"
+TEST_USER = "devtrack_user"
+TEST_PWORD = "devtrack##mojo99"
 
 
 def _is_debug():
@@ -40,11 +40,10 @@ def setup_device_testing(opts):
     from mojo.decorators.limits import clear_rate_limits
     clear_rate_limits(ip='127.0.0.1')
 
-    # Ensure the test user exists (may have been flushed between runs)
-    user = User.objects.filter(username=TEST_USER).first()
-    if not user:
-        user = User(username=TEST_USER, display_name=TEST_USER, email=f"{TEST_USER}@example.com")
-        user.save()
+    # Ensure clean test user
+    User.objects.filter(username=TEST_USER).delete()
+    user = User(username=TEST_USER, display_name=TEST_USER, email=f"{TEST_USER}@example.com")
+    user.save()
     user.is_active = True
     user.is_email_verified = True
     user.save_password(TEST_PWORD)

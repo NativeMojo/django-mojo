@@ -1,7 +1,7 @@
 from testit import helpers as th
 from testit import faker
 
-TEST_USER = "testit"
+TEST_USER = "auth_user"
 
 @th.django_unit_test()
 def test_secrets_basic(opts):

@@ -2,11 +2,10 @@ from testit import helpers as th
 from testit import faker
 from unittest.mock import patch, MagicMock
 
-# Use the same test users as other account tests
-TEST_USER = "testit"
-TEST_PWORD = "testit##mojo"
-ADMIN_USER = "tadmin"
-ADMIN_PWORD = "testit##mojo"
+TEST_USER = "push_user"
+TEST_PWORD = "push##mojo99"
+ADMIN_USER = "push_admin"
+ADMIN_PWORD = "push##mojo99"
 
 
 @th.django_unit_setup()
@@ -21,22 +20,31 @@ def setup_push_testing(opts):
     NotificationTemplate.objects.filter(name__startswith='test_').delete()
     NotificationDelivery.objects.filter(user__username__in=[TEST_USER, ADMIN_USER]).delete()
     PushConfig.objects.filter(name__startswith='test_').delete()
+    User.objects.filter(username__in=[TEST_USER, ADMIN_USER]).delete()
+
     # Create test organization
     test_org, _ = Group.objects.get_or_create(
         name='test_org_push',
         kind='organization'
     )
 
-    # Assign test user to organization
-    user = User.objects.get(username=TEST_USER)
+    # Create dedicated test user
+    user = User(username=TEST_USER, email=f"{TEST_USER}@test.com")
+    user.save()
     user.org = test_org
+    user.is_active = True
     user.is_email_verified = True
+    user.save_password(TEST_PWORD)
     user.add_permission("send_notifications")
     user.save()
 
-    # Give admin push config permissions
-    admin = User.objects.get(username=ADMIN_USER)
+    # Create dedicated admin user
+    admin = User(username=ADMIN_USER, email=f"{ADMIN_USER}@test.com")
+    admin.save()
+    admin.is_active = True
     admin.is_email_verified = True
+    admin.is_staff = True
+    admin.save_password(ADMIN_PWORD)
     admin.add_permission(["manage_push_config", "manage_notifications"])
     admin.save()
 

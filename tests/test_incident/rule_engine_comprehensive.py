@@ -17,8 +17,8 @@ from objict import objict
 from django.utils import timezone
 
 
-TEST_USER = "testit"
-TEST_PWORD = "testit##mojo"
+TEST_USER = "incident_engine_user"
+TEST_PWORD = "incident##mojo99"
 
 
 # =============================================================================
