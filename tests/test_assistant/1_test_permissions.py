@@ -157,6 +157,65 @@ def test_tool_handlers_return_bounded_results(opts):
 
 
 @th.django_unit_test()
+def test_parse_blocks_extracts_structured_data(opts):
+    """_parse_blocks should extract assistant_block fences from LLM output."""
+    from mojo.apps.assistant.services.agent import _parse_blocks
+
+    text = """Here are the failed jobs:
+
+```assistant_block
+{"type": "table", "title": "Failed Jobs", "columns": ["ID", "Error"], "rows": [["abc", "timeout"]]}
+```
+
+And here's the trend:
+
+```assistant_block
+{"type": "chart", "chart_type": "line", "title": "Events", "labels": ["Mon", "Tue"], "series": [{"name": "events", "values": [10, 20]}]}
+```
+
+That's the summary."""
+
+    clean, blocks = _parse_blocks(text)
+    assert_eq(len(blocks), 2, f"Expected 2 blocks, got {len(blocks)}")
+    assert_eq(blocks[0]["type"], "table", f"First block should be table, got {blocks[0]['type']}")
+    assert_eq(blocks[1]["type"], "chart", f"Second block should be chart, got {blocks[1]['type']}")
+    assert_true("assistant_block" not in clean,
+                "Block fences should be removed from clean text")
+    assert_true("Here are the failed jobs" in clean,
+                "Narrative text should be preserved")
+    assert_true("That's the summary" in clean,
+                "Trailing text should be preserved")
+
+
+@th.django_unit_test()
+def test_parse_blocks_handles_no_blocks(opts):
+    """_parse_blocks should handle text with no blocks gracefully."""
+    from mojo.apps.assistant.services.agent import _parse_blocks
+
+    text = "Just a plain text response with no structured data."
+    clean, blocks = _parse_blocks(text)
+    assert_eq(len(blocks), 0, "Expected 0 blocks for plain text")
+    assert_eq(clean, text, "Clean text should be unchanged")
+
+
+@th.django_unit_test()
+def test_parse_blocks_rejects_invalid_types(opts):
+    """_parse_blocks should reject blocks with unknown types."""
+    from mojo.apps.assistant.services.agent import _parse_blocks
+
+    text = """Some text.
+
+```assistant_block
+{"type": "malicious", "data": "bad"}
+```
+
+More text."""
+
+    clean, blocks = _parse_blocks(text)
+    assert_eq(len(blocks), 0, "Invalid block types should be rejected")
+
+
+@th.django_unit_test()
 def test_user_tool_excludes_sensitive_fields(opts):
     """User tools should never include password, auth_key, or onetime_code."""
     from mojo.apps.assistant.services.tools.users import _safe_user_dict

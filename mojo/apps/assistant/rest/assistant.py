@@ -33,14 +33,16 @@ def on_assistant_message(request):
             "conversation_id": result.get("conversation_id"),
         }, status=status_code)
 
-    return JsonResponse({
-        "status": True,
-        "data": {
-            "response": result["response"],
-            "conversation_id": result["conversation_id"],
-            "tool_calls_made": result.get("tool_calls_made", []),
-        },
-    })
+    data = {
+        "response": result["response"],
+        "conversation_id": result["conversation_id"],
+        "tool_calls_made": result.get("tool_calls_made", []),
+    }
+    blocks = result.get("blocks")
+    if blocks:
+        data["blocks"] = blocks
+
+    return JsonResponse({"status": True, "data": data})
 
 
 @md.GET('conversation')
