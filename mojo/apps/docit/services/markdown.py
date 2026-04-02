@@ -3,13 +3,17 @@ from pygments import highlight
 from pygments.lexers import get_lexer_by_name
 from pygments.styles import get_style_by_name
 from pygments.formatters import HtmlFormatter
+from pygments.util import ClassNotFound
 
 
 class HighlightRenderer(mistune.HTMLRenderer):
     def block_code(self, code, info=None):
         if not info:
             return f'\n<pre>{mistune.escape(code)}</pre>\n'
-        lexer = get_lexer_by_name(info, stripall=True)
+        try:
+            lexer = get_lexer_by_name(info, stripall=True)
+        except ClassNotFound:
+            return f'\n<pre>{mistune.escape(code)}</pre>\n'
         formatter = HtmlFormatter(
             linenos=False,
             cssclass="highlight",
