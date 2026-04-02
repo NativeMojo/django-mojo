@@ -3655,6 +3655,39 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#parallel-execution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Parallel Execution
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rich-progress-ui" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rich Progress UI
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#agent-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Agent Mode
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#json-config" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3667,6 +3700,17 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#testit-module-config" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TESTIT Module Config
+      
+    </span>
+  </a>
   
 </li>
       
@@ -3834,56 +3878,125 @@ It is intentionally lightweight so both humans and LLM agents can reason about a
   <code>./bin/run_tests --onlymojo</code> · <code>./bin/run_tests --nomojo</code></li>
 <li>See every declared <code>@requires_extra</code> flag (static scan only, no tests executed):
   <code>./bin/run_tests --list-extras</code></li>
+<li>Run modules in parallel (default 3 threads):
+  <code>./bin/run_tests -j 4</code></li>
+<li>Force plain text output and disable the rich progress UI:
+  <code>./bin/run_tests --plain</code></li>
+<li>Write a structured failure report for LLM agents:
+  <code>./bin/run_tests --agent</code></li>
 </ul>
 <p>All arguments are passed directly to <code>bin/testit.py</code>. If the server is already running, <code>bin/run_tests</code> will not stop it after the suite completes.</p>
+<h3 id="parallel-execution">Parallel Execution<a class="headerlink" href="#parallel-execution" title="Permanent link">&para;</a></h3>
+<p>By default the runner executes up to 3 modules in parallel using <code>ThreadPoolExecutor</code>. Each parallel module gets its own <code>RestClient</code> instance. Parallelism is automatically forced to 1 when <code>-s</code> (stop on fail), <code>-v</code> (verbose), or <code>--continue</code> (resume) is active — those modes require sequential output.</p>
+<p>Set a specific thread count with <code>-j N</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>./bin/run_tests<span class="w"> </span>-j<span class="w"> </span><span class="m">1</span><span class="w">   </span><span class="c1"># fully sequential (same as --plain behaviour)</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>./bin/run_tests<span class="w"> </span>-j<span class="w"> </span><span class="m">6</span><span class="w">   </span><span class="c1"># run up to 6 modules at once</span>
+</code></pre></div>
+<p>Modules marked <code>serial</code> in their <code>TESTIT</code> config always run sequentially after all parallel modules complete, regardless of <code>-j</code>.</p>
+<h3 id="rich-progress-ui">Rich Progress UI<a class="headerlink" href="#rich-progress-ui" title="Permanent link">&para;</a></h3>
+<p>When <code>rich</code> is installed and <code>-j</code> is greater than 1, the runner shows a live per-module progress table. Use <code>--plain</code> to disable it (useful in CI environments that do not handle ANSI codes, or when piping output):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>./bin/run_tests<span class="w"> </span>--plain
+</code></pre></div>
+<h3 id="agent-mode">Agent Mode<a class="headerlink" href="#agent-mode" title="Permanent link">&para;</a></h3>
+<p><code>--agent</code> writes <code>var/test_failures.json</code> after the run. The report includes:</p>
+<ul>
+<li>Overall <code>total</code>, <code>passed</code>, <code>failed</code>, <code>skipped</code>, <code>duration</code></li>
+<li>Per-failure entries with <code>test_name</code>, <code>function</code>, <code>status</code>, <code>assertion</code>, <code>test_source</code>, <code>file_path</code>, <code>line</code>, and <code>traceback</code> (errors only)</li>
+<li>Last 20 lines of the server error log for each failure</li>
+</ul>
+<p>Use this flag when invoking the test runner from an LLM agent or CI pipeline that needs structured failure data rather than terminal output.</p>
 <h3 id="json-config">JSON Config<a class="headerlink" href="#json-config" title="Permanent link">&para;</a></h3>
 <p>CLI flags always win, but you can seed defaults through a JSON file:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>./bin/testit.py<span class="w"> </span>--config<span class="w"> </span>docs/testit/examples/testit.config.json<span class="w"> </span>--extra<span class="w"> </span>run-backfill
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>./bin/testit.py<span class="w"> </span>--config<span class="w"> </span>docs/testit/examples/testit.config.json<span class="w"> </span>--extra<span class="w"> </span>run-backfill
 </code></pre></div>
 <p>Supported keys:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">&quot;tests&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;test_accounts&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;test_helpers.cron&quot;</span><span class="p">],</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nt">&quot;ignore&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;test_aws&quot;</span><span class="p">],</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span><span class="nt">&quot;stop_on_fail&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span><span class="nt">&quot;show_errors&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span><span class="nt">&quot;verbose&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">  </span><span class="nt">&quot;nomojo&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">  </span><span class="nt">&quot;module&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;test_accounts&quot;</span><span class="p">,</span>
-<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">  </span><span class="nt">&quot;extra&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;run-backfill,cleanup&quot;</span>
-<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">&quot;tests&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;test_accounts&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;test_helpers.cron&quot;</span><span class="p">],</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span><span class="nt">&quot;ignore&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;test_aws&quot;</span><span class="p">],</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span><span class="nt">&quot;stop_on_fail&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">  </span><span class="nt">&quot;show_errors&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">  </span><span class="nt">&quot;verbose&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">  </span><span class="nt">&quot;nomojo&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">  </span><span class="nt">&quot;module&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;test_accounts&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">  </span><span class="nt">&quot;extra&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;run-backfill,cleanup&quot;</span>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="p">}</span>
 </code></pre></div>
 <ul>
 <li><code>tests</code> and <code>ignore</code> accept strings or lists.</li>
-<li><code>show_errors</code> is equivalent to <code>-e</code>.  </li>
+<li><code>show_errors</code> is equivalent to <code>-e</code>.</li>
 <li><code>extra</code> accepts either a comma-separated string or a JSON list; at runtime it is exposed as <code>opts.extra_list</code> (and <code>opts.extra</code> remains a comma-joined string for legacy helpers).</li>
 <li>Supply fewer flags in automation scripts; let interactive runs override what is needed.</li>
 </ul>
 <hr />
+<h2 id="testit-module-config">TESTIT Module Config<a class="headerlink" href="#testit-module-config" title="Permanent link">&para;</a></h2>
+<p>Each test package can declare a <code>TESTIT</code> dict in its <code>__init__.py</code> to control how the runner handles it. The runner reads the file via AST — the module is never imported during config loading, so there are no side effects.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># tests/test_accounts/__init__.py</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="n">TESTIT</span> <span class="o">=</span> <span class="p">{</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>    <span class="s2">&quot;serial&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>                          <span class="c1"># do not run this module in parallel</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>    <span class="s2">&quot;requires_apps&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;mojo.apps.account&quot;</span><span class="p">],</span>  <span class="c1"># skip if app is not installed</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>    <span class="s2">&quot;server_settings&quot;</span><span class="p">:</span> <span class="p">{},</span>                   <span class="c1"># dict of Django settings to apply before the module runs</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>    <span class="s2">&quot;requires_extra&quot;</span><span class="p">:</span> <span class="p">[],</span>                    <span class="c1"># list of --extra flags required to run this module</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="p">}</span>
+</code></pre></div>
+<p>Supported keys:</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>serial</code></td>
+<td><code>False</code></td>
+<td>Force this module to run sequentially, after all parallel modules complete. Use for modules that call <code>th.server_settings()</code> mid-run, or that rely on signals bound to the main thread.</td>
+</tr>
+<tr>
+<td><code>requires_apps</code></td>
+<td><code>[]</code></td>
+<td>List of Django app labels. The module is skipped entirely if any listed app is not in <code>INSTALLED_APPS</code>.</td>
+</tr>
+<tr>
+<td><code>server_settings</code></td>
+<td><code>{}</code></td>
+<td>Django settings dict applied before the module starts (same mechanism as <code>th.server_settings()</code>).</td>
+</tr>
+<tr>
+<td><code>requires_extra</code></td>
+<td><code>[]</code></td>
+<td>List of <code>--extra</code> flags. The module is skipped if none of the flags are present.</td>
+</tr>
+</tbody>
+</table>
+<p>All keys are optional. A missing <code>__init__.py</code> or a missing <code>TESTIT</code> assignment uses defaults (parallel, no app requirements, no server settings).</p>
+<hr />
 <h2 id="decorators-shared-state">Decorators &amp; Shared State<a class="headerlink" href="#decorators-shared-state" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">testit</span><span class="w"> </span><span class="kn">import</span> <span class="n">helpers</span> <span class="k">as</span> <span class="n">th</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="nd">@th</span><span class="o">.</span><span class="n">unit_setup</span><span class="p">()</span>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="k">def</span><span class="w"> </span><span class="nf">setup_shared</span><span class="p">(</span><span class="n">opts</span><span class="p">):</span>
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Runs once before every test in this file (no Django ORM).&quot;&quot;&quot;</span>
-<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>    <span class="n">opts</span><span class="o">.</span><span class="n">base_payload</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;Acme Co&quot;</span><span class="p">}</span>
-<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>    <span class="n">opts</span><span class="o">.</span><span class="n">expected_slug</span> <span class="o">=</span> <span class="s2">&quot;acme-co&quot;</span>
-<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>
-<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="nd">@th</span><span class="o">.</span><span class="n">django_unit_setup</span><span class="p">()</span>
-<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="k">def</span><span class="w"> </span><span class="nf">setup_django_records</span><span class="p">(</span><span class="n">opts</span><span class="p">):</span>
-<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Runs with Django configured; keep imports inside the function.&quot;&quot;&quot;</span>
-<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>    <span class="kn">from</span><span class="w"> </span><span class="nn">django.contrib.auth</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_user_model</span>
-<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a>    <span class="n">User</span> <span class="o">=</span> <span class="n">get_user_model</span><span class="p">()</span>
-<a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a>    <span class="n">opts</span><span class="o">.</span><span class="n">admin</span> <span class="o">=</span> <span class="n">User</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">create_superuser</span><span class="p">(</span><span class="s2">&quot;admin&quot;</span><span class="p">,</span> <span class="s2">&quot;admin@example.com&quot;</span><span class="p">,</span> <span class="s2">&quot;secret&quot;</span><span class="p">)</span>
-<a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a>
-<a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a><span class="nd">@th</span><span class="o">.</span><span class="n">unit_test</span><span class="p">(</span><span class="s2">&quot;slug is normalized&quot;</span><span class="p">)</span>
-<a id="__codelineno-3-17" name="__codelineno-3-17" href="#__codelineno-3-17"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_slugify</span><span class="p">(</span><span class="n">opts</span><span class="p">):</span>
-<a id="__codelineno-3-18" name="__codelineno-3-18" href="#__codelineno-3-18"></a>    <span class="n">result</span> <span class="o">=</span> <span class="n">slugify</span><span class="p">(</span><span class="n">opts</span><span class="o">.</span><span class="n">base_payload</span><span class="p">[</span><span class="s2">&quot;name&quot;</span><span class="p">])</span>
-<a id="__codelineno-3-19" name="__codelineno-3-19" href="#__codelineno-3-19"></a>    <span class="k">assert</span> <span class="n">result</span> <span class="o">==</span> <span class="n">opts</span><span class="o">.</span><span class="n">expected_slug</span><span class="p">,</span> <span class="s2">&quot;slugify should normalize company names&quot;</span>
-<a id="__codelineno-3-20" name="__codelineno-3-20" href="#__codelineno-3-20"></a>
-<a id="__codelineno-3-21" name="__codelineno-3-21" href="#__codelineno-3-21"></a><span class="nd">@th</span><span class="o">.</span><span class="n">django_unit_test</span><span class="p">()</span>
-<a id="__codelineno-3-22" name="__codelineno-3-22" href="#__codelineno-3-22"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_admin_can_login</span><span class="p">(</span><span class="n">opts</span><span class="p">):</span>
-<a id="__codelineno-3-23" name="__codelineno-3-23" href="#__codelineno-3-23"></a>    <span class="n">response</span> <span class="o">=</span> <span class="n">opts</span><span class="o">.</span><span class="n">client</span><span class="o">.</span><span class="n">post</span><span class="p">(</span><span class="s2">&quot;/api/login&quot;</span><span class="p">,</span> <span class="n">json</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;username&quot;</span><span class="p">:</span> <span class="s2">&quot;admin&quot;</span><span class="p">,</span> <span class="s2">&quot;password&quot;</span><span class="p">:</span> <span class="s2">&quot;secret&quot;</span><span class="p">})</span>
-<a id="__codelineno-3-24" name="__codelineno-3-24" href="#__codelineno-3-24"></a>    <span class="k">assert</span> <span class="n">response</span><span class="o">.</span><span class="n">status_code</span> <span class="o">==</span> <span class="mi">200</span><span class="p">,</span> <span class="s2">&quot;admin login must succeed&quot;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">testit</span><span class="w"> </span><span class="kn">import</span> <span class="n">helpers</span> <span class="k">as</span> <span class="n">th</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="nd">@th</span><span class="o">.</span><span class="n">unit_setup</span><span class="p">()</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="k">def</span><span class="w"> </span><span class="nf">setup_shared</span><span class="p">(</span><span class="n">opts</span><span class="p">):</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Runs once before every test in this file (no Django ORM).&quot;&quot;&quot;</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>    <span class="n">opts</span><span class="o">.</span><span class="n">base_payload</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;Acme Co&quot;</span><span class="p">}</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>    <span class="n">opts</span><span class="o">.</span><span class="n">expected_slug</span> <span class="o">=</span> <span class="s2">&quot;acme-co&quot;</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="nd">@th</span><span class="o">.</span><span class="n">django_unit_setup</span><span class="p">()</span>
+<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="k">def</span><span class="w"> </span><span class="nf">setup_django_records</span><span class="p">(</span><span class="n">opts</span><span class="p">):</span>
+<a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Runs with Django configured; keep imports inside the function.&quot;&quot;&quot;</span>
+<a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a>    <span class="kn">from</span><span class="w"> </span><span class="nn">django.contrib.auth</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_user_model</span>
+<a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a>    <span class="n">User</span> <span class="o">=</span> <span class="n">get_user_model</span><span class="p">()</span>
+<a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a>    <span class="n">opts</span><span class="o">.</span><span class="n">admin</span> <span class="o">=</span> <span class="n">User</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">create_superuser</span><span class="p">(</span><span class="s2">&quot;admin&quot;</span><span class="p">,</span> <span class="s2">&quot;admin@example.com&quot;</span><span class="p">,</span> <span class="s2">&quot;secret&quot;</span><span class="p">)</span>
+<a id="__codelineno-6-15" name="__codelineno-6-15" href="#__codelineno-6-15"></a>
+<a id="__codelineno-6-16" name="__codelineno-6-16" href="#__codelineno-6-16"></a><span class="nd">@th</span><span class="o">.</span><span class="n">unit_test</span><span class="p">(</span><span class="s2">&quot;slug is normalized&quot;</span><span class="p">)</span>
+<a id="__codelineno-6-17" name="__codelineno-6-17" href="#__codelineno-6-17"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_slugify</span><span class="p">(</span><span class="n">opts</span><span class="p">):</span>
+<a id="__codelineno-6-18" name="__codelineno-6-18" href="#__codelineno-6-18"></a>    <span class="n">result</span> <span class="o">=</span> <span class="n">slugify</span><span class="p">(</span><span class="n">opts</span><span class="o">.</span><span class="n">base_payload</span><span class="p">[</span><span class="s2">&quot;name&quot;</span><span class="p">])</span>
+<a id="__codelineno-6-19" name="__codelineno-6-19" href="#__codelineno-6-19"></a>    <span class="k">assert</span> <span class="n">result</span> <span class="o">==</span> <span class="n">opts</span><span class="o">.</span><span class="n">expected_slug</span><span class="p">,</span> <span class="s2">&quot;slugify should normalize company names&quot;</span>
+<a id="__codelineno-6-20" name="__codelineno-6-20" href="#__codelineno-6-20"></a>
+<a id="__codelineno-6-21" name="__codelineno-6-21" href="#__codelineno-6-21"></a><span class="nd">@th</span><span class="o">.</span><span class="n">django_unit_test</span><span class="p">()</span>
+<a id="__codelineno-6-22" name="__codelineno-6-22" href="#__codelineno-6-22"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_admin_can_login</span><span class="p">(</span><span class="n">opts</span><span class="p">):</span>
+<a id="__codelineno-6-23" name="__codelineno-6-23" href="#__codelineno-6-23"></a>    <span class="n">response</span> <span class="o">=</span> <span class="n">opts</span><span class="o">.</span><span class="n">client</span><span class="o">.</span><span class="n">post</span><span class="p">(</span><span class="s2">&quot;/api/login&quot;</span><span class="p">,</span> <span class="n">json</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;username&quot;</span><span class="p">:</span> <span class="s2">&quot;admin&quot;</span><span class="p">,</span> <span class="s2">&quot;password&quot;</span><span class="p">:</span> <span class="s2">&quot;secret&quot;</span><span class="p">})</span>
+<a id="__codelineno-6-24" name="__codelineno-6-24" href="#__codelineno-6-24"></a>    <span class="k">assert</span> <span class="n">response</span><span class="o">.</span><span class="n">status_code</span> <span class="o">==</span> <span class="mi">200</span><span class="p">,</span> <span class="s2">&quot;admin login must succeed&quot;</span>
 </code></pre></div>
 <ul>
 <li><code>opts</code> persists for the module. Store objects, IDs, and flags for reuse.</li>
@@ -3894,14 +4007,14 @@ It is intentionally lightweight so both humans and LLM agents can reason about a
 <hr />
 <h2 id="gating-expensive-or-destructive-tests">Gating Expensive or Destructive Tests<a class="headerlink" href="#gating-expensive-or-destructive-tests" title="Permanent link">&para;</a></h2>
 <p>Use <code>--extra</code> for operator intent and <code>@requires_extra</code> for explicit guards:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">testit</span><span class="w"> </span><span class="kn">import</span> <span class="n">helpers</span> <span class="k">as</span> <span class="n">th</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="nd">@th</span><span class="o">.</span><span class="n">requires_extra</span><span class="p">(</span><span class="s2">&quot;run-backfill&quot;</span><span class="p">)</span>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="nd">@th</span><span class="o">.</span><span class="n">django_unit_test</span><span class="p">()</span>
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_backfill_job</span><span class="p">(</span><span class="n">opts</span><span class="p">):</span>
-<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Do not enqueue expensive work unless --extra run-backfill is present.&quot;&quot;&quot;</span>
-<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>    <span class="n">response</span> <span class="o">=</span> <span class="n">opts</span><span class="o">.</span><span class="n">client</span><span class="o">.</span><span class="n">post</span><span class="p">(</span><span class="s2">&quot;/api/jobs/backfill&quot;</span><span class="p">,</span> <span class="n">json</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;account_id&quot;</span><span class="p">:</span> <span class="n">opts</span><span class="o">.</span><span class="n">account_id</span><span class="p">})</span>
-<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>    <span class="k">assert</span> <span class="n">response</span><span class="o">.</span><span class="n">status_code</span> <span class="o">==</span> <span class="mi">202</span><span class="p">,</span> <span class="s2">&quot;Backfill should enqueue when requested&quot;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">testit</span><span class="w"> </span><span class="kn">import</span> <span class="n">helpers</span> <span class="k">as</span> <span class="n">th</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="nd">@th</span><span class="o">.</span><span class="n">requires_extra</span><span class="p">(</span><span class="s2">&quot;run-backfill&quot;</span><span class="p">)</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="nd">@th</span><span class="o">.</span><span class="n">django_unit_test</span><span class="p">()</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_backfill_job</span><span class="p">(</span><span class="n">opts</span><span class="p">):</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Do not enqueue expensive work unless --extra run-backfill is present.&quot;&quot;&quot;</span>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>    <span class="n">response</span> <span class="o">=</span> <span class="n">opts</span><span class="o">.</span><span class="n">client</span><span class="o">.</span><span class="n">post</span><span class="p">(</span><span class="s2">&quot;/api/jobs/backfill&quot;</span><span class="p">,</span> <span class="n">json</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;account_id&quot;</span><span class="p">:</span> <span class="n">opts</span><span class="o">.</span><span class="n">account_id</span><span class="p">})</span>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>    <span class="k">assert</span> <span class="n">response</span><span class="o">.</span><span class="n">status_code</span> <span class="o">==</span> <span class="mi">202</span><span class="p">,</span> <span class="s2">&quot;Backfill should enqueue when requested&quot;</span>
 </code></pre></div>
 <ul>
 <li>Without the matching flag the test is logged as <code>SKIPPED</code> and not counted.</li>
@@ -3915,13 +4028,13 @@ It is intentionally lightweight so both humans and LLM agents can reason about a
 <ul>
 <li><strong>Every assert must include a failure message.</strong> No bare <code>assert x</code> — always <code>assert x, "reason"</code>. The message must state what was expected, what the inputs were, or why the assertion matters. Silent failures waste debugging time for both humans and agents.</li>
 </ul>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># Bad — silent on failure</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="k">assert</span> <span class="n">resp</span><span class="o">.</span><span class="n">status_code</span> <span class="o">==</span> <span class="mi">200</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="k">assert</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="nb">list</span><span class="p">)</span>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>
-<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="c1"># Good — tells you exactly what went wrong</span>
-<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="k">assert</span> <span class="n">resp</span><span class="o">.</span><span class="n">status_code</span> <span class="o">==</span> <span class="mi">200</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;Expected 200, got </span><span class="si">{</span><span class="n">resp</span><span class="o">.</span><span class="n">status_code</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">resp</span><span class="o">.</span><span class="n">json</span><span class="si">}</span><span class="s2">&quot;</span>
-<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="k">assert</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="nb">list</span><span class="p">),</span> <span class="sa">f</span><span class="s2">&quot;Expected list, got </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">data</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">data</span><span class="si">!r}</span><span class="s2">&quot;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># Bad — silent on failure</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="k">assert</span> <span class="n">resp</span><span class="o">.</span><span class="n">status_code</span> <span class="o">==</span> <span class="mi">200</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="k">assert</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="nb">list</span><span class="p">)</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="c1"># Good — tells you exactly what went wrong</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="k">assert</span> <span class="n">resp</span><span class="o">.</span><span class="n">status_code</span> <span class="o">==</span> <span class="mi">200</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;Expected 200, got </span><span class="si">{</span><span class="n">resp</span><span class="o">.</span><span class="n">status_code</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">resp</span><span class="o">.</span><span class="n">json</span><span class="si">}</span><span class="s2">&quot;</span>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="k">assert</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="nb">list</span><span class="p">),</span> <span class="sa">f</span><span class="s2">&quot;Expected list, got </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">data</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">data</span><span class="si">!r}</span><span class="s2">&quot;</span>
 </code></pre></div>
 <ul>
 <li><strong>No <code>print()</code> debugging.</strong> Use <code>-v</code> or <code>-e</code> for deeper logs.</li>
@@ -3933,12 +4046,12 @@ It is intentionally lightweight so both humans and LLM agents can reason about a
 <h2 id="accessing-response-data-objict-key-collision">Accessing Response Data — objict Key Collision<a class="headerlink" href="#accessing-response-data-objict-key-collision" title="Permanent link">&para;</a></h2>
 <p>Testit parses all HTTP responses into <code>objict</code>, a <code>dict</code> subclass with attribute access. Because <code>objict</code> inherits from <code>dict</code>, <strong>attribute access for keys that share a name with a built-in dict method will silently return the method instead of the value.</strong></p>
 <p>Affected names: <code>values</code>, <code>keys</code>, <code>items</code>, <code>get</code>, <code>update</code>, <code>pop</code>, <code>clear</code>, <code>copy</code>, <code>setdefault</code>.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># WRONG — data[&quot;values&quot;] is [1, 2, 3] but data.values is dict.values (a method)</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="k">assert</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">resp</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">values</span><span class="p">,</span> <span class="nb">list</span><span class="p">)</span>   <span class="c1"># always False — dict method, not your key</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="c1"># CORRECT — use bracket notation for any key that shadows a dict built-in</span>
-<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="k">assert</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">resp</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">data</span><span class="p">[</span><span class="s2">&quot;values&quot;</span><span class="p">],</span> <span class="nb">list</span><span class="p">),</span> \
-<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>    <span class="sa">f</span><span class="s2">&quot;Expected list, got </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">resp</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">data</span><span class="p">[</span><span class="s1">&#39;values&#39;</span><span class="p">])</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">&quot;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># WRONG — data[&quot;values&quot;] is [1, 2, 3] but data.values is dict.values (a method)</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="k">assert</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">resp</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">values</span><span class="p">,</span> <span class="nb">list</span><span class="p">)</span>   <span class="c1"># always False — dict method, not your key</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="c1"># CORRECT — use bracket notation for any key that shadows a dict built-in</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="k">assert</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">resp</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">data</span><span class="p">[</span><span class="s2">&quot;values&quot;</span><span class="p">],</span> <span class="nb">list</span><span class="p">),</span> \
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>    <span class="sa">f</span><span class="s2">&quot;Expected list, got </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">resp</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">data</span><span class="p">[</span><span class="s1">&#39;values&#39;</span><span class="p">])</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">&quot;</span>
 </code></pre></div>
 <p><strong>Rule:</strong> for any response key named <code>values</code>, <code>keys</code>, <code>items</code>, <code>get</code>, or <code>update</code>, always use <code>obj["key"]</code> bracket access, never <code>obj.key</code> dot access.</p>
 <p>All other keys (e.g. <code>periods</code>, <code>slug</code>, <code>status</code>, <code>data</code>, <code>id</code>) are safe to access with dot notation.</p>
@@ -3962,8 +4075,11 @@ It is intentionally lightweight so both humans and LLM agents can reason about a
 <li><code>total</code>, <code>passed</code>, <code>failed</code></li>
 <li><code>records[]</code> with module, file, function, status (<code>passed</code>, <code>failed</code>, <code>error</code>, <code>skipped</code>)</li>
 <li>timestamps (<code>started_at</code>, <code>finished_at</code>, <code>duration</code>)</li>
+<li>Agent failure report (written only when <code>--agent</code> is passed): <code>var/test_failures.json</code></li>
+<li>Includes per-failure <code>test_source</code>, <code>file_path</code>, <code>line</code>, <code>traceback</code>, and last 20 lines of the server error log.</li>
 <li>HTTP helper: <code>testit.client.RestClient</code></li>
-<li>Reuses auth tokens, and integrates with <code>opts.client</code>.</li>
+<li>Reuses auth tokens and integrates with <code>opts.client</code>.</li>
+<li><code>opts.client.last_response</code> — after every request this is set to an <code>objict</code> with <code>method</code>, <code>path</code>, <code>status_code</code>, <code>body</code>, <code>headers</code>, and <code>elapsed_ms</code>. Useful for diagnosing failures without re-running the request.</li>
 <li>WebSocket helper: <code>testit.ws_client.WsClient</code></li>
 <li>Build URL from the HTTP host and wait for typed messages.</li>
 <li>Faker snippets: <code>testit.faker</code></li>
@@ -3971,7 +4087,7 @@ It is intentionally lightweight so both humans and LLM agents can reason about a
 </ul>
 <hr />
 <h2 id="testing-async-jobs-thrun_pending_jobs">Testing Async Jobs — <code>th.run_pending_jobs()</code><a class="headerlink" href="#testing-async-jobs-thrun_pending_jobs" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="n">count</span> <span class="o">=</span> <span class="n">th</span><span class="o">.</span><span class="n">run_pending_jobs</span><span class="p">(</span><span class="n">channel</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">status</span><span class="o">=</span><span class="s2">&quot;pending&quot;</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="n">count</span> <span class="o">=</span> <span class="n">th</span><span class="o">.</span><span class="n">run_pending_jobs</span><span class="p">(</span><span class="n">channel</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">status</span><span class="o">=</span><span class="s2">&quot;pending&quot;</span><span class="p">)</span>
 </code></pre></div>
 <p>Executes pending jobs from the database using the same calling convention as the production job engine — <code>func(job)</code> where <code>job</code> is a <code>Job</code> model instance. No Redis or running engine process is required.</p>
 <p><strong>Parameters:</strong></p>
@@ -4003,26 +4119,26 @@ It is intentionally lightweight so both humans and LLM agents can reason about a
 - Returns the count of jobs executed</p>
 <p><strong>Why use this instead of calling job functions directly:</strong></p>
 <p>Job functions receive a <code>Job</code> model instance, not a plain dict. Calling a job function directly with a dict bypasses that calling convention and will not catch signature mismatches. Using <code>th.run_pending_jobs()</code> exercises the full pipeline — publish, DB row, function dispatch — exactly as production does.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nd">@th</span><span class="o">.</span><span class="n">django_unit_test</span><span class="p">()</span>
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_handler_fires</span><span class="p">(</span><span class="n">opts</span><span class="p">):</span>
-<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>    <span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps</span><span class="w"> </span><span class="kn">import</span> <span class="n">jobs</span>
-<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>    <span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.jobs.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">Job</span>
-<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>
-<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>    <span class="c1"># Clean up any leftover jobs from previous runs</span>
-<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>    <span class="n">Job</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">channel</span><span class="o">=</span><span class="s2">&quot;default&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">delete</span><span class="p">()</span>
-<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a>
-<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>    <span class="c1"># Publish the job the same way production code does</span>
-<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a>    <span class="n">jobs</span><span class="o">.</span><span class="n">publish</span><span class="p">(</span>
-<a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a>        <span class="s2">&quot;myapp.tasks.send_notification&quot;</span><span class="p">,</span>
-<a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a>        <span class="p">{</span><span class="s2">&quot;user_id&quot;</span><span class="p">:</span> <span class="n">opts</span><span class="o">.</span><span class="n">user</span><span class="o">.</span><span class="n">pk</span><span class="p">,</span> <span class="s2">&quot;message&quot;</span><span class="p">:</span> <span class="s2">&quot;hello&quot;</span><span class="p">},</span>
-<a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a>        <span class="n">channel</span><span class="o">=</span><span class="s2">&quot;default&quot;</span><span class="p">,</span>
-<a id="__codelineno-8-14" name="__codelineno-8-14" href="#__codelineno-8-14"></a>    <span class="p">)</span>
-<a id="__codelineno-8-15" name="__codelineno-8-15" href="#__codelineno-8-15"></a>
-<a id="__codelineno-8-16" name="__codelineno-8-16" href="#__codelineno-8-16"></a>    <span class="c1"># Run pending jobs using the real engine calling convention</span>
-<a id="__codelineno-8-17" name="__codelineno-8-17" href="#__codelineno-8-17"></a>    <span class="n">executed</span> <span class="o">=</span> <span class="n">th</span><span class="o">.</span><span class="n">run_pending_jobs</span><span class="p">(</span><span class="n">channel</span><span class="o">=</span><span class="s2">&quot;default&quot;</span><span class="p">)</span>
-<a id="__codelineno-8-18" name="__codelineno-8-18" href="#__codelineno-8-18"></a>    <span class="k">assert</span> <span class="n">executed</span> <span class="o">&gt;=</span> <span class="mi">1</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;Expected at least 1 job executed, got </span><span class="si">{</span><span class="n">executed</span><span class="si">}</span><span class="s2">&quot;</span>
-<a id="__codelineno-8-19" name="__codelineno-8-19" href="#__codelineno-8-19"></a>
-<a id="__codelineno-8-20" name="__codelineno-8-20" href="#__codelineno-8-20"></a>    <span class="c1"># Assert side effects here</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="nd">@th</span><span class="o">.</span><span class="n">django_unit_test</span><span class="p">()</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_handler_fires</span><span class="p">(</span><span class="n">opts</span><span class="p">):</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>    <span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps</span><span class="w"> </span><span class="kn">import</span> <span class="n">jobs</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>    <span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.jobs.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">Job</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>    <span class="c1"># Clean up any leftover jobs from previous runs</span>
+<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a>    <span class="n">Job</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">channel</span><span class="o">=</span><span class="s2">&quot;default&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">delete</span><span class="p">()</span>
+<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a>
+<a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a>    <span class="c1"># Publish the job the same way production code does</span>
+<a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a>    <span class="n">jobs</span><span class="o">.</span><span class="n">publish</span><span class="p">(</span>
+<a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a>        <span class="s2">&quot;myapp.tasks.send_notification&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-12" name="__codelineno-11-12" href="#__codelineno-11-12"></a>        <span class="p">{</span><span class="s2">&quot;user_id&quot;</span><span class="p">:</span> <span class="n">opts</span><span class="o">.</span><span class="n">user</span><span class="o">.</span><span class="n">pk</span><span class="p">,</span> <span class="s2">&quot;message&quot;</span><span class="p">:</span> <span class="s2">&quot;hello&quot;</span><span class="p">},</span>
+<a id="__codelineno-11-13" name="__codelineno-11-13" href="#__codelineno-11-13"></a>        <span class="n">channel</span><span class="o">=</span><span class="s2">&quot;default&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-14" name="__codelineno-11-14" href="#__codelineno-11-14"></a>    <span class="p">)</span>
+<a id="__codelineno-11-15" name="__codelineno-11-15" href="#__codelineno-11-15"></a>
+<a id="__codelineno-11-16" name="__codelineno-11-16" href="#__codelineno-11-16"></a>    <span class="c1"># Run pending jobs using the real engine calling convention</span>
+<a id="__codelineno-11-17" name="__codelineno-11-17" href="#__codelineno-11-17"></a>    <span class="n">executed</span> <span class="o">=</span> <span class="n">th</span><span class="o">.</span><span class="n">run_pending_jobs</span><span class="p">(</span><span class="n">channel</span><span class="o">=</span><span class="s2">&quot;default&quot;</span><span class="p">)</span>
+<a id="__codelineno-11-18" name="__codelineno-11-18" href="#__codelineno-11-18"></a>    <span class="k">assert</span> <span class="n">executed</span> <span class="o">&gt;=</span> <span class="mi">1</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;Expected at least 1 job executed, got </span><span class="si">{</span><span class="n">executed</span><span class="si">}</span><span class="s2">&quot;</span>
+<a id="__codelineno-11-19" name="__codelineno-11-19" href="#__codelineno-11-19"></a>
+<a id="__codelineno-11-20" name="__codelineno-11-20" href="#__codelineno-11-20"></a>    <span class="c1"># Assert side effects here</span>
 </code></pre></div>
 <p><strong>Setup tip:</strong> delete relevant jobs at the top of your test to prevent leftover rows from previous runs from inflating counts or interfering with assertions.</p>
 <hr />
