@@ -32,8 +32,14 @@ def _send_ws_event(user_id, event_type, conversation_id, data=None):
     """
     Publish a WS event to the user. Never raises — logs failures instead.
     This is the single point through which all WS messages to the client flow.
+
+    Uses send_event_to_user so the client receives the event directly
+    (e.g., {"type": "assistant_response", ...}) without the
+    {"type": "message", "data": ...} wrapper that send_to_user adds.
+    This ensures background-thread events arrive in the same format
+    as the immediate handler return (assistant_thinking).
     """
-    from mojo.apps.realtime.manager import send_to_user
+    from mojo.apps.realtime.manager import send_event_to_user
     event = {
         "type": f"assistant_{event_type}",
         "conversation_id": conversation_id,
@@ -41,7 +47,7 @@ def _send_ws_event(user_id, event_type, conversation_id, data=None):
     if data:
         event.update(data)
     try:
-        send_to_user("user", user_id, event)
+        send_event_to_user("user", user_id, event)
     except Exception:
         logger.exception("Failed to send WS event '%s' to user %s (conv %s)",
                          event_type, user_id, conversation_id)
@@ -108,8 +114,8 @@ def _handle_message(user, data):
     )
 
     # Pre-flight check: API key configured?
-    from mojo.apps.assistant.services.agent import _get_api_key
-    if not _get_api_key():
+    from mojo.helpers import llm
+    if not llm.get_api_key():
         logger.error("assistant: no API key configured")
         return {
             "type": "assistant_error",

@@ -17,16 +17,16 @@ Prompt hierarchy:
 """
 import ujson
 from mojo.helpers.settings import settings
-from mojo.helpers import logit
+from mojo.helpers import logit, llm
 
 logger = logit.get_logger(__name__, "incident.log")
 
 
 def _get_llm_api_key():
-    return settings.get("LLM_HANDLER_API_KEY", None)
+    return llm.get_api_key()
 
 def _get_llm_model():
-    return settings.get("LLM_HANDLER_MODEL", "claude-sonnet-4-20250514")
+    return llm.get_model("general")
 
 SYSTEM_PROMPT = """You are a security operations agent responsible for triaging incidents in a web application fleet.
 
@@ -753,17 +753,7 @@ TOOL_DISPATCH = {
 
 def _call_claude(messages, system_prompt, tools=None):
     """Call Claude API with tool use. Returns the response as a dict."""
-    import anthropic
-
-    client = anthropic.Anthropic(api_key=_get_llm_api_key())
-    response = client.messages.create(
-        model=_get_llm_model(),
-        max_tokens=4096,
-        system=system_prompt,
-        tools=tools or TOOLS,
-        messages=messages,
-    )
-    return response.model_dump()
+    return llm.call(messages, system=system_prompt, tools=tools or TOOLS)
 
 
 def _run_agent_loop(messages, system_prompt, max_iterations=15, tools=None):

@@ -86,9 +86,30 @@ def on_get_conversation(request, pk):
             "error": "Conversation not found",
         }, status=404)
 
+    from mojo.apps.assistant.services.agent import _parse_blocks
+
     messages = Message.objects.filter(
         conversation=conversation
     ).order_by("created")[:200]
+
+    msg_list = []
+    for m in messages:
+        entry = {
+            "id": m.pk,
+            "role": m.role,
+            "content": m.content,
+            "created": str(m.created),
+        }
+        # Parse structured blocks from assistant messages
+        if m.role == "assistant" and m.content:
+            clean, blocks = _parse_blocks(m.content)
+            if blocks:
+                entry["content"] = clean
+                entry["blocks"] = blocks
+        # Include tool_calls for tool interactions
+        if m.tool_calls:
+            entry["tool_calls"] = m.tool_calls
+        msg_list.append(entry)
 
     return JsonResponse({
         "status": True,
@@ -97,15 +118,7 @@ def on_get_conversation(request, pk):
             "title": conversation.title,
             "created": str(conversation.created),
             "modified": str(conversation.modified),
-            "messages": [
-                {
-                    "id": m.pk,
-                    "role": m.role,
-                    "content": m.content,
-                    "created": str(m.created),
-                }
-                for m in messages
-            ],
+            "messages": msg_list,
         },
     })
 

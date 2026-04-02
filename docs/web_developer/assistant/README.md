@@ -156,20 +156,36 @@ Get a conversation with its full message history. Only accessible by the convers
                 "id": 1,
                 "role": "user",
                 "content": "Show me failed jobs in the last hour",
-                "tool_calls": null,
                 "created": "2026-04-01 14:30:00+00:00"
             },
             {
                 "id": 2,
                 "role": "assistant",
                 "content": "I found 3 failed jobs in the last hour...",
-                "tool_calls": null,
+                "blocks": [
+                    {"type": "table", "title": "Failed Jobs", "columns": ["ID", "Error"], "rows": [["abc", "timeout"]]}
+                ],
                 "created": "2026-04-01 14:30:05+00:00"
+            },
+            {
+                "id": 3,
+                "role": "tool_result",
+                "content": "",
+                "tool_calls": [{"type": "tool_result", "tool_use_id": "...", "content": "..."}],
+                "created": "2026-04-01 14:30:03+00:00"
             }
         ]
     }
 }
 ```
+
+**Message fields**:
+
+| Field | Present on | Description |
+|---|---|---|
+| `content` | All messages | Text content (block fences stripped for assistant messages) |
+| `blocks` | Assistant messages | Pre-parsed structured data blocks (table/chart/stat). Only present when blocks exist. |
+| `tool_calls` | Tool interaction messages | Raw tool_use/tool_result data from the LLM conversation. Only present on tool messages. |
 
 **Response** (not found / not owner — HTTP 404):
 
@@ -319,9 +335,11 @@ ws.on('assistant_error', (data) => {
 
 1. Client sends `assistant_message` via WebSocket
 2. Server validates permissions, stores the user message, returns `assistant_thinking` immediately
-3. A background job runs the LLM agent (tool-calling loop may take seconds)
+3. A background thread runs the LLM agent (tool-calling loop may take seconds)
 4. During processing, `assistant_tool_call` events are published for each tool
 5. When done, `assistant_response` (or `assistant_error`) is published
+
+All events arrive in the same format — `{"type": "assistant_*", ...}` directly on the WebSocket. There is no `{"type": "message", "data": ...}` wrapper to unwrap.
 
 The REST endpoints (`GET /api/assistant/conversation`, etc.) continue to work for listing and retrieving conversation history.
 

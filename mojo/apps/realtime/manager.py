@@ -81,6 +81,45 @@ def send_to_connection(connection_id, message_data):
     redis_client.publish(f"realtime:messages:{connection_id}", json.dumps(message))
 
 
+def send_event_to_user(user_type, user_id, event_data):
+    """
+    Send an event directly to a user's connections without wrapping.
+
+    Unlike send_to_user (which wraps in {"type": "message", "data": ...}),
+    this sends event_data as-is to the client. Use this when the payload
+    already has a meaningful ``type`` field (e.g., "assistant_response")
+    and you want the client to receive exactly that shape.
+
+    Args:
+        user_type: Type of user (e.g., "user")
+        user_id: User's ID
+        event_data: Dict sent directly to the client (must include "type")
+    """
+    connections = get_user_connections(user_type, user_id)
+    for conn_id in connections:
+        send_event_to_connection(conn_id, event_data)
+
+
+def send_event_to_connection(connection_id, event_data):
+    """
+    Send an event directly to a connection without wrapping.
+
+    The client receives event_data as-is, not nested inside
+    {"type": "message", "data": ...}.
+
+    Args:
+        connection_id: Unique connection identifier
+        event_data: Dict sent directly to the client
+    """
+    redis_client = get_redis()
+    message = {
+        "type": "direct_event",
+        "data": event_data,
+        "timestamp": time.time()
+    }
+    redis_client.publish(f"realtime:messages:{connection_id}", json.dumps(message))
+
+
 def is_online(user_type, user_id):
     """
     Check if user is currently online.

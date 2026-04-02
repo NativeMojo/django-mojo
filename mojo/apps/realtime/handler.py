@@ -641,7 +641,7 @@ class WebSocketHandler:
         message_type = data.get("type")
 
         if message_type in ["broadcast", "topic_message", "direct_message"]:
-            # Forward to client
+            # Forward to client wrapped in {"type": "message", "data": ...}
             client_message = {
                 "type": "message",
                 "data": data.get("data", {}),
@@ -652,6 +652,11 @@ class WebSocketHandler:
                 client_message["topic"] = data.get("topic")
 
             await self.send_message(client_message)
+        elif message_type == "direct_event":
+            # Forward payload directly — no wrapping. The payload's own
+            # "type" field (e.g., "assistant_response") becomes the
+            # top-level type the client sees.
+            await self.send_message(data.get("data", {}))
         elif message_type == "disconnect":
             await self.send_message(data)
             await self.close_connection()

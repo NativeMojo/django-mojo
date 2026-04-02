@@ -36,7 +36,7 @@ Add `"mojo.apps.assistant"` to `INSTALLED_APPS` and run migrations.
 |---|---|---|
 | `LLM_ADMIN_ENABLED` | `False` | Feature flag — must be True for the assistant to work |
 | `LLM_ADMIN_API_KEY` | `None` | Anthropic API key. Falls back to `LLM_HANDLER_API_KEY` |
-| `LLM_ADMIN_MODEL` | `claude-sonnet-4-6-20250514` | Claude model to use |
+| `LLM_ADMIN_MODEL` | (auto-detect) | Claude model to use. If unset, auto-detects latest Sonnet via `mojo.helpers.llm.get_model()` |
 | `LLM_ADMIN_MAX_TURNS` | `25` | Max tool-calling turns per request |
 | `LLM_ADMIN_MAX_HISTORY` | `50` | Max messages loaded as conversation context |
 | `LLM_ADMIN_SYSTEM_PROMPT` | (built-in) | Override the default system prompt |
