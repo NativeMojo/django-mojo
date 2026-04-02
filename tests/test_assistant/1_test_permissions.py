@@ -55,7 +55,9 @@ def test_registry_loaded(opts):
 
     # Verify key tools exist
     for name in ["query_incidents", "query_jobs", "query_users",
-                 "query_groups", "get_system_health"]:
+                 "query_groups", "get_system_health",
+                 "list_tools", "list_metric_categories", "list_metric_slugs",
+                 "list_job_channels", "list_event_categories", "list_permissions"]:
         assert_true(name in registry, f"Expected tool '{name}' in registry")
 
 
@@ -195,6 +197,79 @@ def test_feature_disabled_returns_error(opts):
     assert_true("error" in result, f"Expected error key in result: {result}")
     assert_true("not enabled" in result["error"].lower(),
                 f"Expected 'not enabled' in error: {result['error']}")
+
+
+@th.django_unit_test()
+def test_list_tools_returns_permitted_tools(opts):
+    """list_tools should return tools grouped by domain, filtered by user perms."""
+    from mojo.apps.assistant.services.tools.discovery import _tool_list_tools
+
+    # Admin sees all domains
+    result = _tool_list_tools({}, opts.admin_user)
+    assert_true(result["total_tools"] >= 30,
+                f"Admin should see 30+ tools, got {result['total_tools']}")
+    assert_true("security" in result["domains"], "Admin should see security domain")
+    assert_true("discovery" in result["domains"], "Admin should see discovery domain")
+
+    # Limited user only sees security + discovery (view_security gives incident_trends)
+    result = _tool_list_tools({}, opts.limited_user)
+    domains = set(result["domains"].keys())
+    assert_true("security" in domains,
+                f"Limited user should see security domain, got {domains}")
+    assert_true("jobs" not in domains,
+                f"Limited user should NOT see jobs domain, got {domains}")
+    assert_true("users" not in domains,
+                f"Limited user should NOT see users domain, got {domains}")
+
+    # Filter by domain
+    result = _tool_list_tools({"domain": "security"}, opts.admin_user)
+    assert_true("security" in result["domains"], "Should see security when filtered")
+    assert_eq(len(result["domains"]), 1,
+              f"Should only see 1 domain when filtered, got {len(result['domains'])}")
+
+
+@th.django_unit_test()
+def test_list_event_categories(opts):
+    """list_event_categories should return a list of category strings."""
+    from mojo.apps.assistant.services.tools.discovery import _tool_list_event_categories
+
+    result = _tool_list_event_categories({"minutes": 1440}, opts.admin_user)
+    assert_true("categories" in result, f"Expected 'categories' key, got {result.keys()}")
+    assert_true(isinstance(result["categories"], list),
+                f"Expected list, got {type(result['categories']).__name__}")
+    assert_true("count" in result, "Expected 'count' key in result")
+
+
+@th.django_unit_test()
+def test_list_job_channels(opts):
+    """list_job_channels should return configured channels."""
+    from mojo.apps.assistant.services.tools.discovery import _tool_list_job_channels
+
+    result = _tool_list_job_channels({}, opts.admin_user)
+    assert_true("channels" in result, f"Expected 'channels' key, got {result.keys()}")
+    assert_true(len(result["channels"]) >= 1,
+                f"Expected at least 1 channel, got {len(result['channels'])}")
+    # Each channel should have name and queue_depth
+    ch = result["channels"][0]
+    assert_true("name" in ch, "Channel should have 'name' field")
+    assert_true("queue_depth" in ch, "Channel should have 'queue_depth' field")
+
+
+@th.django_unit_test()
+def test_list_permissions(opts):
+    """list_permissions should return known permission keys from RestMeta."""
+    from mojo.apps.assistant.services.tools.discovery import _tool_list_permissions
+
+    result = _tool_list_permissions({}, opts.admin_user)
+    assert_true(result["count"] >= 5,
+                f"Expected at least 5 permissions, got {result['count']}")
+    # Known permissions should be present
+    perms = result["permissions"]
+    for p in ["view_security", "manage_security", "view_jobs", "view_admin"]:
+        assert_true(p in perms, f"Expected '{p}' in permissions list")
+    # Meta-perms should be excluded
+    for p in ["owner", "all", "authenticated"]:
+        assert_true(p not in perms, f"'{p}' should NOT be in permissions list")
 
 
 @th.django_unit_test()

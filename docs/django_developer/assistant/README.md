@@ -97,6 +97,19 @@ Add `"mojo.apps.assistant"` to `INSTALLED_APPS` and run migrations.
 | `get_system_health` | `view_admin` | No |
 | `get_incident_trends` | `view_security` | No |
 
+### Discovery Domain (`view_admin` / `view_security` / `view_jobs`)
+
+| Tool | Permission | Mutates |
+|---|---|---|
+| `list_tools` | `view_admin` | No |
+| `list_metric_categories` | `view_admin` | No |
+| `list_metric_slugs` | `view_admin` | No |
+| `list_job_channels` | `view_jobs` | No |
+| `list_event_categories` | `view_security` | No |
+| `list_permissions` | `view_admin` | No |
+
+Discovery tools let the LLM explore the system. When a user asks "what metrics do we track?" or "what can you do?", the LLM calls these tools to find valid slugs, categories, channels, and permissions — rather than guessing.
+
 ## Permission Enforcement
 
 Every tool call passes through a permission gate before execution. The gate checks `user.has_permission(tool_permission)` at call time, not at conversation start. This means:
