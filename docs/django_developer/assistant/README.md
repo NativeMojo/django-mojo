@@ -238,12 +238,12 @@ The assistant also supports a WebSocket transport for real-time chat UIs. This u
 ```
 Client sends WS message {type: "assistant_message", message: "...", conversation_id: N}
   → User.on_realtime_message() dispatches to assistant handler
-  → Handler validates, stores message, returns {type: "assistant:thinking"} immediately
+  → Handler validates, stores message, returns {type: "assistant_thinking"} immediately
   → Background job runs run_assistant_ws() with on_event callback
   → Callback publishes WS events back to the user:
-      assistant:tool_call  (per tool)
-      assistant:response   (final answer)
-      assistant:error      (on failure)
+      assistant_tool_call  (per tool)
+      assistant_response   (final answer)
+      assistant_error      (on failure)
 ```
 
 ### Key Files
