@@ -4,11 +4,11 @@ import datetime
 from objict import objict
 
 
-TEST_USER = "testit"
-TEST_PWORD = "testit##mojo"
+TEST_USER = "incident_rule_user"
+TEST_PWORD = "incident##mojo99"
 
-ADMIN_USER = "tadmin"
-ADMIN_PWORD = "testit##mojo"
+ADMIN_USER = "incident_rule_admin"
+ADMIN_PWORD = "incident##mojo99"
 
 @th.django_unit_test()
 def test_rule_check(opts):

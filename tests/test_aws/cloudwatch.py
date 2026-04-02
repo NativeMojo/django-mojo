@@ -2,11 +2,11 @@ from testit import helpers as th
 from testit import TestitSkip
 from mojo.helpers.settings import settings
 
-TEST_USER = "testit"
-TEST_PWORD = "testit##mojo"
+TEST_USER = "aws_user"
+TEST_PWORD = "aws##mojo99"
 
-ADMIN_USER = "tadmin"
-ADMIN_PWORD = "testit##mojo"
+ADMIN_USER = "aws_admin"
+ADMIN_PWORD = "aws##mojo99"
 
 
 def _require_aws():
@@ -43,19 +43,15 @@ def _get_values(data_dict, slug):
 def setup_users(opts):
     from mojo.apps.account.models import User
 
-    user = User.objects.filter(username=TEST_USER).last()
-    if user is None:
-        user = User(username=TEST_USER, display_name=TEST_USER, email=f"{TEST_USER}@example.com")
-        user.save()
-    user.remove_all_permissions()
+    User.objects.filter(username__in=[TEST_USER, ADMIN_USER]).delete()
+
+    user = User(username=TEST_USER, display_name=TEST_USER, email=f"{TEST_USER}@example.com")
+    user.save()
     user.is_email_verified = True
     user.save_password(TEST_PWORD)
 
-    admin = User.objects.filter(username=ADMIN_USER).last()
-    if admin is None:
-        admin = User(username=ADMIN_USER, display_name=ADMIN_USER, email=f"{ADMIN_USER}@example.com")
-        admin.save()
-    admin.remove_all_permissions()
+    admin = User(username=ADMIN_USER, display_name=ADMIN_USER, email=f"{ADMIN_USER}@example.com")
+    admin.save()
     admin.add_permission(["manage_aws", "manage_users", "view_global", "view_admin"])
     admin.is_staff = True
     admin.is_superuser = True

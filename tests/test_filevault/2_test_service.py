@@ -8,8 +8,8 @@ and access token generation/validation.
 from testit import helpers as th
 from testit.helpers import assert_eq, assert_true
 
-TEST_USER = "testit"
-TEST_PWORD = "testit##mojo"
+TEST_USER = "vault_user"
+TEST_PWORD = "vault##mojo99"
 
 
 # ---------------------------------------------------------------------------
@@ -25,10 +25,9 @@ def setup_vault_service(opts):
     from mojo.apps.fileman.models import FileManager
 
     # ensure test user
-    user = User.objects.filter(username=TEST_USER).last()
-    if user is None:
-        user = User(username=TEST_USER, display_name=TEST_USER, email=f"{TEST_USER}@example.com")
-        user.save()
+    User.objects.filter(username=TEST_USER).delete()
+    user = User(username=TEST_USER, display_name=TEST_USER, email=f"{TEST_USER}@example.com")
+    user.save()
     user.save_password(TEST_PWORD)
     user.add_permission("view_vault")
     user.add_permission("manage_vault")
