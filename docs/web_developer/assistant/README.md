@@ -43,7 +43,7 @@ Send a message to the assistant and receive an LLM-generated response.
 }
 ```
 
-**Response** (feature disabled):
+**Response** (feature disabled — HTTP 404):
 
 ```json
 {
@@ -52,12 +52,22 @@ Send a message to the assistant and receive an LLM-generated response.
 }
 ```
 
-**Response** (no API key):
+**Response** (no API key — HTTP 503):
 
 ```json
 {
     "status": false,
     "error": "LLM API key not configured"
+}
+```
+
+**Response** (invalid `conversation_id` — HTTP 404):
+
+```json
+{
+    "status": false,
+    "error": "Conversation not found",
+    "conversation_id": null
 }
 ```
 

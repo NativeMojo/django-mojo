@@ -46,6 +46,13 @@ class RestClient:
 
     def login(self, username, password):
         self.logout()
+        # Clear the login rate limit so tests never fail due to accumulated
+        # logins across the suite hitting the ip_limit within the window.
+        try:
+            from mojo.decorators.limits import clear_rate_limits
+            clear_rate_limits(ip="127.0.0.1", key="login")
+        except Exception:
+            pass
         resp = self.post("/api/login", dict(username=username, password=password))
         if resp.response.data and resp.response.data.access_token:
             self.is_authenticated = True

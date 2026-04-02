@@ -376,11 +376,17 @@ def test_confirm_race_number_claimed(opts):
     from mojo.decorators.limits import clear_rate_limits
     clear_rate_limits(ip="127.0.0.1")
 
+    # Ensure user is active and phone state is clean before login
     user = User.objects.get(pk=opts.user_id)
+    user.is_active = True
+    user.phone_number = TEST_PHONE
+    user.save(update_fields=["is_active", "phone_number", "modified"])
+
     # Generate token for COLLISION_PHONE which is already owned by another user
     session_token, otp = tokens.generate_phone_change_token(user, COLLISION_PHONE)
 
-    opts.client.login(TEST_USER, TEST_PWORD)
+    logged_in = opts.client.login(TEST_USER, TEST_PWORD)
+    assert_true(logged_in, "Login must succeed before testing confirm")
     resp = opts.client.post("/api/auth/phone/change/confirm", {
         "session_token": session_token,
         "code": otp,

@@ -602,7 +602,13 @@ def server_settings(**overrides):
         yield
     finally:
         conf_path.write_text(original)
-        time.sleep(1.5)
+        # Wait long enough for uvicorn to detect the conf change, kill the old
+        # worker, start and warm up the new worker.  The initial sleep must be
+        # long enough that the OLD worker (still running with the overrides) has
+        # exited before _poll_server_up gets a response — otherwise the poll
+        # returns True against the stale worker and subsequent tests see the
+        # overrides still in effect.
+        time.sleep(3)
         if not _poll_server_up(host, port, timeout=10):
             raise RuntimeError(
                 f"server_settings: server at {host}:{port} did not come back up "
