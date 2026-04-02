@@ -14,7 +14,7 @@ Flow:
 import re
 import ujson
 from mojo.helpers.settings import settings
-from mojo.helpers import logit
+from mojo.helpers import logit, llm
 
 logger = logit.get_logger(__name__, "assistant.log")
 
@@ -103,34 +103,9 @@ Supported chart_type values: line, bar, pie, area.
 """
 
 
-def _get_api_key():
-    key = settings.get("LLM_ADMIN_API_KEY", None)
-    if not key:
-        key = settings.get("LLM_HANDLER_API_KEY", None)
-    return key
-
-
-def _get_model():
-    return settings.get("LLM_ADMIN_MODEL", "claude-sonnet-4-6-20250514")
-
-
 def _get_system_prompt():
     custom = settings.get("LLM_ADMIN_SYSTEM_PROMPT", None)
     return custom if custom else SYSTEM_PROMPT
-
-
-def _call_claude(messages, system_prompt, tools):
-    import anthropic
-
-    client = anthropic.Anthropic(api_key=_get_api_key())
-    response = client.messages.create(
-        model=_get_model(),
-        max_tokens=4096,
-        system=system_prompt,
-        tools=tools,
-        messages=messages,
-    )
-    return response.model_dump()
 
 
 def _build_conversation_messages(conversation, max_history):
@@ -187,8 +162,7 @@ def run_assistant(user, message, conversation_id=None, on_event=None):
         return {"error": "Assistant is not enabled", "status_code": 404}
 
     # Check API key
-    api_key = _get_api_key()
-    if not api_key:
+    if not llm.get_api_key():
         return {"error": "LLM API key not configured", "status_code": 503}
 
     # Load or create conversation
@@ -237,7 +211,7 @@ def run_assistant(user, message, conversation_id=None, on_event=None):
 
     try:
         for _ in range(max_turns):
-            result = _call_claude(messages, system_prompt, tools)
+            result = llm.call(messages, system=system_prompt, tools=tools)
             stop_reason = result.get("stop_reason")
 
             # Add assistant response to messages
@@ -344,8 +318,17 @@ def run_assistant(user, message, conversation_id=None, on_event=None):
 
     except Exception as e:
         logger.exception("Assistant agent failed for user %s", user.pk)
+        err_str = str(e)
+        if "not_found_error" in err_str or "404" in err_str:
+            error = f"LLM model not found. Check LLM_ADMIN_MODEL setting. ({err_str[:200]})"
+        elif "authentication_error" in err_str or "401" in err_str:
+            error = "LLM API key is invalid. Check LLM_ADMIN_API_KEY setting."
+        elif "rate_limit" in err_str.lower() or "429" in err_str:
+            error = "LLM API rate limit reached. Please wait a moment and try again."
+        else:
+            error = f"Assistant error: {err_str[:200]}"
         return {
-            "error": f"Assistant encountered an error: {str(e)}",
+            "error": error,
             "conversation_id": conversation.pk,
             "status_code": 500,
         }
@@ -364,8 +347,7 @@ def run_assistant_ws(user, message, conversation_id, on_event=None):
     if not settings.get("LLM_ADMIN_ENABLED", False, kind="bool"):
         return {"error": "Assistant is not enabled"}
 
-    api_key = _get_api_key()
-    if not api_key:
+    if not llm.get_api_key():
         return {"error": "LLM API key not configured"}
 
     try:
@@ -392,7 +374,7 @@ def run_assistant_ws(user, message, conversation_id, on_event=None):
 
     try:
         for _ in range(max_turns):
-            result = _call_claude(messages, system_prompt, tools)
+            result = llm.call(messages, system=system_prompt, tools=tools)
             stop_reason = result.get("stop_reason")
             messages.append({"role": "assistant", "content": result["content"]})
 
@@ -454,6 +436,14 @@ def run_assistant_ws(user, message, conversation_id, on_event=None):
         Message.objects.create(conversation=conversation, role="assistant", content=response_text)
         return {"response": response_text, "conversation_id": conversation.pk, "tool_calls_made": tool_calls_made}
 
-    except Exception:
+    except Exception as e:
         logger.exception("Assistant WS agent failed for user %s", user.pk)
-        return {"error": "Assistant encountered an unexpected error"}
+        # Give a useful error message for known failure types
+        err_str = str(e)
+        if "not_found_error" in err_str or "404" in err_str:
+            return {"error": f"LLM model not found. Check LLM_ADMIN_MODEL setting. ({err_str[:200]})"}
+        if "authentication_error" in err_str or "401" in err_str:
+            return {"error": "LLM API key is invalid. Check LLM_ADMIN_API_KEY setting."}
+        if "rate_limit" in err_str.lower() or "429" in err_str:
+            return {"error": "LLM API rate limit reached. Please wait a moment and try again."}
+        return {"error": f"Assistant error: {err_str[:200]}"}

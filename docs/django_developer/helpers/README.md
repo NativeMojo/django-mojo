@@ -11,5 +11,6 @@ Helpers live in `mojo/helpers/`. Import directly — no registration required.
 - [crypto](crypto.md) — Encryption, hashing, signing
 - [request](request.md) — Request parsing and client info
 - [response](response.md) — JSON response helpers
+- [llm](llm.md) — LLM model discovery, API key management, quick Claude calls
 - [redis](redis.md) — Redis client and caching
 - [other](other.md) — stats, qrcode, filetypes, domain, geoip, sysinfo

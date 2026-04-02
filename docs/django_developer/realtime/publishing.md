@@ -73,6 +73,30 @@ def on_rest_saved(self, changed_fields, created):
         })
 ```
 
+## send_to_user / send_event_to_user
+
+The `manager` module provides lower-level functions for sending directly to a user's WebSocket connections:
+
+```python
+from mojo.apps.realtime.manager import send_to_user, send_event_to_user
+```
+
+**`send_to_user()`** — wraps the payload in `{"type": "message", "data": ...}`:
+
+```python
+send_to_user("user", 42, {"title": "Hello", "body": "World"})
+# Client receives: {"type": "message", "data": {"title": "Hello", "body": "World"}}
+```
+
+**`send_event_to_user()`** — sends the payload directly, no wrapping. Use this when your payload has its own `type` field and you want the client to receive it as-is:
+
+```python
+send_event_to_user("user", 42, {"type": "assistant_response", "response": "..."})
+# Client receives: {"type": "assistant_response", "response": "..."}
+```
+
+The difference matters for client-side event routing. `send_event_to_user` avoids the need to unwrap a `message` envelope.
+
 ## Group Broadcast
 
 Broadcast to all members of a group:
