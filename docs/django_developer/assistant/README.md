@@ -260,6 +260,30 @@ The `User.on_realtime_message` method checks if the message type starts with `as
 
 LLM calls are too slow to block the WebSocket handler. The handler publishes a job via `mojo.apps.jobs` and returns immediately. The job function (`execute_assistant_job`) runs the agent loop and uses `send_to_user()` from the realtime manager to push events back to the user's WebSocket connections.
 
+## Structured Data Blocks
+
+Responses can include a `blocks` array with structured data for frontend rendering. The LLM decides when to include blocks based on the data — tables for query results, charts for trends, stat cards for key metrics.
+
+### How It Works
+
+1. The system prompt defines three block types: `table`, `chart`, `stat`
+2. The LLM wraps structured data in ` ```assistant_block ` code fences within its text response
+3. `_parse_blocks()` in `agent.py` extracts valid blocks and strips the fences from the text
+4. The response includes both clean `response` text and a `blocks` array
+5. Raw text (with fences) is stored in the Message for audit
+
+### Block Types
+
+- **`table`** — `{type, title, columns, rows}` — query results, comparisons
+- **`chart`** — `{type, chart_type, title, labels, series}` — line/bar/pie/area for trends
+- **`stat`** — `{type, items: [{label, value}]}` — dashboard key metrics
+
+### Customizing
+
+Override `LLM_ADMIN_SYSTEM_PROMPT` to change the block format instructions. The parser (`_parse_blocks`) only requires valid JSON with a recognized `type` field inside ` ```assistant_block ` fences.
+
+See [web_developer/assistant/README.md](../../web_developer/assistant/README.md#structured-data-blocks) for the full block schema reference and frontend rendering examples.
+
 ## Tests
 
 ```bash

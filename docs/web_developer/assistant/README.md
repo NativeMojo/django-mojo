@@ -34,14 +34,27 @@ Send a message to the assistant and receive an LLM-generated response.
 {
     "status": true,
     "data": {
-        "response": "Here are the failed jobs in the last hour...",
+        "response": "Here are the failed jobs in the last hour. The failure rate is 12%.",
         "conversation_id": 42,
         "tool_calls_made": [
             {"tool": "query_jobs", "input": {"status": "failed", "minutes": 60}}
+        ],
+        "blocks": [
+            {
+                "type": "table",
+                "title": "Failed Jobs (Last Hour)",
+                "columns": ["ID", "Function", "Channel", "Error"],
+                "rows": [
+                    ["abc123", "send_email", "email", "SMTP timeout"],
+                    ["def456", "process_file", "default", "File not found"]
+                ]
+            }
         ]
     }
 }
 ```
+
+The `blocks` array is only present when the LLM includes structured data. See [Structured Data Blocks](#structured-data-blocks) for details.
 
 **Response** (feature disabled — HTTP 404):
 
@@ -273,7 +286,7 @@ The server publishes events to the user's WebSocket topic as the assistant proce
 |---|---|---|
 | `assistant:thinking` | Immediately after message received | `{conversation_id}` |
 | `assistant:tool_call` | Each time a tool is called | `{conversation_id, tool, input}` |
-| `assistant:response` | Final LLM response | `{conversation_id, response, tool_calls_made}` |
+| `assistant:response` | Final LLM response | `{conversation_id, response, tool_calls_made, blocks?}` |
 | `assistant:error` | On failure | `{conversation_id, error}` |
 
 ### Client Wiring Example
@@ -291,6 +304,9 @@ ws.on('assistant:tool_call', (data) => {
 ws.on('assistant:response', (data) => {
     hideThinkingIndicator();
     appendAssistantMessage(data.conversation_id, data.response);
+    if (data.blocks) {
+        renderBlocks(data.blocks);  // see Structured Data Blocks section
+    }
 });
 
 ws.on('assistant:error', (data) => {
@@ -308,3 +324,96 @@ ws.on('assistant:error', (data) => {
 5. When done, `assistant:response` (or `assistant:error`) is published
 
 The REST endpoints (`GET /api/assistant/conversation`, etc.) continue to work for listing and retrieving conversation history.
+
+## Structured Data Blocks
+
+Responses may include a `blocks` array containing structured data for rendering as tables, charts, or stat cards. The `blocks` key is only present when the LLM includes structured data — most simple text responses won't have it.
+
+The `response` text field contains the narrative with block fences already stripped. The frontend renders text and blocks together.
+
+### Block Types
+
+#### `table`
+
+For query results, lists, comparisons.
+
+```json
+{
+    "type": "table",
+    "title": "Failed Jobs (Last Hour)",
+    "columns": ["ID", "Function", "Channel", "Error", "Time"],
+    "rows": [
+        ["abc123", "send_email", "email", "SMTP timeout", "14:23"],
+        ["def456", "process_file", "default", "File not found", "14:31"]
+    ]
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `title` | string | Table heading |
+| `columns` | string[] | Column headers (Title Case) |
+| `rows` | any[][] | Row data, one array per row |
+
+#### `chart`
+
+For time-series, trends, distributions.
+
+```json
+{
+    "type": "chart",
+    "chart_type": "line",
+    "title": "Login Attempts (7d)",
+    "labels": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+    "series": [
+        {"name": "attempts", "values": [120, 145, 132, 198, 210, 89, 95]},
+        {"name": "failures", "values": [3, 5, 2, 12, 8, 1, 2]}
+    ]
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `chart_type` | string | `line`, `bar`, `pie`, or `area` |
+| `title` | string | Chart heading |
+| `labels` | string[] | X-axis labels (or pie slice labels) |
+| `series` | object[] | Data series, each with `name` and `values` array |
+
+#### `stat`
+
+For dashboard-style key metrics.
+
+```json
+{
+    "type": "stat",
+    "items": [
+        {"label": "Open Incidents", "value": 42},
+        {"label": "Failed Jobs (24h)", "value": 7},
+        {"label": "Active Users", "value": 156}
+    ]
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `items` | object[] | Each with `label` (string) and `value` (string or number) |
+
+### Rendering Example
+
+```javascript
+function renderBlocks(blocks) {
+    for (const block of blocks) {
+        switch (block.type) {
+            case 'table':
+                renderTable(block.title, block.columns, block.rows);
+                break;
+            case 'chart':
+                renderChart(block.chart_type, block.title, block.labels, block.series);
+                break;
+            case 'stat':
+                renderStatCards(block.items);
+                break;
+        }
+    }
+}
+```
