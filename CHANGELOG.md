@@ -2,6 +2,11 @@
 
 ## v1.1.8 - April 02, 2026
 
+new assistant app, major cleanup in testit
+
+
+## v1.1.8 - April 02, 2026
+
 ### Added
 - **Parallel test execution (`-j N`)** — `bin/run_tests` now runs up to 3 modules in parallel by default using `ThreadPoolExecutor`. Set a specific thread count with `-j N`. Parallelism is forced to 1 when `-s`, `-v`, or `--continue` is active.
 - **Rich progress UI** — when the `rich` package is installed and `-j > 1`, the runner displays a live per-module progress table. Use `--plain` to disable (e.g. in CI).
