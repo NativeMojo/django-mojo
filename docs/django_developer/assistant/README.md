@@ -217,6 +217,36 @@ Tracks a multi-turn conversation between a user and the assistant.
 | `created` | DateTimeField | When the conversation started |
 | `modified` | DateTimeField | Last activity |
 
+#### RestMeta
+
+| Setting | Value | Effect |
+|---|---|---|
+| `VIEW_PERMS` | `["view_admin", "owner"]` | Admins see all; owners see only their own conversations |
+| `OWNER_FIELD` | `"user"` | List auto-filters to `user=request.user` for non-admins |
+| `CAN_DELETE` | `True` | Owner or admin may delete via `DELETE /api/assistant/conversation/<pk>` |
+| `NO_REST_SAVE` | `True` | Conversations are created by the agent service, not via direct POST |
+
+The `detail` graph includes nested messages using the message `default` graph:
+
+```python
+"detail": {
+    "fields": ["id", "title", "created", "modified", "messages"],
+    "graphs": {"messages": "default"},
+}
+```
+
+Request it with `GET /api/assistant/conversation/<pk>?graph=detail`.
+
+The REST handler is standard:
+
+```python
+@md.URL('conversation')
+@md.URL('conversation/<int:pk>')
+@md.uses_model_security(Conversation)
+def on_conversation(request, pk=None):
+    return Conversation.on_rest_request(request, pk)
+```
+
 ### Message
 
 A single message in a conversation.
@@ -225,9 +255,12 @@ A single message in a conversation.
 |---|---|---|
 | `conversation` | FK(Conversation) | Parent conversation |
 | `role` | CharField | `user`, `assistant`, `tool_use`, or `tool_result` |
-| `content` | TextField | Message text content |
+| `content` | TextField | Message text content (block fences stripped for assistant messages) |
 | `tool_calls` | JSONField | Tool call details (for assistant/tool_result messages) |
+| `blocks` | JSONField | Pre-parsed structured data blocks extracted at write time. `null` when none present. |
 | `created` | DateTimeField | When the message was created |
+
+`blocks` is populated when the agent saves an assistant message — `_parse_blocks()` runs once at write time and the result is stored. Reading the conversation detail never re-parses content.
 
 ## WebSocket Interface
 
@@ -270,7 +303,7 @@ Responses can include a `blocks` array with structured data for frontend renderi
 2. The LLM wraps structured data in ` ```assistant_block ` code fences within its text response
 3. `_parse_blocks()` in `agent.py` extracts valid blocks and strips the fences from the text
 4. The response includes both clean `response` text and a `blocks` array
-5. Raw text (with fences) is stored in the Message for audit
+5. Clean text and parsed blocks are stored on the `Message` — no re-parsing happens at read time
 
 ### Block Types
 
