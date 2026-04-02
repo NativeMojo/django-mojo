@@ -200,8 +200,8 @@ def test_rest_conversation_history_persisted(opts):
         assert_eq(resp.status_code, 200, f"POST failed: {resp.json}")
         conv_id = resp.json.data.conversation_id
 
-        # Fetch conversation history
-        hist = opts.client.get(f'/api/assistant/conversation/{conv_id}')
+        # Fetch conversation history via detail graph
+        hist = opts.client.get(f'/api/assistant/conversation/{conv_id}?graph=detail')
         assert_eq(hist.status_code, 200, f"GET history failed: {hist.json}")
         messages = hist.json.data.messages
         assert_true(len(messages) >= 2,
@@ -231,22 +231,19 @@ def test_rest_conversation_history_includes_blocks(opts):
         assert_eq(resp.status_code, 200, f"POST failed: {resp.json}")
         conv_id = resp.json.data.conversation_id
 
-        # Fetch conversation history — should have blocks pre-parsed
-        hist = opts.client.get(f'/api/assistant/conversation/{conv_id}')
+        # Fetch conversation history via detail graph — blocks stored at write time
+        hist = opts.client.get(f'/api/assistant/conversation/{conv_id}?graph=detail')
         assert_eq(hist.status_code, 200, f"GET history failed: {hist.json}")
         messages = hist.json.data.messages
 
-        # Find assistant messages with blocks
+        # Find assistant messages with blocks field populated
         assistant_msgs = [m for m in messages if m.role == "assistant"]
-        blocks_found = any(
-            hasattr(m, "blocks") and m.blocks for m in assistant_msgs
-        )
+        blocks_found = any(m.blocks for m in assistant_msgs if m.blocks)
         assert_true(blocks_found,
-                    "Expected at least one assistant message with pre-parsed blocks in history")
+                    "Expected at least one assistant message with blocks stored at write time")
 
         # Find tool interaction messages with tool_calls
-        tool_msgs = [m for m in messages if m.role in ("tool_use", "tool_result") or
-                     (hasattr(m, "tool_calls") and m.tool_calls)]
+        tool_msgs = [m for m in messages if m.tool_calls]
         assert_true(len(tool_msgs) > 0,
                     "Expected tool interaction messages with tool_calls in history")
 

@@ -227,11 +227,11 @@ def run_assistant(user, message, conversation_id=None, on_event=None):
                 raw_text = "\n".join(text_parts) if text_parts else ""
                 response_text, blocks = _parse_blocks(raw_text)
 
-                # Store full response (with block fences) for audit
                 Message.objects.create(
                     conversation=conversation,
                     role="assistant",
-                    content=raw_text,
+                    content=response_text,
+                    blocks=blocks or None,
                     tool_calls=result["content"] if any(
                         b.get("type") == "tool_use" for b in result["content"]
                     ) else None,
@@ -383,7 +383,8 @@ def run_assistant_ws(user, message, conversation_id, on_event=None):
                 raw_text = "\n".join(text_parts) if text_parts else ""
                 response_text, blocks = _parse_blocks(raw_text)
                 Message.objects.create(
-                    conversation=conversation, role="assistant", content=raw_text,
+                    conversation=conversation, role="assistant",
+                    content=response_text, blocks=blocks or None,
                 )
                 return {
                     "response": response_text,
