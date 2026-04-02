@@ -765,14 +765,18 @@ def _print_summary_rich(display, duration):
             f"{t.elapsed:.1f}s",
         )
 
-    # Totals
+    # Totals — sum from trackers for consistency with per-module rows
+    total_tests = sum(t.total for t in display.trackers.values())
+    total_passed = sum(t.passed for t in display.trackers.values())
+    total_failed = sum(t.failed for t in display.trackers.values())
+    total_skipped = sum(t.skipped for t in display.trackers.values())
     table.add_section()
     table.add_row(
         "TOTAL",
-        str(helpers.TEST_RUN.total),
-        str(helpers.TEST_RUN.passed),
-        str(helpers.TEST_RUN.failed) if helpers.TEST_RUN.failed else "-",
-        str(helpers.TEST_RUN.skipped) if helpers.TEST_RUN.skipped else "-",
+        str(total_tests),
+        str(total_passed),
+        str(total_failed) if total_failed else "-",
+        str(total_skipped) if total_skipped else "-",
         f"{duration:.1f}s",
         style="bold",
     )
