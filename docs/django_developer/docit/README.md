@@ -111,12 +111,42 @@ def on_page_by_slug(request, slug=None):
     return Page.objects.get(slug=slug).on_rest_get(request)
 ```
 
+## Render Endpoint
+
+`POST /api/docit/render` renders arbitrary Markdown to HTML server-side. Requires authentication.
+
+```python
+from mojo.apps.docit.services.markdown import MarkdownRenderer
+
+renderer = MarkdownRenderer()
+html = renderer.render("# Hello\n\n```python\nprint('hi')\n```")
+```
+
+The REST endpoint exposes the same renderer:
+
+```
+POST /api/docit/render
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{"markdown": "# Hello World"}
+```
+
+Response:
+
+```json
+{"status": true, "html": "<h1>Hello World</h1>\n"}
+```
+
 ## Markdown Plugins
 
 The `MarkdownRenderer` supports:
-- Table of contents generation
-- Syntax highlighting for code blocks
+- Syntax highlighting for code blocks via Pygments (`monokai` theme, `highlight` CSS class)
 - Custom plugins via `mojo/apps/docit/services/markdown.py`
+
+### HighlightRenderer — invalid language fallback
+
+`HighlightRenderer.block_code` now catches `ClassNotFound` from Pygments when an unrecognized language name is used in a fenced code block. Instead of raising an exception, it falls back to a plain `<pre>` block. This means markdown like ` ```notareallanguage ` renders safely without errors.
 
 ## Circular Reference Prevention
 

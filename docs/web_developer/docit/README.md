@@ -18,6 +18,7 @@ Documentation/wiki system with hierarchical pages and Markdown rendering.
 | PUT/POST | `/api/docit/page/<id>` | Update page |
 | DELETE | `/api/docit/page/<id>` | Delete page |
 | GET | `/api/docit/page/slug/<slug>` | Get page by slug |
+| POST | `/api/docit/render` | Render Markdown to HTML |
 
 ## Get a Page
 
@@ -106,3 +107,35 @@ GET /api/docit/page?search=authentication
   "is_published": true
 }
 ```
+
+## Render Markdown
+
+**POST** `/api/docit/render`
+
+Permission required: authenticated (any logged-in user).
+
+Request:
+
+```json
+{
+  "markdown": "# Hello World\n\n```python\nprint('hi')\n```"
+}
+```
+
+Response:
+
+```json
+{
+  "status": true,
+  "html": "<h1>Hello World</h1>\n<div class=\"highlight\">...</div>\n"
+}
+```
+
+Code blocks are syntax-highlighted using Pygments (`monokai` theme). The `highlight` CSS class is applied to the wrapper `<div>`. If an unrecognized language name is used, the block renders as a plain `<pre>` element with no highlighting.
+
+Error responses:
+
+| Status | Condition |
+|---|---|
+| 400 | `markdown` field missing or empty |
+| 401 | Not authenticated |
