@@ -9,6 +9,9 @@
 
 set -euo pipefail
 
+# Ensure Homebrew and common tool paths are available
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Start server if not already running; track so we know to stop it after

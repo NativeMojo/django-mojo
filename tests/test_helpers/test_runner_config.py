@@ -11,12 +11,12 @@ def test_config_loads(opts):
     from mojo.helpers import paths
 
     test_root = os.path.join(os.path.dirname(os.path.dirname(__file__)))
-    module_path = os.path.join(test_root, "test_accounts")
+    module_path = os.path.join(test_root, "test_oauth")
 
     config = _load_module_config(module_path)
-    th.assert_true(config.serial is True, "test_accounts should be serial=True")
+    th.assert_true(config.serial is True, "test_oauth should be serial=True")
     th.assert_true("mojo.apps.account" in config.requires_apps,
-                    "test_accounts should require mojo.apps.account")
+                    "test_oauth should require mojo.apps.account")
 
 
 @th.django_unit_test("TESTIT config: defaults when no TESTIT defined")
