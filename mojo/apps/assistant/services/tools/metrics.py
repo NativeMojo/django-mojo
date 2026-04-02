@@ -1,5 +1,9 @@
 """Metrics domain tools — fetch metrics, system health, incident trends."""
+import re
 from mojo.helpers import dates
+
+# Valid account scopes for metrics
+_VALID_ACCOUNT_RE = re.compile(r"^(public|global|group-\d+|user-\d+)$")
 
 
 def _tool_fetch_metrics(params, user):
@@ -11,6 +15,8 @@ def _tool_fetch_metrics(params, user):
 
     granularity = params.get("granularity", "hours")
     account = params.get("account", "public")
+    if not _VALID_ACCOUNT_RE.match(account):
+        return {"error": f"Invalid account scope: {account}. Use public, global, group-<id>, or user-<id>."}
     dt_start = None
     dt_end = None
 

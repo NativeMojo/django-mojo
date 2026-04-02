@@ -2,6 +2,7 @@
 
 
 MAX_RESULTS = 50
+MAX_MINUTES = 43200  # 30 days
 
 
 def _tool_query_groups(params, user):
@@ -43,9 +44,10 @@ def _tool_get_group_detail(params, user):
     member_count = GroupMember.objects.filter(group=group).count()
     children_count = Group.objects.filter(parent=group).count()
 
-    # Exclude secrets from metadata
+    # Only expose safe, known metadata keys (allowlist)
+    safe_keys = {"timezone", "short_name", "description", "website", "industry"}
     safe_metadata = {k: v for k, v in (group.metadata or {}).items()
-                     if "secret" not in k.lower() and "key" not in k.lower()}
+                     if k in safe_keys}
 
     return {
         "id": group.pk,
@@ -92,7 +94,7 @@ def _tool_get_group_activity(params, user):
     from mojo.helpers import dates
 
     group_id = params["group_id"]
-    minutes = params.get("minutes", 1440)
+    minutes = min(params.get("minutes", 1440), MAX_MINUTES)
     since = dates.subtract(minutes=minutes)
 
     # Events related to the group via model reference

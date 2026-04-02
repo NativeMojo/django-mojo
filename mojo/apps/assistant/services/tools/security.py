@@ -3,6 +3,7 @@ from mojo.helpers import dates
 
 
 MAX_RESULTS = 50
+MAX_MINUTES = 43200  # 30 days
 
 
 def _tool_query_incidents(params, user):
@@ -18,7 +19,7 @@ def _tool_query_incidents(params, user):
     if params.get("source_ip"):
         criteria["source_ip"] = params["source_ip"]
 
-    minutes = params.get("minutes", 1440)
+    minutes = min(params.get("minutes", 1440), MAX_MINUTES)
     criteria["created__gte"] = dates.subtract(minutes=minutes)
 
     limit = min(params.get("limit", MAX_RESULTS), MAX_RESULTS)
@@ -52,7 +53,7 @@ def _tool_query_events(params, user):
     if params.get("level_gte"):
         criteria["level__gte"] = params["level_gte"]
 
-    minutes = params.get("minutes", 60)
+    minutes = min(params.get("minutes", 60), MAX_MINUTES)
     criteria["created__gte"] = dates.subtract(minutes=minutes)
 
     limit = min(params.get("limit", MAX_RESULTS), MAX_RESULTS)

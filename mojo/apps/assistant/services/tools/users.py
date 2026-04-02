@@ -2,6 +2,7 @@
 
 
 MAX_RESULTS = 50
+MAX_MINUTES = 43200  # 30 days
 
 # Fields to never expose in tool results
 SENSITIVE_FIELDS = {"password", "auth_key", "onetime_code"}
@@ -74,7 +75,7 @@ def _tool_get_user_activity(params, user):
     from mojo.apps.incident.models import Event
 
     user_id = params["user_id"]
-    minutes = params.get("minutes", 1440)
+    minutes = min(params.get("minutes", 1440), MAX_MINUTES)
 
     from mojo.helpers import dates
     since = dates.subtract(minutes=minutes)

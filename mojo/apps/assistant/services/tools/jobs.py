@@ -3,6 +3,7 @@ from mojo.helpers import dates
 
 
 MAX_RESULTS = 50
+MAX_MINUTES = 43200  # 30 days
 
 
 def _tool_query_jobs(params, user):
@@ -16,7 +17,7 @@ def _tool_query_jobs(params, user):
     if params.get("func"):
         criteria["func__icontains"] = params["func"]
 
-    minutes = params.get("minutes", 1440)
+    minutes = min(params.get("minutes", 1440), MAX_MINUTES)
     criteria["created__gte"] = dates.subtract(minutes=minutes)
 
     limit = min(params.get("limit", MAX_RESULTS), MAX_RESULTS)
@@ -81,7 +82,7 @@ def _tool_get_job_stats(params, user):
     from mojo.apps.jobs.models import Job
     from django.db.models import Count, Avg, F
 
-    minutes = params.get("minutes", 1440)
+    minutes = min(params.get("minutes", 1440), MAX_MINUTES)
     since = dates.subtract(minutes=minutes)
 
     qs = Job.objects.filter(created__gte=since)

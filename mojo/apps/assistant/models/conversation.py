@@ -17,18 +17,14 @@ class Conversation(models.Model, MojoModel):
         ordering = ["-modified"]
 
     class RestMeta:
+        # All mutations go through the service layer (run_assistant).
+        # RestMeta endpoint is read-only, owner-scoped.
+        NO_REST_SAVE = True
         VIEW_PERMS = ["view_admin"]
-        SAVE_PERMS = ["view_admin"]
         OWNER_FIELD = "user"
         GRAPHS = {
             "default": {
                 "fields": ["id", "title", "created", "modified"],
-            },
-            "detail": {
-                "fields": ["id", "title", "metadata", "created", "modified"],
-                "graphs": {
-                    "messages": "default",
-                },
             },
         }
 
@@ -58,10 +54,13 @@ class Message(models.Model, MojoModel):
         ordering = ["created"]
 
     class RestMeta:
+        # Messages are only accessible via the conversation detail endpoint.
+        # No direct RestMeta endpoint exposed.
+        NO_REST = True
         VIEW_PERMS = ["view_admin"]
         GRAPHS = {
             "default": {
-                "fields": ["id", "role", "content", "tool_calls", "created"],
+                "fields": ["id", "role", "content", "created"],
             },
         }
 

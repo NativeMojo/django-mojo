@@ -218,9 +218,9 @@ def run_assistant(user, message, conversation_id=None):
                             "tool": tool_name,
                             "input": tool_input,
                         })
-                    except Exception as e:
+                    except Exception:
                         logger.exception("Tool %s failed", tool_name)
-                        tool_result = {"error": str(e)}
+                        tool_result = {"error": f"Tool '{tool_name}' encountered an internal error."}
 
                 tool_results.append({
                     "type": "tool_result",
