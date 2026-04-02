@@ -8,3 +8,4 @@ from .book import *
 from .page import *
 from .page_revision import *
 from .asset import *
+from .render import *

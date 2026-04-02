@@ -626,3 +626,68 @@ def test_page_html_property(opts):
     html = page.html
     assert "<h2>Sub-header</h2>" in html, f"Should render sub-header. Got:\n{html}"
     assert "<ul>" in html and "<li>One</li>" in html, f"Should render list. Got:\n{html}"
+
+
+@th.django_unit_test()
+def test_invalid_language_code_block(opts):
+    """Test that invalid language names in code blocks don't crash the renderer."""
+    from mojo.apps.docit.services.markdown import MarkdownRenderer
+
+    renderer = MarkdownRenderer()
+    code_block = "```notareallanguage\nsome code here\n```"
+    html = renderer.render(code_block)
+    assert "<pre>" in html, f"Invalid language should fall back to plain pre block. Got:\n{html}"
+    assert "some code here" in html, f"Code content should still be present. Got:\n{html}"
+
+
+@th.django_unit_test()
+def test_render_endpoint_valid_markdown(opts):
+    """Test POST /api/docit/render with valid markdown."""
+    resp = opts.client.login(TEST_USER, TEST_PWORD)
+    assert opts.client.is_authenticated, "Authentication failed"
+
+    resp = opts.client.post("/api/docit/render", json={"markdown": "# Hello World"})
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
+    assert "<h1>Hello World</h1>" in resp.response.data.html, \
+        f"Expected rendered h1 tag. Got: {resp.response.data.html}"
+
+
+@th.django_unit_test()
+def test_render_endpoint_code_highlighting(opts):
+    """Test that code blocks render with syntax highlighting."""
+    assert opts.client.is_authenticated, "Should still be authenticated"
+
+    markdown = "```python\nprint('hello')\n```"
+    resp = opts.client.post("/api/docit/render", json={"markdown": markdown})
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
+    assert '<div class="highlight">' in resp.response.data.html, \
+        f"Expected syntax highlighting. Got: {resp.response.data.html}"
+
+
+@th.django_unit_test()
+def test_render_endpoint_missing_markdown(opts):
+    """Test POST /api/docit/render without markdown field returns 400."""
+    assert opts.client.is_authenticated, "Should still be authenticated"
+
+    resp = opts.client.post("/api/docit/render", json={"content": "# Hello"})
+    assert resp.status_code == 400, f"Expected 400 for missing markdown field, got {resp.status_code}"
+
+
+@th.django_unit_test()
+def test_render_endpoint_empty_markdown(opts):
+    """Test POST /api/docit/render with empty string returns 400."""
+    assert opts.client.is_authenticated, "Should still be authenticated"
+
+    resp = opts.client.post("/api/docit/render", json={"markdown": ""})
+    assert resp.status_code == 400, f"Expected 400 for empty markdown, got {resp.status_code}"
+
+
+@th.django_unit_test()
+def test_render_endpoint_unauthenticated(opts):
+    """Test that unauthenticated requests to /api/docit/render are rejected."""
+    opts.client.logout()
+    assert not opts.client.is_authenticated, "Should be logged out"
+
+    resp = opts.client.post("/api/docit/render", json={"markdown": "# Test"})
+    assert resp.status_code in (401, 403), \
+        f"Expected 401 or 403 for unauthenticated request, got {resp.status_code}"
