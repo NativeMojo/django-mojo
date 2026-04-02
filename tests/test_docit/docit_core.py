@@ -419,26 +419,6 @@ def test_docit_service_create_book_with_homepage(opts):
     opts.service_homepage_id = homepage.id
 
 
-# @th.django_unit_test()
-# def test_docit_service_move_page(opts):
-#     """Test DocItService move_page functionality."""
-#     from mojo.apps.docit.models import Page
-#     from mojo.apps.docit.services import DocItService
-
-#     page = Page.objects.get(id=opts.test_child_page_id)
-#     service_homepage = Page.objects.get(id=opts.service_homepage_id)
-
-#     original_parent = page.parent
-#     original_path = page.full_path
-
-#     # Move page to different parent
-#     DocItService.move_page(page, new_parent=service_homepage, new_position=500)
-
-#     page.refresh_from_db()
-#     assert page.parent == service_homepage, "Page should have new parent"
-#     assert page.order_priority == 500, "Page should have new position"
-#     assert page.full_path != original_path, "Page path should change after move"
-
 
 @th.django_unit_test()
 def test_docit_service_duplicate_page(opts):
@@ -616,41 +596,6 @@ def test_page_revision_restore_functionality(opts):
     assert new_revision.version > old_revision.version, "New revision should have higher version number"
 
 
-# @th.django_unit_test()
-# def test_cleanup_docit_test_data(opts):
-#     """Clean up test data created during DocIt testing."""
-#     from mojo.apps.account.models import User, Group
-#     from mojo.apps.docit.models import Book, Page, PageRevision, Asset
-
-#     # Clean up test data
-#     Book.objects.filter(title__startswith='test_').delete()  # Cascades to pages and assets
-#     Page.objects.filter(title__startswith='test_').delete()  # Clean any remaining pages
-#     PageRevision.objects.filter(change_summary__startswith='test_').delete()  # Clean any remaining revisions
-#     Asset.objects.filter(alt_text__startswith='test_').delete()  # Clean any remaining assets
-#     Group.objects.filter(name__startswith='test_org_docit').delete()
-
-#     # Reset user permissions and org assignments
-#     user = User.objects.get(username=TEST_USER)
-#     user.org = None
-#     user.remove_permission("manage_docit")
-#     user.save()
-
-#     admin = User.objects.get(username=ADMIN_USER)
-#     admin.remove_permission("manage_docit")
-#     admin.save()
-
-#     # Verify cleanup
-#     remaining_books = Book.objects.filter(title__startswith='test_').count()
-#     remaining_pages = Page.objects.filter(title__startswith='test_').count()
-#     remaining_revisions = PageRevision.objects.filter(change_summary__startswith='test_').count()
-#     remaining_assets = Asset.objects.filter(alt_text__startswith='test_').count()
-
-#     assert remaining_books == 0, f"Expected 0 remaining books, found {remaining_books}"
-#     assert remaining_pages == 0, f"Expected 0 remaining pages, found {remaining_pages}"
-#     assert remaining_revisions == 0, f"Expected 0 remaining revisions, found {remaining_revisions}"
-#     assert remaining_assets == 0, f"Expected 0 remaining assets, found {remaining_assets}"
-
-
 @th.django_unit_test()
 def test_markdown_rendering_service(opts):
     """Test the MarkdownRenderer service and its plugins."""
@@ -666,12 +611,6 @@ def test_markdown_rendering_service(opts):
     code_block = "```python\nprint('Hello')\n```"
     html = renderer.render(code_block)
     assert '<div class="highlight">' in html, f"Should have a python code block. Got:\n{html}"
-
-    # # Test TOC (Note: our simple plugin just creates a placeholder)
-    # toc_markdown = "[TOC]\n\n# Header 1\n\n## Header 2"
-    # html = renderer.render(toc_markdown)
-    # assert '<div class="toc">' in html, f"Should have a TOC placeholder. Got:\n{html}"
-
 
 
 @th.django_unit_test()

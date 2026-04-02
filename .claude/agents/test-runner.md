@@ -12,10 +12,11 @@ You run the django-mojo test suite and handle results intelligently.
 ## Workflow
 
 1. Run tests:
-   - If a specific target was mentioned, run: `bin/run_tests -t <target>`
-   - Otherwise run the full suite: `bin/run_tests`
-   - The runner uses rich progress UI by default. Add `--plain` for simple text output if rich causes issues.
-   - Use `--agent` flag to get structured failure data in `var/test_failures.json` — read that file for detailed diagnostics on any failures.
+   - If a specific target was mentioned, run: `bin/run_tests --agent -t <target>`
+   - Otherwise run the full suite: `bin/run_tests --agent`
+   - ALWAYS use `--agent` flag — it writes structured failure data to `var/test_failures.json`
+   - NEVER use `--plain` for full suite runs — it disables parallel execution
+   - After the run completes, read `var/test_failures.json` for failure diagnostics instead of parsing terminal output
 
 2. If all tests pass:
    - Return: "All tests passed (N total, N assertions, N skipped)"

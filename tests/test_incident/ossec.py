@@ -327,29 +327,6 @@ def test_clean_text_data_coverage(opts):
 
 
 
-
-# @th.django_unit_test()
-# def test_save_raw_ossec_parsing(opts):
-#     from mojo.apps.incident.parsers import ossec
-#     from mojo.helpers import logit
-#     assert os.path.exists(batch_file_path), "could not load test file"
-#     batch = objict.from_file(batch_file_path)
-#     expected = nobjict()
-#     for sec_alert in batch.tests:
-#         alert = ossec.parse(sec_alert)
-#         #assert expected[sec_alert.alert_id] == alert, f"does not match {sec_alert.alert_id}"
-#         expected[sec_alert.alert_id] = alert
-#     expected.save(os.path.join(current_dir, "ossec_expected.json"))
-
-
-# @th.django_unit_test()
-# def test_ossec_rest_skips_none_single(opts):
-#     """Ensure single REST handler returns 200 and skips None alerts."""
-#     # Post an empty body which will parse to None and should be skipped gracefully
-#     resp = opts.client.post("/api/incident/ossec/alert", "", content_type="text/plain")
-#     assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
-
-
 @th.django_unit_test()
 def test_ossec_rest_batch_skips_none_and_processes_valid(opts):
     """Ensure batch REST handler skips None entries and processes valid ones."""
