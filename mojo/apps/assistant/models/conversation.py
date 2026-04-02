@@ -17,8 +17,6 @@ class Conversation(models.Model, MojoModel):
         ordering = ["-modified"]
 
     class RestMeta:
-        # All mutations go through the service layer (run_assistant).
-        # RestMeta endpoint is read-only, owner-scoped.
         NO_REST_SAVE = True
         VIEW_PERMS = ["view_admin"]
         OWNER_FIELD = "user"
