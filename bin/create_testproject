@@ -109,6 +109,7 @@ INSTALLED_APPS = [
     "mojo.apps.filevault",
     "mojo.apps.shortlink",
     "mojo.apps.chat",
+    "mojo.apps.assistant",
     "django.contrib.humanize",
     "django.contrib.auth",
     "django.contrib.contenttypes",
