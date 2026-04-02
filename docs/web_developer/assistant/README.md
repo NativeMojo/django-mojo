@@ -204,11 +204,11 @@ The assistant checks the user's permissions before executing each tool. The tool
 
 | Permission | Tools Available |
 |---|---|
-| `view_security` | Query incidents, events, event counts, tickets, rulesets, IP history, incident timeline, incident trends |
+| `view_security` | Query incidents, events, event counts, tickets, rulesets, IP history, incident timeline, incident trends, list event categories |
 | `manage_security` | All `view_security` tools + update incident, block IP, create ticket |
-| `view_jobs` | Query jobs, job events, job logs, job stats, queue health |
+| `view_jobs` | Query jobs, job events, job logs, job stats, queue health, list job channels |
 | `manage_jobs` | All `view_jobs` tools + cancel job, retry job |
-| `view_admin` | Query users, user detail, user activity, rate limits, permission summary, fetch metrics, system health |
+| `view_admin` | Query users, user detail, user activity, rate limits, permission summary, fetch metrics, system health, list tools, list metric categories/slugs, list permissions |
 | `view_groups` | Query groups, group detail, group members, group activity |
 
 Users without any of these permissions will receive: `"You don't have permissions for any assistant tools."`
