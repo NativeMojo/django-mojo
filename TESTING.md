@@ -23,7 +23,9 @@ This generates `testproject/`, creates a `mojo_test` PostgreSQL database, and ru
 Use `bin/run_tests` — it starts the server, runs the suite, and stops the server automatically:
 
 ```bash
-./bin/run_tests                        # run all tests
+./bin/run_tests                        # run all tests (skips opt-in modules)
+./bin/run_tests --full                 # run all tests including opt-in modules
+./bin/run_tests --agent                # run all tests, write structured report to var/test_failures.json
 ./bin/run_tests -t test_accounts       # run one module
 ./bin/run_tests -t test_accounts.login # run one test file
 ./bin/run_tests -q                     # quick tests only
@@ -57,6 +59,26 @@ If you need to control the server directly:
 
 Server runs on `http://127.0.0.1:5555`. Redis is started automatically if not already running.
 
+## Opt-in Modules
+
+Some test modules are slow or only relevant before publishing. They are skipped by default and require `--full` (or `--extra slow`) to run:
+
+| Module | Why opt-in |
+|---|---|
+| `test_security` | Bouncer/rate-limiting tests (~20s, serial) |
+
+To add more opt-in modules, set `"requires_extra": ["slow"]` in the module's `__init__.py` TESTIT config.
+
+## Agent Mode
+
+`--agent` writes `var/test_failures.json` — a structured JSON report designed for LLM agents and CI pipelines. It includes:
+
+- **Top-level**: `status` (passed/failed), total, passed, failed, skipped, duration
+- **modules**: per-module breakdown with tests/passed/failed/skipped/duration
+- **failures**: per-failure diagnostics (file path, line number, test source, traceback, server log tail)
+
+LLM agents should always use `--agent` and read the JSON report instead of parsing terminal output.
+
 ## Test Layout
 
 Tests live in `tests/` at the repo root, organised by module:
@@ -65,7 +87,7 @@ Tests live in `tests/` at the repo root, organised by module:
 tests/
 ├── test_accounts/      # auth, login, tokens, sessions
 ├── test_helpers/       # crypto, settings, content_guard, etc.
-├── test_security/      # route security audit
+├── test_security/      # route security audit (opt-in: --full)
 └── ...
 ```
 

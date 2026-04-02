@@ -30,7 +30,8 @@ Make the changes described in the plan. The rules files (`.claude/rules/`) are l
 
 ### 5. Write and Run Tests
 - Write testit tests covering the scenarios in the plan
-- Run with `bin/run_tests -t <target>`
+- Run with `bin/run_tests --agent -t <target>`
+- Read `var/test_failures.json` for structured diagnostics
 - Fix any failures in your code (not in the tests)
 - Do not proceed until targeted tests pass
 
