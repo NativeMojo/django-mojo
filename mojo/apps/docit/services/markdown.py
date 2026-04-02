@@ -23,6 +23,7 @@ class HighlightRenderer(mistune.HTMLRenderer):
 
 class MarkdownRenderer:
     _renderer = None
+    _safe_renderer = None
 
     def __init__(self):
         if not self._renderer:
@@ -30,9 +31,15 @@ class MarkdownRenderer:
 
     def _initialize_renderer(self):
         # plugins = self._discover_plugins()
-        self._renderer = mistune.create_markdown(
+        MarkdownRenderer._renderer = mistune.create_markdown(
             renderer=HighlightRenderer(escape=False),
             escape=False,
+            hard_wrap=True,
+            plugins=[]
+        )
+        MarkdownRenderer._safe_renderer = mistune.create_markdown(
+            renderer=HighlightRenderer(escape=True),
+            escape=True,
             hard_wrap=True,
             plugins=[]
         )
@@ -46,3 +53,6 @@ class MarkdownRenderer:
 
     def render(self, markdown_text):
         return self._renderer(markdown_text)
+
+    def render_safe(self, markdown_text):
+        return self._safe_renderer(markdown_text)

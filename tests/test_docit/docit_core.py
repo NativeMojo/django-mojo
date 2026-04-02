@@ -683,6 +683,32 @@ def test_render_endpoint_empty_markdown(opts):
 
 
 @th.django_unit_test()
+def test_render_endpoint_escapes_raw_html(opts):
+    """Test that the render endpoint escapes raw HTML to prevent XSS."""
+    resp = opts.client.login(TEST_USER, TEST_PWORD)
+    assert opts.client.is_authenticated, "Authentication failed"
+
+    resp = opts.client.post("/api/docit/render", json={
+        "markdown": '<script>alert(1)</script>'
+    })
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
+    assert "<script>" not in resp.response.data.html, \
+        f"Raw script tags should be escaped. Got: {resp.response.data.html}"
+    assert "&lt;script&gt;" in resp.response.data.html, \
+        f"Script tags should be HTML-escaped. Got: {resp.response.data.html}"
+
+
+@th.django_unit_test()
+def test_render_endpoint_size_limit(opts):
+    """Test that oversized markdown input is rejected with 413."""
+    assert opts.client.is_authenticated, "Should still be authenticated"
+
+    large_markdown = "x" * 500_000
+    resp = opts.client.post("/api/docit/render", json={"markdown": large_markdown})
+    assert resp.status_code == 413, f"Expected 413 for oversized input, got {resp.status_code}"
+
+
+@th.django_unit_test()
 def test_render_endpoint_unauthenticated(opts):
     """Test that unauthenticated requests to /api/docit/render are rejected."""
     opts.client.logout()
