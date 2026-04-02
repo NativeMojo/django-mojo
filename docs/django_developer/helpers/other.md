@@ -1,24 +1,5 @@
 # Other Helpers — Django Developer Reference
 
-## redis
-
-```python
-from mojo.helpers.redis import get_client
-
-r = get_client()
-r.set("key", "value", ex=3600)
-value = r.get("key")
-```
-
-Wraps the `redis-py` client with connection management from settings. Configure via:
-
-```python
-# settings.py
-REDIS_HOST = "localhost"
-REDIS_PORT = 6379
-REDIS_DB = 0
-```
-
 ## stats
 
 ```python
