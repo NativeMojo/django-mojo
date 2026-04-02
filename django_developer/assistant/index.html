@@ -3720,6 +3720,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#discovery-domain-view_admin-view_security-view_jobs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Discovery Domain (view_admin / view_security / view_jobs)
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -3825,6 +3836,117 @@
     <span class="md-ellipsis">
       
         Message
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#websocket-interface" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WebSocket Interface
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="WebSocket Interface">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#architecture_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architecture
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#key-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key Files
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-messages-are-routed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How Messages Are Routed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#background-processing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Background Processing
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#structured-data-blocks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Structured Data Blocks
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Structured Data Blocks">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How It Works
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#block-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Block Types
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#customizing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Customizing
       
     </span>
   </a>
@@ -4137,6 +4259,49 @@
 </tr>
 </tbody>
 </table>
+<h3 id="discovery-domain-view_admin-view_security-view_jobs">Discovery Domain (<code>view_admin</code> / <code>view_security</code> / <code>view_jobs</code>)<a class="headerlink" href="#discovery-domain-view_admin-view_security-view_jobs" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>Permission</th>
+<th>Mutates</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>list_tools</code></td>
+<td><code>view_admin</code></td>
+<td>No</td>
+</tr>
+<tr>
+<td><code>list_metric_categories</code></td>
+<td><code>view_admin</code></td>
+<td>No</td>
+</tr>
+<tr>
+<td><code>list_metric_slugs</code></td>
+<td><code>view_admin</code></td>
+<td>No</td>
+</tr>
+<tr>
+<td><code>list_job_channels</code></td>
+<td><code>view_jobs</code></td>
+<td>No</td>
+</tr>
+<tr>
+<td><code>list_event_categories</code></td>
+<td><code>view_security</code></td>
+<td>No</td>
+</tr>
+<tr>
+<td><code>list_permissions</code></td>
+<td><code>view_admin</code></td>
+<td>No</td>
+</tr>
+</tbody>
+</table>
+<p>Discovery tools let the LLM explore the system. When a user asks "what metrics do we track?" or "what can you do?", the LLM calls these tools to find valid slugs, categories, channels, and permissions — rather than guessing.</p>
 <h2 id="permission-enforcement">Permission Enforcement<a class="headerlink" href="#permission-enforcement" title="Permanent link">&para;</a></h2>
 <p>Every tool call passes through a permission gate before execution. The gate checks <code>user.has_permission(tool_permission)</code> at call time, not at conversation start. This means:</p>
 <ul>
@@ -4332,8 +4497,49 @@
 </tr>
 </tbody>
 </table>
+<h2 id="websocket-interface">WebSocket Interface<a class="headerlink" href="#websocket-interface" title="Permanent link">&para;</a></h2>
+<p>The assistant also supports a WebSocket transport for real-time chat UIs. This uses the existing realtime system — no new WebSocket endpoint needed.</p>
+<h3 id="architecture_1">Architecture<a class="headerlink" href="#architecture_1" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>Client sends WS message {type: &quot;assistant_message&quot;, message: &quot;...&quot;, conversation_id: N}
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>  → User.on_realtime_message() dispatches to assistant handler
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>  → Handler validates, stores message, returns {type: &quot;assistant:thinking&quot;} immediately
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>  → Background job runs run_assistant_ws() with on_event callback
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>  → Callback publishes WS events back to the user:
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>      assistant:tool_call  (per tool)
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>      assistant:response   (final answer)
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>      assistant:error      (on failure)
+</code></pre></div>
+<h3 id="key-files">Key Files<a class="headerlink" href="#key-files" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>mojo/apps/assistant/handler.py</code> — WS message handler + background job function</li>
+<li><code>mojo/apps/assistant/services/agent.py</code> — <code>run_assistant_ws()</code> variant with event callbacks</li>
+<li><code>mojo/apps/account/models/user.py</code> — <code>on_realtime_message</code> dispatches <code>assistant_*</code> types</li>
+</ul>
+<h3 id="how-messages-are-routed">How Messages Are Routed<a class="headerlink" href="#how-messages-are-routed" title="Permanent link">&para;</a></h3>
+<p>The <code>User.on_realtime_message</code> method checks if the message type starts with <code>assistant_</code> and delegates to <code>handle_assistant_message()</code> — identical to how <code>chat_*</code> messages are routed to the chat handler.</p>
+<h3 id="background-processing">Background Processing<a class="headerlink" href="#background-processing" title="Permanent link">&para;</a></h3>
+<p>LLM calls are too slow to block the WebSocket handler. The handler publishes a job via <code>mojo.apps.jobs</code> and returns immediately. The job function (<code>execute_assistant_job</code>) runs the agent loop and uses <code>send_to_user()</code> from the realtime manager to push events back to the user's WebSocket connections.</p>
+<h2 id="structured-data-blocks">Structured Data Blocks<a class="headerlink" href="#structured-data-blocks" title="Permanent link">&para;</a></h2>
+<p>Responses can include a <code>blocks</code> array with structured data for frontend rendering. The LLM decides when to include blocks based on the data — tables for query results, charts for trends, stat cards for key metrics.</p>
+<h3 id="how-it-works">How It Works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h3>
+<ol>
+<li>The system prompt defines three block types: <code>table</code>, <code>chart</code>, <code>stat</code></li>
+<li>The LLM wraps structured data in <code>```assistant_block</code> code fences within its text response</li>
+<li><code>_parse_blocks()</code> in <code>agent.py</code> extracts valid blocks and strips the fences from the text</li>
+<li>The response includes both clean <code>response</code> text and a <code>blocks</code> array</li>
+<li>Raw text (with fences) is stored in the Message for audit</li>
+</ol>
+<h3 id="block-types">Block Types<a class="headerlink" href="#block-types" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong><code>table</code></strong> — <code>{type, title, columns, rows}</code> — query results, comparisons</li>
+<li><strong><code>chart</code></strong> — <code>{type, chart_type, title, labels, series}</code> — line/bar/pie/area for trends</li>
+<li><strong><code>stat</code></strong> — <code>{type, items: [{label, value}]}</code> — dashboard key metrics</li>
+</ul>
+<h3 id="customizing">Customizing<a class="headerlink" href="#customizing" title="Permanent link">&para;</a></h3>
+<p>Override <code>LLM_ADMIN_SYSTEM_PROMPT</code> to change the block format instructions. The parser (<code>_parse_blocks</code>) only requires valid JSON with a recognized <code>type</code> field inside <code>```assistant_block</code> fences.</p>
+<p>See <a href="../../web_developer/assistant/#structured-data-blocks">web_developer/assistant/README.md</a> for the full block schema reference and frontend rendering examples.</p>
 <h2 id="tests">Tests<a class="headerlink" href="#tests" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>./bin/run_tests<span class="w"> </span>-t<span class="w"> </span>test_assistant
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>./bin/run_tests<span class="w"> </span>-t<span class="w"> </span>test_assistant
 </code></pre></div>
 <p>Test files:
 - <code>tests/test_assistant/1_test_permissions.py</code> — Registry, permission gate, feature flag, sensitive field exclusion
