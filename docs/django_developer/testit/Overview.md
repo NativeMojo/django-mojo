@@ -10,31 +10,46 @@ It is intentionally lightweight so both humans and LLM agents can reason about a
 - Prefer reusing state instead of recreating fixtures. Store shared objects on `opts` during setup and tear them down only when reuse is impossible.
 - Tests are documentation. If an API feels awkward, pause and call it out rather than embedding new logic in the test.
 - Expensive or destructive flows must opt-in via `--extra` or the `@requires_extra` decorator.
-- Name test packages `test_<app>` (for example `test_accounts`) to avoid module collisions with real Django apps.
+- Name test packages `test_<domain>` (for example `test_auth`, `test_user_mgmt`) to avoid module collisions with real Django apps. Splitting a large app across multiple focused packages is encouraged — each package runs in parallel independently.
 
 ---
 
 ## Project Layout
 
 ```
-apps/
-  tests/
-    test_accounts/
-      __init__.py
-      1_test_models.py
-      2_test_views.py
-      3_test_flows.py
+tests/
+  test_auth/         # login, magic login, secrets, permissions  (parallel)
+    __init__.py
+    accounts.py
+    magic_login.py
+    secrets.py
+  test_mfa/          # TOTP, passkeys, verification              (parallel)
+    __init__.py
+    totp.py
+    passkeys.py
+  test_oauth/        # OAuth flows — calls server_settings()     (serial)
+    __init__.py
+    oauth.py
+    oauth_apple.py
+  test_security/     # bouncer, device tracking, PII             (serial)
+    __init__.py
+    bouncer.py
+    device_tracking.py
+  test_user_mgmt/    # invite, deactivation, API keys            (parallel)
+    __init__.py
+    invite_flow.py
+    deactivation.py
 docs/
   testit/
-    index.md
     examples/
       1_test_models.py
       3_test_flows.py
       testit.config.json
 ```
 
-- Sorting comes from prefixes. Adjust numbers (or add `_suffix`) to control module order.
-- **Do not name test packages identically to the Django app.** Use `tests/test_accounts/` instead of `tests/accounts/` so imports never collide when the runner appends the folder to `sys.path`.
+- Sorting within a package comes from filenames. Use `1_`, `2_` prefixes when execution order inside a package matters.
+- **Do not name test packages identically to the Django app.** Use `tests/test_auth/` instead of `tests/auth/` so imports never collide when the runner appends the folder to `sys.path`.
+- Split large app test suites into domain-focused packages. Each package runs in parallel independently, so smaller packages reduce total wall-clock time.
 - Each file keeps decorators at the top, followed by related tests in definition order.
 - Example files live in `docs/testit/examples/` for quick copy/paste or prompting.
 
@@ -47,10 +62,10 @@ Use `bin/run_tests` — it handles starting and stopping the test server automat
 - Run everything:
   `./bin/run_tests`
 - Target a module or a specific file:
-  `./bin/run_tests -t test_accounts`
-  `./bin/run_tests -t test_accounts.1_test_models`
+  `./bin/run_tests -t test_auth`
+  `./bin/run_tests -t test_auth.accounts`
 - Multiple modules:
-  `./bin/run_tests -t test_accounts.1_test_models -t test_billing.3_test_flows`
+  `./bin/run_tests -t test_auth.accounts -t test_billing.3_test_flows`
 - Verbose output and stop on first failure:
   `./bin/run_tests -v -s`
 - Resume from the last failed test file (skips DB flush, picks up where `-s` stopped):
@@ -112,13 +127,13 @@ Supported keys:
 
 ```json
 {
-  "tests": ["test_accounts", "test_helpers.cron"],
+  "tests": ["test_auth", "test_helpers.cron"],
   "ignore": ["test_aws"],
   "stop_on_fail": true,
   "show_errors": true,
   "verbose": true,
   "nomojo": true,
-  "module": "test_accounts",
+  "module": "test_auth",
   "extra": "run-backfill,cleanup"
 }
 ```
@@ -135,14 +150,21 @@ Supported keys:
 Each test package can declare a `TESTIT` dict in its `__init__.py` to control how the runner handles it. The runner reads the file via AST — the module is never imported during config loading, so there are no side effects.
 
 ```python
-# tests/test_accounts/__init__.py
+# tests/test_auth/__init__.py  — parallel module (default)
 TESTIT = {
-    "serial": True,                          # do not run this module in parallel
     "requires_apps": ["mojo.apps.account"],  # skip if app is not installed
-    "server_settings": {},                   # dict of Django settings to apply before the module runs
+}
+
+# tests/test_oauth/__init__.py  — serial because oauth.py calls th.server_settings()
+TESTIT = {
+    "requires_apps": ["mojo.apps.account"],
+    "serial": True,                          # do not run this module in parallel
+    "server_settings": {},                   # dict of Django settings to apply before the module starts
     "requires_extra": [],                    # list of --extra flags required to run this module
 }
 ```
+
+When a large app has many tests, split it into domain-focused packages (`test_auth`, `test_mfa`, `test_user_mgmt`, etc.) rather than one monolithic `test_accounts`. Each package runs in parallel by default; only packages that call `th.server_settings()` mid-run need `"serial": True`.
 
 Supported keys:
 
