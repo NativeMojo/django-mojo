@@ -94,9 +94,17 @@ def _build_conversation_messages(conversation, max_history):
     return messages
 
 
-def run_assistant(user, message, conversation_id=None):
+def run_assistant(user, message, conversation_id=None, on_event=None):
     """
     Main entry point for the admin assistant.
+
+    Args:
+        user:            The requesting User instance.
+        message:         The user's natural language message.
+        conversation_id: Optional existing conversation to continue.
+        on_event:        Optional callback ``(event_type, data_dict)`` for
+                         live progress events (used by the WS handler).
+                         Events: ``tool_call``, ``thinking``.
 
     Returns:
         dict with keys: response, conversation_id, tool_calls_made, error
@@ -213,6 +221,11 @@ def run_assistant(user, message, conversation_id=None):
                                 tool_name, user.pk, perm)
                 else:
                     try:
+                        if on_event:
+                            on_event("tool_call", {
+                                "tool": tool_name,
+                                "input": tool_input,
+                            })
                         tool_result = tool_entry["handler"](tool_input, user)
                         tool_calls_made.append({
                             "tool": tool_name,
@@ -264,3 +277,109 @@ def run_assistant(user, message, conversation_id=None):
             "conversation_id": conversation.pk,
             "status_code": 500,
         }
+
+
+def run_assistant_ws(user, message, conversation_id, on_event=None):
+    """
+    WebSocket variant — conversation already exists and user message
+    is already stored by the WS handler.  Skips conversation creation
+    and message storage, delegates to the core loop.
+    """
+    from mojo.apps.assistant.models import Conversation, Message
+    from mojo.apps.assistant import get_registry, get_tools_for_user
+
+    # Check feature flag
+    if not settings.get("LLM_ADMIN_ENABLED", False, kind="bool"):
+        return {"error": "Assistant is not enabled"}
+
+    api_key = _get_api_key()
+    if not api_key:
+        return {"error": "LLM API key not configured"}
+
+    try:
+        conversation = Conversation.objects.get(pk=conversation_id, user=user)
+    except Conversation.DoesNotExist:
+        return {"error": "Conversation not found"}
+
+    # Build messages from history (user message already stored by handler)
+    max_history = settings.get("LLM_ADMIN_MAX_HISTORY", 50, kind="int")
+    messages = _build_conversation_messages(conversation, max_history)
+
+    tools = get_tools_for_user(user)
+    if not tools:
+        response_text = "You don't have permissions for any assistant tools."
+        Message.objects.create(
+            conversation=conversation, role="assistant", content=response_text,
+        )
+        return {"response": response_text, "conversation_id": conversation.pk, "tool_calls_made": []}
+
+    system_prompt = _get_system_prompt()
+    max_turns = settings.get("LLM_ADMIN_MAX_TURNS", 25, kind="int")
+    registry = get_registry()
+    tool_calls_made = []
+
+    try:
+        for _ in range(max_turns):
+            result = _call_claude(messages, system_prompt, tools)
+            stop_reason = result.get("stop_reason")
+            messages.append({"role": "assistant", "content": result["content"]})
+
+            if stop_reason != "tool_use":
+                text_parts = [b["text"] for b in result["content"] if b.get("type") == "text"]
+                response_text = "\n".join(text_parts) if text_parts else ""
+                Message.objects.create(
+                    conversation=conversation, role="assistant", content=response_text,
+                )
+                return {
+                    "response": response_text,
+                    "conversation_id": conversation.pk,
+                    "tool_calls_made": tool_calls_made,
+                }
+
+            # Process tool calls with permission gate
+            tool_results = []
+            for block in result["content"]:
+                if block.get("type") != "tool_use":
+                    continue
+
+                tool_name = block["name"]
+                tool_input = block["input"]
+                tool_id = block["id"]
+
+                tool_entry = registry.get(tool_name)
+                if not tool_entry:
+                    tool_result = {"error": f"Unknown tool: {tool_name}"}
+                elif not user.has_permission(tool_entry["permission"]):
+                    perm = tool_entry["permission"]
+                    tool_result = {"error": f"Permission denied. You need '{perm}' to use {tool_name}."}
+                else:
+                    try:
+                        if on_event:
+                            on_event("tool_call", {"tool": tool_name, "input": tool_input})
+                        tool_result = tool_entry["handler"](tool_input, user)
+                        tool_calls_made.append({"tool": tool_name, "input": tool_input})
+                    except Exception:
+                        logger.exception("Tool %s failed", tool_name)
+                        tool_result = {"error": f"Tool '{tool_name}' encountered an internal error."}
+
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tool_id,
+                    "content": ujson.dumps(tool_result),
+                })
+
+            Message.objects.create(
+                conversation=conversation, role="assistant", content="", tool_calls=result["content"],
+            )
+            Message.objects.create(
+                conversation=conversation, role="tool_result", content="", tool_calls=tool_results,
+            )
+            messages.append({"role": "user", "content": tool_results})
+
+        response_text = "I've reached the maximum number of tool calls for this request. Please try a more specific query."
+        Message.objects.create(conversation=conversation, role="assistant", content=response_text)
+        return {"response": response_text, "conversation_id": conversation.pk, "tool_calls_made": tool_calls_made}
+
+    except Exception:
+        logger.exception("Assistant WS agent failed for user %s", user.pk)
+        return {"error": "Assistant encountered an unexpected error"}

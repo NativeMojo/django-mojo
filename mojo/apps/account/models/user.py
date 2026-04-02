@@ -1151,6 +1151,14 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
                 return {"response": result}
             return None
 
+        # Assistant message routing
+        if mtype and mtype.startswith("assistant_"):
+            from mojo.apps.assistant.handler import handle_assistant_message
+            result = handle_assistant_message(self, data)
+            if result:
+                return {"response": result}
+            return None
+
         # Default ack for unrecognized messages
         return {"response": {"type": "ack"}}
 

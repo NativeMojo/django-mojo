@@ -250,3 +250,61 @@ Tools that modify data (block IP, cancel job, update incident, create ticket) re
 4. Assistant: "Done. IP 1.2.3.4 has been blocked for 3600 seconds."
 
 This confirmation happens via conversation turns, not a separate API call.
+
+## WebSocket Interface
+
+For real-time chat UIs, the assistant supports a WebSocket interface alongside REST. Conversation CRUD stays as REST; the actual chat flows over the existing realtime WebSocket connection.
+
+### Sending a Message
+
+```javascript
+ws.send(JSON.stringify({
+    type: 'assistant_message',
+    message: 'Show me failed jobs in the last hour',
+    conversation_id: 42  // optional — omit to start a new conversation
+}));
+```
+
+### Response Events
+
+The server publishes events to the user's WebSocket topic as the assistant processes:
+
+| Event | When | Payload |
+|---|---|---|
+| `assistant:thinking` | Immediately after message received | `{conversation_id}` |
+| `assistant:tool_call` | Each time a tool is called | `{conversation_id, tool, input}` |
+| `assistant:response` | Final LLM response | `{conversation_id, response, tool_calls_made}` |
+| `assistant:error` | On failure | `{conversation_id, error}` |
+
+### Client Wiring Example
+
+```javascript
+// Subscribe to assistant events
+ws.on('assistant:thinking', (data) => {
+    showThinkingIndicator(data.conversation_id);
+});
+
+ws.on('assistant:tool_call', (data) => {
+    showToolCallStatus(data.tool, data.input);
+});
+
+ws.on('assistant:response', (data) => {
+    hideThinkingIndicator();
+    appendAssistantMessage(data.conversation_id, data.response);
+});
+
+ws.on('assistant:error', (data) => {
+    hideThinkingIndicator();
+    showError(data.error);
+});
+```
+
+### How It Works
+
+1. Client sends `assistant_message` via WebSocket
+2. Server validates permissions, stores the user message, returns `assistant:thinking` immediately
+3. A background job runs the LLM agent (tool-calling loop may take seconds)
+4. During processing, `assistant:tool_call` events are published for each tool
+5. When done, `assistant:response` (or `assistant:error`) is published
+
+The REST endpoints (`GET /api/assistant/conversation`, etc.) continue to work for listing and retrieving conversation history.
