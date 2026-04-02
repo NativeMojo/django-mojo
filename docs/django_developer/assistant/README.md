@@ -229,6 +229,37 @@ A single message in a conversation.
 | `tool_calls` | JSONField | Tool call details (for assistant/tool_result messages) |
 | `created` | DateTimeField | When the message was created |
 
+## WebSocket Interface
+
+The assistant also supports a WebSocket transport for real-time chat UIs. This uses the existing realtime system — no new WebSocket endpoint needed.
+
+### Architecture
+
+```
+Client sends WS message {type: "assistant_message", message: "...", conversation_id: N}
+  → User.on_realtime_message() dispatches to assistant handler
+  → Handler validates, stores message, returns {type: "assistant:thinking"} immediately
+  → Background job runs run_assistant_ws() with on_event callback
+  → Callback publishes WS events back to the user:
+      assistant:tool_call  (per tool)
+      assistant:response   (final answer)
+      assistant:error      (on failure)
+```
+
+### Key Files
+
+- `mojo/apps/assistant/handler.py` — WS message handler + background job function
+- `mojo/apps/assistant/services/agent.py` — `run_assistant_ws()` variant with event callbacks
+- `mojo/apps/account/models/user.py` — `on_realtime_message` dispatches `assistant_*` types
+
+### How Messages Are Routed
+
+The `User.on_realtime_message` method checks if the message type starts with `assistant_` and delegates to `handle_assistant_message()` — identical to how `chat_*` messages are routed to the chat handler.
+
+### Background Processing
+
+LLM calls are too slow to block the WebSocket handler. The handler publishes a job via `mojo.apps.jobs` and returns immediately. The job function (`execute_assistant_job`) runs the agent loop and uses `send_to_user()` from the realtime manager to push events back to the user's WebSocket connections.
+
 ## Tests
 
 ```bash
