@@ -1,7 +1,7 @@
 # Admin LLM Assistant
 
 **Type**: request
-**Status**: open
+**Status**: planned
 **Date**: 2026-04-01
 **Priority**: high
 
@@ -248,3 +248,122 @@ For mutating operations, the LLM should confirm intent before executing:
 - Code execution or shell access
 - Modifying the LLM agent's own configuration
 - Multi-user shared conversations
+
+## Plan
+
+**Status**: planned
+**Planned**: 2026-04-01
+
+### Objective
+
+Build a REST-based LLM admin assistant with permission-gated tools across security, jobs, users, groups, and metrics domains, extensible by external projects via a `register_tool()` API and Django autodiscover pattern.
+
+### App Structure
+
+```
+mojo/apps/assistant/
+├── __init__.py               # register_tool(), register_tools(), get_registry()
+├── apps.py                   # AppConfig with autodiscover_modules("assistant_tools")
+├── models/
+│   ├── __init__.py
+│   └── conversation.py       # Conversation + Message models for audit
+├── rest/
+│   ├── __init__.py
+│   └── assistant.py          # REST endpoints (POST message, GET/DELETE conversations)
+├── services/
+│   ├── __init__.py
+│   ├── agent.py              # Core agent loop, permission gate, conversation manager
+│   └── tools/
+│       ├── __init__.py       # Built-in tool registration (security, jobs, users, groups, metrics)
+│       ├── security.py       # query_incidents, query_events, query_event_counts, query_ip_history, etc.
+│       ├── jobs.py           # query_jobs, get_job_stats, get_queue_health, cancel_job, retry_job
+│       ├── users.py          # query_users, get_user_detail, get_user_activity, query_rate_limits
+│       ├── groups.py         # query_groups, get_group_detail, get_group_members
+│       └── metrics.py        # fetch_metrics, get_system_health, get_incident_trends
+└── migrations/
+    └── __init__.py
+```
+
+### Steps
+
+1. **`mojo/apps/assistant/__init__.py`** — Public API: `register_tool(name, description, input_schema, handler, permission, mutates=False, domain="custom")`, `register_tools(list_of_dicts)`, `get_registry()`. The registry is a module-level dict: `{name: {definition, handler, permission, mutates, domain}}`. Also expose `get_tools_for_user(user)` that filters tools by the user's permissions (for building the Claude `tools` list).
+
+2. **`mojo/apps/assistant/apps.py`** — AppConfig with `name = 'mojo.apps.assistant'`. In `ready()`, call `autodiscover_modules("assistant_tools")` to import `assistant_tools.py` from every installed app. This lets external projects register tools by dropping an `assistant_tools.py` in any of their apps.
+
+3. **`mojo/apps/assistant/models/conversation.py`** — Two models:
+   - `Conversation(models.Model, MojoModel)` — `user` FK, `title` CharField, `metadata` JSONField, `created`/`modified`. RestMeta with `VIEW_PERMS = ["view_admin"]`, `OWNER_FIELD = "user"`.
+   - `Message(models.Model, MojoModel)` — `conversation` FK, `role` CharField (choices: user/assistant/tool_use/tool_result), `content` TextField, `tool_calls` JSONField (nullable), `created`. RestMeta with `VIEW_PERMS = ["view_admin"]`.
+
+4. **`mojo/apps/assistant/services/tools/security.py`** — Tool definitions and `_tool_*` implementations for the security domain. Follows `llm_agent.py` patterns: bounded queries (max 50), sensitive fields excluded, results as list-of-dicts. Tools: `query_incidents`, `query_events`, `query_event_counts`, `query_tickets`, `query_rulesets`, `query_ip_history`, `get_incident_timeline`, `update_incident` (mutates), `block_ip` (mutates), `create_ticket` (mutates).
+
+5. **`mojo/apps/assistant/services/tools/jobs.py`** — Tools: `query_jobs`, `query_job_events`, `query_job_logs`, `get_job_stats`, `get_queue_health`, `cancel_job` (mutates), `retry_job` (mutates). Reuses existing `mojo.apps.jobs` manager and services.
+
+6. **`mojo/apps/assistant/services/tools/users.py`** — Tools: `query_users`, `get_user_detail`, `get_user_activity`, `query_rate_limits`, `get_permission_summary`. Excludes `password`, `auth_key`, `onetime_code` from all results (matches User.RestMeta.NO_SHOW_FIELDS).
+
+7. **`mojo/apps/assistant/services/tools/groups.py`** — Tools: `query_groups`, `get_group_detail`, `get_group_members`, `get_group_activity`.
+
+8. **`mojo/apps/assistant/services/tools/metrics.py`** — Tools: `fetch_metrics`, `get_system_health`, `get_incident_trends`. Wraps `mojo.apps.metrics.fetch()` and aggregates cross-domain stats.
+
+9. **`mojo/apps/assistant/services/tools/__init__.py`** — Imports all built-in tool modules and calls `register_tool()` for each. This runs when the assistant app loads, before autodiscover picks up external tools. Defines `PERMISSION_MAP` mapping domain prefixes to required permissions.
+
+10. **`mojo/apps/assistant/services/agent.py`** — Core agent:
+    - `run_assistant(user, message, conversation_id=None)` — Main entry point.
+    - Checks `LLM_ADMIN_ENABLED` setting (default False).
+    - Loads/creates `Conversation`, appends user `Message`.
+    - Builds system prompt with available tools (filtered by user perms via `get_tools_for_user`).
+    - Calls Claude API with tool-calling loop (max `LLM_ADMIN_MAX_TURNS` iterations, default 25).
+    - **Permission gate**: before each tool execution, checks `user.has_permission(tool_permission)`. Returns permission error to LLM (not a 500) if denied.
+    - Stores assistant response and tool calls/results as `Message` records.
+    - Returns `{response, conversation_id, tool_calls_made}`.
+    - Settings: `LLM_ADMIN_ENABLED`, `LLM_ADMIN_MODEL` (default `claude-sonnet-4-6`), `LLM_ADMIN_API_KEY` (falls back to `LLM_HANDLER_API_KEY`), `LLM_ADMIN_MAX_TURNS` (25), `LLM_ADMIN_MAX_HISTORY` (50), `LLM_ADMIN_SYSTEM_PROMPT` (override).
+
+11. **`mojo/apps/assistant/rest/assistant.py`** — Four endpoints:
+    - `POST /api/assistant` — Send message, get LLM response. Requires `view_admin`. Rate-limited per user.
+    - `GET /api/assistant/conversation` — List user's conversations. Requires `view_admin`.
+    - `GET /api/assistant/conversation/<int:pk>` — Get conversation with messages. Requires `view_admin` + owner.
+    - `DELETE /api/assistant/conversation/<int:pk>` — Soft-delete conversation. Requires `view_admin` + owner.
+
+12. **`testproject/config/settings/local/__init__.py`** — Add `"mojo.apps.assistant"` to `INSTALLED_APPS`.
+
+13. **Run `bin/create_testproject`** — Generate migrations for the new models.
+
+14. **`tests/test_assistant/__init__.py`** + **`tests/test_assistant/1_test_permissions.py`** — Test permission gate blocks unauthorized tool calls, allows authorized ones, mutating tools require `manage_*`, sensitive fields excluded, feature disabled returns error.
+
+15. **`tests/test_assistant/2_test_conversations.py`** — Test conversation CRUD, message history stored and retrievable, conversation context maintained across turns, owner-only access.
+
+### Design Decisions
+
+- **Extensible via `register_tool()` + autodiscover**: External projects drop `assistant_tools.py` in any app and call `register_tool()`. The assistant's `AppConfig.ready()` auto-imports these modules, same pattern as Django's `admin.py`. No framework code changes needed to add tools.
+- **Built-in tools centralized in assistant app for v1**: Built-in tools live in `assistant/services/tools/` rather than scattered across domain apps. Keeps the assistant self-contained and avoids coupling domain apps to the assistant. External projects use the autodiscover path.
+- **Permission gate in agent loop, not tool functions**: Single enforcement point. Tool functions are pure data queries. The gate checks `user.has_permission(required_perm)` before dispatching. If permissions change mid-conversation, the next tool call reflects that.
+- **Conversation model, not chat rooms**: Lightweight audit trail without chat overhead (memberships, read receipts, WebSocket). Future Option A can bridge conversations to chat rooms.
+- **No confirmation flow in v1**: Mutating tools gated by `manage_*` perms. System prompt instructs LLM to confirm intent, but enforcement is permission-based. Keeps implementation simple.
+- **Settings fallback chain**: `LLM_ADMIN_API_KEY` → `LLM_HANDLER_API_KEY`. Same pattern as incident agent.
+- **Tool results always bounded**: Every query tool caps at 50 results. No unbounded querysets.
+
+### Edge Cases
+
+- **No API key configured**: `run_assistant` returns a clear error dict, REST endpoint returns 503. No 500.
+- **LLM returns unknown tool**: Log warning, return `{error: "Unknown tool"}` to LLM, continue loop.
+- **User permissions change mid-conversation**: Permission check is per tool call, always current.
+- **Sensitive fields**: User tools exclude `password`, `auth_key`, `onetime_code` (matches `NO_SHOW_FIELDS`). Group tools exclude `metadata.secrets` if present.
+- **Rate limiting**: `@md.rate_limit` on POST endpoint. Per-user, per-IP.
+- **Feature disabled**: If `LLM_ADMIN_ENABLED` is False, POST endpoint returns `{status: False, error: "Assistant is not enabled"}` with 404.
+- **External tool registration after ready()**: Tools registered after autodiscover still work — the registry is a live dict, and `get_tools_for_user()` reads it at call time.
+- **Duplicate tool names**: `register_tool` raises `ValueError` if name already registered. First-registered wins.
+
+### Testing
+
+- Permission gate blocks unauthorized tool calls → `tests/test_assistant/1_test_permissions.py`
+- Permission gate allows authorized tool calls → same file
+- Mutating tools require `manage_*` not just `view_*` → same file
+- Sensitive fields excluded from user tool results → same file
+- Feature disabled returns error → same file
+- Conversation CRUD (create, list, get, delete) → `tests/test_assistant/2_test_conversations.py`
+- Message history stored and retrievable → same file
+- Owner-only conversation access → same file
+
+### Docs
+
+- `docs/django_developer/assistant/README.md` — Architecture, settings reference, tool registry API, how to add custom tools via `assistant_tools.py`, permission mapping, built-in tool inventory
+- `docs/web_developer/assistant/README.md` — REST endpoints, request/response format, conversation flow, permissions needed, error responses

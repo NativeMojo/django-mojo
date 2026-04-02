@@ -29,6 +29,7 @@ Companion track for REST integrators: [docs/web_developer/README.md](../web_deve
 | [shortlink/](shortlink/README.md) | URL shortener with OG previews, file links, and click tracking |
 | [filevault/](filevault/README.md) | Encrypted file vault |
 | [docit/](docit/README.md) | Documentation system |
+| [assistant/](assistant/README.md) | LLM admin assistant — architecture, tools, extensibility, custom tool registration |
 | [testit/](testit/Overview.md) | Testing framework and patterns for django-mojo projects |
 
 ## Quick Start Pattern

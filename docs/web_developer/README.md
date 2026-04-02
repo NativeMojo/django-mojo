@@ -26,6 +26,7 @@ Companion track for framework developers: [docs/django_developer/README.md](../d
 | [shortlink/](shortlink/README.md) | Short URL creation, redirect behavior, OG previews |
 | [aws/cloudwatch](aws/cloudwatch.md) | Live AWS infrastructure metrics (EC2, RDS, ElastiCache) |
 | [filevault/](filevault/README.md) | Encrypted file vault |
+| [assistant/](assistant/README.md) | LLM admin assistant — natural language queries, conversations |
 | [docit/](docit/README.md) | Documentation system |
 
 ## Quick Reference
