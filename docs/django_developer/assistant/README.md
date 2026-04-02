@@ -293,6 +293,23 @@ The `User.on_realtime_message` method checks if the message type starts with `as
 
 LLM calls are too slow to block the WebSocket handler. The handler publishes a job via `mojo.apps.jobs` and returns immediately. The job function (`execute_assistant_job`) runs the agent loop and uses `send_to_user()` from the realtime manager to push events back to the user's WebSocket connections.
 
+### `assistant_response` Event Payload
+
+`run_assistant_ws()` returns a dict that becomes the WS event payload. As of v1.1.8 it always includes:
+
+```python
+{
+    "message_id": msg.pk,          # int — PK of the saved Message record
+    "created": msg.created.isoformat(),  # ISO 8601 string
+    "response": response_text,     # narrative text, block fences stripped
+    "blocks": blocks or None,      # parsed blocks, or None when absent
+    "tool_calls_made": [...],       # list of {tool, input} dicts
+    "conversation_id": conversation.pk,
+}
+```
+
+`blocks` is always included in the dict (`None` when empty) rather than conditionally omitted, making the shape consistent with the REST detail graph and easier for clients to handle.
+
 ## Structured Data Blocks
 
 Responses can include a `blocks` array with structured data for frontend rendering. The LLM decides when to include blocks based on the data — tables for query results, charts for trends, stat cards for key metrics.
@@ -304,6 +321,12 @@ Responses can include a `blocks` array with structured data for frontend renderi
 3. `_parse_blocks()` in `agent.py` extracts valid blocks and strips the fences from the text
 4. The response includes both clean `response` text and a `blocks` array
 5. Clean text and parsed blocks are stored on the `Message` — no re-parsing happens at read time
+
+### System Prompt Behavior — Narrative Text
+
+The system prompt instructs the LLM to keep narrative text brief when blocks carry the data. The text provides interpretation (key takeaways, context, warnings); the blocks carry the detail. The LLM should not repeat in prose what is already shown in a table, chart, or stat block.
+
+This is enforced via the system prompt, not code. Override `LLM_ADMIN_SYSTEM_PROMPT` in settings to change this behavior.
 
 ### Block Types
 
