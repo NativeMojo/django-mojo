@@ -4,12 +4,12 @@ REST endpoints for the admin assistant.
 Endpoints:
     POST /api/assistant              — Send message, get LLM response
     GET  /api/assistant/conversation — List user's conversations
-    GET  /api/assistant/conversation/<pk> — Get conversation with messages
-    DELETE /api/assistant/conversation/<pk> — Delete conversation
+    GET  /api/assistant/conversation/<pk> — Conversation detail (use ?graph=detail for messages)
+    DELETE /api/assistant/conversation/<pk> — Delete conversation (owner or admin)
 """
 from mojo import decorators as md
 from mojo.helpers.response import JsonResponse
-from mojo.helpers.settings import settings
+from mojo.apps.assistant.models import Conversation
 
 
 @md.POST('/api/assistant')
@@ -45,97 +45,8 @@ def on_assistant_message(request):
     return JsonResponse({"status": True, "data": data})
 
 
-@md.GET('conversation')
-@md.requires_perms('view_admin')
-@md.rate_limit("assistant_read", ip_limit=120)
-def on_list_conversations(request):
-    """List the requesting user's conversations."""
-    from mojo.apps.assistant.models import Conversation
-
-    limit = min(request.DATA.get_typed("limit", default=20, typed=int), 50)
-    conversations = Conversation.objects.filter(
-        user=request.user
-    ).order_by("-modified")[:limit]
-
-    return JsonResponse({
-        "status": True,
-        "data": [
-            {
-                "id": c.pk,
-                "title": c.title,
-                "created": str(c.created),
-                "modified": str(c.modified),
-            }
-            for c in conversations
-        ],
-    })
-
-
-@md.GET('conversation/<int:pk>')
-@md.requires_perms('view_admin')
-@md.rate_limit("assistant_read", ip_limit=120)
-def on_get_conversation(request, pk):
-    """Get a conversation with its message history."""
-    from mojo.apps.assistant.models import Conversation, Message
-
-    try:
-        conversation = Conversation.objects.get(pk=pk, user=request.user)
-    except Conversation.DoesNotExist:
-        return JsonResponse({
-            "status": False,
-            "error": "Conversation not found",
-        }, status=404)
-
-    from mojo.apps.assistant.services.agent import _parse_blocks
-
-    messages = Message.objects.filter(
-        conversation=conversation
-    ).order_by("created")[:200]
-
-    msg_list = []
-    for m in messages:
-        entry = {
-            "id": m.pk,
-            "role": m.role,
-            "content": m.content,
-            "created": str(m.created),
-        }
-        # Parse structured blocks from assistant messages
-        if m.role == "assistant" and m.content:
-            clean, blocks = _parse_blocks(m.content)
-            if blocks:
-                entry["content"] = clean
-                entry["blocks"] = blocks
-        # Include tool_calls for tool interactions
-        if m.tool_calls:
-            entry["tool_calls"] = m.tool_calls
-        msg_list.append(entry)
-
-    return JsonResponse({
-        "status": True,
-        "data": {
-            "id": conversation.pk,
-            "title": conversation.title,
-            "created": str(conversation.created),
-            "modified": str(conversation.modified),
-            "messages": msg_list,
-        },
-    })
-
-
-@md.DELETE('conversation/<int:pk>')
-@md.requires_perms('view_admin')
-def on_delete_conversation(request, pk):
-    """Delete a conversation (owner only)."""
-    from mojo.apps.assistant.models import Conversation
-
-    try:
-        conversation = Conversation.objects.get(pk=pk, user=request.user)
-    except Conversation.DoesNotExist:
-        return JsonResponse({
-            "status": False,
-            "error": "Conversation not found",
-        }, status=404)
-
-    conversation.delete()
-    return JsonResponse({"status": True})
+@md.URL('conversation')
+@md.URL('conversation/<int:pk>')
+@md.uses_model_security(Conversation)
+def on_conversation(request, pk=None):
+    return Conversation.on_rest_request(request, pk)

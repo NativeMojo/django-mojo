@@ -18,11 +18,16 @@ class Conversation(models.Model, MojoModel):
 
     class RestMeta:
         NO_REST_SAVE = True
-        VIEW_PERMS = ["view_admin"]
+        VIEW_PERMS = ["view_admin", "owner"]
         OWNER_FIELD = "user"
+        CAN_DELETE = True
         GRAPHS = {
             "default": {
                 "fields": ["id", "title", "created", "modified"],
+            },
+            "detail": {
+                "fields": ["id", "title", "created", "modified", "messages"],
+                "graphs": {"messages": "default"},
             },
         }
 
@@ -45,6 +50,7 @@ class Message(models.Model, MojoModel):
     role = models.CharField(max_length=16, choices=ROLE_CHOICES, db_index=True)
     content = models.TextField(blank=True, default="")
     tool_calls = models.JSONField(default=None, null=True, blank=True)
+    blocks = models.JSONField(default=None, null=True, blank=True)
 
     created = models.DateTimeField(auto_now_add=True, editable=False, db_index=True)
 
@@ -52,13 +58,11 @@ class Message(models.Model, MojoModel):
         ordering = ["created"]
 
     class RestMeta:
-        # Messages are only accessible via the conversation detail endpoint.
-        # No direct RestMeta endpoint exposed.
         NO_REST = True
         VIEW_PERMS = ["view_admin"]
         GRAPHS = {
             "default": {
-                "fields": ["id", "role", "content", "created"],
+                "fields": ["id", "role", "content", "tool_calls", "blocks", "created"],
             },
         }
 
