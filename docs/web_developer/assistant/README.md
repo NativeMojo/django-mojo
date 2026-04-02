@@ -320,8 +320,21 @@ The server publishes events to the user's WebSocket topic as the assistant proce
 |---|---|---|
 | `assistant_thinking` | Immediately after message received | `{conversation_id}` |
 | `assistant_tool_call` | Each time a tool is called | `{conversation_id, tool, input}` |
-| `assistant_response` | Final LLM response | `{conversation_id, response, tool_calls_made, blocks?}` |
+| `assistant_response` | Final LLM response | `{conversation_id, message_id, created, response, tool_calls_made, blocks}` |
 | `assistant_error` | On failure | `{conversation_id, error}` |
+
+**`assistant_response` payload fields**:
+
+| Field | Type | Description |
+|---|---|---|
+| `conversation_id` | integer | Conversation the message belongs to |
+| `message_id` | integer | ID of the saved `Message` record |
+| `created` | string | ISO 8601 timestamp of when the message was saved |
+| `response` | string | Narrative text with block fences already stripped |
+| `tool_calls_made` | array | List of `{tool, input}` objects for tools called during this turn |
+| `blocks` | array or null | Parsed structured-data blocks (`table`, `chart`, `stat`). `null` when the response contains no blocks. Always present — never absent. |
+
+The `message_id` and `created` fields make the WS event consistent with the REST detail graph shape, allowing the client to correlate WS events with conversation history retrieved via `GET /api/assistant/conversation/<id>?graph=detail`.
 
 ### Client Wiring Example
 
@@ -337,7 +350,10 @@ ws.on('assistant_tool_call', (data) => {
 
 ws.on('assistant_response', (data) => {
     hideThinkingIndicator();
-    appendAssistantMessage(data.conversation_id, data.response);
+    appendAssistantMessage(data.conversation_id, data.response, {
+        messageId: data.message_id,
+        created: data.created,
+    });
     if (data.blocks) {
         renderBlocks(data.blocks);  // see Structured Data Blocks section
     }
@@ -363,7 +379,7 @@ The REST endpoints (`GET /api/assistant/conversation`, etc.) continue to work fo
 
 ## Structured Data Blocks
 
-Responses may include a `blocks` array containing structured data for rendering as tables, charts, or stat cards. The `blocks` key is only present when the LLM includes structured data — most simple text responses won't have it.
+Responses may include a `blocks` array containing structured data for rendering as tables, charts, or stat cards. In REST responses the `blocks` key is only present when the LLM includes structured data. In WebSocket `assistant_response` events, `blocks` is always present — it is `null` when the response has no blocks and an array otherwise.
 
 The `response` text field contains the narrative with block fences already stripped. The frontend renders text and blocks together.
 
