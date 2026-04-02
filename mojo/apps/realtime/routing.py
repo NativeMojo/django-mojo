@@ -178,7 +178,7 @@ def create_application(websocket_routes=None):
     # Default WebSocket routes
     if websocket_routes is None:
         websocket_routes = [
-            ("/ws/realtime/", get_realtime_asgi()),
+            (r"^/ws/realtime/?$", get_realtime_asgi()),
         ]
 
     return ProtocolTypeRouter({
