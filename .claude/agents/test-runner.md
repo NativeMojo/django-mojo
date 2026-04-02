@@ -14,9 +14,11 @@ You run the django-mojo test suite and handle results intelligently.
 1. Run tests:
    - If a specific target was mentioned, run: `bin/run_tests -t <target>`
    - Otherwise run the full suite: `bin/run_tests`
+   - The runner uses rich progress UI by default. Add `--plain` for simple text output if rich causes issues.
+   - Use `--agent` flag to get structured failure data in `var/test_failures.json` — read that file for detailed diagnostics on any failures.
 
 2. If all tests pass:
-   - Return: "All tests passed (N total)"
+   - Return: "All tests passed (N total, N assertions, N skipped)"
 
 3. If tests fail, classify each failure:
 
@@ -41,6 +43,24 @@ You run the django-mojo test suite and handle results intelligently.
    - Test name and file:line
    - Error message
    - Likely cause (one sentence)
+
+## Agent Mode Diagnostics
+
+When using `--agent` flag, read `var/test_failures.json` after a run for structured data including:
+- Test name, module, file path, function name
+- Assertion message and full test source
+- Last HTTP response (status, body, headers)
+- Server error log tail around the failure
+
+This is faster than parsing terminal output for diagnosing failures.
+
+## Test Infrastructure
+
+- Tests use the `testit` framework with `@th.django_unit_test()` decorator
+- Test modules can define `TESTIT` config in `__init__.py` (serial, requires_apps, etc.)
+- Server logs are in `testproject/var/error.log` — check these for 500 errors
+- Use `bin/create_testproject` after model/schema changes, then re-run tests
+- Use `uv run` for venv commands, never `.venv/bin/python`
 
 ## Critical Rules
 

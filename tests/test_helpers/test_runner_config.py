@@ -98,22 +98,20 @@ def test_increment_atomic(opts):
     import threading
     from testit import helpers
 
-    # Reset to known state
+    # Use a scratch field so we don't clobber TEST_RUN.total mid-suite
     with helpers._lock:
-        helpers.TEST_RUN.total = 0
+        helpers.TEST_RUN._scratch_counter = 0
 
     threads = []
     for _ in range(100):
-        t = threading.Thread(target=helpers._increment, args=("total",))
+        t = threading.Thread(target=helpers._increment, args=("_scratch_counter",))
         threads.append(t)
         t.start()
     for t in threads:
         t.join()
 
-    # The total might include counts from other tests in this run,
-    # so just verify it increased by at least 100
-    th.assert_true(helpers.TEST_RUN.total >= 100,
-                   f"Expected total >= 100 after 100 concurrent increments, got {helpers.TEST_RUN.total}")
+    th.assert_eq(helpers.TEST_RUN._scratch_counter, 100,
+                 f"Expected exactly 100 after 100 concurrent increments, got {helpers.TEST_RUN._scratch_counter}")
 
 
 @th.django_unit_test("thread-local display: per-thread isolation")
