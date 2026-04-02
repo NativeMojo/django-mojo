@@ -239,6 +239,89 @@ def _tool_block_ip(params, user):
     return {"ok": True, "ip": ip, "blocked": True, "ttl": ttl}
 
 
+def _tool_get_incident(params, user):
+    from mojo.apps.incident.models import Incident
+
+    incident_id = params["incident_id"]
+    try:
+        i = Incident.objects.get(pk=incident_id)
+    except Incident.DoesNotExist:
+        return {"error": f"Incident {incident_id} not found"}
+
+    return {
+        "id": i.pk,
+        "status": i.status,
+        "priority": i.priority,
+        "category": i.category,
+        "source_ip": i.source_ip,
+        "hostname": i.hostname,
+        "title": i.title,
+        "details": (i.details or "")[:1000],
+        "scope": i.scope,
+        "country_code": i.country_code,
+        "rule_set_id": i.rule_set_id,
+        "metadata": i.metadata or {},
+        "created": str(i.created),
+        "event_count": i.events.count(),
+    }
+
+
+def _tool_get_incident_events(params, user):
+    from mojo.apps.incident.models import Event
+
+    incident_id = params["incident_id"]
+    limit = min(params.get("limit", MAX_RESULTS), MAX_RESULTS)
+    events = Event.objects.filter(incident_id=incident_id).order_by("-created")[:limit]
+
+    return [
+        {
+            "id": e.pk,
+            "created": str(e.created),
+            "category": e.category,
+            "level": e.level,
+            "source_ip": e.source_ip,
+            "hostname": e.hostname,
+            "title": e.title,
+            "details": (e.details or "")[:500],
+            "metadata": e.metadata or {},
+        }
+        for e in events
+    ]
+
+
+def _tool_create_rule(params, user):
+    from mojo.apps.incident.models import RuleSet, Rule
+
+    metadata = {
+        "disabled": True,
+        "assistant_proposed": True,
+        "reasoning": params.get("reasoning", ""),
+    }
+    if params.get("min_count"):
+        metadata["min_count"] = params["min_count"]
+    if params.get("window_minutes"):
+        metadata["window_minutes"] = params["window_minutes"]
+
+    ruleset = RuleSet.objects.create(
+        name=params["name"],
+        category=params["category"],
+        handler=params.get("handler", ""),
+        bundle_by=params.get("bundle_by", 4),
+        bundle_minutes=params.get("bundle_minutes", 30),
+        metadata=metadata,
+    )
+
+    for rule_data in (params.get("rules") or []):
+        Rule.objects.create(
+            rule_set=ruleset,
+            field_name=rule_data.get("field", ""),
+            operator=rule_data.get("operator", "eq"),
+            value=rule_data.get("value", ""),
+        )
+
+    return {"ok": True, "ruleset_id": ruleset.pk, "name": params["name"], "disabled": True}
+
+
 def _tool_create_ticket(params, user):
     from mojo.apps.incident.models import Ticket
 
@@ -368,6 +451,66 @@ TOOLS = [
         },
         "handler": _tool_get_incident_timeline,
         "permission": "view_security",
+    },
+    {
+        "name": "get_incident",
+        "description": "Get full details for a specific incident by ID, including metadata, event count, and rule set.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "incident_id": {"type": "integer", "description": "The incident ID"},
+            },
+            "required": ["incident_id"],
+        },
+        "handler": _tool_get_incident,
+        "permission": "view_security",
+    },
+    {
+        "name": "get_incident_events",
+        "description": "Get events bundled into a specific incident, including full metadata (OSSEC rule_id, etc.).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "incident_id": {"type": "integer", "description": "The incident ID"},
+                "limit": {"type": "integer", "description": "Max results (default 50)", "default": 50},
+            },
+            "required": ["incident_id"],
+        },
+        "handler": _tool_get_incident_events,
+        "permission": "view_security",
+    },
+    {
+        "name": "create_rule",
+        "description": "Create a new event rule set (created DISABLED for human review). Use to auto-handle recurring event patterns. IMPORTANT: Confirm with the user before executing.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Rule name describing the pattern"},
+                "category": {"type": "string", "description": "Event category to match"},
+                "handler": {"type": "string", "description": "Handler chain (e.g. 'ignore://' or 'block://?ttl=3600,notify://perm@manage_security'). Use 'ignore://' to auto-ignore matching events."},
+                "rules": {
+                    "type": "array",
+                    "description": "Field match rules",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "field": {"type": "string", "description": "Event field or metadata key to match (e.g. 'metadata.rule_id')"},
+                            "operator": {"type": "string", "enum": ["eq", "ne", "gt", "lt", "gte", "lte", "contains", "startswith"]},
+                            "value": {"type": "string", "description": "Value to match against"},
+                        },
+                    },
+                },
+                "bundle_by": {"type": "integer", "description": "How to group events: 0=none, 4=source_ip, 2=model_name. Default 4.", "default": 4},
+                "bundle_minutes": {"type": "integer", "description": "Time window for bundling (default 30 min)", "default": 30},
+                "min_count": {"type": "integer", "description": "Minimum events before triggering (optional)"},
+                "window_minutes": {"type": "integer", "description": "Time window for threshold counting (optional)"},
+                "reasoning": {"type": "string", "description": "Why this rule is being created"},
+            },
+            "required": ["name", "category"],
+        },
+        "handler": _tool_create_rule,
+        "permission": "manage_security",
+        "mutates": True,
     },
     {
         "name": "update_incident",

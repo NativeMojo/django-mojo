@@ -41,6 +41,11 @@ def _tool_query_users(params, user):
             | Q(display_name__icontains=search)
         )
 
+    # Filter by permission key — find users who have this permission set to True
+    if params.get("permission"):
+        perm = params["permission"]
+        q &= Q(**{f"permissions__{perm}": True})
+
     limit = min(params.get("limit", MAX_RESULTS), MAX_RESULTS)
     users = User.objects.filter(q).order_by("-created")[:limit]
     return [_safe_user_dict(u) for u in users]
@@ -151,6 +156,38 @@ def _tool_get_permission_summary(params, user):
     return result
 
 
+def _tool_update_user_permission(params, user):
+    from mojo.apps.account.models import User
+
+    user_id = params["user_id"]
+    perm_key = params["permission"]
+    action = params.get("action", "add")
+
+    try:
+        target = User.objects.get(pk=user_id)
+    except User.DoesNotExist:
+        return {"error": f"User {user_id} not found"}
+
+    if action == "remove":
+        target.add_permission(perm_key, False)
+        return {
+            "ok": True,
+            "user_id": target.pk,
+            "username": target.username,
+            "permission": perm_key,
+            "action": "removed",
+        }
+    else:
+        target.add_permission(perm_key, True)
+        return {
+            "ok": True,
+            "user_id": target.pk,
+            "username": target.username,
+            "permission": perm_key,
+            "action": "added",
+        }
+
+
 # ---------------------------------------------------------------------------
 # Tool definitions
 # ---------------------------------------------------------------------------
@@ -158,12 +195,13 @@ def _tool_get_permission_summary(params, user):
 TOOLS = [
     {
         "name": "query_users",
-        "description": "Search/filter users by name, email, status. Returns up to 50 users.",
+        "description": "Search/filter users by name, email, status, or permission. Returns up to 50 users.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "search": {"type": "string", "description": "Search by username, email, or display name"},
                 "is_active": {"type": "boolean", "description": "Filter by active status"},
+                "permission": {"type": "string", "description": "Filter to users who have this permission (e.g. 'manage_users')"},
                 "limit": {"type": "integer", "description": "Max results (default 50)", "default": 50},
             },
         },
@@ -219,5 +257,21 @@ TOOLS = [
         },
         "handler": _tool_get_permission_summary,
         "permission": "view_admin",
+    },
+    {
+        "name": "update_user_permission",
+        "description": "Add or remove a permission from a user. IMPORTANT: Confirm with the user before executing.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "user_id": {"type": "integer", "description": "The user ID"},
+                "permission": {"type": "string", "description": "Permission key (e.g. 'manage_users', 'view_security')"},
+                "action": {"type": "string", "enum": ["add", "remove"], "description": "Whether to add or remove the permission"},
+            },
+            "required": ["user_id", "permission", "action"],
+        },
+        "handler": _tool_update_user_permission,
+        "permission": "manage_users",
+        "mutates": True,
     },
 ]
