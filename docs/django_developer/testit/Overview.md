@@ -61,8 +61,45 @@ Use `bin/run_tests` — it handles starting and stopping the test server automat
   `./bin/run_tests --onlymojo` · `./bin/run_tests --nomojo`
 - See every declared `@requires_extra` flag (static scan only, no tests executed):
   `./bin/run_tests --list-extras`
+- Run modules in parallel (default 3 threads):
+  `./bin/run_tests -j 4`
+- Force plain text output and disable the rich progress UI:
+  `./bin/run_tests --plain`
+- Write a structured failure report for LLM agents:
+  `./bin/run_tests --agent`
 
 All arguments are passed directly to `bin/testit.py`. If the server is already running, `bin/run_tests` will not stop it after the suite completes.
+
+### Parallel Execution
+
+By default the runner executes up to 3 modules in parallel using `ThreadPoolExecutor`. Each parallel module gets its own `RestClient` instance. Parallelism is automatically forced to 1 when `-s` (stop on fail), `-v` (verbose), or `--continue` (resume) is active — those modes require sequential output.
+
+Set a specific thread count with `-j N`:
+
+```bash
+./bin/run_tests -j 1   # fully sequential (same as --plain behaviour)
+./bin/run_tests -j 6   # run up to 6 modules at once
+```
+
+Modules marked `serial` in their `TESTIT` config always run sequentially after all parallel modules complete, regardless of `-j`.
+
+### Rich Progress UI
+
+When `rich` is installed and `-j` is greater than 1, the runner shows a live per-module progress table. Use `--plain` to disable it (useful in CI environments that do not handle ANSI codes, or when piping output):
+
+```bash
+./bin/run_tests --plain
+```
+
+### Agent Mode
+
+`--agent` writes `var/test_failures.json` after the run. The report includes:
+
+- Overall `total`, `passed`, `failed`, `skipped`, `duration`
+- Per-failure entries with `test_name`, `function`, `status`, `assertion`, `test_source`, `file_path`, `line`, and `traceback` (errors only)
+- Last 20 lines of the server error log for each failure
+
+Use this flag when invoking the test runner from an LLM agent or CI pipeline that needs structured failure data rather than terminal output.
 
 ### JSON Config
 CLI flags always win, but you can seed defaults through a JSON file:
@@ -87,9 +124,36 @@ Supported keys:
 ```
 
 - `tests` and `ignore` accept strings or lists.
-- `show_errors` is equivalent to `-e`.  
+- `show_errors` is equivalent to `-e`.
 - `extra` accepts either a comma-separated string or a JSON list; at runtime it is exposed as `opts.extra_list` (and `opts.extra` remains a comma-joined string for legacy helpers).
 - Supply fewer flags in automation scripts; let interactive runs override what is needed.
+
+---
+
+## TESTIT Module Config
+
+Each test package can declare a `TESTIT` dict in its `__init__.py` to control how the runner handles it. The runner reads the file via AST — the module is never imported during config loading, so there are no side effects.
+
+```python
+# tests/test_accounts/__init__.py
+TESTIT = {
+    "serial": True,                          # do not run this module in parallel
+    "requires_apps": ["mojo.apps.account"],  # skip if app is not installed
+    "server_settings": {},                   # dict of Django settings to apply before the module runs
+    "requires_extra": [],                    # list of --extra flags required to run this module
+}
+```
+
+Supported keys:
+
+| Key | Default | Description |
+|---|---|---|
+| `serial` | `False` | Force this module to run sequentially, after all parallel modules complete. Use for modules that call `th.server_settings()` mid-run, or that rely on signals bound to the main thread. |
+| `requires_apps` | `[]` | List of Django app labels. The module is skipped entirely if any listed app is not in `INSTALLED_APPS`. |
+| `server_settings` | `{}` | Django settings dict applied before the module starts (same mechanism as `th.server_settings()`). |
+| `requires_extra` | `[]` | List of `--extra` flags. The module is skipped if none of the flags are present. |
+
+All keys are optional. A missing `__init__.py` or a missing `TESTIT` assignment uses defaults (parallel, no app requirements, no server settings).
 
 ---
 
@@ -215,8 +279,11 @@ All other keys (e.g. `periods`, `slug`, `status`, `data`, `id`) are safe to acce
   - `total`, `passed`, `failed`
   - `records[]` with module, file, function, status (`passed`, `failed`, `error`, `skipped`)
   - timestamps (`started_at`, `finished_at`, `duration`)
+- Agent failure report (written only when `--agent` is passed): `var/test_failures.json`
+  - Includes per-failure `test_source`, `file_path`, `line`, `traceback`, and last 20 lines of the server error log.
 - HTTP helper: `testit.client.RestClient`
-  - Reuses auth tokens, and integrates with `opts.client`.
+  - Reuses auth tokens and integrates with `opts.client`.
+  - `opts.client.last_response` — after every request this is set to an `objict` with `method`, `path`, `status_code`, `body`, `headers`, and `elapsed_ms`. Useful for diagnosing failures without re-running the request.
 - WebSocket helper: `testit.ws_client.WsClient`
   - Build URL from the HTTP host and wait for typed messages.
 - Faker snippets: `testit.faker`
