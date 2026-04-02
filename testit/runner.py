@@ -1,4 +1,5 @@
 import ast
+import copy
 import json
 import os
 import sys
@@ -6,6 +7,8 @@ import time
 import traceback
 import inspect
 import argparse
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from importlib import import_module
 
 from mojo.helpers import logit
@@ -14,11 +17,67 @@ import testit.client
 
 from mojo.helpers import paths
 from objict import objict
+
 TEST_ROOT = paths.APPS_ROOT / "tests"
 
 _resume = objict(active=False, module=None, test_name=None, reached=False)
 
+# ---------------------------------------------------------------------------
+# Rich UI (optional — falls back to plain text)
+# ---------------------------------------------------------------------------
+try:
+    from rich.live import Live
+    from rich.table import Table
+    from rich.text import Text
+    from rich.progress import Progress, BarColumn, TextColumn, SpinnerColumn
+    from rich.console import Console
+    from rich.panel import Panel
+    HAS_RICH = True
+except ImportError:
+    HAS_RICH = False
 
+# ---------------------------------------------------------------------------
+# Module config
+# ---------------------------------------------------------------------------
+_DEFAULT_CONFIG = objict(
+    server_settings={},
+    serial=False,
+    requires_apps=[],
+    requires_extra=[],
+)
+
+
+def _load_module_config(module_path):
+    """Load TESTIT config from a module's __init__.py via AST (no import side effects)."""
+    init_path = os.path.join(module_path, "__init__.py")
+    if not os.path.exists(init_path):
+        return objict(_DEFAULT_CONFIG)
+
+    try:
+        with open(init_path, "r", encoding="utf-8") as fh:
+            source = fh.read()
+        tree = ast.parse(source, filename=init_path)
+    except (OSError, SyntaxError):
+        return objict(_DEFAULT_CONFIG)
+
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == "TESTIT":
+                    try:
+                        value = ast.literal_eval(node.value)
+                        if isinstance(value, dict):
+                            merged = dict(_DEFAULT_CONFIG)
+                            merged.update(value)
+                            return objict(merged)
+                    except (ValueError, TypeError):
+                        pass
+    return objict(_DEFAULT_CONFIG)
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint (resume from failure)
+# ---------------------------------------------------------------------------
 def _checkpoint_path():
     return os.path.join(paths.VAR_ROOT, "testit_checkpoint.json")
 
@@ -44,6 +103,10 @@ def clear_checkpoint():
     except FileNotFoundError:
         pass
 
+
+# ---------------------------------------------------------------------------
+# Host / config
+# ---------------------------------------------------------------------------
 def get_host():
     """Extract host and port from dev_server.conf."""
     host = "127.0.0.1"
@@ -139,6 +202,7 @@ def apply_config_defaults(parser, config):
     if defaults:
         parser.set_defaults(**defaults)
 
+
 def setup_parser(argv=None):
     """Setup command-line arguments for the test runner."""
     argv = sys.argv[1:] if argv is None else argv
@@ -180,6 +244,12 @@ def setup_parser(argv=None):
                         help="Only run Mojo app tests")
     parser.add_argument("--ignore", action="append", dest="ignore_modules",
                         help="Ignore specific test modules (can be used multiple times)")
+    parser.add_argument("-j", "--jobs", type=int, default=None,
+                        help="Parallel module threads (default 3, forced to 1 with -s or -v)")
+    parser.add_argument("--agent", action="store_true",
+                        help="Write structured failure report to var/test_failures.json for LLM agents")
+    parser.add_argument("--plain", action="store_true",
+                        help="Force plain text output (no rich progress UI)")
 
     config_args, _ = config_parser.parse_known_args(argv)
     config_data = {}
@@ -199,25 +269,41 @@ def setup_parser(argv=None):
     opts.extra_list = extra_values
     opts.extra = ",".join(extra_values) if extra_values else ""
 
+    # Resolve parallelism
+    if opts.jobs is None:
+        if opts.stop or opts.verbose:
+            opts.jobs = 1
+        else:
+            opts.jobs = 3
+    if opts.stop or opts.verbose:
+        opts.jobs = 1
+    if getattr(opts, "resume", False) and opts.jobs > 1:
+        opts.jobs = 1
+
     return opts
 
 
+# ---------------------------------------------------------------------------
+# Test execution (single module)
+# ---------------------------------------------------------------------------
 def run_test(opts, module, func_name, module_name, test_name):
     """Run a specific test function inside a module."""
     test_key = f"{module_name}.{test_name}.{func_name}"
     helpers.VERBOSE = opts.verbose or opts.errors
-    helpers.TEST_RUN.tests.active_test = test_key.replace(".", ":")
+    helpers._set_active_test(test_key.replace(".", ":"))
     try:
         getattr(module, func_name)(opts)
     except helpers.TestitSkip:
         return
+    except helpers.TestitAbort:
+        raise
     except Exception as err:
         if opts.verbose:
-            print(f"⚠️ Test Error: {err}")
+            print(f"  Test Error: {err}")
             traceback.print_exc()
         if opts.stop:
             save_checkpoint(module_name, test_name)
-            sys.exit(1)
+            raise helpers.TestitAbort()
 
 
 def run_setup(opts, module, func_name, module_name, test_name):
@@ -229,14 +315,15 @@ def run_setup(opts, module, func_name, module_name, test_name):
         return False
     except helpers.TestitSkip as skip:
         msg = str(skip) if str(skip) else "skipped"
-        logit.color_print(f"{helpers.INDENT}{msg}", logit.ConsoleLogger.BLUE)
+        if not helpers._get_display_fn():
+            logit.color_print(f"{helpers.INDENT}{msg}", logit.ConsoleLogger.BLUE)
         return True
     except Exception as err:
         if opts.verbose:
-            print(f"⚠️ Setup Error: {err}")
+            print(f"  Setup Error: {err}")
             traceback.print_exc()
         if opts.stop:
-            sys.exit(1)
+            raise helpers.TestitAbort()
         return False
 
 
@@ -247,9 +334,50 @@ def import_module_for_testing(module_name, test_name):
         module = import_module(name)
         return module
     except (ImportError, RuntimeError):
-        print(f"⚠️ Failed to import test module: {name}")
+        print(f"  Failed to import test module: {name}")
         traceback.print_exc()
         return None
+
+
+def _sort_key(name):
+    prefix = name.split("_", 1)[0]
+    return (int(prefix), name) if prefix.isdigit() else (float("inf"), name)
+
+
+def _count_tests_in_file(file_path, quick=False):
+    """Count test functions in a file via AST scan (no import)."""
+    prefix = "quick_" if quick else "test_"
+    try:
+        with open(file_path, "r", encoding="utf-8") as fh:
+            tree = ast.parse(fh.read(), filename=file_path)
+    except (OSError, SyntaxError):
+        return 0
+    count = 0
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name.startswith(prefix):
+            count += 1
+    return count
+
+
+def _discover_test_files(module_name, test_root, parent_test_root=None):
+    """Find the module directory and return sorted list of (test_name, file_path)."""
+    module_path = os.path.join(test_root, module_name)
+    if not os.path.exists(module_path):
+        if parent_test_root:
+            module_path = os.path.join(parent_test_root, module_name)
+        if not os.path.exists(module_path):
+            return [], module_path
+
+    test_files = [f for f in os.listdir(module_path)
+                  if f.endswith(".py") and f not in ["__init__.py", "setup.py"]
+                  and not f.startswith("_")]
+
+    result = []
+    for test_file in sorted(test_files, key=_sort_key):
+        test_name = test_file.rsplit('.', 1)[0]
+        file_path = os.path.join(module_path, test_file)
+        result.append((test_name, file_path))
+    return result, module_path
 
 
 def run_module_tests_by_name(opts, module_name, test_name):
@@ -270,13 +398,10 @@ def run_module_setup(opts, module, test_name, module_name):
     started = time.time()
     prefix = "setup_"
 
-    # Get all functions in the module
     functions = inspect.getmembers(module, inspect.isfunction)
-
-    # Preserve definition order by using inspect.getsourcelines()
     functions = sorted(
         functions,
-        key=lambda func: inspect.getsourcelines(func[1])[1]  # Sort by line number
+        key=lambda func: inspect.getsourcelines(func[1])[1]
     )
     setup_funcs = []
     for func_name, func in functions:
@@ -284,13 +409,15 @@ def run_module_setup(opts, module, test_name, module_name):
             setup_funcs.append((module, func_name))
 
     if len(setup_funcs):
-        logit.color_print(f"\nRUNNING SETUP: {test_key}", logit.ConsoleLogger.BLUE)
+        if not helpers._get_display_fn():
+            logit.color_print(f"\nRUNNING SETUP: {test_key}", logit.ConsoleLogger.BLUE)
         for module, func_name in setup_funcs:
             skipped = run_setup(opts, module, func_name, module_name, test_name)
             if skipped:
                 return True
-        duration = time.time() - started
-        print(f"{helpers.INDENT}---------\n{helpers.INDENT}run time: {duration:.2f}s")
+        if not helpers._get_display_fn():
+            duration = time.time() - started
+            print(f"{helpers.INDENT}---------\n{helpers.INDENT}run time: {duration:.2f}s")
     return False
 
 
@@ -298,47 +425,33 @@ def run_module_tests(opts, module, test_name, module_name):
     if not getattr(opts, 'client', None):
         opts.client = testit.client.RestClient(opts.host, logger=opts.logger)
     test_key = f"{module_name}.{test_name}"
-    logit.color_print(f"\nRUNNING TEST: {test_key}", logit.ConsoleLogger.BLUE)
+    if not helpers._get_display_fn():
+        logit.color_print(f"\nRUNNING TEST: {test_key}", logit.ConsoleLogger.BLUE)
     started = time.time()
     prefix = "test_" if not opts.quick else "quick_"
 
-    # Get all functions in the module
     functions = inspect.getmembers(module, inspect.isfunction)
-
-    # Preserve definition order by using inspect.getsourcelines()
     functions = sorted(
         functions,
-        key=lambda func: inspect.getsourcelines(func[1])[1]  # Sort by line number
+        key=lambda func: inspect.getsourcelines(func[1])[1]
     )
 
     for func_name, func in functions:
         if func_name.startswith(prefix):
             run_test(opts, module, func_name, module_name, test_name)
 
-    duration = time.time() - started
-    print(f"{helpers.INDENT}---------\n{helpers.INDENT}run time: {duration:.2f}s")
+    if not helpers._get_display_fn():
+        duration = time.time() - started
+        print(f"{helpers.INDENT}---------\n{helpers.INDENT}run time: {duration:.2f}s")
 
 
 def run_tests_for_module(opts, module_name, test_root, parent_test_root=None):
     """Discover and run tests for a given module."""
-    module_path = os.path.join(test_root, module_name)
-    if not os.path.exists(module_path):
-        if parent_test_root is None:
-            raise FileNotFoundError(f"Module '{module_name}' not found")
-        module_path = os.path.join(parent_test_root, module_name)
-        if not os.path.exists(module_path):
-            raise FileNotFoundError(f"Module '{module_name}' not found")
-    test_files = [f for f in os.listdir(module_path)
-                  if f.endswith(".py") and f not in ["__init__.py", "setup.py"]]
+    test_files, module_path = _discover_test_files(module_name, test_root, parent_test_root)
+    if not test_files:
+        return
 
-    def _sort_key(name):
-        prefix = name.split("_", 1)[0]
-        return (int(prefix), name) if prefix.isdigit() else (float("inf"), name)
-
-    for test_file in sorted(test_files, key=_sort_key):
-        if test_file.startswith("_"):
-            continue
-        test_name = test_file.rsplit('.', 1)[0]  # Remove .py extension
+    for test_name, file_path in test_files:
         if _resume.active and not _resume.reached:
             if module_name != _resume.module or test_name != _resume.test_name:
                 continue
@@ -346,6 +459,9 @@ def run_tests_for_module(opts, module_name, test_root, parent_test_root=None):
         run_module_tests_by_name(opts, module_name, test_name)
 
 
+# ---------------------------------------------------------------------------
+# Extras scanning (unchanged logic, refactored for shared helpers)
+# ---------------------------------------------------------------------------
 def _resolve_test_file(module_name, test_name, roots):
     filename = f"{test_name}.py"
     for root in roots:
@@ -467,10 +583,6 @@ def collect_extras_for_module(module_name, test_root, parent_test_root=None, *, 
     test_files = [f for f in os.listdir(module_path)
                   if f.endswith(".py") and f not in ["__init__.py", "setup.py"]]
 
-    def _sort_key(name):
-        prefix = name.split("_", 1)[0]
-        return (int(prefix), name) if prefix.isdigit() else (float("inf"), name)
-
     extras = []
     for test_file in sorted(test_files, key=_sort_key):
         if test_file.startswith("_"):
@@ -515,11 +627,340 @@ def print_extra_flags(extras):
     print("")
 
 
+# ---------------------------------------------------------------------------
+# Rich progress display
+# ---------------------------------------------------------------------------
+class _ModuleTracker:
+    """Per-module state for the rich progress display."""
+
+    def __init__(self, module_name, total_tests):
+        self.module_name = module_name
+        self.total = total_tests
+        self.completed = 0
+        self.passed = 0
+        self.failed = 0
+        self.skipped = 0
+        self.started_at = None
+        self.finished_at = None
+        self.finished = False
+        self.failures = []
+        self._lock = threading.Lock()
+
+    def start(self):
+        self.started_at = time.time()
+
+    def record(self, status, name=None, detail=None):
+        with self._lock:
+            self.completed += 1
+            if status == "passed":
+                self.passed += 1
+            elif status in ("failed", "error"):
+                self.failed += 1
+                self.failures.append({"name": name, "detail": detail})
+            elif status == "skipped":
+                self.skipped += 1
+
+    @property
+    def elapsed(self):
+        start = self.started_at or time.time()
+        end = self.finished_at or time.time()
+        return end - start
+
+
+class _RichDisplay:
+    """Manages the rich Live panel showing per-module progress."""
+
+    def __init__(self):
+        self.console = Console()
+        self.trackers = {}
+        self._order = []
+        self._lock = threading.Lock()
+        self._live = None
+
+    def add_module(self, module_name, total_tests):
+        tracker = _ModuleTracker(module_name, total_tests)
+        with self._lock:
+            self.trackers[module_name] = tracker
+            self._order.append(module_name)
+        return tracker
+
+    def _build_table(self):
+        table = Table(show_header=False, box=None, padding=(0, 1))
+        table.add_column("module", min_width=20)
+        table.add_column("bar", min_width=30)
+        table.add_column("counts", min_width=28)
+        table.add_column("time", min_width=8, justify="right")
+        table.add_column("status", min_width=3)
+
+        with self._lock:
+            for name in self._order:
+                t = self.trackers[name]
+                # Progress bar
+                if t.total > 0:
+                    pct = t.completed / t.total
+                    filled = int(pct * 25)
+                    bar = "[green]" + "━" * filled + "[/green]"
+                    if filled < 25:
+                        bar += "[dim]" + "━" * (25 - filled) + "[/dim]"
+                else:
+                    bar = "[dim]" + "━" * 25 + "[/dim]"
+
+                counts = f"{t.completed}/{t.total}  "
+                counts += f"[green]✓ {t.passed}[/green]  "
+                if t.failed:
+                    counts += f"[red]✗ {t.failed}[/red]  "
+                else:
+                    counts += f"[dim]✗ {t.failed}[/dim]  "
+                if t.skipped:
+                    counts += f"[blue]⊘ {t.skipped}[/blue]"
+                else:
+                    counts += f"[dim]⊘ {t.skipped}[/dim]"
+
+                elapsed = f"{t.elapsed:.1f}s"
+
+                if t.finished:
+                    status = "[green]✔[/green]" if t.failed == 0 else "[red]✘[/red]"
+                else:
+                    status = "[yellow]…[/yellow]"
+
+                table.add_row(name, bar, counts, elapsed, status)
+        return table
+
+    def start(self):
+        self._live = Live(self._build_table(), console=self.console, refresh_per_second=4)
+        self._live.start()
+
+    def refresh(self):
+        if self._live:
+            self._live.update(self._build_table())
+
+    def stop(self):
+        if self._live:
+            self._live.update(self._build_table())
+            self._live.stop()
+            self._live = None
+
+
+def _print_summary_rich(display, duration):
+    """Print a final summary table with failures expanded."""
+    console = display.console
+
+    # Summary table
+    table = Table(title="Test Results", show_lines=False)
+    table.add_column("Module", style="bold")
+    table.add_column("Tests", justify="right")
+    table.add_column("Passed", justify="right", style="green")
+    table.add_column("Failed", justify="right", style="red")
+    table.add_column("Skipped", justify="right", style="blue")
+    table.add_column("Time", justify="right")
+
+    for name in display._order:
+        t = display.trackers[name]
+        table.add_row(
+            name,
+            str(t.total),
+            str(t.passed),
+            str(t.failed) if t.failed else "-",
+            str(t.skipped) if t.skipped else "-",
+            f"{t.elapsed:.1f}s",
+        )
+
+    # Totals
+    table.add_section()
+    table.add_row(
+        "TOTAL",
+        str(helpers.TEST_RUN.total),
+        str(helpers.TEST_RUN.passed),
+        str(helpers.TEST_RUN.failed) if helpers.TEST_RUN.failed else "-",
+        str(helpers.TEST_RUN.skipped) if helpers.TEST_RUN.skipped else "-",
+        f"{duration:.1f}s",
+        style="bold",
+    )
+    console.print()
+    console.print(table)
+
+    # Failures detail
+    all_failures = []
+    for name in display._order:
+        t = display.trackers[name]
+        for f in t.failures:
+            all_failures.append((name, f))
+
+    if all_failures:
+        console.print()
+        console.print("[bold red]Failures:[/bold red]")
+        for module_name, fail in all_failures:
+            console.print(f"  [red]✗[/red] [bold]{module_name}[/bold] > {fail['name']}")
+            if fail.get("detail"):
+                console.print(f"    [dim]{fail['detail']}[/dim]")
+
+
+def _print_summary_plain(duration):
+    """Print the original plain-text summary."""
+    print("\n" + "=" * 80)
+    logit.color_print(f"TOTAL RUN: {helpers.TEST_RUN.total}\t", logit.ConsoleLogger.YELLOW)
+    logit.color_print(f"TOTAL PASSED: {helpers.TEST_RUN.passed}", logit.ConsoleLogger.GREEN)
+    if helpers.TEST_RUN.skipped:
+        logit.color_print(f"TOTAL SKIPPED: {helpers.TEST_RUN.skipped}", logit.ConsoleLogger.BLUE)
+    if helpers.TEST_RUN.failed > 0:
+        logit.color_print(f"TOTAL FAILED: {helpers.TEST_RUN.failed}", logit.ConsoleLogger.RED)
+    print("=" * 80)
+
+
+# ---------------------------------------------------------------------------
+# Agent output
+# ---------------------------------------------------------------------------
+def _write_agent_report(opts):
+    """Write structured failure data to var/test_failures.json."""
+    failures = []
+    for record in helpers.TEST_RUN.records:
+        if record["status"] not in ("failed", "error"):
+            continue
+        entry = {
+            "test_name": record.get("name"),
+            "module": record.get("module"),
+            "test_file": record.get("test_module"),
+            "function": record.get("function"),
+            "status": record["status"],
+            "assertion": record.get("detail"),
+        }
+        # Merge agent context if available
+        agent_ctx = record.get("agent_context")
+        if agent_ctx:
+            entry["file_path"] = agent_ctx.get("file_path")
+            entry["line"] = agent_ctx.get("line")
+            entry["test_source"] = agent_ctx.get("test_source")
+            if agent_ctx.get("traceback"):
+                entry["traceback"] = agent_ctx["traceback"]
+
+        # Server error log tail
+        try:
+            log_path = os.path.join(paths.VAR_ROOT, "error.log")
+            if os.path.exists(log_path):
+                with open(log_path, "r", encoding="utf-8", errors="replace") as fh:
+                    lines = fh.readlines()
+                entry["server_log_tail"] = "".join(lines[-20:])
+        except Exception:
+            pass
+
+        failures.append(entry)
+
+    report = {
+        "total": helpers.TEST_RUN.total,
+        "passed": helpers.TEST_RUN.passed,
+        "failed": helpers.TEST_RUN.failed,
+        "skipped": helpers.TEST_RUN.skipped,
+        "duration": (helpers.TEST_RUN.finished_at or time.time()) - (helpers.TEST_RUN.started_at or time.time()),
+        "failures": failures,
+    }
+
+    report_path = os.path.join(paths.VAR_ROOT, "test_failures.json")
+    os.makedirs(os.path.dirname(report_path), exist_ok=True)
+    with open(report_path, "w", encoding="utf-8") as fh:
+        json.dump(report, fh, indent=2, default=str)
+
+
+# ---------------------------------------------------------------------------
+# Parallel module runner
+# ---------------------------------------------------------------------------
+def _run_module_in_thread(opts_template, module_name, test_root, parent_test_root, tracker):
+    """Run all test files for a module. Called from a thread."""
+    # Each thread gets its own opts copy with its own client
+    opts = copy.copy(opts_template)
+    opts.client = testit.client.RestClient(opts.host, logger=opts.logger)
+
+    # Wire up a per-thread display callback
+    def _on_event(event, **kwargs):
+        if event == "test_result":
+            tracker.record(kwargs.get("status"), kwargs.get("name"), kwargs.get("detail"))
+            if display_ref:
+                display_ref.refresh()
+
+    helpers._set_display_fn(_on_event)
+
+    tracker.start()
+    test_files, module_path = _discover_test_files(module_name, test_root, parent_test_root)
+    try:
+        for test_name, file_path in test_files:
+            run_module_tests_by_name(opts, module_name, test_name)
+    except helpers.TestitAbort:
+        pass
+    finally:
+        tracker.finished_at = time.time()
+        tracker.finished = True
+        helpers._set_display_fn(None)
+        if display_ref:
+            display_ref.refresh()
+
+    return module_name
+
+
+# Module-level ref so threads can access the display
+display_ref = None
+
+
+def _collect_modules(opts, test_root, parent_test_root):
+    """Collect all module names to run, respecting filters and ignore lists."""
+    modules = []
+    ignored = opts.ignore_modules or []
+
+    if opts.test_modules:
+        # Specific modules requested
+        for test_spec in opts.test_modules:
+            if '.' in test_spec:
+                # Specific file — run directly (not parallelizable at module level)
+                modules.append(("file", test_spec))
+            else:
+                if test_spec not in ignored:
+                    modules.append(("module", test_spec))
+        return modules
+
+    parent_test_modules = None
+    if parent_test_root and os.path.exists(parent_test_root):
+        parent_test_modules = sorted([
+            d for d in os.listdir(parent_test_root)
+            if os.path.isdir(os.path.join(parent_test_root, d))
+        ])
+
+    if parent_test_modules and not opts.nomojo:
+        for name in parent_test_modules:
+            if name not in ignored:
+                modules.append(("module", name))
+
+    if not opts.onlymojo:
+        app_test_root = os.path.join(paths.APPS_ROOT, "tests")
+        if os.path.exists(app_test_root):
+            app_modules = sorted([
+                d for d in os.listdir(app_test_root)
+                if os.path.isdir(os.path.join(app_test_root, d))
+            ])
+            for name in app_modules:
+                if name not in ignored:
+                    modules.append(("module", name))
+
+    return modules
+
+
+def _count_module_tests(module_name, test_root, parent_test_root, quick=False):
+    """Count total tests in a module by scanning all test files."""
+    test_files, module_path = _discover_test_files(module_name, test_root, parent_test_root)
+    total = 0
+    for test_name, file_path in test_files:
+        total += _count_tests_in_file(file_path, quick=quick)
+    return total
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 def main(opts):
     """Main function to run tests."""
+    global display_ref
+
     helpers.reset_test_run()
     helpers.STOP_ON_FAIL = bool(opts.stop)
     helpers.VERBOSE = opts.verbose or opts.errors
+    helpers.AGENT_MODE = bool(opts.agent)
     helpers.TEST_RUN.started_at = time.time()
 
     # Set up resume state
@@ -539,31 +980,27 @@ def main(opts):
     opts.logger = logit.get_logger("testit", "testit.log")
 
     parent_test_root = os.path.join(os.path.dirname(os.path.dirname(__file__)), "tests")
-    parent_test_modules = None
-    if os.path.exists(parent_test_root):
-        sys.path.insert(0, parent_test_root)
-        parent_test_modules = sorted([d for d in os.listdir(parent_test_root) if os.path.isdir(os.path.join(parent_test_root, d))])
+    if not os.path.exists(parent_test_root):
+        parent_test_root = None
+    else:
+        if parent_test_root not in sys.path:
+            sys.path.insert(0, parent_test_root)
 
+    test_root = os.path.join(paths.APPS_ROOT, "tests")
+
+    # Handle --list-extras
     if opts.list_extras:
         extras = []
-        roots = [TEST_ROOT, parent_test_root]
+        roots = [test_root, parent_test_root]
 
         def add_from_module(module_name, test_name):
             file_path = _resolve_test_file(module_name, test_name, roots)
             extras.extend(collect_module_extras(
-                module_name,
-                test_name,
-                file_path=file_path,
-                safe=True,
-            ))
+                module_name, test_name, file_path=file_path, safe=True))
 
-        def add_from_directory(module_name, test_root):
+        def add_from_directory(module_name, _test_root):
             extras.extend(collect_extras_for_module(
-                module_name,
-                test_root,
-                parent_test_root,
-                safe=True,
-            ))
+                module_name, _test_root, parent_test_root, safe=True))
 
         if opts.test_modules:
             for test_spec in opts.test_modules:
@@ -571,72 +1008,179 @@ def main(opts):
                     module_name, test_name = test_spec.split('.', 1)
                     add_from_module(module_name, test_name)
                 else:
-                    add_from_directory(test_spec, TEST_ROOT)
+                    add_from_directory(test_spec, test_root)
         else:
-            test_root = os.path.join(paths.APPS_ROOT, "tests")
-            test_modules = sorted([d for d in os.listdir(test_root) if os.path.isdir(os.path.join(test_root, d))])
-            ignored_modules = opts.ignore_modules or []
-
-            if parent_test_modules and not opts.nomojo:
-                for module_name in parent_test_modules:
-                    if module_name not in ignored_modules:
-                        add_from_directory(module_name, parent_test_root)
-            if not opts.onlymojo:
-                for module_name in test_modules:
-                    if module_name not in ignored_modules:
-                        add_from_directory(module_name, test_root)
+            all_modules = _collect_modules(opts, test_root, parent_test_root)
+            for kind, name in all_modules:
+                if kind == "module":
+                    add_from_directory(name, test_root)
 
         print_extra_flags(extras)
         return
 
-    if opts.test_modules:
-        for test_spec in opts.test_modules:
-            if '.' in test_spec:
-                module_name, test_name = test_spec.split('.', 1)
-                run_module_tests_by_name(opts, module_name, test_name)
-            else:
-                run_tests_for_module(opts, test_spec, TEST_ROOT, parent_test_root)
+    # Collect modules
+    all_modules = _collect_modules(opts, test_root, parent_test_root)
+
+    # Determine if we use rich UI
+    use_rich = HAS_RICH and not opts.plain and not opts.verbose and opts.jobs > 1
+
+    # Load module configs and separate serial vs parallel
+    parallel_modules = []
+    serial_modules = []
+    file_specs = []
+
+    for kind, name in all_modules:
+        if kind == "file":
+            file_specs.append(name)
+            continue
+
+        # Find module path for config loading
+        module_path = os.path.join(test_root, name)
+        if not os.path.exists(module_path) and parent_test_root:
+            module_path = os.path.join(parent_test_root, name)
+        config = _load_module_config(module_path)
+
+        # Check app requirements
+        if config.requires_apps:
+            try:
+                from django.apps import apps
+                skip = False
+                for app_label in config.requires_apps:
+                    if not apps.is_installed(app_label):
+                        skip = True
+                        break
+                if skip:
+                    continue
+            except Exception:
+                pass
+
+        if config.serial or opts.jobs <= 1:
+            serial_modules.append(name)
+        else:
+            parallel_modules.append(name)
+
+    # --- Execute ---
+
+    if use_rich:
+        display = _RichDisplay()
+        display_ref = display
+
+        # Add trackers for parallel modules
+        for name in parallel_modules:
+            total = _count_module_tests(name, test_root, parent_test_root, quick=opts.quick)
+            display.add_module(name, total)
+
+        # Add trackers for serial modules
+        for name in serial_modules:
+            total = _count_module_tests(name, test_root, parent_test_root, quick=opts.quick)
+            display.add_module(name, total)
+
+        display.start()
+
+        try:
+            # Run parallel modules
+            if parallel_modules:
+                with ThreadPoolExecutor(max_workers=opts.jobs) as executor:
+                    futures = {}
+                    for name in parallel_modules:
+                        tracker = display.trackers[name]
+                        future = executor.submit(
+                            _run_module_in_thread,
+                            opts, name, test_root, parent_test_root, tracker,
+                        )
+                        futures[future] = name
+
+                    for future in as_completed(futures):
+                        try:
+                            future.result()
+                        except Exception:
+                            pass
+
+            # Run serial modules sequentially
+            for name in serial_modules:
+                tracker = display.trackers[name]
+
+                def _make_event_handler(t, d):
+                    def _on_event(event, **kwargs):
+                        if event == "test_result":
+                            t.record(kwargs.get("status"), kwargs.get("name"), kwargs.get("detail"))
+                            d.refresh()
+                    return _on_event
+
+                helpers._set_display_fn(_make_event_handler(tracker, display))
+                tracker.start()
+                try:
+                    run_tests_for_module(opts, name, test_root, parent_test_root)
+                except helpers.TestitAbort:
+                    break
+                finally:
+                    tracker.finished_at = time.time()
+                    tracker.finished = True
+                    display.refresh()
+
+        finally:
+            helpers._set_display_fn(None)
+            display_ref = None
+            display.stop()
+
+        # Print summary
+        duration = time.time() - helpers.TEST_RUN.started_at
+        _print_summary_rich(display, duration)
+
     else:
-        test_root = os.path.join(paths.APPS_ROOT, "tests")
-        test_modules = sorted([d for d in os.listdir(test_root) if os.path.isdir(os.path.join(test_root, d))])
-        ignored_modules = opts.ignore_modules or []
+        # Plain text mode (sequential or single-threaded)
+        helpers._set_display_fn(None)
+        display_ref = None
 
-        if parent_test_modules and not opts.nomojo:
-            for module_name in parent_test_modules:
-                if module_name not in ignored_modules:
-                    if _resume.active and not _resume.reached and module_name != _resume.module:
-                        continue
-                    run_tests_for_module(opts, module_name, parent_test_root)
-        if not opts.onlymojo:
-            for module_name in test_modules:
-                if module_name not in ignored_modules:
-                    if _resume.active and not _resume.reached and module_name != _resume.module:
-                        continue
-                    run_tests_for_module(opts, module_name, test_root)
+        # Run file specs first
+        for spec in file_specs:
+            module_name, test_name = spec.split('.', 1)
+            try:
+                run_module_tests_by_name(opts, module_name, test_name)
+            except helpers.TestitAbort:
+                break
 
-    # Clear checkpoint on clean completion (no failures or failures without -s)
+        # Run all modules sequentially
+        for name in parallel_modules + serial_modules:
+            if _resume.active and not _resume.reached:
+                if name != _resume.module:
+                    continue
+            try:
+                run_tests_for_module(opts, name, test_root, parent_test_root)
+            except helpers.TestitAbort:
+                break
+
+        duration = time.time() - helpers.TEST_RUN.started_at
+        _print_summary_plain(duration)
+
+    # Handle file specs in rich mode too
+    if use_rich and file_specs:
+        helpers._set_display_fn(None)
+        for spec in file_specs:
+            module_name, test_name = spec.split('.', 1)
+            try:
+                run_module_tests_by_name(opts, module_name, test_name)
+            except helpers.TestitAbort:
+                break
+
+    # Clear checkpoint on clean completion
     if helpers.TEST_RUN.failed == 0:
         clear_checkpoint()
 
-    # Summary Output
-    print("\n" + "=" * 80)
+    # Agent report
+    if opts.agent:
+        _write_agent_report(opts)
+        report_path = os.path.join(paths.VAR_ROOT, "test_failures.json")
+        if helpers.TEST_RUN.failed > 0:
+            print(f"\n  Agent report: {report_path} ({helpers.TEST_RUN.failed} failures)")
 
-    logit.color_print(f"TOTAL RUN: {helpers.TEST_RUN.total}\t", logit.ConsoleLogger.YELLOW)
-    logit.color_print(f"TOTAL PASSED: {helpers.TEST_RUN.passed}", logit.ConsoleLogger.GREEN)
-    if helpers.TEST_RUN.skipped:
-        logit.color_print(f"TOTAL SKIPPED: {helpers.TEST_RUN.skipped}", logit.ConsoleLogger.BLUE)
-    if helpers.TEST_RUN.failed > 0:
-        logit.color_print(f"TOTAL FAILED: {helpers.TEST_RUN.failed}", logit.ConsoleLogger.RED)
-
-    print("=" * 80)
-
-    # Save Test Results
+    # Save results
     helpers.TEST_RUN.finished_at = time.time()
     helpers.save_results(os.path.join(paths.VAR_ROOT, "test_results.json"))
 
     # Exit with failure status if any test failed
     if helpers.TEST_RUN.failed > 0:
-        sys.exit("❌ Tests failed!")
+        sys.exit("  Tests failed!")
 
 
 if __name__ == "__main__":

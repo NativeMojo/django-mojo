@@ -43,6 +43,7 @@ class RestClient:
         self.is_authenticated = False
         self.bearer = "bearer"
         self.headers = {}
+        self.last_response = None
 
     def login(self, username, password):
         self.logout()
@@ -113,6 +114,17 @@ class RestClient:
                 response_data = objict(response=data, status_code=response.status_code, json=data)
             if not response.ok:
                 response_data['error_reason'] = response.reason
+
+            # Capture last response for agent diagnostics
+            self.last_response = objict(
+                method=method,
+                path=path,
+                status_code=response.status_code,
+                body=response_data.get("json") or response_data.get("text"),
+                headers=dict(response.headers),
+                elapsed_ms=round(response.elapsed.total_seconds() * 1000, 1),
+            )
+
             if self.logger:
                 self.logger.info("RESPONSE", f"{method}:{url}")
                 self.logger.info(response_data)
