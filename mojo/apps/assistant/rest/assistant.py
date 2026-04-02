@@ -45,6 +45,7 @@ def on_assistant_message(request):
 
 @md.GET('conversation')
 @md.requires_perms('view_admin')
+@md.rate_limit("assistant_read", ip_limit=120)
 def on_list_conversations(request):
     """List the requesting user's conversations."""
     from mojo.apps.assistant.models import Conversation
@@ -70,6 +71,7 @@ def on_list_conversations(request):
 
 @md.GET('conversation/<int:pk>')
 @md.requires_perms('view_admin')
+@md.rate_limit("assistant_read", ip_limit=120)
 def on_get_conversation(request, pk):
     """Get a conversation with its message history."""
     from mojo.apps.assistant.models import Conversation, Message
@@ -98,7 +100,6 @@ def on_get_conversation(request, pk):
                     "id": m.pk,
                     "role": m.role,
                     "content": m.content,
-                    "tool_calls": m.tool_calls,
                     "created": str(m.created),
                 }
                 for m in messages
