@@ -97,10 +97,13 @@ def publish(
     if len(payload_json.encode('utf-8')) > max_bytes:
         raise ValueError(f"Payload exceeds maximum size of {max_bytes} bytes")
 
-    # Validate channel against configured channels
+    # Validate channel against configured channels — fall back to "default"
+    # if the requested channel is not configured, so projects work out of
+    # the box without listing every possible channel in JOBS_CHANNELS.
     configured_channels = JOB_CHANNELS if isinstance(JOB_CHANNELS, list) else [JOB_CHANNELS]
     if channel not in configured_channels:
-        raise ValueError(f"Invalid jobs channel '{channel}'. Must be one of: {', '.join(configured_channels)}")
+        logit.warning("jobs.publish: channel '%s' not in JOBS_CHANNELS, falling back to 'default'", channel)
+        channel = "default"
 
     # Generate job ID
     job_id = uuid.uuid4().hex  # UUID without dashes

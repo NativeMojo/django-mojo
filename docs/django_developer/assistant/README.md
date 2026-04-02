@@ -199,7 +199,7 @@ Tracks a multi-turn conversation between a user and the assistant.
 | Field | Type | Description |
 |---|---|---|
 | `user` | FK(User) | Owner of the conversation |
-| `title` | CharField | Auto-set from first message (max 100 chars) |
+| `title` | CharField | Set from the first 100 chars of the first message on creation (field max 255) |
 | `metadata` | JSONField | Extensible metadata |
 | `created` | DateTimeField | When the conversation started |
 | `modified` | DateTimeField | Last activity |
