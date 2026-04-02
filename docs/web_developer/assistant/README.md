@@ -284,24 +284,24 @@ The server publishes events to the user's WebSocket topic as the assistant proce
 
 | Event | When | Payload |
 |---|---|---|
-| `assistant:thinking` | Immediately after message received | `{conversation_id}` |
-| `assistant:tool_call` | Each time a tool is called | `{conversation_id, tool, input}` |
-| `assistant:response` | Final LLM response | `{conversation_id, response, tool_calls_made, blocks?}` |
-| `assistant:error` | On failure | `{conversation_id, error}` |
+| `assistant_thinking` | Immediately after message received | `{conversation_id}` |
+| `assistant_tool_call` | Each time a tool is called | `{conversation_id, tool, input}` |
+| `assistant_response` | Final LLM response | `{conversation_id, response, tool_calls_made, blocks?}` |
+| `assistant_error` | On failure | `{conversation_id, error}` |
 
 ### Client Wiring Example
 
 ```javascript
 // Subscribe to assistant events
-ws.on('assistant:thinking', (data) => {
+ws.on('assistant_thinking', (data) => {
     showThinkingIndicator(data.conversation_id);
 });
 
-ws.on('assistant:tool_call', (data) => {
+ws.on('assistant_tool_call', (data) => {
     showToolCallStatus(data.tool, data.input);
 });
 
-ws.on('assistant:response', (data) => {
+ws.on('assistant_response', (data) => {
     hideThinkingIndicator();
     appendAssistantMessage(data.conversation_id, data.response);
     if (data.blocks) {
@@ -309,7 +309,7 @@ ws.on('assistant:response', (data) => {
     }
 });
 
-ws.on('assistant:error', (data) => {
+ws.on('assistant_error', (data) => {
     hideThinkingIndicator();
     showError(data.error);
 });
@@ -318,10 +318,10 @@ ws.on('assistant:error', (data) => {
 ### How It Works
 
 1. Client sends `assistant_message` via WebSocket
-2. Server validates permissions, stores the user message, returns `assistant:thinking` immediately
+2. Server validates permissions, stores the user message, returns `assistant_thinking` immediately
 3. A background job runs the LLM agent (tool-calling loop may take seconds)
-4. During processing, `assistant:tool_call` events are published for each tool
-5. When done, `assistant:response` (or `assistant:error`) is published
+4. During processing, `assistant_tool_call` events are published for each tool
+5. When done, `assistant_response` (or `assistant_error`) is published
 
 The REST endpoints (`GET /api/assistant/conversation`, etc.) continue to work for listing and retrieving conversation history.
 

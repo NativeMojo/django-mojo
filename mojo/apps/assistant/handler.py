@@ -9,10 +9,10 @@ Message types (client → server):
   - assistant_message: Send a new message to the assistant
 
 Response types (server → client, via realtime publish):
-  - assistant:thinking:   Processing has started
-  - assistant:tool_call:  A tool was called (sent per tool)
-  - assistant:response:   Final LLM response
-  - assistant:error:      Something went wrong
+  - assistant_thinking:   Processing has started
+  - assistant_tool_call:  A tool was called (sent per tool)
+  - assistant_response:   Final LLM response
+  - assistant_error:      Something went wrong
 """
 from mojo.helpers import logit
 
@@ -45,15 +45,15 @@ def _handle_message(user, data):
 
     # Check feature flag
     if not settings.get("LLM_ADMIN_ENABLED", False, kind="bool"):
-        return {"type": "assistant:error", "error": "Assistant is not enabled"}
+        return {"type": "assistant_error", "error": "Assistant is not enabled"}
 
     # Check permission
     if not user.has_permission("view_admin"):
-        return {"type": "assistant:error", "error": "Permission denied"}
+        return {"type": "assistant_error", "error": "Permission denied"}
 
     message = (data.get("message") or "").strip()
     if not message:
-        return {"type": "assistant:error", "error": "Message is required"}
+        return {"type": "assistant_error", "error": "Message is required"}
 
     conversation_id = data.get("conversation_id")
 
@@ -64,7 +64,7 @@ def _handle_message(user, data):
             pk=conversation_id, user=user
         ).first()
         if not conversation:
-            return {"type": "assistant:error", "error": "Conversation not found"}
+            return {"type": "assistant_error", "error": "Conversation not found"}
 
     if not conversation:
         title = message[:100]
@@ -90,7 +90,7 @@ def _handle_message(user, data):
     )
 
     return {
-        "type": "assistant:thinking",
+        "type": "assistant_thinking",
         "conversation_id": conversation.pk,
     }
 
@@ -124,7 +124,7 @@ def execute_assistant_job(job):
         """Publish WS events back to the user during processing."""
         from mojo.apps.realtime.manager import send_to_user
         event = {
-            "type": f"assistant:{event_type}",
+            "type": f"assistant_{event_type}",
             "conversation_id": conversation_id,
         }
         if data:
