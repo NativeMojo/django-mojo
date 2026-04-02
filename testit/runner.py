@@ -24,6 +24,79 @@ _LOCK_FILE = os.path.join(paths.VAR_ROOT, "testit.lock")
 _resume = objict(active=False, module=None, test_name=None, reached=False)
 
 # ---------------------------------------------------------------------------
+# Interactive abort — set by keyboard listener or signal handler
+# ---------------------------------------------------------------------------
+_abort_event = threading.Event()
+
+# ---------------------------------------------------------------------------
+# Keyboard listener (Rich UI mode only, Unix terminals)
+# ---------------------------------------------------------------------------
+try:
+    import termios
+    import tty
+    _HAS_TERMIOS = True
+except ImportError:
+    _HAS_TERMIOS = False
+
+
+class _KeyboardListener:
+    """Background daemon thread that reads single keypresses during Rich UI mode."""
+
+    def __init__(self, display):
+        self._display = display
+        self._thread = None
+        self._stop = threading.Event()
+        self._old_settings = None
+
+    def start(self):
+        if not _HAS_TERMIOS or not sys.stdin.isatty():
+            return
+        self._old_settings = termios.tcgetattr(sys.stdin)
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+        if self._old_settings:
+            try:
+                termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self._old_settings)
+            except Exception:
+                pass
+            self._old_settings = None
+
+    def _run(self):
+        try:
+            tty.setcbreak(sys.stdin.fileno())
+            while not self._stop.is_set():
+                import select
+                ready, _, _ = select.select([sys.stdin], [], [], 0.2)
+                if not ready:
+                    continue
+                ch = sys.stdin.read(1)
+                if ch == "q":
+                    _abort_event.set()
+                    self._display.set_status_message("Quitting after current tests finish...")
+                    self._display.refresh()
+                elif ch == "f":
+                    helpers.STOP_ON_FAIL = True
+                    self._display.fail_fast_active = True
+                    self._display.refresh()
+                elif ch == "r":
+                    self._display.show_running = not self._display.show_running
+                    self._display.refresh()
+                elif ch == "v":
+                    self._display.show_verbose = not self._display.show_verbose
+                    self._display.refresh()
+        except Exception:
+            pass
+        finally:
+            if self._old_settings:
+                try:
+                    termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self._old_settings)
+                except Exception:
+                    pass
+
+# ---------------------------------------------------------------------------
 # Rich UI (optional — falls back to plain text)
 # ---------------------------------------------------------------------------
 try:
@@ -445,6 +518,18 @@ def run_module_tests_by_name(opts, module_name, test_name):
         return
     skipped = run_module_setup(opts, module, test_name, module_name)
     if skipped:
+        # Count all tests in this file as skipped so totals stay consistent
+        prefix = "quick_" if opts.quick else "test_"
+        functions = inspect.getmembers(module, inspect.isfunction)
+        for func_name, func in functions:
+            if func_name.startswith(prefix):
+                display_name = func_name[len(prefix):]
+                helpers._increment("total")
+                helpers._increment("skipped")
+                helpers._record_result(display_name, status="skipped", detail="setup skipped")
+                dfn = helpers._get_display_fn()
+                if dfn:
+                    dfn("test_result", name=display_name, status="skipped", detail="setup skipped")
         return
     run_module_tests(opts, module, test_name, module_name)
 
@@ -496,6 +581,12 @@ def run_module_tests(opts, module, test_name, module_name):
 
     for func_name, func in functions:
         if func_name.startswith(prefix):
+            if _abort_event.is_set():
+                raise helpers.TestitAbort()
+            # Track current test for the running display
+            dfn = helpers._get_display_fn()
+            if dfn:
+                dfn("test_running", name=func_name)
             run_test(opts, module, func_name, module_name, test_name)
 
     if not helpers._get_display_fn():
@@ -702,10 +793,16 @@ class _ModuleTracker:
         self.finished_at = None
         self.finished = False
         self.failures = []
+        self.current_test = None
+        self.skip_reason = None
         self._lock = threading.Lock()
 
     def start(self):
         self.started_at = time.time()
+
+    def set_current(self, name):
+        with self._lock:
+            self.current_test = name
 
     def record(self, status, name=None, detail=None):
         with self._lock:
@@ -735,6 +832,13 @@ class _RichDisplay:
         self._lock = threading.Lock()
         self._live = None
         self._started_at = None
+        self.show_running = False
+        self.show_verbose = False
+        self.fail_fast_active = False
+        self._status_message = None
+
+    def set_status_message(self, msg):
+        self._status_message = msg
 
     def add_module(self, module_name, total_tests):
         tracker = _ModuleTracker(module_name, total_tests)
@@ -756,6 +860,7 @@ class _RichDisplay:
         with self._lock:
             for name in self._order:
                 t = self.trackers[name]
+
                 # Progress bar
                 if t.total > 0:
                     pct = t.completed / t.total
@@ -786,12 +891,34 @@ class _RichDisplay:
 
                 table.add_row(name, bar, counts, elapsed, status)
 
+                # Show currently running test name when toggled
+                if self.show_running and not t.finished and t.current_test:
+                    table.add_row(
+                        f"  [dim]{t.current_test}[/dim]", "", "", "", ""
+                    )
+
         # Running clock at bottom
         if self._started_at:
             wall = time.time() - self._started_at
             mins, secs = divmod(int(wall), 60)
             clock = f"[dim]elapsed {mins}:{secs:02d}[/dim]"
             table.add_row("", "", "", clock, "")
+
+        # Status message (e.g., "Quitting after current tests finish...")
+        if self._status_message:
+            table.add_row(f"[yellow]{self._status_message}[/yellow]", "", "", "", "")
+
+        # Keyboard hints — escape brackets with backslash for Rich
+        # Split across columns so they don't wrap
+        if self.fail_fast_active:
+            h1 = "[dim]\\[q]uit[/dim]"
+            h2 = "[bold dim]\\[f]ail-fast ✓[/bold dim]"
+        else:
+            h1 = "[dim]\\[q]uit[/dim]"
+            h2 = "[dim]\\[f]ail-fast[/dim]"
+        h3 = "[dim]\\[r]unning  \\[v]erbose[/dim]"
+        table.add_row(h1, h2, h3, "", "")
+
         return table
 
     def start(self):
@@ -868,9 +995,12 @@ def _print_summary_rich(display, duration):
                 console.print(f"    [dim]{fail['detail']}[/dim]")
 
 
-def _print_summary_plain(duration):
+def _print_summary_plain(duration, skipped_modules=None):
     """Print the original plain-text summary."""
     print("\n" + "=" * 80)
+    if skipped_modules:
+        for name, reason, total in skipped_modules:
+            logit.color_print(f"SKIPPED: {name} — {total} tests ({reason})", logit.ConsoleLogger.BLUE)
     logit.color_print(f"TOTAL RUN: {helpers.TEST_RUN.total}\t", logit.ConsoleLogger.YELLOW)
     logit.color_print(f"TOTAL PASSED: {helpers.TEST_RUN.passed}", logit.ConsoleLogger.GREEN)
     if helpers.TEST_RUN.skipped:
@@ -927,13 +1057,16 @@ def _write_agent_report(opts, display=None):
     if display and hasattr(display, "trackers"):
         for name in display._order:
             t = display.trackers[name]
-            modules[name] = {
+            entry = {
                 "tests": t.total,
                 "passed": t.passed,
                 "failed": t.failed,
                 "skipped": t.skipped,
                 "duration": round(t.elapsed, 2),
             }
+            if t.skip_reason:
+                entry["skipped_reason"] = t.skip_reason
+            modules[name] = entry
     else:
         # Build per-module stats from records
         for record in helpers.TEST_RUN.records:
@@ -979,7 +1112,11 @@ def _run_module_in_thread(opts_template, module_name, test_root, parent_test_roo
 
     # Wire up a per-thread display callback
     def _on_event(event, **kwargs):
-        if event == "test_result":
+        if event == "test_running":
+            tracker.set_current(kwargs.get("name"))
+            if display_ref:
+                display_ref.refresh()
+        elif event == "test_result":
             tracker.record(kwargs.get("status"), kwargs.get("name"), kwargs.get("detail"))
             if display_ref:
                 display_ref.refresh()
@@ -990,10 +1127,13 @@ def _run_module_in_thread(opts_template, module_name, test_root, parent_test_roo
     test_files, module_path = _discover_test_files(module_name, test_root, parent_test_root)
     try:
         for test_name, file_path in test_files:
+            if _abort_event.is_set():
+                raise helpers.TestitAbort()
             run_module_tests_by_name(opts, module_name, test_name)
     except helpers.TestitAbort:
         pass
     finally:
+        tracker.set_current(None)
         tracker.finished_at = time.time()
         tracker.finished = True
         helpers._set_display_fn(None)
@@ -1028,6 +1168,7 @@ def _collect_modules(opts, test_root, parent_test_root):
         parent_test_modules = sorted([
             d for d in os.listdir(parent_test_root)
             if os.path.isdir(os.path.join(parent_test_root, d))
+            and not d.startswith("__")
         ])
 
     if parent_test_modules and not opts.nomojo:
@@ -1041,6 +1182,7 @@ def _collect_modules(opts, test_root, parent_test_root):
             app_modules = sorted([
                 d for d in os.listdir(app_test_root)
                 if os.path.isdir(os.path.join(app_test_root, d))
+                and not d.startswith("__")
             ])
             for name in app_modules:
                 if name not in ignored:
@@ -1076,6 +1218,7 @@ def main(opts):
         print(f"  If this is stale, remove it: rm {_LOCK_FILE}\n")
         sys.exit(1)
 
+    _abort_event.clear()
     helpers.reset_test_run()
     helpers.STOP_ON_FAIL = bool(opts.stop)
     helpers.VERBOSE = opts.verbose or opts.errors
@@ -1147,6 +1290,7 @@ def main(opts):
     # Load module configs and separate serial vs parallel
     parallel_modules = []
     serial_modules = []
+    skipped_modules = []  # (name, reason, test_count)
     file_specs = []
 
     for kind, name in all_modules:
@@ -1165,11 +1309,15 @@ def main(opts):
             try:
                 from django.apps import apps
                 skip = False
+                missing_app = None
                 for app_label in config.requires_apps:
                     if not apps.is_installed(app_label):
                         skip = True
+                        missing_app = app_label
                         break
                 if skip:
+                    total = _count_module_tests(name, test_root, parent_test_root, quick=opts.quick)
+                    skipped_modules.append((name, f"requires app: {missing_app}", total))
                     continue
             except Exception:
                 pass
@@ -1179,6 +1327,9 @@ def main(opts):
             required = set(_normalize_extra_value(config.requires_extra))
             provided = set(opts.extra_list or [])
             if not required.intersection(provided):
+                total = _count_module_tests(name, test_root, parent_test_root, quick=opts.quick)
+                flags = ", ".join(sorted(required))
+                skipped_modules.append((name, f"requires --extra {flags}", total))
                 continue
 
         if config.serial or opts.jobs <= 1:
@@ -1203,7 +1354,19 @@ def main(opts):
             total = _count_module_tests(name, test_root, parent_test_root, quick=opts.quick)
             display.add_module(name, total)
 
+        # Add trackers for skipped modules — count tests and mark all as skipped
+        for name, reason, total in skipped_modules:
+            tracker = display.add_module(name, total)
+            tracker.completed = total
+            tracker.skipped = total
+            tracker.skip_reason = reason
+            tracker.finished = True
+            tracker.started_at = time.time()
+            tracker.finished_at = tracker.started_at
+
         display.start()
+        keyboard = _KeyboardListener(display)
+        keyboard.start()
 
         try:
             # Run parallel modules
@@ -1226,11 +1389,16 @@ def main(opts):
 
             # Run serial modules sequentially
             for name in serial_modules:
+                if _abort_event.is_set():
+                    break
                 tracker = display.trackers[name]
 
                 def _make_event_handler(t, d):
                     def _on_event(event, **kwargs):
-                        if event == "test_result":
+                        if event == "test_running":
+                            t.set_current(kwargs.get("name"))
+                            d.refresh()
+                        elif event == "test_result":
                             t.record(kwargs.get("status"), kwargs.get("name"), kwargs.get("detail"))
                             d.refresh()
                     return _on_event
@@ -1247,6 +1415,7 @@ def main(opts):
                     display.refresh()
 
         finally:
+            keyboard.stop()
             helpers._set_display_fn(None)
             display_ref = None
             display.stop()
@@ -1296,7 +1465,7 @@ def main(opts):
                 break
 
         duration = time.time() - helpers.TEST_RUN.started_at
-        _print_summary_plain(duration)
+        _print_summary_plain(duration, skipped_modules)
 
     else:
         # Plain text sequential mode
@@ -1322,7 +1491,7 @@ def main(opts):
                 break
 
         duration = time.time() - helpers.TEST_RUN.started_at
-        _print_summary_plain(duration)
+        _print_summary_plain(duration, skipped_modules)
 
     # Handle file specs in rich mode too
     if use_rich and file_specs:

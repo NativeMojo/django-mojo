@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## v1.1.9 - April 03, 2026
+
+new AI Agent support, improved security
+
+
 ## v1.1.8 - April 02, 2026
 
 new assistant app, major cleanup in testit
