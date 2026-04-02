@@ -1,10 +1,10 @@
 from testit import helpers as th
 from testit import faker
 
-TEST_USER = "testit"
-TEST_PWORD = "testit##mojo"
-ADMIN_USER = "tadmin"
-ADMIN_PWORD = "testit##mojo"
+TEST_USER = "apikey_user"
+TEST_PWORD = "apikey##mojo99"
+ADMIN_USER = "apikey_admin"
+ADMIN_PWORD = "apikey##mojo99"
 
 
 @th.django_unit_setup()
@@ -14,14 +14,20 @@ def setup_api_key_testing(opts):
     # Clean up existing test data
     ApiKey.objects.filter(name__startswith="test_").delete()
     Group.objects.filter(name__in=["test_apikey_parent", "test_apikey_child"]).delete()
+    User.objects.filter(username__in=[TEST_USER, ADMIN_USER]).delete()
 
     # Create parent group
     parent = Group.objects.create(name="test_apikey_parent", kind="organization")
     # Create child group under parent
     child = Group.objects.create(name="test_apikey_child", kind="team", parent=parent)
 
-    # Give admin manage_group permission
-    admin = User.objects.get(username=ADMIN_USER)
+    # Create dedicated admin user
+    admin = User(username=ADMIN_USER, email=f"{ADMIN_USER}@test.com")
+    admin.save()
+    admin.is_active = True
+    admin.is_email_verified = True
+    admin.is_staff = True
+    admin.save_password(ADMIN_PWORD)
     admin.add_permission(["manage_group", "manage_groups"])
     admin.save()
 

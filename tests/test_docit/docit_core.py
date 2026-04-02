@@ -2,11 +2,10 @@ from testit import helpers as th
 from testit import faker
 from unittest.mock import patch, MagicMock
 
-# Use the same test users as other account tests
-TEST_USER = "testit"
-TEST_PWORD = "testit##mojo"
-ADMIN_USER = "tadmin"
-ADMIN_PWORD = "testit##mojo"
+TEST_USER = "docit_user"
+TEST_PWORD = "docit##mojo99"
+ADMIN_USER = "docit_admin"
+ADMIN_PWORD = "docit##mojo99"
 
 
 @th.django_unit_setup()
@@ -23,22 +22,32 @@ def setup_docit_testing(opts):
     PageRevision.objects.filter(change_summary__startswith='test_').delete()
     Asset.objects.filter(alt_text__startswith='test_').delete()
 
+    # Clean up previous test users
+    User.objects.filter(username__in=[TEST_USER, ADMIN_USER]).delete()
+
     # Create test organization
     test_org, _ = Group.objects.get_or_create(
         name='test_org_docit',
         kind='organization'
     )
 
-    # Assign test user to organization and permissions
-    user = User.objects.get(username=TEST_USER)
+    # Create dedicated test user
+    user = User(username=TEST_USER, email=f"{TEST_USER}@test.com")
+    user.save()
     user.org = test_org
     user.is_email_verified = True
+    user.is_active = True
+    user.save_password(TEST_PWORD)
     user.add_permission("manage_docit")
     user.save()
 
-    # Give admin docit permissions
-    admin = User.objects.get(username=ADMIN_USER)
+    # Create dedicated admin user
+    admin = User(username=ADMIN_USER, email=f"{ADMIN_USER}@test.com")
+    admin.save()
     admin.is_email_verified = True
+    admin.is_active = True
+    admin.is_staff = True
+    admin.save_password(ADMIN_PWORD)
     admin.add_permission("manage_docit")
     admin.save()
 
