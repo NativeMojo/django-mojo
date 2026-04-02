@@ -2211,6 +2211,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#send_to_user-send_event_to_user" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        send_to_user / send_event_to_user
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#group-broadcast" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3847,6 +3858,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#send_to_user-send_event_to_user" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        send_to_user / send_event_to_user
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#group-broadcast" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3929,15 +3951,28 @@
 <a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>            <span class="s2">&quot;new_status&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">status</span>
 <a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>        <span class="p">})</span>
 </code></pre></div>
+<h2 id="send_to_user-send_event_to_user">send_to_user / send_event_to_user<a class="headerlink" href="#send_to_user-send_event_to_user" title="Permanent link">&para;</a></h2>
+<p>The <code>manager</code> module provides lower-level functions for sending directly to a user's WebSocket connections:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.realtime.manager</span><span class="w"> </span><span class="kn">import</span> <span class="n">send_to_user</span><span class="p">,</span> <span class="n">send_event_to_user</span>
+</code></pre></div>
+<p><strong><code>send_to_user()</code></strong> — wraps the payload in <code>{"type": "message", "data": ...}</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="n">send_to_user</span><span class="p">(</span><span class="s2">&quot;user&quot;</span><span class="p">,</span> <span class="mi">42</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;title&quot;</span><span class="p">:</span> <span class="s2">&quot;Hello&quot;</span><span class="p">,</span> <span class="s2">&quot;body&quot;</span><span class="p">:</span> <span class="s2">&quot;World&quot;</span><span class="p">})</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="c1"># Client receives: {&quot;type&quot;: &quot;message&quot;, &quot;data&quot;: {&quot;title&quot;: &quot;Hello&quot;, &quot;body&quot;: &quot;World&quot;}}</span>
+</code></pre></div>
+<p><strong><code>send_event_to_user()</code></strong> — sends the payload directly, no wrapping. Use this when your payload has its own <code>type</code> field and you want the client to receive it as-is:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="n">send_event_to_user</span><span class="p">(</span><span class="s2">&quot;user&quot;</span><span class="p">,</span> <span class="mi">42</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;assistant_response&quot;</span><span class="p">,</span> <span class="s2">&quot;response&quot;</span><span class="p">:</span> <span class="s2">&quot;...&quot;</span><span class="p">})</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="c1"># Client receives: {&quot;type&quot;: &quot;assistant_response&quot;, &quot;response&quot;: &quot;...&quot;}</span>
+</code></pre></div>
+<p>The difference matters for client-side event routing. <code>send_event_to_user</code> avoids the need to unwrap a <code>message</code> envelope.</p>
 <h2 id="group-broadcast">Group Broadcast<a class="headerlink" href="#group-broadcast" title="Permanent link">&para;</a></h2>
 <p>Broadcast to all members of a group:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.realtime.utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">publish_to_topic</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="c1"># All clients subscribed to group:7</span>
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="n">publish_to_topic</span><span class="p">(</span><span class="s2">&quot;group:7&quot;</span><span class="p">,</span> <span class="p">{</span>
-<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>    <span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;group_message&quot;</span><span class="p">,</span>
-<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>    <span class="s2">&quot;body&quot;</span><span class="p">:</span> <span class="s2">&quot;New policy update&quot;</span>
-<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="p">})</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.realtime.utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">publish_to_topic</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="c1"># All clients subscribed to group:7</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="n">publish_to_topic</span><span class="p">(</span><span class="s2">&quot;group:7&quot;</span><span class="p">,</span> <span class="p">{</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>    <span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;group_message&quot;</span><span class="p">,</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>    <span class="s2">&quot;body&quot;</span><span class="p">:</span> <span class="s2">&quot;New policy update&quot;</span>
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="p">})</span>
 </code></pre></div>
 
 

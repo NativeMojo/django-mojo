@@ -3829,6 +3829,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Conversation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#restmeta" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RestMeta
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
           <li class="md-nav__item">
@@ -3903,6 +3920,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#assistant_response-event-payload" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        assistant_response Event Payload
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -3925,6 +3953,17 @@
     <span class="md-ellipsis">
       
         How It Works
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#system-prompt-behavior-narrative-text" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        System Prompt Behavior — Narrative Text
       
     </span>
   </a>
@@ -4033,8 +4072,8 @@
 </tr>
 <tr>
 <td><code>LLM_ADMIN_MODEL</code></td>
-<td><code>claude-sonnet-4-6-20250514</code></td>
-<td>Claude model to use</td>
+<td>(auto-detect)</td>
+<td>Claude model to use. If unset, auto-detects latest Sonnet via <code>mojo.helpers.llm.get_model()</code></td>
 </tr>
 <tr>
 <td><code>LLM_ADMIN_MAX_TURNS</code></td>
@@ -4459,6 +4498,52 @@
 </tr>
 </tbody>
 </table>
+<h4 id="restmeta">RestMeta<a class="headerlink" href="#restmeta" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Value</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>VIEW_PERMS</code></td>
+<td><code>["view_admin", "owner"]</code></td>
+<td>Admins see all; owners see only their own conversations</td>
+</tr>
+<tr>
+<td><code>OWNER_FIELD</code></td>
+<td><code>"user"</code></td>
+<td>List auto-filters to <code>user=request.user</code> for non-admins</td>
+</tr>
+<tr>
+<td><code>CAN_DELETE</code></td>
+<td><code>True</code></td>
+<td>Owner or admin may delete via <code>DELETE /api/assistant/conversation/&lt;pk&gt;</code></td>
+</tr>
+<tr>
+<td><code>NO_REST_SAVE</code></td>
+<td><code>True</code></td>
+<td>Conversations are created by the agent service, not via direct POST</td>
+</tr>
+</tbody>
+</table>
+<p>The <code>detail</code> graph includes nested messages using the message <code>default</code> graph:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="s2">&quot;detail&quot;</span><span class="p">:</span> <span class="p">{</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>    <span class="s2">&quot;fields&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;id&quot;</span><span class="p">,</span> <span class="s2">&quot;title&quot;</span><span class="p">,</span> <span class="s2">&quot;created&quot;</span><span class="p">,</span> <span class="s2">&quot;modified&quot;</span><span class="p">,</span> <span class="s2">&quot;messages&quot;</span><span class="p">],</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>    <span class="s2">&quot;graphs&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;messages&quot;</span><span class="p">:</span> <span class="s2">&quot;default&quot;</span><span class="p">},</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="p">}</span>
+</code></pre></div>
+<p>Request it with <code>GET /api/assistant/conversation/&lt;pk&gt;?graph=detail</code>.</p>
+<p>The REST handler is standard:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;conversation&#39;</span><span class="p">)</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;conversation/&lt;int:pk&gt;&#39;</span><span class="p">)</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="nd">@md</span><span class="o">.</span><span class="n">uses_model_security</span><span class="p">(</span><span class="n">Conversation</span><span class="p">)</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_conversation</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">pk</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>    <span class="k">return</span> <span class="n">Conversation</span><span class="o">.</span><span class="n">on_rest_request</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">pk</span><span class="p">)</span>
+</code></pre></div>
 <h3 id="message">Message<a class="headerlink" href="#message" title="Permanent link">&para;</a></h3>
 <p>A single message in a conversation.</p>
 <table>
@@ -4483,12 +4568,17 @@
 <tr>
 <td><code>content</code></td>
 <td>TextField</td>
-<td>Message text content</td>
+<td>Message text content (block fences stripped for assistant messages)</td>
 </tr>
 <tr>
 <td><code>tool_calls</code></td>
 <td>JSONField</td>
 <td>Tool call details (for assistant/tool_result messages)</td>
+</tr>
+<tr>
+<td><code>blocks</code></td>
+<td>JSONField</td>
+<td>Pre-parsed structured data blocks extracted at write time. <code>null</code> when none present.</td>
 </tr>
 <tr>
 <td><code>created</code></td>
@@ -4497,17 +4587,18 @@
 </tr>
 </tbody>
 </table>
+<p><code>blocks</code> is populated when the agent saves an assistant message — <code>_parse_blocks()</code> runs once at write time and the result is stored. Reading the conversation detail never re-parses content.</p>
 <h2 id="websocket-interface">WebSocket Interface<a class="headerlink" href="#websocket-interface" title="Permanent link">&para;</a></h2>
 <p>The assistant also supports a WebSocket transport for real-time chat UIs. This uses the existing realtime system — no new WebSocket endpoint needed.</p>
 <h3 id="architecture_1">Architecture<a class="headerlink" href="#architecture_1" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>Client sends WS message {type: &quot;assistant_message&quot;, message: &quot;...&quot;, conversation_id: N}
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>  → User.on_realtime_message() dispatches to assistant handler
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>  → Handler validates, stores message, returns {type: &quot;assistant_thinking&quot;} immediately
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>  → Background job runs run_assistant_ws() with on_event callback
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>  → Callback publishes WS events back to the user:
-<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>      assistant_tool_call  (per tool)
-<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>      assistant_response   (final answer)
-<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>      assistant_error      (on failure)
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>Client sends WS message {type: &quot;assistant_message&quot;, message: &quot;...&quot;, conversation_id: N}
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>  → User.on_realtime_message() dispatches to assistant handler
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>  → Handler validates, stores message, returns {type: &quot;assistant_thinking&quot;} immediately
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>  → Background job runs run_assistant_ws() with on_event callback
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>  → Callback publishes WS events back to the user:
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>      assistant_tool_call  (per tool)
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>      assistant_response   (final answer)
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>      assistant_error      (on failure)
 </code></pre></div>
 <h3 id="key-files">Key Files<a class="headerlink" href="#key-files" title="Permanent link">&para;</a></h3>
 <ul>
@@ -4519,6 +4610,18 @@
 <p>The <code>User.on_realtime_message</code> method checks if the message type starts with <code>assistant_</code> and delegates to <code>handle_assistant_message()</code> — identical to how <code>chat_*</code> messages are routed to the chat handler.</p>
 <h3 id="background-processing">Background Processing<a class="headerlink" href="#background-processing" title="Permanent link">&para;</a></h3>
 <p>LLM calls are too slow to block the WebSocket handler. The handler publishes a job via <code>mojo.apps.jobs</code> and returns immediately. The job function (<code>execute_assistant_job</code>) runs the agent loop and uses <code>send_to_user()</code> from the realtime manager to push events back to the user's WebSocket connections.</p>
+<h3 id="assistant_response-event-payload"><code>assistant_response</code> Event Payload<a class="headerlink" href="#assistant_response-event-payload" title="Permanent link">&para;</a></h3>
+<p><code>run_assistant_ws()</code> returns a dict that becomes the WS event payload. As of v1.1.8 it always includes:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>    <span class="s2">&quot;message_id&quot;</span><span class="p">:</span> <span class="n">msg</span><span class="o">.</span><span class="n">pk</span><span class="p">,</span>          <span class="c1"># int — PK of the saved Message record</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>    <span class="s2">&quot;created&quot;</span><span class="p">:</span> <span class="n">msg</span><span class="o">.</span><span class="n">created</span><span class="o">.</span><span class="n">isoformat</span><span class="p">(),</span>  <span class="c1"># ISO 8601 string</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>    <span class="s2">&quot;response&quot;</span><span class="p">:</span> <span class="n">response_text</span><span class="p">,</span>     <span class="c1"># narrative text, block fences stripped</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>    <span class="s2">&quot;blocks&quot;</span><span class="p">:</span> <span class="n">blocks</span> <span class="ow">or</span> <span class="kc">None</span><span class="p">,</span>      <span class="c1"># parsed blocks, or None when absent</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>    <span class="s2">&quot;tool_calls_made&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">...</span><span class="p">],</span>       <span class="c1"># list of {tool, input} dicts</span>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>    <span class="s2">&quot;conversation_id&quot;</span><span class="p">:</span> <span class="n">conversation</span><span class="o">.</span><span class="n">pk</span><span class="p">,</span>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="p">}</span>
+</code></pre></div>
+<p><code>blocks</code> is always included in the dict (<code>None</code> when empty) rather than conditionally omitted, making the shape consistent with the REST detail graph and easier for clients to handle.</p>
 <h2 id="structured-data-blocks">Structured Data Blocks<a class="headerlink" href="#structured-data-blocks" title="Permanent link">&para;</a></h2>
 <p>Responses can include a <code>blocks</code> array with structured data for frontend rendering. The LLM decides when to include blocks based on the data — tables for query results, charts for trends, stat cards for key metrics.</p>
 <h3 id="how-it-works">How It Works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h3>
@@ -4527,8 +4630,11 @@
 <li>The LLM wraps structured data in <code>```assistant_block</code> code fences within its text response</li>
 <li><code>_parse_blocks()</code> in <code>agent.py</code> extracts valid blocks and strips the fences from the text</li>
 <li>The response includes both clean <code>response</code> text and a <code>blocks</code> array</li>
-<li>Raw text (with fences) is stored in the Message for audit</li>
+<li>Clean text and parsed blocks are stored on the <code>Message</code> — no re-parsing happens at read time</li>
 </ol>
+<h3 id="system-prompt-behavior-narrative-text">System Prompt Behavior — Narrative Text<a class="headerlink" href="#system-prompt-behavior-narrative-text" title="Permanent link">&para;</a></h3>
+<p>The system prompt instructs the LLM to keep narrative text brief when blocks carry the data. The text provides interpretation (key takeaways, context, warnings); the blocks carry the detail. The LLM should not repeat in prose what is already shown in a table, chart, or stat block.</p>
+<p>This is enforced via the system prompt, not code. Override <code>LLM_ADMIN_SYSTEM_PROMPT</code> in settings to change this behavior.</p>
 <h3 id="block-types">Block Types<a class="headerlink" href="#block-types" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong><code>table</code></strong> — <code>{type, title, columns, rows}</code> — query results, comparisons</li>
@@ -4539,7 +4645,7 @@
 <p>Override <code>LLM_ADMIN_SYSTEM_PROMPT</code> to change the block format instructions. The parser (<code>_parse_blocks</code>) only requires valid JSON with a recognized <code>type</code> field inside <code>```assistant_block</code> fences.</p>
 <p>See <a href="../../web_developer/assistant/#structured-data-blocks">web_developer/assistant/README.md</a> for the full block schema reference and frontend rendering examples.</p>
 <h2 id="tests">Tests<a class="headerlink" href="#tests" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>./bin/run_tests<span class="w"> </span>-t<span class="w"> </span>test_assistant
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>./bin/run_tests<span class="w"> </span>-t<span class="w"> </span>test_assistant
 </code></pre></div>
 <p>Test files:
 - <code>tests/test_assistant/1_test_permissions.py</code> — Registry, permission gate, feature flag, sensitive field exclusion

@@ -185,6 +185,10 @@
          <lastmod>2026-04-02</lastmod>
     </url>
     <url>
+         <loc>https://NativeMojo.github.io/django-mojo/django_developer/helpers/llm/</loc>
+         <lastmod>2026-04-02</lastmod>
+    </url>
+    <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/helpers/logit/</loc>
          <lastmod>2026-04-02</lastmod>
     </url>
@@ -194,6 +198,10 @@
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/helpers/other/</loc>
+         <lastmod>2026-04-02</lastmod>
+    </url>
+    <url>
+         <loc>https://NativeMojo.github.io/django-mojo/django_developer/helpers/redis/</loc>
          <lastmod>2026-04-02</lastmod>
     </url>
     <url>
@@ -294,6 +302,10 @@
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/realtime/publishing/</loc>
+         <lastmod>2026-04-02</lastmod>
+    </url>
+    <url>
+         <loc>https://NativeMojo.github.io/django-mojo/django_developer/rest/permissions/</loc>
          <lastmod>2026-04-02</lastmod>
     </url>
     <url>

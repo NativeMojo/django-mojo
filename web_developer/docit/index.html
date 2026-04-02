@@ -3755,6 +3755,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#render-markdown" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Render Markdown
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -3896,6 +3907,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#render-markdown" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Render Markdown
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -3963,6 +3985,11 @@
 <td>GET</td>
 <td><code>/api/docit/page/slug/&lt;slug&gt;</code></td>
 <td>Get page by slug</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/api/docit/render</code></td>
+<td>Render Markdown to HTML</td>
 </tr>
 </tbody>
 </table>
@@ -4048,6 +4075,40 @@
 <a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="nt">&quot;is_published&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
 <a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="p">}</span>
 </code></pre></div>
+<h2 id="render-markdown">Render Markdown<a class="headerlink" href="#render-markdown" title="Permanent link">&para;</a></h2>
+<p><strong>POST</strong> <code>/api/docit/render</code></p>
+<p>Permission required: authenticated (any logged-in user).</p>
+<p>Request:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="nt">&quot;markdown&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;# Hello World\n\n```python\nprint(&#39;hi&#39;)\n```&quot;</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="p">}</span>
+</code></pre></div>
+<p>Response:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p">{</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span><span class="nt">&quot;html&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;h1&gt;Hello World&lt;/h1&gt;\n&lt;div class=\&quot;highlight\&quot;&gt;...&lt;/div&gt;\n&quot;</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="p">}</span>
+</code></pre></div>
+<p>Code blocks are syntax-highlighted using Pygments (<code>monokai</code> theme). The <code>highlight</code> CSS class is applied to the wrapper <code>&lt;div&gt;</code>. If an unrecognized language name is used, the block renders as a plain <code>&lt;pre&gt;</code> element with no highlighting.</p>
+<p>Error responses:</p>
+<table>
+<thead>
+<tr>
+<th>Status</th>
+<th>Condition</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>400</td>
+<td><code>markdown</code> field missing or empty</td>
+</tr>
+<tr>
+<td>401</td>
+<td>Not authenticated</td>
+</tr>
+</tbody>
+</table>
 
 
 
