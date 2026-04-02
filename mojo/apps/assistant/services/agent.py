@@ -72,7 +72,7 @@ When your response includes data that would be better shown as a table, chart, o
 {"type": "table", "title": "Failed Jobs", "columns": ["ID", "Function", "Error"], "rows": [["abc", "send_email", "timeout"]]}
 ```
 
-Write your narrative text around the blocks normally. The blocks are extracted and rendered as visual components by the frontend.
+The blocks are extracted and rendered as rich visual components by the frontend alongside your text.
 
 ### Block Types
 
@@ -93,7 +93,7 @@ Supported chart_type values: line, bar, pie, area.
 ```
 
 ### Rules
-- Always include narrative text — blocks supplement the text, they don't replace it.
+- Always include brief narrative text — a sentence or two of context, key takeaways, or warnings. Do NOT repeat the data that is already in the blocks. The blocks carry the detail; the text provides interpretation.
 - Use tables for 3+ rows of data. For 1-2 items, just describe them in text.
 - Use stat blocks for dashboard-style overviews (system health, summaries).
 - Use chart blocks when the user asks about trends or when time-series data is available.
