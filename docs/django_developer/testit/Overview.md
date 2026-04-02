@@ -31,7 +31,7 @@ tests/
     __init__.py
     oauth.py
     oauth_apple.py
-  test_security/     # bouncer, device tracking, PII             (serial)
+  test_security/     # bouncer, device tracking, PII   (serial, opt-in: --full)
     __init__.py
     bouncer.py
     device_tracking.py
@@ -76,11 +76,13 @@ Use `bin/run_tests` — it handles starting and stopping the test server automat
   `./bin/run_tests --onlymojo` · `./bin/run_tests --nomojo`
 - See every declared `@requires_extra` flag (static scan only, no tests executed):
   `./bin/run_tests --list-extras`
-- Run modules in parallel (default 3 threads):
-  `./bin/run_tests -j 4`
+- Run modules in parallel (default 4 threads):
+  `./bin/run_tests -j 6`
+- Include opt-in modules (slow/pre-publish tests):
+  `./bin/run_tests --full`
 - Force plain text output and disable the rich progress UI:
   `./bin/run_tests --plain`
-- Write a structured failure report for LLM agents:
+- Write structured test report for LLM agents:
   `./bin/run_tests --agent`
 
 All arguments are passed directly to `bin/testit.py`. If the server is already running, `bin/run_tests` will not stop it after the suite completes.
@@ -108,13 +110,30 @@ When `rich` is installed and `-j` is greater than 1, the runner shows a live per
 
 ### Agent Mode
 
-`--agent` writes `var/test_failures.json` after the run. The report includes:
+`--agent` writes `var/test_failures.json` after the run — a structured JSON report designed for LLM agents and CI pipelines. The report includes:
 
-- Overall `total`, `passed`, `failed`, `skipped`, `duration`
-- Per-failure entries with `test_name`, `function`, `status`, `assertion`, `test_source`, `file_path`, `line`, and `traceback` (errors only)
-- Last 20 lines of the server error log for each failure
+- **Top-level**: `status` (passed/failed), `total`, `passed`, `failed`, `skipped`, `duration`
+- **`modules`**: per-module breakdown — `tests`, `passed`, `failed`, `skipped`, `duration` for each test module
+- **`failures`**: per-failure entries with `test_name`, `function`, `status`, `assertion`, `test_source`, `file_path`, `line`, `traceback` (errors only), and `server_log_tail`
 
-Use this flag when invoking the test runner from an LLM agent or CI pipeline that needs structured failure data rather than terminal output.
+LLM agents should always use `--agent` and read the JSON report instead of parsing terminal output. Never use `--plain` for full suite runs — it disables the rich UI but doesn't improve agent output.
+
+### Opt-in Modules
+
+Modules with `"requires_extra": ["slow"]` in their TESTIT config are skipped by default. Include them with `--full` (shortcut for `--extra slow`):
+
+```bash
+./bin/run_tests --full          # include all opt-in modules
+./bin/run_tests --extra slow    # equivalent
+```
+
+Currently opt-in:
+
+| Module | Reason |
+|---|---|
+| `test_security` | Bouncer/rate-limiting tests (~20s, serial) |
+
+To make a module opt-in, add `"requires_extra": ["slow"]` to its `__init__.py` TESTIT config.
 
 ### JSON Config
 CLI flags always win, but you can seed defaults through a JSON file:
@@ -160,7 +179,13 @@ TESTIT = {
     "requires_apps": ["mojo.apps.account"],
     "serial": True,                          # do not run this module in parallel
     "server_settings": {},                   # dict of Django settings to apply before the module starts
-    "requires_extra": [],                    # list of --extra flags required to run this module
+}
+
+# tests/test_security/__init__.py  — opt-in slow module
+TESTIT = {
+    "requires_apps": ["mojo.apps.account"],
+    "serial": True,
+    "requires_extra": ["slow"],              # skipped unless --full or --extra slow
 }
 ```
 
@@ -173,7 +198,7 @@ Supported keys:
 | `serial` | `False` | Force this module to run sequentially, after all parallel modules complete. Use for modules that call `th.server_settings()` mid-run, or that rely on signals bound to the main thread. |
 | `requires_apps` | `[]` | List of Django app labels. The module is skipped entirely if any listed app is not in `INSTALLED_APPS`. |
 | `server_settings` | `{}` | Django settings dict applied before the module starts (same mechanism as `th.server_settings()`). |
-| `requires_extra` | `[]` | List of `--extra` flags. The module is skipped if none of the flags are present. |
+| `requires_extra` | `[]` | List of `--extra` flags. The module is skipped unless at least one flag is present. Use `["slow"]` for opt-in modules included by `--full`. |
 
 All keys are optional. A missing `__init__.py` or a missing `TESTIT` assignment uses defaults (parallel, no app requirements, no server settings).
 
@@ -301,8 +326,10 @@ All other keys (e.g. `periods`, `slug`, `status`, `data`, `id`) are safe to acce
   - `total`, `passed`, `failed`
   - `records[]` with module, file, function, status (`passed`, `failed`, `error`, `skipped`)
   - timestamps (`started_at`, `finished_at`, `duration`)
-- Agent failure report (written only when `--agent` is passed): `var/test_failures.json`
-  - Includes per-failure `test_source`, `file_path`, `line`, `traceback`, and last 20 lines of the server error log.
+- Agent report (written when `--agent` is passed): `var/test_failures.json`
+  - Top-level `status`, `total`, `passed`, `failed`, `skipped`, `duration`
+  - Per-module stats in `modules` dict (tests, passed, failed, skipped, duration)
+  - Per-failure diagnostics in `failures` list (test_source, file_path, line, traceback, server_log_tail)
 - HTTP helper: `testit.client.RestClient`
   - Reuses auth tokens and integrates with `opts.client`.
   - `opts.client.last_response` — after every request this is set to an `objict` with `method`, `path`, `status_code`, `body`, `headers`, and `elapsed_ms`. Useful for diagnosing failures without re-running the request.

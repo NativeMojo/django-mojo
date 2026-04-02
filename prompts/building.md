@@ -49,8 +49,9 @@ Take requests from `planning/requests/` (or directly from the user), build them 
   effect on the server. Use `th.server_settings()` for settings-dependent behavior.
 - **Run the tests yourself** using the Bash tool:
   ```bash
-  bin/run_tests -t test_module.filename
+  bin/run_tests --agent -t test_module.filename
   ```
+  Read `var/test_failures.json` for structured diagnostics.
   Do not ask the user to run them. You must confirm they pass before marking the
   feature done.
 

@@ -14,9 +14,10 @@ You run the django-mojo test suite and handle results intelligently.
 1. Run tests:
    - If a specific target was mentioned, run: `bin/run_tests --agent -t <target>`
    - Otherwise run the full suite: `bin/run_tests --agent`
-   - ALWAYS use `--agent` flag — it writes structured failure data to `var/test_failures.json`
+   - For pre-publish (includes slow opt-in modules): `bin/run_tests --agent --full`
+   - ALWAYS use `--agent` flag — it writes structured data to `var/test_failures.json`
    - NEVER use `--plain` for full suite runs — it disables parallel execution
-   - After the run completes, read `var/test_failures.json` for failure diagnostics instead of parsing terminal output
+   - After the run completes, read `var/test_failures.json` for ALL diagnostics instead of parsing terminal output
 
 2. If all tests pass:
    - Return: "All tests passed (N total, N assertions, N skipped)"
@@ -47,13 +48,23 @@ You run the django-mojo test suite and handle results intelligently.
 
 ## Agent Mode Diagnostics
 
-When using `--agent` flag, read `var/test_failures.json` after a run for structured data including:
-- Test name, module, file path, function name
-- Assertion message and full test source
-- Last HTTP response (status, body, headers)
-- Server error log tail around the failure
+When using `--agent` flag, read `var/test_failures.json` after a run. This is the ONLY output you need — never parse terminal output.
 
-This is faster than parsing terminal output for diagnosing failures.
+The report includes:
+- **Top-level**: status (passed/failed), total, passed, failed, skipped, duration
+- **modules**: per-module breakdown (tests, passed, failed, skipped, duration)
+- **failures**: detailed failure info for each failing test:
+  - Test name, module, file path, line number, function name
+  - Assertion message and full test source code
+  - Traceback (for errors)
+  - Server error log tail
+
+## Opt-in Modules
+
+Some modules are marked `requires_extra: ["slow"]` and skipped by default:
+- `test_security` — bouncer/rate-limiting tests (~20s)
+
+To include them: `bin/run_tests --agent --full` (or `--extra slow`)
 
 ## Test Infrastructure
 

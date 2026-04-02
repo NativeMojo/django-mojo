@@ -24,8 +24,9 @@ We can also treat new requests the same way `planning/requests/`, but we don't n
 - If coverage is missing or partial, add a regression test that reproduces the bug.
 - **Run the regression test yourself** with the Bash tool to confirm it fails:
   ```bash
-  bin/run_tests -t test_module.filename
+  bin/run_tests --agent -t test_module.filename
   ```
+  Read `var/test_failures.json` for structured diagnostics instead of parsing terminal output.
   A regression that passes before the fix is written wrong.
 - `opts.client` calls a live server — `mock.patch` and `override_settings` have no
   effect on the server. Use `th.server_settings()` for settings-dependent behavior.
@@ -42,8 +43,9 @@ We can also treat new requests the same way `planning/requests/`, but we don't n
 5. **Verify**
 - **Run the targeted suite yourself** with the Bash tool:
   ```bash
-  bin/run_tests -t test_module.filename
+  bin/run_tests --agent -t test_module.filename
   ```
+  Read `var/test_failures.json` for structured diagnostics.
 - Run additional nearby tests if risk area is broader.
 - Report pass/fail clearly. Do not mark resolved until tests pass.
 

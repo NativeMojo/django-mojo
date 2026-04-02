@@ -23,7 +23,7 @@ Parse $ARGUMENTS. If the description is ambiguous, ask one focused clarifying qu
 
 ### 3. Best-Effort Confirmation
 - If you can confirm the bug through code analysis alone (logic error, missing guard, wrong field name, race condition), state your confidence level
-- If a regression test is feasible without a running project, write one in `tests/` and run it with `bin/run_tests -t <target>` to demonstrate the failure
+- If a regression test is feasible without a running project, write one in `tests/` and run it with `bin/run_tests --agent -t <target>` to demonstrate the failure (read `var/test_failures.json` for diagnostics)
 - If confirmation requires a running server or specific data state, say so — don't force it
 
 ### 4. Write the Issue File

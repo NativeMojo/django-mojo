@@ -45,10 +45,13 @@ Tests live in `tests/` at the repo root, organized into modules:
 
 ```
 tests/
-  test_accounts/
+  test_auth/           # login, magic login, secrets, permissions
     accounts.py
+    magic_login.py
+    secrets.py
+  test_security/       # bouncer, device tracking (opt-in: --full)
     bouncer.py
-    oauth.py
+    device_tracking.py
   test_helpers/
     content_guard.py
     crypto.py
@@ -381,8 +384,14 @@ bin/run_tests --list-extras
 # bin/run_tests starts and stops asgi_local automatically.
 # No need to run bin/asgi_local manually.
 
-# Run all tests
+# Run all tests (skips opt-in modules like test_security)
 bin/run_tests
+
+# Include opt-in modules (pre-publish, same as --extra slow)
+bin/run_tests --full
+
+# LLM agent mode — writes structured report to var/test_failures.json
+bin/run_tests --agent
 
 # Run a specific module
 bin/run_tests -t test_accounts
@@ -404,6 +413,26 @@ bin/run_tests --extra stripe,webhooks
 
 # Quick mode — only runs quick_ prefixed functions
 bin/run_tests -q
+```
+
+### Agent Mode (`--agent`)
+
+Writes `var/test_failures.json` — a structured JSON report for LLM agents and CI:
+
+- `status`: "passed" or "failed"
+- `modules`: per-module stats (tests, passed, failed, skipped, duration)
+- `failures`: per-failure diagnostics (file path, line, test source, traceback, server log tail)
+
+LLM agents should always use `--agent` and read the JSON instead of parsing terminal output.
+
+### Opt-in Modules (`--full`)
+
+Modules with `"requires_extra": ["slow"]` in their TESTIT config are skipped by default.
+Use `--full` to include them:
+
+```bash
+bin/run_tests --full            # include all opt-in modules
+bin/run_tests --extra slow      # equivalent
 ```
 
 ---

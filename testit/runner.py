@@ -299,11 +299,13 @@ def setup_parser(argv=None):
     parser.add_argument("--ignore", action="append", dest="ignore_modules",
                         help="Ignore specific test modules (can be used multiple times)")
     parser.add_argument("-j", "--jobs", type=int, default=None,
-                        help="Parallel module threads (default 3, forced to 1 with -s or -v)")
+                        help="Parallel module threads (default 4, forced to 1 with -s or -v)")
     parser.add_argument("--agent", action="store_true",
                         help="Write structured failure report to var/test_failures.json for LLM agents")
     parser.add_argument("--plain", action="store_true",
                         help="Force plain text output (no rich progress UI)")
+    parser.add_argument("--full", action="store_true",
+                        help="Include opt-in modules (same as --extra slow)")
 
     config_args, _ = config_parser.parse_known_args(argv)
     config_data = {}
@@ -320,6 +322,8 @@ def setup_parser(argv=None):
 
     # Normalize extras for both config defaults and CLI input.
     extra_values = _normalize_extra_value(opts.extra)
+    if opts.full and "slow" not in extra_values:
+        extra_values.append("slow")
     opts.extra_list = extra_values
     opts.extra = ",".join(extra_values) if extra_values else ""
 
@@ -328,7 +332,7 @@ def setup_parser(argv=None):
         if opts.stop or opts.verbose:
             opts.jobs = 1
         else:
-            opts.jobs = 3
+            opts.jobs = 4
     if opts.stop or opts.verbose:
         opts.jobs = 1
     if getattr(opts, "resume", False) and opts.jobs > 1:
@@ -879,8 +883,12 @@ def _print_summary_plain(duration):
 # ---------------------------------------------------------------------------
 # Agent output
 # ---------------------------------------------------------------------------
-def _write_agent_report(opts):
-    """Write structured failure data to var/test_failures.json."""
+def _write_agent_report(opts, display=None):
+    """Write structured test report to var/test_failures.json for LLM agents.
+
+    This is the primary output channel for --agent mode. Agents should read
+    this file instead of parsing terminal output.
+    """
     failures = []
     for record in helpers.TEST_RUN.records:
         if record["status"] not in ("failed", "error"):
@@ -914,12 +922,43 @@ def _write_agent_report(opts):
 
         failures.append(entry)
 
+    # Per-module stats from rich display trackers (when available)
+    modules = {}
+    if display and hasattr(display, "trackers"):
+        for name in display._order:
+            t = display.trackers[name]
+            modules[name] = {
+                "tests": t.total,
+                "passed": t.passed,
+                "failed": t.failed,
+                "skipped": t.skipped,
+                "duration": round(t.elapsed, 2),
+            }
+    else:
+        # Build per-module stats from records
+        for record in helpers.TEST_RUN.records:
+            mod = record.get("module") or "unknown"
+            if mod not in modules:
+                modules[mod] = {"tests": 0, "passed": 0, "failed": 0, "skipped": 0}
+            modules[mod]["tests"] += 1
+            status = record.get("status", "")
+            if status == "passed":
+                modules[mod]["passed"] += 1
+            elif status in ("failed", "error"):
+                modules[mod]["failed"] += 1
+            elif status == "skipped":
+                modules[mod]["skipped"] += 1
+
+    duration = (helpers.TEST_RUN.finished_at or time.time()) - (helpers.TEST_RUN.started_at or time.time())
+
     report = {
+        "status": "passed" if helpers.TEST_RUN.failed == 0 else "failed",
         "total": helpers.TEST_RUN.total,
         "passed": helpers.TEST_RUN.passed,
         "failed": helpers.TEST_RUN.failed,
         "skipped": helpers.TEST_RUN.skipped,
-        "duration": (helpers.TEST_RUN.finished_at or time.time()) - (helpers.TEST_RUN.started_at or time.time()),
+        "duration": round(duration, 2),
+        "modules": modules,
         "failures": failures,
     }
 
@@ -1135,12 +1174,20 @@ def main(opts):
             except Exception:
                 pass
 
+        # Check extra requirements (opt-in modules like "slow", "security")
+        if config.requires_extra:
+            required = set(_normalize_extra_value(config.requires_extra))
+            provided = set(opts.extra_list or [])
+            if not required.intersection(provided):
+                continue
+
         if config.serial or opts.jobs <= 1:
             serial_modules.append(name)
         else:
             parallel_modules.append(name)
 
     # --- Execute ---
+    display = None
 
     if use_rich:
         display = _RichDisplay()
@@ -1291,12 +1338,13 @@ def main(opts):
     if helpers.TEST_RUN.failed == 0:
         clear_checkpoint()
 
-    # Agent report
+    # Agent report — structured JSON for LLM consumption
     if opts.agent:
-        _write_agent_report(opts)
+        _write_agent_report(opts, display=display)
         report_path = os.path.join(paths.VAR_ROOT, "test_failures.json")
+        print(f"\n  Agent report: {report_path}")
         if helpers.TEST_RUN.failed > 0:
-            print(f"\n  Agent report: {report_path} ({helpers.TEST_RUN.failed} failures)")
+            print(f"  {helpers.TEST_RUN.failed} failure(s) — read the report for diagnostics")
 
     # Save results
     helpers.TEST_RUN.finished_at = time.time()
