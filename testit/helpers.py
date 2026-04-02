@@ -1,5 +1,7 @@
 import json
+import inspect
 import os
+import threading
 import time
 import functools
 import traceback
@@ -7,6 +9,8 @@ import contextlib
 from objict import objict
 from mojo.helpers import logit
 
+
+_lock = threading.Lock()
 
 TEST_RUN = objict(
     total=0,
@@ -22,6 +26,22 @@ TEST_RUN = objict(
 STOP_ON_FAIL = True
 VERBOSE = False
 INDENT = "    "
+
+# Display callback — per-thread so parallel modules don't overwrite each other.
+# Signature: display_fn(event, **kwargs)
+# Events: "test_result", "setup_progress", "setup_done"
+_thread_local = threading.local()
+
+# Agent mode — when True, collect structured failure context
+AGENT_MODE = False
+
+
+def _get_display_fn():
+    return getattr(_thread_local, "display_fn", None)
+
+
+def _set_display_fn(fn):
+    _thread_local.display_fn = fn
 
 
 class TestitAbort(Exception):
@@ -65,9 +85,17 @@ def requires_app(app_label):
 
 def _run_setup(func, *args, **kwargs):
     name = kwargs.get("name", func.__name__)
-    logit.color_print(f"{INDENT}{name.ljust(80, '.')}", logit.ConsoleLogger.PINK, end="")
+    dfn = _get_display_fn()
+    if dfn:
+        dfn("setup_progress", name=name)
+    else:
+        logit.color_print(f"{INDENT}{name.ljust(80, '.')}", logit.ConsoleLogger.PINK, end="")
     res = func(*args, **kwargs)
-    logit.color_print("DONE", logit.ConsoleLogger.PINK, end="\n")
+    dfn = _get_display_fn()
+    if dfn:
+        dfn("setup_done", name=name)
+    else:
+        logit.color_print("DONE", logit.ConsoleLogger.PINK, end="\n")
     return res
 
 
@@ -115,10 +143,42 @@ def django_unit_setup():
     return decorator
 
 
+def _increment(field, value=1):
+    """Thread-safe increment of TEST_RUN counters."""
+    with _lock:
+        current = getattr(TEST_RUN, field, 0)
+        setattr(TEST_RUN, field, current + value)
+
+
+def _collect_failure_context(func, test_name, error, status):
+    """Collect structured context for agent mode failure reports."""
+    context = {
+        "test_name": test_name,
+        "function": func.__name__,
+        "status": status,
+        "assertion": str(error),
+    }
+    # Source code of the test function
+    try:
+        context["test_source"] = inspect.getsource(func)
+        source_file = inspect.getfile(func)
+        _, line_no = inspect.getsourcelines(func)
+        context["file_path"] = source_file
+        context["line"] = line_no
+    except (OSError, TypeError):
+        pass
+
+    # Traceback
+    if status == "error":
+        context["traceback"] = traceback.format_exc()
+
+    return context
+
+
 def _run_unit(func, name, *args, **kwargs):
     if TEST_RUN.started_at is None:
         TEST_RUN.started_at = time.time()
-    TEST_RUN.total += 1
+    _increment("total")
     if name:
         test_name = name
     else:
@@ -132,45 +192,65 @@ def _run_unit(func, name, *args, **kwargs):
     try:
         result = func(*args, **kwargs)
         _record_result(test_name, status="passed")
-        TEST_RUN.passed += 1
-        logit.color_print(f"{name_line}PASSED", logit.ConsoleLogger.GREEN, end="\n")
+        _increment("passed")
+        dfn = _get_display_fn()
+        if dfn:
+            dfn("test_result", name=test_name, status="passed")
+        else:
+            logit.color_print(f"{name_line}PASSED", logit.ConsoleLogger.GREEN, end="\n")
         return result
 
     except TestitSkip as skip:
         _record_result(test_name, status="skipped", detail=str(skip))
-        TEST_RUN.skipped += 1
-        logit.color_print(f"{name_line}SKIPPED", logit.ConsoleLogger.BLUE, end="\n")
-        if str(skip):
-            logit.color_print(f"{INDENT}{INDENT}{skip}", logit.ConsoleLogger.BLUE)
+        _increment("skipped")
+        dfn = _get_display_fn()
+        if dfn:
+            dfn("test_result", name=test_name, status="skipped", detail=str(skip))
+        else:
+            logit.color_print(f"{name_line}SKIPPED", logit.ConsoleLogger.BLUE, end="\n")
+            if str(skip):
+                logit.color_print(f"{INDENT}{INDENT}{skip}", logit.ConsoleLogger.BLUE)
         return None
 
     except AssertionError as error:
-        TEST_RUN.failed += 1
-        _record_result(test_name, status="failed", detail=str(error))
+        _increment("failed")
+        fail_context = _collect_failure_context(func, test_name, error, "failed") if AGENT_MODE else None
+        _record_result(test_name, status="failed", detail=str(error), agent_context=fail_context)
 
-        # Print failure message
-        logit.color_print(f"{name_line}FAILED", logit.ConsoleLogger.RED, end="\n")
-        logit.color_print(f"{INDENT}{INDENT}{error}", logit.ConsoleLogger.PINK)
+        dfn = _get_display_fn()
+        if dfn:
+            dfn("test_result", name=test_name, status="failed", detail=str(error))
+        else:
+            logit.color_print(f"{name_line}FAILED", logit.ConsoleLogger.RED, end="\n")
+            logit.color_print(f"{INDENT}{INDENT}{error}", logit.ConsoleLogger.PINK)
 
         if STOP_ON_FAIL:
             raise TestitAbort()
 
     except Exception as error:
-        TEST_RUN.failed += 1
+        _increment("failed")
         detail = traceback.format_exc() if VERBOSE else str(error)
-        _record_result(test_name, status="error", detail=detail)
+        fail_context = _collect_failure_context(func, test_name, error, "error") if AGENT_MODE else None
+        _record_result(test_name, status="error", detail=detail, agent_context=fail_context)
 
-        # Print error message
-        logit.color_print(f"{name_line}FAILED", logit.ConsoleLogger.RED, end="\n")
-        if VERBOSE:
-            logit.color_print(traceback.format_exc(), logit.ConsoleLogger.PINK)
+        dfn = _get_display_fn()
+        if dfn:
+            dfn("test_result", name=test_name, status="error", detail=detail)
+        else:
+            logit.color_print(f"{name_line}FAILED", logit.ConsoleLogger.RED, end="\n")
+            if VERBOSE:
+                logit.color_print(traceback.format_exc(), logit.ConsoleLogger.PINK)
         if STOP_ON_FAIL:
             raise TestitAbort()
     return False
 
 
+def _set_active_test(key):
+    _thread_local.active_test = key
+
+
 def _active_context():
-    active = TEST_RUN.tests.active_test or ""
+    active = getattr(_thread_local, "active_test", None) or ""
     parts = active.split(":") if active else []
     context = objict(
         active=active or None,
@@ -188,16 +268,9 @@ def _result_key(test_name):
     return test_name
 
 
-def _record_result(test_name, *, status, detail=None):
+def _record_result(test_name, *, status, detail=None, agent_context=None):
     context = _active_context()
     key = _result_key(test_name)
-    if status == "passed":
-        dict.__setitem__(TEST_RUN.results, key, True)
-    elif status in {"failed", "error"}:
-        dict.__setitem__(TEST_RUN.results, key, False)
-    else:
-        dict.__setitem__(TEST_RUN.results, key, None)
-
     record = {
         "module": context.module,
         "test_module": context.test_module,
@@ -207,7 +280,17 @@ def _record_result(test_name, *, status, detail=None):
     }
     if detail:
         record["detail"] = detail
-    TEST_RUN.records.append(record)
+    if agent_context:
+        record["agent_context"] = agent_context
+
+    with _lock:
+        if status == "passed":
+            dict.__setitem__(TEST_RUN.results, key, True)
+        elif status in {"failed", "error"}:
+            dict.__setitem__(TEST_RUN.results, key, False)
+        else:
+            dict.__setitem__(TEST_RUN.results, key, None)
+        TEST_RUN.records.append(record)
 
 
 def _normalize_extra(extra):
