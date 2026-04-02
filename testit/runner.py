@@ -19,6 +19,7 @@ from mojo.helpers import paths
 from objict import objict
 
 TEST_ROOT = paths.APPS_ROOT / "tests"
+_LOCK_FILE = os.path.join(paths.VAR_ROOT, "testit.lock")
 
 _resume = objict(active=False, module=None, test_name=None, reached=False)
 
@@ -45,6 +46,59 @@ _DEFAULT_CONFIG = objict(
     requires_apps=[],
     requires_extra=[],
 )
+
+
+# ---------------------------------------------------------------------------
+# Run lock — prevents concurrent test runs from colliding
+# ---------------------------------------------------------------------------
+def _acquire_lock():
+    """Acquire the test run lock. Returns True if acquired, False if another run is active."""
+    os.makedirs(os.path.dirname(_LOCK_FILE), exist_ok=True)
+    if os.path.exists(_LOCK_FILE):
+        try:
+            with open(_LOCK_FILE, "r") as fh:
+                info = json.load(fh)
+            pid = info.get("pid")
+            # Check if the locking process is still alive
+            if pid and _pid_alive(pid):
+                return False, info
+            # Stale lock — process is gone
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    lock_info = {
+        "pid": os.getpid(),
+        "started": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "user": os.environ.get("USER", "unknown"),
+    }
+    with open(_LOCK_FILE, "w") as fh:
+        json.dump(lock_info, fh)
+    return True, lock_info
+
+
+def _release_lock():
+    """Release the test run lock."""
+    try:
+        if os.path.exists(_LOCK_FILE):
+            with open(_LOCK_FILE, "r") as fh:
+                info = json.load(fh)
+            # Only remove if we own the lock
+            if info.get("pid") == os.getpid():
+                os.remove(_LOCK_FILE)
+    except (json.JSONDecodeError, OSError):
+        try:
+            os.remove(_LOCK_FILE)
+        except OSError:
+            pass
+
+
+def _pid_alive(pid):
+    """Check if a process is still running."""
+    try:
+        os.kill(pid, 0)
+        return True
+    except (OSError, ProcessLookupError):
+        return False
 
 
 def _load_module_config(module_path):
@@ -676,6 +730,7 @@ class _RichDisplay:
         self._order = []
         self._lock = threading.Lock()
         self._live = None
+        self._started_at = None
 
     def add_module(self, module_name, total_tests):
         tracker = _ModuleTracker(module_name, total_tests)
@@ -685,6 +740,8 @@ class _RichDisplay:
         return tracker
 
     def _build_table(self):
+        from rich.text import Text as RichText
+
         table = Table(show_header=False, box=None, padding=(0, 1))
         table.add_column("module", min_width=20)
         table.add_column("bar", min_width=30)
@@ -724,9 +781,17 @@ class _RichDisplay:
                     status = "[yellow]…[/yellow]"
 
                 table.add_row(name, bar, counts, elapsed, status)
+
+        # Running clock at bottom
+        if self._started_at:
+            wall = time.time() - self._started_at
+            mins, secs = divmod(int(wall), 60)
+            clock = f"[dim]elapsed {mins}:{secs:02d}[/dim]"
+            table.add_row("", "", "", clock, "")
         return table
 
     def start(self):
+        self._started_at = time.time()
         self._live = Live(self._build_table(), console=self.console, refresh_per_second=4)
         self._live.start()
 
@@ -961,6 +1026,17 @@ def main(opts):
     """Main function to run tests."""
     global display_ref
 
+    # Acquire run lock to prevent concurrent test runs
+    acquired, lock_info = _acquire_lock()
+    if not acquired:
+        pid = lock_info.get("pid", "?")
+        started = lock_info.get("started", "?")
+        user = lock_info.get("user", "?")
+        print(f"\n  Another test run is active (pid={pid}, user={user}, started={started})")
+        print(f"  Lock file: {_LOCK_FILE}")
+        print(f"  If this is stale, remove it: rm {_LOCK_FILE}\n")
+        sys.exit(1)
+
     helpers.reset_test_run()
     helpers.STOP_ON_FAIL = bool(opts.stop)
     helpers.VERBOSE = opts.verbose or opts.errors
@@ -1181,6 +1257,9 @@ def main(opts):
     # Save results
     helpers.TEST_RUN.finished_at = time.time()
     helpers.save_results(os.path.join(paths.VAR_ROOT, "test_results.json"))
+
+    # Release run lock
+    _release_lock()
 
     # Exit with failure status if any test failed
     if helpers.TEST_RUN.failed > 0:
