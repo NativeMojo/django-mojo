@@ -382,13 +382,15 @@ def run_assistant_ws(user, message, conversation_id, on_event=None):
                 text_parts = [b["text"] for b in result["content"] if b.get("type") == "text"]
                 raw_text = "\n".join(text_parts) if text_parts else ""
                 response_text, blocks = _parse_blocks(raw_text)
-                Message.objects.create(
+                msg = Message.objects.create(
                     conversation=conversation, role="assistant",
                     content=response_text, blocks=blocks or None,
                 )
                 return {
                     "response": response_text,
                     "blocks": blocks,
+                    "message_id": msg.pk,
+                    "created": msg.created.isoformat(),
                     "conversation_id": conversation.pk,
                     "tool_calls_made": tool_calls_made,
                 }

@@ -201,11 +201,12 @@ def _run_agent_thread(user_id, conversation_id, message):
             on_event("error", {"error": result["error"]})
         else:
             response_data = {
+                "message_id": result.get("message_id"),
+                "created": result.get("created"),
                 "response": result.get("response", ""),
+                "blocks": result.get("blocks") or None,
                 "tool_calls_made": result.get("tool_calls_made", []),
             }
-            if result.get("blocks"):
-                response_data["blocks"] = result["blocks"]
             on_event("response", response_data)
             logger.info("assistant thread completed: user=%s conv=%s tools=%d",
                         user_id, conversation_id, len(response_data["tool_calls_made"]))
