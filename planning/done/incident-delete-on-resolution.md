@@ -1,7 +1,7 @@
 # Incident Delete-on-Resolution & Pruning
 
 **Type**: request
-**Status**: planned
+**Status**: resolved
 **Date**: 2026-04-03
 **Priority**: medium
 
@@ -165,3 +165,35 @@ Add delete-on-resolution to incidents (via RuleSet metadata) and a periodic inci
 
 - `docs/django_developer/logging/incidents.md` — Add section on incident deletion lifecycle (delete-on-resolution, `do_not_delete`, pruning job, `INCIDENT_PRUNE_DAYS` setting)
 - `CHANGELOG.md` — Document new feature
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-04-03
+
+### What Was Built
+Incident delete-on-resolution via RuleSet `metadata.delete_on_resolution`, per-incident `metadata.do_not_delete` override, `prune_incidents` async job (90-day default), and LLM agent awareness of both flags.
+
+### Files Changed
+- `mojo/apps/incident/models/incident.py` — Added `check_delete_on_resolution()` method, hooked into `on_rest_saved()`
+- `mojo/apps/incident/handlers/event_handlers.py` — BlockHandler calls `check_delete_on_resolution()` after resolving
+- `mojo/apps/incident/handlers/llm_agent.py` — Updated prompts, tool schemas, `_tool_update_incident` (do_not_delete + delete check), `_tool_create_rule` (delete_on_resolution)
+- `mojo/apps/incident/asyncjobs.py` — Added `prune_incidents()` job with `INCIDENT_PRUNE_DAYS` setting
+
+### Tests
+- `tests/test_incident/test_delete_on_resolution.py` — 12 tests covering all resolution paths, do_not_delete override, null ruleset, cascade
+- `tests/test_incident/test_prune_incidents.py` — 4 tests covering prune job, do_not_delete skip, active status skip, recent skip
+- Run: `bin/run_tests -t test_incident.test_delete_on_resolution -t test_incident.test_prune_incidents`
+
+### Docs Updated
+- `docs/django_developer/logging/incidents.md` — Deletion lifecycle section, INCIDENT_PRUNE_DAYS setting
+- `docs/web_developer/logging/incidents.md` — do_not_delete flag, 404-after-resolution behavior
+- `CHANGELOG.md` — Feature entry
+
+### Security Review
+No auth bypass or injection risks. Two advisory items: broad `security` SAVE_PERM allows clearing `do_not_delete` (existing permission model), and `prune_incidents` has no batch limit (same pattern as existing `prune_events`). Both acceptable for current use.
+
+### Follow-up
+- Consider minimum retention window (e.g. 24h) before delete-on-resolution fires, to give humans time to set `do_not_delete`
+- Consider batch-limiting `prune_incidents` for large backlogs
+- Register `prune_incidents` as a cron job in the deployment config

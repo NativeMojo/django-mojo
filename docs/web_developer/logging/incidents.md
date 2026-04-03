@@ -89,6 +89,22 @@ Incidents move through these statuses:
 }
 ```
 
+### Protecting an incident from deletion
+
+Some incidents are auto-deleted when resolved (controlled by the RuleSet) or pruned after 90 days by the `prune_incidents` job. To prevent either from happening, set `metadata.do_not_delete` on save:
+
+```json
+{
+  "metadata": {"do_not_delete": true}
+}
+```
+
+Use this for confirmed serious incidents — real intrusions, active data exfiltration, anything that needs long-term retention. When `do_not_delete` is `true`, the incident is never touched by automatic deletion regardless of its RuleSet configuration.
+
+### Incident deleted on resolution
+
+If an incident belongs to a RuleSet with `delete_on_resolution` enabled, the incident is automatically deleted when its status becomes `resolved` or `closed`. The POST response will still return the incident data as it existed at save time, but a subsequent GET on that incident ID will return 404. This is expected — the record was cleaned up. Do not treat a 404 after resolving as an error.
+
 ## Merge Incidents
 
 **POST** `/api/incident/incident/<id>`
@@ -292,6 +308,7 @@ When reading or writing rules via `/api/incident/event/ruleset`, these fields co
 | `trigger_count` | int or null | Fire the handler when the incident reaches this many events. `null` = fire immediately on the first event. |
 | `trigger_window` | int or null | Only count events within this many minutes when evaluating `trigger_count`. `null` = count all events on the incident. |
 | `retrigger_every` | int or null | Re-fire the handler every N additional events after the initial trigger. `null` = fire once only. |
+| `metadata.delete_on_resolution` | bool | When `true`, incidents created by this RuleSet are auto-deleted the moment they transition to `resolved` or `closed`. Intended for noise patterns (bot scanners, brute-force probes) where the incident has no long-term value. Overridden per-incident by `metadata.do_not_delete`. |
 
 **Example — block after 10 failed logins in 10 minutes, re-alert every 20 more:**
 
