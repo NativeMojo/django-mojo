@@ -6,6 +6,7 @@ from mojo.helpers import logit
 
 # Default: check once an hour at minute 0 (can be overridden in settings)
 INCIDENT_EVENT_PRUNE_DAYS = settings.get_static("INCIDENT_EVENT_PRUNE_DAYS", 30)
+INCIDENT_PRUNE_DAYS = settings.get_static("INCIDENT_PRUNE_DAYS", 90)
 
 
 def prune_events(job):
@@ -13,6 +14,25 @@ def prune_events(job):
         created__lt=timezone.now() - timedelta(days=INCIDENT_EVENT_PRUNE_DAYS),
         level__lt=6)
     qset.delete()
+
+
+def prune_incidents(job):
+    from django.db.models import Q
+    from mojo.apps.incident.models import Incident
+    cutoff = timezone.now() - timedelta(days=INCIDENT_PRUNE_DAYS)
+    qset = Incident.objects.filter(
+        created__lt=cutoff,
+        status__in=("resolved", "closed", "ignored"),
+    ).filter(
+        Q(metadata__do_not_delete=False)
+        | ~Q(metadata__has_key="do_not_delete"),
+    )
+    count = qset.count()
+    if count:
+        qset.delete()
+        job.add_log(f"Pruned {count} incidents older than {INCIDENT_PRUNE_DAYS} days")
+    else:
+        job.add_log("No incidents to prune")
 
 
 def broadcast_block_ip(data):

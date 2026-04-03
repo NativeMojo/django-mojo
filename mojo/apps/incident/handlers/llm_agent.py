@@ -53,6 +53,11 @@ You have access to tools that let you query the system and take actions.
 - Read the agent_memory for this rule type — it contains your past learnings.
 - Update agent_memory when you learn something new about a pattern.
 
+## Incident Deletion Lifecycle
+- RuleSets can have `metadata.delete_on_resolution = true` — incidents matching that rule are auto-deleted when resolved or closed. Use `delete_on_resolution` when proposing rules for noise patterns (bot scanning, brute-force, health blips) where the incident has no long-term value.
+- For serious incidents (real threats, active intrusions, data exfiltration), set `do_not_delete = true` via update_incident to protect them from auto-deletion and periodic pruning. This overrides any RuleSet delete_on_resolution setting.
+- When in doubt about severity, do NOT set do_not_delete — only use it for confirmed serious threats.
+
 ## Event Deduplication & Bundling
 When creating rules, ALWAYS configure bundling to prevent duplicate incidents:
 - bundle_by: groups events into a single incident (4=source_ip is most common)
@@ -87,6 +92,7 @@ a RuleSet that will auto-handle this pattern in the future — so no new open in
 - Always set bundle_by and bundle_minutes to prevent duplicate incidents.
 - Choose a handler chain that matches the threat level (block for attacks, notify for health issues).
 - The rule is created DISABLED — a human will review and approve it via a ticket.
+- For noise patterns (bot scanning, brute-force, health blips), set delete_on_resolution=true so incidents are cleaned up automatically on resolution.
 
 ## Event Deduplication & Bundling Reference
 - bundle_by: 0=none, 1=hostname, 2=model_name, 3=model_name+id, 4=source_ip, 5=hostname+model_name,
@@ -170,6 +176,10 @@ TOOLS = [
                     "enum": ["investigating", "resolved", "ignored"],
                 },
                 "note": {"type": "string", "description": "Your reasoning for this status change"},
+                "do_not_delete": {
+                    "type": "boolean",
+                    "description": "Set true for serious incidents (real threats, active intrusions) that should be preserved permanently — overrides delete_on_resolution and pruning.",
+                },
             },
             "required": ["incident_id", "status", "note"],
         },
@@ -266,6 +276,10 @@ TOOLS = [
                     "default": 30,
                 },
                 "reasoning": {"type": "string", "description": "Why you're proposing this rule"},
+                "delete_on_resolution": {
+                    "type": "boolean",
+                    "description": "Set true for noise patterns (bot scanning, health blips) where the incident should be auto-deleted on resolution or close.",
+                },
             },
             "required": ["name", "category", "handler", "reasoning"],
         },
@@ -485,7 +499,15 @@ def _tool_update_incident(params):
         "status": params["status"],
         "note": params["note"],
     }
+    if params.get("do_not_delete"):
+        incident.metadata["do_not_delete"] = True
     incident.save(update_fields=["metadata"])
+
+    # Check if this incident should be auto-deleted on resolution
+    if incident.status in ("resolved", "closed"):
+        if incident.check_delete_on_resolution():
+            return {"ok": True, "incident_id": params["incident_id"], "status": params["status"], "deleted": True}
+
     return {"ok": True, "incident_id": incident.pk, "status": params["status"]}
 
 
@@ -624,6 +646,8 @@ def _tool_create_rule(params):
         metadata["min_count"] = params["min_count"]
     if params.get("window_minutes"):
         metadata["window_minutes"] = params["window_minutes"]
+    if params.get("delete_on_resolution"):
+        metadata["delete_on_resolution"] = True
 
     ruleset = RuleSet.objects.create(
         name=params["name"],
@@ -643,6 +667,9 @@ def _tool_create_rule(params):
         )
 
     # Create a ticket for human approval
+    delete_note = ""
+    if metadata.get("delete_on_resolution"):
+        delete_note = "\n**Delete on Resolution**: Yes (noise pattern — incidents auto-deleted when resolved/closed)\n"
     ticket_result = _tool_create_ticket({
         "title": f"[Rule Proposal] {params['name']}",
         "note": (
@@ -650,6 +677,7 @@ def _tool_create_rule(params):
             f"**Name**: {params['name']}\n"
             f"**Category**: {params['category']}\n"
             f"**Handler**: {params['handler']}\n"
+            f"{delete_note}"
             f"**Reasoning**: {params['reasoning']}\n\n"
             f"The rule is currently disabled. Please review and approve by replying to this ticket."
         ),

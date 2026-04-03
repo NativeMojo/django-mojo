@@ -109,6 +109,35 @@ class Incident(models.Model, MojoModel):
         except Exception:
             logger.exception("Failed to create IncidentHistory for incident %s", self.pk)
 
+    def check_delete_on_resolution(self):
+        """
+        Delete this incident if its RuleSet has delete_on_resolution enabled
+        and the incident is not protected by do_not_delete.
+
+        Called after status changes to "resolved" or "closed" from all
+        resolution paths (REST, BlockHandler, LLM agent).
+
+        Returns True if the incident was deleted, False otherwise.
+        """
+        if self.status not in ("resolved", "closed"):
+            return False
+        if (self.metadata or {}).get("do_not_delete"):
+            return False
+        if not self.rule_set_id:
+            return False
+        try:
+            rule_set = self.rule_set
+            if not rule_set:
+                return False
+            if not (rule_set.metadata or {}).get("delete_on_resolution"):
+                return False
+        except Exception:
+            return False
+        logger.info("Auto-deleting incident %s (rule_set %s has delete_on_resolution)",
+            self.pk, self.rule_set_id)
+        self.delete()
+        return True
+
     def on_rest_saved(self, changed_fields, created):
         if created:
             return
@@ -128,6 +157,9 @@ class Incident(models.Model, MojoModel):
                             min_granularity=settings.get_static("INCIDENT_METRICS_MIN_GRANULARITY", "hours"))
                 except Exception:
                     pass
+            if self.status in ("resolved", "closed"):
+                if self.check_delete_on_resolution():
+                    return
 
         if 'priority' in changed_fields:
             self.add_history("priority_changed",
