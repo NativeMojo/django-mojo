@@ -397,7 +397,9 @@ class GeoLocatedIP(models.Model, MojoModel):
         Unblock this IP fleet-wide. Updates the database AND broadcasts
         the unblock to all instances.
         """
-        was_permanent = self.is_blocked and self.blocked_until is None
+        # Read DB truth to avoid stale in-memory state from concurrent updates
+        db_state = GeoLocatedIP.objects.filter(pk=self.pk).values("is_blocked", "blocked_until").first()
+        was_permanent = db_state and db_state["is_blocked"] and db_state["blocked_until"] is None
 
         self.is_blocked = False
         self.blocked_reason = f"unblocked: {reason}"
