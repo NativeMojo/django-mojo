@@ -373,6 +373,7 @@ class BlockHandler:
                         incident.save(update_fields=["status"])
                         incident.add_history("status_changed",
                             note=f"Auto-resolved: IP {ip} blocked by block handler")
+                        incident.check_delete_on_resolution()
                 except Exception:
                     logger.exception("BlockHandler: failed to update incident %s", event.incident_id)
 
