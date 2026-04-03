@@ -144,6 +144,53 @@ def unblock(ip):
 # Bulk blocking via ipset (countries, datacenters, abuse lists)
 # ---------------------------------------------------------------------------
 
+def ipset_add(name, ip):
+    """
+    Add a single IP to an ipset. Creates the set if it doesn't exist.
+    Idempotent — safe to call multiple times for the same IP.
+
+    Returns True on success, False on failure.
+    """
+    name = _validate_ipset_name(name)
+    ip = _validate_ip(ip)
+    if not name or not ip:
+        return False
+
+    # Create the set if it doesn't exist (hash:net handles IPs as /32)
+    _run([IPSET, "create", name, "hash:net", "-exist"])
+
+    ok, _, stderr = _run([IPSET, "add", name, ip, "-exist"])
+    if not ok:
+        logit.error(f"ipset add failed for {name}/{ip}: {stderr}")
+        return False
+
+    # Ensure iptables rule exists for this set
+    ok, stdout, _ = _run([IPTABLES_SAVE])
+    if ok and f"--match-set {name}" not in stdout:
+        _run([IPTABLES, "-I", "INPUT", "-m", "set", "--match-set", name, "src", "-j", "DROP"])
+
+    return True
+
+
+def ipset_del(name, ip):
+    """
+    Remove a single IP from an ipset.
+    Idempotent — safe to call if the IP is not in the set.
+
+    Returns True on success, False on failure.
+    """
+    name = _validate_ipset_name(name)
+    ip = _validate_ip(ip)
+    if not name or not ip:
+        return False
+
+    ok, _, stderr = _run([IPSET, "del", name, ip, "-exist"])
+    if not ok:
+        logit.error(f"ipset del failed for {name}/{ip}: {stderr}")
+        return False
+    return True
+
+
 def ipset_load(name, cidrs):
     """
     Create/replace an ipset with the given CIDRs and attach an iptables rule.

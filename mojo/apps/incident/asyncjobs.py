@@ -7,6 +7,7 @@ from mojo.helpers import logit
 # Default: check once an hour at minute 0 (can be overridden in settings)
 INCIDENT_EVENT_PRUNE_DAYS = settings.get_static("INCIDENT_EVENT_PRUNE_DAYS", 30)
 INCIDENT_PRUNE_DAYS = settings.get_static("INCIDENT_PRUNE_DAYS", 90)
+FIREWALL_BLOCKED_IPSET_NAME = settings.get_static("FIREWALL_BLOCKED_IPSET_NAME", "mojo_blocked")
 
 
 def prune_events(job):
@@ -92,6 +93,69 @@ def broadcast_unblock_ip(data):
             unblocked.append(ip)
 
     logit.info("broadcast_unblock_ip: unblocked %d/%d IPs: %s", len(unblocked), len(ips), unblocked)
+
+
+def broadcast_ipset_add_blocked(data):
+    """Broadcast handler — adds a single IP to the permanent block ipset.
+
+    Expected data keys:
+        ip: IP address string to add
+    """
+    from mojo.apps.incident import firewall
+
+    ip = data.get("ip")
+    if not ip:
+        return
+
+    if firewall.ipset_add(FIREWALL_BLOCKED_IPSET_NAME, ip):
+        logit.info("broadcast_ipset_add_blocked: added %s to %s", ip, FIREWALL_BLOCKED_IPSET_NAME)
+
+
+def broadcast_ipset_del_blocked(data):
+    """Broadcast handler — removes a single IP from the permanent block ipset.
+
+    Expected data keys:
+        ip: IP address string to remove
+    """
+    from mojo.apps.incident import firewall
+
+    ip = data.get("ip")
+    if not ip:
+        return
+
+    if firewall.ipset_del(FIREWALL_BLOCKED_IPSET_NAME, ip):
+        logit.info("broadcast_ipset_del_blocked: removed %s from %s", ip, FIREWALL_BLOCKED_IPSET_NAME)
+
+
+def sync_firewall(job):
+    """
+    Hourly reconciliation job: rebuilds all ipsets from DB truth.
+    Doubles as startup recovery — first run after restart restores all blocks.
+
+    1. Load all permanently blocked IPs into the mojo_blocked ipset
+    2. Load all enabled IPSet records (country, abuse, etc.)
+    """
+    from mojo.apps.incident import firewall
+    from mojo.apps.account.models import GeoLocatedIP
+    from mojo.apps.incident.models import IPSet
+
+    # Permanent blocks → mojo_blocked ipset
+    permanent_ips = list(
+        GeoLocatedIP.objects.filter(
+            is_blocked=True,
+            blocked_until__isnull=True,
+        ).values_list("ip_address", flat=True)
+    )
+    ok, loaded = firewall.ipset_load(FIREWALL_BLOCKED_IPSET_NAME, permanent_ips)
+    job.add_log(f"sync_firewall: loaded {loaded}/{len(permanent_ips)} permanent blocks into {FIREWALL_BLOCKED_IPSET_NAME}")
+
+    # Enabled IPSets (country, abuse, datacenter, custom)
+    ipsets = IPSet.objects.filter(is_enabled=True)
+    for ipset in ipsets:
+        cidrs = ipset.cidrs
+        ok, count = firewall.ipset_load(ipset.name, cidrs)
+        if ok:
+            job.add_log(f"sync_firewall: loaded {count}/{len(cidrs)} CIDRs into {ipset.name}")
 
 
 def sweep_expired_blocks(job):
