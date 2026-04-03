@@ -1,7 +1,7 @@
 # Use ipset for permanent IP blocks
 
 **Type**: request
-**Status**: open
+**Status**: planned
 **Date**: 2026-03-31
 **Priority**: high
 
@@ -86,3 +86,71 @@ The existing `IPSet` model and `firewall.ipset_load()` already provide the infra
 - Migrating existing `IPSet` model records to use this pattern (they already work fine with `hash:net`)
 - REST API changes (this is all internal plumbing)
 - Persistent iptables rules across reboots (startup sync handles this)
+
+## Plan
+
+**Status**: planned
+**Planned**: 2026-04-03
+
+### Objective
+
+Route permanent IP blocks through a `mojo_blocked` ipset (O(1) lookup), add hourly reconciliation that doubles as startup recovery, and reduce sweep frequency to every 5 minutes.
+
+### Steps
+
+1. **`mojo/apps/incident/firewall.py`** — Add two single-IP ipset functions (lines ~145+):
+   - `ipset_add(name, ip)` — `ipset add <name> <ip> -exist`. Creates the set (`hash:net -exist`) if it doesn't exist. Returns True/False.
+   - `ipset_del(name, ip)` — `ipset del <name> <ip> -exist`. Returns True/False.
+   - Both validate name and IP using existing `_validate_ip` / `_validate_ipset_name`.
+   - Also ensure the iptables DROP rule exists for the set (same pattern as `ipset_load` line 183-185).
+
+2. **`mojo/apps/incident/asyncjobs.py`** — Add broadcast handlers and sync job:
+   - `broadcast_ipset_add_blocked(data)` — Receives `{"ip": "1.2.3.4"}`, calls `firewall.ipset_add("mojo_blocked", ip)`. Broadcast handler (plain dict, not Job).
+   - `broadcast_ipset_del_blocked(data)` — Receives `{"ip": "1.2.3.4"}`, calls `firewall.ipset_del("mojo_blocked", ip)`. Broadcast handler.
+   - `sync_firewall(job)` — Hourly reconciliation job:
+     1. Query `GeoLocatedIP.objects.filter(is_blocked=True, blocked_until__isnull=True)` for all permanent blocks → list of IPs
+     2. Call `firewall.ipset_load("mojo_blocked", ips)` to flush+reload the ipset from DB truth
+     3. Query all enabled `IPSet` records → for each, call `firewall.ipset_load(ipset.name, ipset.cidrs)`
+     4. Log counts via `job.add_log()`
+   - Read `FIREWALL_BLOCKED_IPSET_NAME` from settings (default `"mojo_blocked"`) at module level.
+
+3. **`mojo/apps/account/models/geolocated_ip.py`** — Modify `block()` and `unblock()`:
+   - **`block()` (line 374-382)**: When `ttl` is 0/None (permanent), broadcast `broadcast_ipset_add_blocked` with `{"ip": self.ip_address}` instead of `broadcast_block_ip`. When `ttl` > 0, keep existing `broadcast_block_ip` behavior.
+   - **`unblock()` (line 407-414)**: Check if the block was permanent (`self.blocked_until is None` before the save clears it — capture this before the update). If permanent, broadcast `broadcast_ipset_del_blocked` with `{"ip": self.ip_address}`. If TTL, keep existing `broadcast_unblock_ip` behavior.
+
+4. **`mojo/apps/incident/cronjobs.py`** — Two changes:
+   - Change `sweep_expired_blocks` from `@schedule(minutes="*")` to `@schedule(minutes="*/5")` (every 5 minutes).
+   - Add `sync_firewall` cron: `@schedule(minutes="0")` (every hour at minute 0). Publishes `mojo.apps.incident.asyncjobs.sync_firewall` job.
+
+### Design Decisions
+
+- **`hash:net` for everything**: Handles both CIDRs and individual IPs (as /32). No need for `hash:ip`. Consistent with existing `ipset_load()` which already creates `hash:net` sets.
+- **No job engine changes**: No `STARTUP_JOBS`, no `initialize()` hooks. The hourly cron is the startup recovery — first run after restart rebuilds all ipsets. Up to 1 hour of exposure is acceptable for suspected-IP blocks.
+- **Incremental add/del for realtime, full rebuild for reconciliation**: `block()`/`unblock()` broadcast single-IP `ipset_add`/`ipset_del` for immediate effect. The hourly `sync_firewall` does a full flush+reload from DB truth to catch anything missed (failed broadcasts, new servers, drift).
+- **Sweep at 5 minutes, not 1**: Expired blocks sitting an extra 4 minutes is irrelevant. 12x fewer queries per hour on an API node.
+- **TTL blocks stay as individual iptables rules**: They expire soon and aren't worth ipset complexity. Lost on restart — acceptable since they'd expire anyway.
+- **`ipset_add` creates the set if missing**: Handles the edge case where a block broadcast arrives before the first `sync_firewall` run. The set is created lazily with `-exist` flag.
+
+### Edge Cases
+
+- **First block before first sync**: `ipset_add` creates `mojo_blocked` set if it doesn't exist, so the broadcast works even on a fresh server before `sync_firewall` has run.
+- **Unblock race with sync**: If `unblock()` removes an IP via `ipset_del`, then `sync_firewall` runs and the IP is already removed from DB, the full rebuild won't re-add it. Clean.
+- **Concurrent block/unblock**: `ipset add -exist` and `ipset del -exist` are idempotent. No race conditions.
+- **`ipset_load` flush gap**: During `sync_firewall`, the flush+reload creates a brief window where the ipset is empty. For thousands of IPs this is milliseconds. Acceptable for this threat level.
+- **Capture permanent status before unblock save**: `unblock()` must check `self.blocked_until is None` BEFORE saving (which clears `blocked_until`), to know whether to broadcast ipset_del or iptables unblock.
+
+### Testing
+
+- `firewall.ipset_add` and `ipset_del` validate inputs and return correctly → `tests/test_incident/test_ipset_blocks.py`
+- `block(ttl=None)` broadcasts `ipset_add` instead of `iptables` → same file (mock `jobs.broadcast_execute`, check function path and payload)
+- `block(ttl=600)` still broadcasts `iptables` → same file
+- `unblock()` of permanent block broadcasts `ipset_del` → same file
+- `unblock()` of TTL block broadcasts `iptables unblock` → same file
+- `sync_firewall` queries correct IPs and IPSets, calls `ipset_load` → `tests/test_incident/test_sync_firewall.py`
+- Cron schedule changes (sweep at */5, sync_firewall at 0) → verify in cronjobs.py
+
+### Docs
+
+- `docs/django_developer/logging/incidents.md` — Add section on ipset-based permanent blocking, `sync_firewall` reconciliation, `FIREWALL_BLOCKED_IPSET_NAME` setting
+- `docs/django_developer/logging/incidents.md` — Update settings table with new setting and sweep frequency change
+- `CHANGELOG.md` — Document the change

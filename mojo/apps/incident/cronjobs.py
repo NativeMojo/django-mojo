@@ -26,12 +26,20 @@ def prune_events(force=False, verbose=False, now=None):
         channel="cleanup", payload={})
 
 
-# Runs every minute — unblocks IPs whose blocked_until has passed
-@schedule(minutes="*")
+# Runs every 5 minutes — unblocks IPs whose blocked_until has passed
+@schedule(minutes="*/5")
 def sweep_expired_blocks(force=False, verbose=False, now=None):
     jobs.publish(
         func="mojo.apps.incident.asyncjobs.sweep_expired_blocks",
         payload={})
+
+
+# Hourly — rebuild all ipsets from DB truth (startup recovery + drift reconciliation)
+@schedule(minutes="0")
+def sync_firewall(force=False, verbose=False, now=None):
+    jobs.publish(
+        func="mojo.apps.incident.asyncjobs.sync_firewall",
+        channel="cleanup", payload={})
 
 
 # Weekly — refresh IPSet sources (countries, abuse lists) and sync to fleet

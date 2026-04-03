@@ -373,10 +373,18 @@ class GeoLocatedIP(models.Model, MojoModel):
 
         if broadcast:
             try:
-                jobs.broadcast_execute(
-                    "mojo.apps.incident.asyncjobs.broadcast_block_ip",
-                    {"ips": [self.ip_address], "ttl": ttl},
-                )
+                if not ttl:
+                    # Permanent block — route through ipset for O(1) lookup
+                    jobs.broadcast_execute(
+                        "mojo.apps.incident.asyncjobs.broadcast_ipset_add_blocked",
+                        {"ip": self.ip_address},
+                    )
+                else:
+                    # TTL block — individual iptables rule (expires soon)
+                    jobs.broadcast_execute(
+                        "mojo.apps.incident.asyncjobs.broadcast_block_ip",
+                        {"ips": [self.ip_address], "ttl": ttl},
+                    )
                 metrics.record("firewall:broadcasts", category="firewall")
             except Exception:
                 logit.exception("Failed to broadcast block for %s", self.ip_address)
@@ -389,6 +397,8 @@ class GeoLocatedIP(models.Model, MojoModel):
         Unblock this IP fleet-wide. Updates the database AND broadcasts
         the unblock to all instances.
         """
+        was_permanent = self.is_blocked and self.blocked_until is None
+
         self.is_blocked = False
         self.blocked_reason = f"unblocked: {reason}"
         self.blocked_until = None
@@ -406,10 +416,18 @@ class GeoLocatedIP(models.Model, MojoModel):
 
         if broadcast:
             try:
-                jobs.broadcast_execute(
-                    "mojo.apps.incident.asyncjobs.broadcast_unblock_ip",
-                    {"ips": [self.ip_address]},
-                )
+                if was_permanent:
+                    # Remove from ipset (permanent blocks live in mojo_blocked)
+                    jobs.broadcast_execute(
+                        "mojo.apps.incident.asyncjobs.broadcast_ipset_del_blocked",
+                        {"ip": self.ip_address},
+                    )
+                else:
+                    # Remove individual iptables rule (TTL blocks)
+                    jobs.broadcast_execute(
+                        "mojo.apps.incident.asyncjobs.broadcast_unblock_ip",
+                        {"ips": [self.ip_address]},
+                    )
             except Exception:
                 logit.exception("Failed to broadcast unblock for %s", self.ip_address)
                 metrics.record("firewall:broadcast_errors", category="firewall")
