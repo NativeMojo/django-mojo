@@ -2,6 +2,11 @@
 
 ## v1.1.10 - April 03, 2026
 
+ipset blocking now in place
+
+
+## v1.1.10 - April 03, 2026
+
 ipset-based permanent IP blocking, fleet reconciliation cron
 
 ### Added
