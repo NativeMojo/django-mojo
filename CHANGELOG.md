@@ -1,5 +1,20 @@
 ## v1.1.0 - (current)
 
+## v1.1.10 - April 03, 2026
+
+ipset-based permanent IP blocking, fleet reconciliation cron
+
+### Added
+- **ipset permanent block routing** — `GeoLocatedIP.block(ttl=None)` now routes through the `mojo_blocked` ipset instead of individual iptables rules. O(1) kernel lookup regardless of how many IPs are blocked. TTL blocks (`ttl > 0`) continue to use individual iptables rules.
+- **`firewall.ipset_add(name, ip)` and `firewall.ipset_del(name, ip)`** — new single-IP ipset operations. Both are idempotent. `ipset_add` creates the set if it does not exist and ensures the iptables DROP rule is present.
+- **`broadcast_ipset_add_blocked` / `broadcast_ipset_del_blocked`** — new broadcast job handlers that apply `ipset_add`/`ipset_del` on each fleet instance for real-time permanent block/unblock propagation.
+- **`sync_firewall` cron job (hourly)** — rebuilds all ipsets from DB truth every hour. Restores permanent blocks after server restart (iptables/ipset state is lost on reboot) and reconciles fleet drift from missed broadcasts.
+- **`FIREWALL_BLOCKED_IPSET_NAME` setting** — configures the ipset name for permanent blocks. Default: `"mojo_blocked"`.
+
+### Changed
+- **`sweep_expired_blocks` now runs every 5 minutes** (previously every minute). TTL blocks sitting an extra 4 minutes after expiry has no practical impact and reduces cron overhead 12x.
+- **`unblock()` of a permanent block** now broadcasts `broadcast_ipset_del_blocked` instead of `broadcast_unblock_ip`, matching the new block routing.
+
 ## v1.1.9 - April 03, 2026
 
 new AI Agent support, improved security

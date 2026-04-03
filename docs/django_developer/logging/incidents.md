@@ -40,29 +40,61 @@ The incident system is the **sole authority** for IP blocking decisions. OSSEC a
 
 ### How a block flows
 
+Permanent blocks (`ttl=None`) and TTL blocks (`ttl > 0`) are enforced differently:
+
+**Permanent block (ttl=None):**
+
 ```
-OSSEC detects suspicious activity
-  → reports via POST /api/incident/ossec/alert (event only, no blocking)
-  → Event created → RuleSet evaluates
-  → RuleSet with block:// handler fires
-  → GeoLocatedIP.block(reason, ttl) called
-    → DB updated (is_blocked=True, blocked_until, blocked_reason)
-    → jobs.broadcast_execute("mojo.apps.incident.asyncjobs.broadcast_block_ip", {ips, ttl})
-    → Every instance's job runner picks up the broadcast
-    → firewall.block(ip) applies iptables DROP rule via sudo
+GeoLocatedIP.block(reason, ttl=None)
+  → DB updated (is_blocked=True, blocked_until=None, blocked_reason)
+  → jobs.broadcast_execute("mojo.apps.incident.asyncjobs.broadcast_ipset_add_blocked", {ip})
+  → Every instance adds the IP to the mojo_blocked ipset (O(1) kernel lookup)
+  → firewall.ipset_add("mojo_blocked", ip) creates the set if absent and ensures iptables rule
+```
+
+**TTL block (ttl > 0):**
+
+```
+GeoLocatedIP.block(reason, ttl=600)
+  → DB updated (is_blocked=True, blocked_until=<now+ttl>, blocked_reason)
+  → jobs.broadcast_execute("mojo.apps.incident.asyncjobs.broadcast_block_ip", {ips, ttl})
+  → Every instance adds an individual iptables DROP rule via firewall.block(ip)
 ```
 
 ### How an unblock flows
 
+**Cron (every 5 minutes): sweep_expired_blocks**
+
 ```
-Cron (every minute): sweep_expired_blocks
+sweep_expired_blocks
   → Finds GeoLocatedIP where is_blocked=True AND blocked_until <= now
   → Bulk DB update: is_blocked=False
   → jobs.broadcast_execute("mojo.apps.incident.asyncjobs.broadcast_unblock_ip", {ips})
-  → Every instance removes the iptables rule
+  → Every instance removes the individual iptables rule
 ```
 
-Admins can also unblock immediately via the `unblock` action on `GeoLocatedIP`.
+**Admin unblock (`unblock` action on GeoLocatedIP):**
+
+- If the block was permanent (`blocked_until` was `None`): broadcasts `broadcast_ipset_del_blocked` to remove the IP from the `mojo_blocked` ipset.
+- If the block had a TTL: broadcasts `broadcast_unblock_ip` to remove the individual iptables rule.
+
+### Startup recovery and fleet reconciliation
+
+A new hourly cron job, `sync_firewall`, rebuilds all ipsets from DB truth. This:
+
+- Restores permanent blocks after a server restart (iptables rules are lost on reboot; ipset state is also non-persistent without this job).
+- Catches any blocks missed by failed broadcasts.
+- Catches drift between instances that joined after a block was issued.
+
+```
+sync_firewall (hourly, minute 0)
+  → Query all GeoLocatedIP where is_blocked=True AND blocked_until IS NULL
+  → firewall.ipset_load("mojo_blocked", permanent_ips)  — full flush+reload
+  → Query all IPSet where is_enabled=True
+  → For each: firewall.ipset_load(ipset.name, ipset.cidrs)
+```
+
+Up to one hour of exposure is acceptable for permanent blocks — they target sustained threats, not short-lived TTL blocks that expire on their own.
 
 ### firewall.py — iptables enforcement
 
@@ -73,6 +105,8 @@ Admins can also unblock immediately via the `unblock` action on `GeoLocatedIP`.
 | `block(ip)` | Idempotent — adds iptables DROP rule for INPUT (and FORWARD if forwarding is enabled) |
 | `unblock(ip)` | Idempotent — removes DROP rules |
 | `is_blocked(ip)` | Checks `iptables-save` output |
+| `ipset_add(name, ip)` | Adds a single IP to a named ipset. Creates the set (`hash:net`) if absent. Ensures the iptables DROP rule for the set exists. Idempotent. Returns True/False. |
+| `ipset_del(name, ip)` | Removes a single IP from a named ipset. Idempotent. Returns True/False. |
 | `ipset_load(name, cidrs)` | Creates/replaces a kernel ipset with the given CIDRs and adds an iptables DROP rule for it |
 | `ipset_remove(name)` | Removes a kernel ipset and its associated iptables rule |
 
@@ -82,9 +116,12 @@ All IPs are validated against a strict regex before touching iptables. Commands 
 
 | Job | Type | Description |
 |---|---|---|
-| `broadcast_block_ip` | Broadcast | Applies iptables blocks on the local instance. Receives plain dict: `{"ips": [...], "ttl": 600}` |
-| `broadcast_unblock_ip` | Broadcast | Removes iptables blocks on the local instance. Receives plain dict: `{"ips": [...]}` |
-| `sweep_expired_blocks` | Cron (every minute) | Finds expired blocks in DB, updates DB, broadcasts fleet-wide unblock |
+| `broadcast_block_ip` | Broadcast | Applies individual iptables blocks on the local instance (TTL blocks). Receives plain dict: `{"ips": [...], "ttl": 600}` |
+| `broadcast_unblock_ip` | Broadcast | Removes individual iptables blocks on the local instance. Receives plain dict: `{"ips": [...]}` |
+| `broadcast_ipset_add_blocked` | Broadcast | Adds a single IP to the `mojo_blocked` ipset on the local instance (permanent blocks). Receives plain dict: `{"ip": "1.2.3.4"}` |
+| `broadcast_ipset_del_blocked` | Broadcast | Removes a single IP from the `mojo_blocked` ipset on the local instance. Receives plain dict: `{"ip": "1.2.3.4"}` |
+| `sweep_expired_blocks` | Cron (every 5 minutes) | Finds expired blocks in DB, updates DB, broadcasts fleet-wide unblock |
+| `sync_firewall` | Cron (hourly, minute 0) | Rebuilds all ipsets from DB truth. Restores permanent blocks after restart and reconciles fleet drift. |
 | `prune_events` | Cron (daily 9:45) | Deletes events older than `INCIDENT_EVENT_PRUNE_DAYS` with level < 6 |
 | `prune_incidents` | Cron | Deletes resolved/closed/ignored incidents older than `INCIDENT_PRUNE_DAYS`. Skips incidents with `metadata.do_not_delete = True`. |
 
@@ -714,6 +751,7 @@ RuleSet.objects.create(
 | `INCIDENT_PRUNE_DAYS` | `90` | Days to retain resolved/closed/ignored incidents before pruning. Incidents with `metadata.do_not_delete = True` are exempt. |
 | `INCIDENT_EVENT_METRICS` | — | Enable metrics recording for events and incidents |
 | `INCIDENT_METRICS_MIN_GRANULARITY` | `"hours"` | Granularity for incident metrics |
+| `FIREWALL_BLOCKED_IPSET_NAME` | `"mojo_blocked"` | Name of the kernel ipset used for permanent IP blocks. Change only if you have a naming conflict with an existing ipset. |
 
 ---
 
