@@ -103,6 +103,7 @@ def dispatch_error_handler(func):
                     request=request,
                     level=5,
                     request_path=getattr(request, "path", None),
+                    error_code=err.code,
                     stack_trace=traceback.format_exc(),
                 )
             return JsonResponse({"error": err.reason, "code": err.code, "status": False }, status=err.status)

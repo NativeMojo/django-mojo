@@ -125,6 +125,7 @@ class RuleSet(models.Model, MojoModel):
         validators=[MinValueValidator(1)],
         help_text="Re-fire handler every N additional events after the initial trigger. Null = fire once only.")
     metadata = models.JSONField(default=dict, blank=True)
+    is_active = models.BooleanField(default=True)
 
     class RestMeta:
         SEARCH_FIELDS = ["name"]
@@ -668,7 +669,7 @@ class RuleSet(models.Model, MojoModel):
         Returns:
             RuleSet: The first RuleSet that matches the event, or None if no matches are found.
         """
-        for rule_set in cls.objects.filter(category=category).order_by("priority"):
+        for rule_set in cls.objects.filter(category=category, is_active=True).order_by("priority"):
             if rule_set.check_rules(event):
                 return rule_set
         return None
