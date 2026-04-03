@@ -585,14 +585,14 @@ def test_incident_cronjobs_registered(opts):
     assert "check_system_health" in registered_names, \
         f"check_system_health should be registered; found: {registered_names}"
 
-    # Verify sweep_expired_blocks fires every minute
+    # Verify sweep_expired_blocks fires every 5 minutes
     sweep_spec = next(
         (s for s in schedule.scheduled_functions if s['func'].__name__ == "sweep_expired_blocks"),
         None
     )
     assert sweep_spec is not None, "sweep_expired_blocks spec not found"
-    assert sweep_spec['minutes'] == '*', \
-        f"sweep_expired_blocks should run every minute (minutes='*'), got {sweep_spec['minutes']!r}"
+    assert sweep_spec['minutes'] == '*/5', \
+        f"sweep_expired_blocks should run every 5 minutes (minutes='*/5'), got {sweep_spec['minutes']!r}"
 
     # Verify refresh_ipsets is weekly (weekdays='0')
     refresh_spec = next(
