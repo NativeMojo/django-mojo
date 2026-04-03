@@ -1,7 +1,7 @@
 # Use ipset for permanent IP blocks
 
 **Type**: request
-**Status**: planned
+**Status**: resolved
 **Date**: 2026-03-31
 **Priority**: high
 
@@ -154,3 +154,38 @@ Route permanent IP blocks through a `mojo_blocked` ipset (O(1) lookup), add hour
 - `docs/django_developer/logging/incidents.md` — Add section on ipset-based permanent blocking, `sync_firewall` reconciliation, `FIREWALL_BLOCKED_IPSET_NAME` setting
 - `docs/django_developer/logging/incidents.md` — Update settings table with new setting and sweep frequency change
 - `CHANGELOG.md` — Document the change
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-04-03
+
+### What Was Built
+Permanent IP blocks routed through `mojo_blocked` ipset for O(1) kernel lookup. Hourly `sync_firewall` cron rebuilds all ipsets from DB truth (startup recovery + drift reconciliation). Sweep frequency reduced to every 5 minutes.
+
+### Files Changed
+- `mojo/apps/incident/firewall.py` — Added `ipset_add()` and `ipset_del()` for single-IP operations
+- `mojo/apps/incident/asyncjobs.py` — Added `broadcast_ipset_add_blocked`, `broadcast_ipset_del_blocked`, `sync_firewall` job, `FIREWALL_BLOCKED_IPSET_NAME` setting
+- `mojo/apps/account/models/geolocated_ip.py` — `block()` routes permanent blocks through ipset; `unblock()` routes based on DB-read `was_permanent`
+- `mojo/apps/incident/cronjobs.py` — Sweep at `*/5`, added `sync_firewall` hourly cron
+- `tests/test_helpers/cron.py` — Updated existing test to expect `*/5` sweep schedule
+
+### Tests
+- `tests/test_incident/test_ipset_blocks.py` — 5 tests: block/unblock routing for permanent vs TTL
+- `tests/test_incident/test_sync_firewall.py` — 4 tests: sync queries, IPSet loading, cron registration
+- Run: `bin/run_tests -t test_incident.test_ipset_blocks -t test_incident.test_sync_firewall`
+
+### Docs Updated
+- `docs/django_developer/logging/incidents.md` — ipset block flows, new functions, settings, cron changes
+- `CHANGELOG.md` — v1.1.10 entry
+
+### Security Review
+- Command injection mitigations solid (validated inputs, no shell=True)
+- Fixed `was_permanent` stale-read race (now reads from DB)
+- Flush+reload window acceptable for this threat level
+- Redis trust boundary is pre-existing architectural concern
+
+### Follow-up
+- Consider `ipset swap` for atomic replacement in `sync_firewall` (large deployments)
+- Consider startup validation of `FIREWALL_BLOCKED_IPSET_NAME` setting
+- Register `sync_firewall` cron in deployment config
