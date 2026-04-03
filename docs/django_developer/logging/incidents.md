@@ -86,6 +86,7 @@ All IPs are validated against a strict regex before touching iptables. Commands 
 | `broadcast_unblock_ip` | Broadcast | Removes iptables blocks on the local instance. Receives plain dict: `{"ips": [...]}` |
 | `sweep_expired_blocks` | Cron (every minute) | Finds expired blocks in DB, updates DB, broadcasts fleet-wide unblock |
 | `prune_events` | Cron (daily 9:45) | Deletes events older than `INCIDENT_EVENT_PRUNE_DAYS` with level < 6 |
+| `prune_incidents` | Cron | Deletes resolved/closed/ignored incidents older than `INCIDENT_PRUNE_DAYS`. Skips incidents with `metadata.do_not_delete = True`. |
 
 ### Why no public blocking endpoints?
 
@@ -463,6 +464,48 @@ pending  →  new  →  open  →  investigating  →  resolved  →  closed
 | `resolved` | Root cause addressed |
 | `closed` | No further action needed |
 
+### Incident Deletion Lifecycle
+
+Incidents can be automatically deleted at two points:
+
+**1. Delete on resolution (immediate)**
+
+If a RuleSet has `metadata.delete_on_resolution = True`, any incident it creates is automatically deleted the moment it transitions to `resolved` or `closed`. This keeps the database clean for high-volume noise patterns (bot scanners, brute-force probes, health check blips) that generate incidents only as bookkeeping artifacts — once handled, there is no value in retaining them.
+
+This is triggered from all resolution paths: REST saves, the BlockHandler, and the LLM agent.
+
+```python
+RuleSet.objects.create(
+    name="Bot Scanner Noise",
+    category="ossec",
+    handler="block://?ttl=3600",
+    metadata={"delete_on_resolution": True},
+)
+```
+
+**2. Periodic pruning (`prune_incidents` job)**
+
+The `prune_incidents` async job deletes resolved, closed, and ignored incidents older than `INCIDENT_PRUNE_DAYS` (default: 90 days). It runs on a schedule and skips any incident protected by `do_not_delete`.
+
+**Protecting serious incidents from deletion**
+
+Set `metadata.do_not_delete = True` on an incident to prevent both auto-deletion on resolution and periodic pruning. Use this for confirmed serious threats — real intrusions, active data exfiltration, or incidents that must be retained for compliance or forensics.
+
+```python
+incident.metadata["do_not_delete"] = True
+incident.save(update_fields=["metadata"])
+```
+
+`do_not_delete` overrides any RuleSet `delete_on_resolution` setting. When in doubt, leave it unset — protect only when there is a clear reason.
+
+**`check_delete_on_resolution()` — the deletion method**
+
+All resolution paths call `incident.check_delete_on_resolution()` after a status change. It returns `True` if the incident was deleted, `False` otherwise. It is a no-op when:
+- The incident status is not `resolved` or `closed`
+- `metadata.do_not_delete` is `True`
+- The incident has no linked RuleSet
+- The RuleSet does not have `metadata.delete_on_resolution = True`
+
 ### Incident Actions
 
 | Action | Description |
@@ -668,6 +711,7 @@ RuleSet.objects.create(
 |---|---|---|
 | `INCIDENT_LEVEL_THRESHOLD` | `7` | Minimum level to auto-create an incident without a matching RuleSet |
 | `INCIDENT_EVENT_PRUNE_DAYS` | `30` | Days to retain events with level < 6 |
+| `INCIDENT_PRUNE_DAYS` | `90` | Days to retain resolved/closed/ignored incidents before pruning. Incidents with `metadata.do_not_delete = True` are exempt. |
 | `INCIDENT_EVENT_METRICS` | — | Enable metrics recording for events and incidents |
 | `INCIDENT_METRICS_MIN_GRANULARITY` | `"hours"` | Granularity for incident metrics |
 

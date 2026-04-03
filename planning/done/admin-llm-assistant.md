@@ -1,7 +1,7 @@
 # Admin LLM Assistant
 
 **Type**: request
-**Status**: planned
+**Status**: resolved
 **Date**: 2026-04-01
 **Priority**: high
 
@@ -367,3 +367,20 @@ mojo/apps/assistant/
 
 - `docs/django_developer/assistant/README.md` — Architecture, settings reference, tool registry API, how to add custom tools via `assistant_tools.py`, permission mapping, built-in tool inventory
 - `docs/web_developer/assistant/README.md` — REST endpoints, request/response format, conversation flow, permissions needed, error responses
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-04-03
+
+### What Was Built
+Full LLM admin assistant with REST API, permission-gated tools across security/jobs/users/groups/metrics domains, conversation tracking, and extensible tool registry via autodiscover.
+
+### Files Changed
+- `mojo/apps/assistant/` — Full app: models, REST, agent, tool registry, tools by domain
+- `tests/test_assistant/` — Permission and conversation tests
+- `docs/django_developer/assistant/` — Developer docs
+- `docs/web_developer/assistant/` — API docs
+
+### Follow-up
+- None — implementation matches plan

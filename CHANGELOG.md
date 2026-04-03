@@ -4,6 +4,14 @@
 
 new AI Agent support, improved security
 
+### Added
+- **Incident delete-on-resolution** — RuleSets with `metadata.delete_on_resolution = True` now auto-delete their incidents the moment they transition to `resolved` or `closed`. Triggered from all resolution paths: REST saves, the BlockHandler, and the LLM agent. Keeps the database clean for high-volume noise patterns.
+- **`metadata.do_not_delete` per-incident flag** — set `True` on any incident to exempt it from both delete-on-resolution and periodic pruning. Intended for confirmed serious threats requiring long-term retention.
+- **`prune_incidents` async job** — periodic cron job that deletes resolved, closed, and ignored incidents older than `INCIDENT_PRUNE_DAYS` (default: 90 days). Skips incidents with `do_not_delete = True`.
+- **`INCIDENT_PRUNE_DAYS` setting** — configures the age threshold for the `prune_incidents` job. Default: `90`.
+- **LLM agent: `delete_on_resolution` param on `create_rule` tool** — agent can now propose noise-pattern rules with automatic cleanup enabled.
+- **LLM agent: `do_not_delete` param on `update_incident` tool** — agent can protect serious incidents from auto-deletion when assessing confirmed threats.
+
 
 ## v1.1.8 - April 02, 2026
 
