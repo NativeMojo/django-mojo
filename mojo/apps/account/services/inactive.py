@@ -5,9 +5,17 @@ from mojo.helpers.settings import settings
 
 logger = logit.get_logger("inactive_sweep", "inactive_sweep.log")
 
-ACCOUNT_INACTIVE_DAYS = settings.get("ACCOUNT_INACTIVE_DAYS", 90)
-ACCOUNT_INACTIVE_WARNING_DAYS = settings.get("ACCOUNT_INACTIVE_WARNING_DAYS", 7)
-GROUP_INACTIVE_DAYS = settings.get("GROUP_INACTIVE_DAYS", 90)
+
+def _get_account_inactive_days():
+    return settings.get("ACCOUNT_INACTIVE_DAYS", 90)
+
+
+def _get_account_warning_days():
+    return settings.get("ACCOUNT_INACTIVE_WARNING_DAYS", 7)
+
+
+def _get_group_inactive_days():
+    return settings.get("GROUP_INACTIVE_DAYS", 90)
 
 
 def _clear_stale_warnings(Model, inactive_days):
@@ -22,7 +30,9 @@ def _clear_stale_warnings(Model, inactive_days):
         if not warn_date_str:
             continue
         # If last_activity is after the warn date, user reactivated
-        if entity.last_activity and str(entity.last_activity) > warn_date_str:
+        # Parse warn_date to datetime for reliable comparison (not string ordering)
+        warn_date = dates.parse(warn_date_str)
+        if warn_date and entity.last_activity and entity.last_activity > warn_date:
             entity.set_protected_metadata("disable_warned", None)
             entity.set_protected_metadata("disable_warn_date", None)
             cleared += 1
@@ -34,8 +44,8 @@ def warn_inactive_users():
     from mojo.apps.account.models import User
     from mojo.apps.incident import report_event
 
-    inactive_days = ACCOUNT_INACTIVE_DAYS
-    warning_days = ACCOUNT_INACTIVE_WARNING_DAYS
+    inactive_days = _get_account_inactive_days()
+    warning_days = _get_account_warning_days()
     warn_cutoff = dates.subtract(days=inactive_days - warning_days)
 
     users = User.objects.filter(
@@ -90,7 +100,7 @@ def disable_inactive_users():
     from mojo.apps.account.models import User
     from mojo.apps.incident import report_event
 
-    inactive_days = ACCOUNT_INACTIVE_DAYS
+    inactive_days = _get_account_inactive_days()
     disable_cutoff = dates.subtract(days=inactive_days)
 
     users = User.objects.filter(
@@ -164,8 +174,8 @@ def warn_inactive_groups():
     from mojo.apps.account.models import User, Group
     from mojo.apps.incident import report_event
 
-    inactive_days = GROUP_INACTIVE_DAYS
-    warning_days = ACCOUNT_INACTIVE_WARNING_DAYS
+    inactive_days = _get_group_inactive_days()
+    warning_days = _get_account_warning_days()
     warn_cutoff = dates.subtract(days=inactive_days - warning_days)
 
     groups = Group.objects.filter(
@@ -229,7 +239,7 @@ def disable_inactive_groups():
     from mojo.apps.account.models import Group
     from mojo.apps.incident import report_event
 
-    inactive_days = GROUP_INACTIVE_DAYS
+    inactive_days = _get_group_inactive_days()
     disable_cutoff = dates.subtract(days=inactive_days)
 
     groups = Group.objects.filter(

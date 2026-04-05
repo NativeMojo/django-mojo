@@ -147,8 +147,15 @@ class EmailTemplate(models.Model, MojoModel):
         """Load a template from the seed file at seeds/email_templates/{name}.json."""
         import json
         import os
+        import re
+        # Validate name to prevent path traversal — only alphanumeric + underscores
+        if not re.fullmatch(r'[a-z0-9_]{1,80}', name):
+            return None
         seed_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "seeds", "email_templates")
         seed_path = os.path.join(seed_dir, f"{name}.json")
+        # Belt-and-suspenders: verify resolved path is inside the seed directory
+        if not os.path.abspath(seed_path).startswith(os.path.abspath(seed_dir) + os.sep):
+            return None
         if not os.path.isfile(seed_path):
             return None
         try:
