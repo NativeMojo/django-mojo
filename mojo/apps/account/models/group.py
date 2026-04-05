@@ -156,6 +156,19 @@ class Group(MojoSecrets, MojoModel):
         self.metadata = self.jsonfield_as_objict("metadata")
         return self.metadata
 
+    def get_protected_metadata(self, key, default=None):
+        meta = self.metadata or {}
+        protected = meta.get("protected") or {}
+        return protected.get(key, default)
+
+    def set_protected_metadata(self, key, value):
+        from objict import objict
+        meta = self.get_metadata()
+        if not isinstance(meta.get("protected"), objict):
+            meta.protected = objict.fromdict(meta.get("protected") or {})
+        meta.protected[key] = value
+        self.save(update_fields=["metadata", "modified"])
+
     def add_member(self, user):
         member, created = self.members.get_or_create(user=user)
         return member
