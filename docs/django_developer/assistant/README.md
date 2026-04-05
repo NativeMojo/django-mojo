@@ -45,18 +45,33 @@ Add `"mojo.apps.assistant"` to `INSTALLED_APPS` and run migrations.
 
 ### Security Domain (`view_security` / `manage_security`)
 
-| Tool | Permission | Mutates |
-|---|---|---|
-| `query_incidents` | `view_security` | No |
-| `query_events` | `view_security` | No |
-| `query_event_counts` | `view_security` | No |
-| `query_tickets` | `view_security` | No |
-| `query_rulesets` | `view_security` | No |
-| `query_ip_history` | `view_security` | No |
-| `get_incident_timeline` | `view_security` | No |
-| `update_incident` | `manage_security` | Yes |
-| `block_ip` | `manage_security` | Yes |
-| `create_ticket` | `manage_security` | Yes |
+| Tool | Permission | Mutates | Description |
+|---|---|---|---|
+| `query_incidents` | `view_security` | No | Filter by status, priority, category, source_ip, hostname, rule_set_id, model_name |
+| `query_events` | `view_security` | No | Filter by category, IP, hostname, level, rule_id (OSSEC metadata), incident_id |
+| `query_event_counts` | `view_security` | No | Aggregate counts grouped by category or rule_id |
+| `query_tickets` | `view_security` | No | Filter tickets by status, priority, category |
+| `query_rulesets` | `view_security` | No | List rule sets with is_active, trigger_count, priority, match_by |
+| `query_ip_history` | `view_security` | No | IP reputation, block history, geo info, past incidents |
+| `query_blocked_ips` | `view_security` | No | List currently blocked IPs with TTL, reason, block count |
+| `query_ipsets` | `view_security` | No | List bulk IP sets (country/datacenter/abuse) — metadata only |
+| `get_incident` | `view_security` | No | Full incident details including metadata and event count |
+| `get_incident_timeline` | `view_security` | No | Full history/audit trail for an incident |
+| `get_incident_events` | `view_security` | No | Events bundled into an incident with full metadata |
+| `get_event` | `view_security` | No | Full event details including complete metadata |
+| `get_ruleset` | `view_security` | No | Full rule set details including child rules (field conditions) |
+| `update_incident` | `manage_security` | Yes | Change incident status with history note |
+| `bulk_update_incidents` | `manage_security` | Yes | Resolve/ignore up to 100 incidents at once |
+| `merge_incidents` | `manage_security` | Yes | Merge source incidents into target (moves events, deletes sources) |
+| `create_rule` | `manage_security` | Yes | Create new rule set with conditions (created disabled) |
+| `add_rule_condition` | `manage_security` | Yes | Add a field-level rule to an existing rule set |
+| `update_ruleset` | `manage_security` | Yes | Edit rule set fields (handler, bundle, trigger, is_active, etc.) |
+| `delete_ruleset` | `manage_security` | Yes | Delete a rule set and cascade-delete child rules |
+| `block_ip` | `manage_security` | Yes | Block an IP fleet-wide with TTL |
+| `unblock_ip` | `manage_security` | Yes | Unblock a blocked IP fleet-wide |
+| `whitelist_ip` | `manage_security` | Yes | Add IP to whitelist (prevents future auto-blocks, unblocks if blocked) |
+| `unwhitelist_ip` | `manage_security` | Yes | Remove IP from whitelist |
+| `create_ticket` | `manage_security` | Yes | Create a ticket for human review |
 
 ### Jobs Domain (`view_jobs` / `manage_jobs`)
 
@@ -70,15 +85,19 @@ Add `"mojo.apps.assistant"` to `INSTALLED_APPS` and run migrations.
 | `cancel_job` | `manage_jobs` | Yes |
 | `retry_job` | `manage_jobs` | Yes |
 
-### Users Domain (`view_admin`)
+### Users Domain (`view_admin` / `manage_users`)
 
-| Tool | Permission | Mutates |
-|---|---|---|
-| `query_users` | `view_admin` | No |
-| `get_user_detail` | `view_admin` | No |
-| `get_user_activity` | `view_admin` | No |
-| `query_rate_limits` | `view_admin` | No |
-| `get_permission_summary` | `view_admin` | No |
+| Tool | Permission | Mutates | Description |
+|---|---|---|---|
+| `query_users` | `view_admin` | No | Search/filter users by name, email, status, permission |
+| `get_user_detail` | `view_admin` | No | Full user profile, permissions, group memberships |
+| `get_user_activity` | `view_admin` | No | Recent security events for a user |
+| `query_rate_limits` | `view_admin` | No | Currently active rate limit entries from Redis |
+| `get_permission_summary` | `view_admin` | No | User permissions breakdown (user-level + group-level) |
+| `update_user_permission` | `manage_users` | Yes | Add or remove a permission from a user |
+| `disable_user` | `manage_users` | Yes | Disable account + rotate auth_key (invalidates all sessions). Cannot disable yourself. |
+| `enable_user` | `manage_users` | Yes | Re-enable a disabled account |
+| `force_logout` | `manage_users` | Yes | Rotate auth_key to invalidate all sessions (account stays active) |
 
 ### Groups Domain (`view_groups`)
 
@@ -349,3 +368,4 @@ See [web_developer/assistant/README.md](../../web_developer/assistant/README.md#
 Test files:
 - `tests/test_assistant/1_test_permissions.py` — Registry, permission gate, feature flag, sensitive field exclusion
 - `tests/test_assistant/2_test_conversations.py` — Conversation CRUD, owner-only access, message ordering
+- `tests/test_assistant/4_test_security_tools.py` — Security tool handlers, IP management, rule management, bulk operations, user security actions

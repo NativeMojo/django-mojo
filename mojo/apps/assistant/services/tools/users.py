@@ -156,6 +156,92 @@ def _tool_get_permission_summary(params, user):
     return result
 
 
+def _tool_disable_user(params, user):
+    from mojo.apps.account.models import User
+    import uuid
+
+    user_id = params["user_id"]
+    if user_id == user.pk:
+        return {"error": "Cannot disable your own account"}
+
+    try:
+        target = User.objects.get(pk=user_id)
+    except User.DoesNotExist:
+        return {"error": f"User {user_id} not found"}
+
+    if not target.is_active:
+        return {"error": f"User {user_id} is already disabled"}
+
+    target.is_active = False
+    target.auth_key = uuid.uuid4().hex
+    target.save(update_fields=["is_active", "auth_key", "modified"])
+
+    reason = params.get("reason", "Disabled by admin assistant")
+    User.class_logit(None, f"[Admin Assistant] Disabled user {target.username}: {reason}",
+                     kind="security:user_disabled", model_id=target.pk, level="warn")
+
+    return {
+        "ok": True,
+        "user_id": target.pk,
+        "username": target.username,
+        "is_active": False,
+        "sessions_invalidated": True,
+    }
+
+
+def _tool_enable_user(params, user):
+    from mojo.apps.account.models import User
+
+    user_id = params["user_id"]
+    try:
+        target = User.objects.get(pk=user_id)
+    except User.DoesNotExist:
+        return {"error": f"User {user_id} not found"}
+
+    if target.is_active:
+        return {"error": f"User {user_id} is already active"}
+
+    target.is_active = True
+    target.save(update_fields=["is_active", "modified"])
+
+    reason = params.get("reason", "Enabled by admin assistant")
+    User.class_logit(None, f"[Admin Assistant] Enabled user {target.username}: {reason}",
+                     kind="security:user_enabled", model_id=target.pk, level="info")
+
+    return {
+        "ok": True,
+        "user_id": target.pk,
+        "username": target.username,
+        "is_active": True,
+    }
+
+
+def _tool_force_logout(params, user):
+    from mojo.apps.account.models import User
+    import uuid
+
+    user_id = params["user_id"]
+    try:
+        target = User.objects.get(pk=user_id)
+    except User.DoesNotExist:
+        return {"error": f"User {user_id} not found"}
+
+    target.auth_key = uuid.uuid4().hex
+    target.save(update_fields=["auth_key", "modified"])
+
+    reason = params.get("reason", "Force logout by admin assistant")
+    User.class_logit(None, f"[Admin Assistant] Force logout user {target.username}: {reason}",
+                     kind="security:force_logout", model_id=target.pk, level="warn")
+
+    return {
+        "ok": True,
+        "user_id": target.pk,
+        "username": target.username,
+        "sessions_invalidated": True,
+        "account_active": target.is_active,
+    }
+
+
 def _tool_update_user_permission(params, user):
     from mojo.apps.account.models import User
 
@@ -257,6 +343,51 @@ TOOLS = [
         },
         "handler": _tool_get_permission_summary,
         "permission": "view_admin",
+    },
+    {
+        "name": "disable_user",
+        "description": "Disable a user account and invalidate all active sessions. Cannot disable yourself. IMPORTANT: Confirm with the user before executing.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "user_id": {"type": "integer", "description": "The user ID to disable"},
+                "reason": {"type": "string", "description": "Reason for disabling the account"},
+            },
+            "required": ["user_id", "reason"],
+        },
+        "handler": _tool_disable_user,
+        "permission": "manage_users",
+        "mutates": True,
+    },
+    {
+        "name": "enable_user",
+        "description": "Re-enable a disabled user account. IMPORTANT: Confirm with the user before executing.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "user_id": {"type": "integer", "description": "The user ID to enable"},
+                "reason": {"type": "string", "description": "Reason for re-enabling the account"},
+            },
+            "required": ["user_id", "reason"],
+        },
+        "handler": _tool_enable_user,
+        "permission": "manage_users",
+        "mutates": True,
+    },
+    {
+        "name": "force_logout",
+        "description": "Invalidate all active sessions for a user by rotating their auth key. Account stays active — user can log back in. IMPORTANT: Confirm with the user before executing.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "user_id": {"type": "integer", "description": "The user ID to force logout"},
+                "reason": {"type": "string", "description": "Reason for force logout"},
+            },
+            "required": ["user_id", "reason"],
+        },
+        "handler": _tool_force_logout,
+        "permission": "manage_users",
+        "mutates": True,
     },
     {
         "name": "update_user_permission",
