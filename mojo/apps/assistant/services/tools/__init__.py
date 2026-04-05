@@ -12,6 +12,7 @@ from . import users
 from . import groups
 from . import metrics
 from . import discovery
+from . import web
 
 
 def _register_domain(domain_name, tool_list):
@@ -33,3 +34,4 @@ _register_domain("users", users.TOOLS)
 _register_domain("groups", groups.TOOLS)
 _register_domain("metrics", metrics.TOOLS)
 _register_domain("discovery", discovery.TOOLS)
+_register_domain("web", web.TOOLS)

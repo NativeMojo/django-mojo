@@ -36,6 +36,7 @@ dependencies = [
     "websocket-client>=1.9.0",
     "uvicorn[standard]>=0.42.0",
     "anthropic>=0.52.0",
+    "beautifulsoup4>=4.12.0,<5.0.0",
     "rich>=13.0.0"
 ]
 
