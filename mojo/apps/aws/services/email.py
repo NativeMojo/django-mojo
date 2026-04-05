@@ -245,8 +245,8 @@ def send_with_template(
    if not template_name:
        raise ValueError("template_name is required")
 
-   # Load and render template
-   tpl = EmailTemplate.objects.filter(name=template_name).first()
+   # Load and render template (auto-loads from seed if missing)
+   tpl = EmailTemplate.get_or_load_from_seed(template_name)
    if not tpl:
        raise ValueError(f"EmailTemplate not found: {template_name}")
    rendered = tpl.render_all(context or {})
