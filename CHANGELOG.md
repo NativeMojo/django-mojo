@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## v1.1.11 - April 05, 2026
+
+new AI Dream support
+
+
 ### Added
 - **Assistant persistent memory** — three-tier memory system (global, user, group) stored in Redis. Memories are injected into the system prompt at conversation start. New LLM tools: `read_memory`, `write_memory`, `delete_memory` (all require `assistant` permission). New REST endpoints: `GET/POST/DELETE /api/assistant/memory`. Nightly cleanup job with mechanical phase (orphan removal, size enforcement) and LLM-assisted dreaming phase (consolidation, deduplication). When global memory is empty, an onboarding prompt guides the LLM to ask the user about their platform.
 - **Assistant incident event reporting** — security-relevant assistant actions now emit incident events via `incident.report_event()`: permission denied (level 5-6), mutating tool execution (level 5), tool exceptions (level 6), agent crashes (level 7), API errors (level 5-7). Events flow through the rule engine for automated response.
