@@ -201,6 +201,63 @@ By default, log content is truncated at 500 characters. Pass `verbose: true` to 
 
 Discovery tools let the LLM explore the system. When a user asks "what metrics do we track?" or "what can you do?", the LLM calls these tools to find valid slugs, categories, channels, and permissions — rather than guessing.
 
+## Context Conversations
+
+Create a conversation pre-loaded with the full context of any MojoModel instance. The UI calls this to provide an "Open in Assistant" button from any detail view (tickets, incidents, or any other model).
+
+### Endpoint
+
+`POST /api/assistant/context` — requires `view_admin` + the model's own `VIEW_PERMS`.
+
+```json
+{"model": "incident.Ticket", "pk": 123}
+```
+
+Returns:
+```json
+{"status": true, "data": {"conversation_id": 789}}
+```
+
+### How It Works
+
+1. Resolves the model via `apps.get_model(app_label, ModelName)`
+2. Checks the user has at least one of the model's `VIEW_PERMS`
+3. Checks for duplicate: same user + same model + same pk returns the existing conversation (with `"existing": true`)
+4. Builds a context message — rich builders for Ticket and Incident, generic `to_dict()` fallback for everything else
+5. Creates a Conversation with `metadata: {"source_model": "incident.ticket", "source_pk": 123}`
+6. Stores the context as the first `user` message
+
+The admin then sends their first real message and the assistant responds with full tool access.
+
+### Rich Context Builders
+
+Ticket and Incident have custom builders that load related data:
+
+- **Ticket**: title, status, priority, description, assignee, linked incident, all notes (up to 20)
+- **Incident**: title, status, priority, source IP, hostname, details, LLM assessment, history (up to 15), recent events (up to 10), linked tickets
+
+### Generic Fallback
+
+Any MojoModel without a registered builder gets `to_dict(graph="detail")` serialization with sensitive fields stripped. This means the endpoint works for RuleSets, Jobs, Users, or any other model — the context is less rich but still useful.
+
+### Registering Custom Builders
+
+```python
+from mojo.apps.assistant.services.context import register_context_builder
+
+def build_order_context(instance):
+    title = f"Order #{instance.pk}: {instance.status}"
+    message = f"I need help with this order:\n\n## {title}\n..."
+    return title, message, None  # (title, message, error)
+
+register_context_builder("myapp.Order", build_order_context)
+```
+
+### Key Files
+
+- `mojo/apps/assistant/services/context.py` — context builder registry and rich builders
+- `mojo/apps/assistant/rest/assistant.py` — `on_assistant_context` endpoint
+
 ## Permission Enforcement
 
 Every tool call passes through a permission gate before execution. The gate checks `user.has_permission(tool_permission)` at call time, not at conversation start. This means:
@@ -214,16 +271,30 @@ Sensitive fields (`password`, `auth_key`, `onetime_code`) are never included in 
 
 ## Adding Custom Tools
 
-External projects can register tools by creating an `assistant_tools.py` file in any installed Django app. The assistant auto-discovers these on startup.
+There are two ways to register tools: the `@tool` decorator (preferred) and the `register_tool()` function.
 
-### Example: `myapp/assistant_tools.py`
+### The `@tool` Decorator (Preferred)
+
+The decorator registers the function as an assistant tool immediately on import. All built-in tools use this pattern.
 
 ```python
-from mojo.apps.assistant import register_tool
+from mojo.apps.assistant import tool
 
 
-def query_orders(params, user):
-    """Tool handler receives (params, user) and returns a dict or list."""
+@tool(
+    name="query_orders",
+    domain="orders",
+    permission="view_orders",
+    description="Query orders by status and date range. Returns up to 50 orders.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "status": {"type": "string", "description": "Filter by status"},
+            "limit": {"type": "integer", "description": "Max results", "default": 50},
+        },
+    },
+)
+def _tool_query_orders(params, user):
     from myapp.models import Order
 
     criteria = {}
@@ -244,18 +315,50 @@ def query_orders(params, user):
         }
         for o in orders
     ]
+```
 
+#### `@tool` Parameters
+
+| Parameter | Required | Description |
+|---|---|---|
+| `name` | Yes | Unique tool name. Raises `ValueError` if duplicate. |
+| `domain` | Yes | Logical grouping (e.g. `"security"`, `"jobs"`, `"orders"`) |
+| `permission` | Yes | Permission string checked via `user.has_permission()` |
+| `description` | Yes | Human-readable description shown to the LLM |
+| `input_schema` | Yes | JSON Schema dict for the tool's parameters |
+| `mutates` | No | Default `False`. If True, LLM is told to confirm before executing |
+
+#### Organizing Tools in Modules
+
+For external projects, create an `assistant_tools.py` file in any installed Django app. The assistant auto-discovers these on startup. Each `@tool`-decorated function in that module self-registers on import — no additional wiring needed.
+
+For apps with many tools, split into a `tools/` package with submodules per domain and import them from `__init__.py`:
+
+```
+myapp/
+  assistant_tools/
+    __init__.py      # from . import orders, shipping
+    orders.py        # @tool-decorated functions
+    shipping.py      # @tool-decorated functions
+```
+
+This is how the built-in security tools are organized — `mojo/apps/assistant/services/tools/security/` contains submodules for incidents, events, tickets, rules, and IPs.
+
+### `register_tool()` Function
+
+The imperative alternative — useful when tool configuration is dynamic or loaded from data.
+
+```python
+from mojo.apps.assistant import register_tool
+
+
+def query_orders(params, user):
+    ...
 
 register_tool(
     name="query_orders",
-    description="Query orders by status and date range. Returns up to 50 orders.",
-    input_schema={
-        "type": "object",
-        "properties": {
-            "status": {"type": "string", "description": "Filter by status"},
-            "limit": {"type": "integer", "description": "Max results", "default": 50},
-        },
-    },
+    description="Query orders by status and date range.",
+    input_schema={...},
     handler=query_orders,
     permission="view_orders",
     mutates=False,
@@ -263,7 +366,7 @@ register_tool(
 )
 ```
 
-### `register_tool()` Parameters
+#### `register_tool()` Parameters
 
 | Parameter | Required | Description |
 |---|---|---|
@@ -281,13 +384,14 @@ register_tool(
 - **Exclude secrets**: Never include passwords, auth keys, tokens, or other sensitive fields.
 - **Return simple types**: Return dicts and lists with JSON-serializable values. Dates as strings.
 - **Handle errors gracefully**: Return `{"error": "message"}` instead of raising exceptions.
-- **Accept `user` param**: Even if you don't need it now, the signature is `(params, user)`.
+- **Signature**: Always `(params, user)` — even if you don't use `user` today.
 
 ### Other Registry Functions
 
 ```python
 from mojo.apps.assistant import (
-    register_tool,       # Register a single tool
+    tool,                # @tool decorator (preferred)
+    register_tool,       # Register a single tool imperatively
     register_tools,      # Register multiple tools from a list of dicts
     get_registry,        # Get the full registry dict
     get_tools_for_user,  # Get Claude tool definitions filtered by user perms
@@ -447,3 +551,4 @@ Test files:
 - `tests/test_assistant/8_test_log_tools.py` — Logs domain tool: query_logs, time range, filter combinations, count-only mode, verbose mode, log truncation
 - `tests/test_assistant/9_test_ticket_tools.py` — Ticket management tools (get, update, add note)
 - `tests/test_assistant/10_test_file_tools.py` — File domain tools: query, metadata, image analysis
+- `tests/test_assistant/11_test_context.py` — Context conversations: ticket, incident, generic model, duplicate prevention, permission checks
