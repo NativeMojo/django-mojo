@@ -170,8 +170,8 @@ class Event(models.Model, MojoModel):
         if rule_set is None:
             rule_set = RuleSet.check_by_category("*", self)
 
-        # Honor action=ignore from RuleSet metadata
-        if rule_set and rule_set.handler == "ignore":
+        # Honor action=ignore from RuleSet metadata (accept both "ignore" and "ignore://")
+        if rule_set and rule_set.handler and rule_set.handler.strip().rstrip(":/") == "ignore":
             return
 
         # Read trigger config from model fields

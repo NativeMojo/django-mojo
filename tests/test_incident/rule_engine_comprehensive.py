@@ -1093,6 +1093,48 @@ def test_handler_ignore(opts):
 
 
 @th.django_unit_test()
+def test_handler_ignore_url_format(opts):
+    """Test that handler='ignore://' also prevents incident creation."""
+    from mojo.apps.incident.models import Event, RuleSet, Rule, Incident
+
+    # Clean up
+    RuleSet.objects.filter(category="ignore_url_test").delete()
+    Event.objects.filter(category="ignore_url_test").delete()
+    Incident.objects.filter(category="ignore_url_test").delete()
+
+    # Create ruleset with ignore:// handler (URL-scheme format)
+    ruleset = RuleSet.objects.create(
+        name="Ignore URL Test",
+        category="ignore_url_test",
+        priority=1,
+        match_by=0,
+        handler="ignore://"
+    )
+
+    Rule.objects.create(
+        parent=ruleset,
+        field_name="category",
+        comparator="==",
+        value="ignore_url_test",
+        value_type="str"
+    )
+
+    # Create event
+    event = Event.objects.create(
+        category="ignore_url_test",
+        level=5,
+        title="Ignored event (URL format)"
+    )
+    event.sync_metadata()
+    event.publish()
+
+    # Should not create incident
+    incidents = Incident.objects.filter(category="ignore_url_test")
+    assert incidents.count() == 0, \
+        f"Expected 0 incidents with ignore:// handler, got {incidents.count()}"
+
+
+@th.django_unit_test()
 def test_handler_task_execution(opts):
     """Test that task handler is called."""
     from mojo.apps.incident.models import Event, RuleSet, Rule, Incident
