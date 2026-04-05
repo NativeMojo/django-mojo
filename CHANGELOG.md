@@ -1,9 +1,18 @@
 ## v1.1.0 - (current)
 
+## v1.1.12 - April 05, 2026
+
+bugfix in how ipsets are handled
+
+
 ## v1.1.11 - April 05, 2026
 
-new AI Dream support
+new AI Dream support, firewall sync performance fix
 
+
+### Changed
+- **`sync_firewall` skips unchanged IPSets** — each enabled `IPSet` is now compared against a Redis-stored last-sync timestamp (`mojo:sync_firewall:last_sync`). Sets whose `modified` time is not newer than the last sync are skipped entirely. Permanent blocks (`mojo_blocked`) are similarly skipped if no `GeoLocatedIP` record has changed since the last sync. First run after deploy or reboot loads everything as before.
+- **`ipset_load()` uses `ipset restore` with atomic swap** — bulk CIDR loading now pipes all entries to `sudo ipset restore` in a single subprocess call instead of spawning one process per CIDR. CIDRs are loaded into a `<name>_tmp` set and atomically swapped with the live set, so the live set is never empty during a reload. This reduces a 30-minute hourly sync (thousands of CIDRs) to under 30 seconds.
 
 ### Added
 - **Assistant persistent memory** — three-tier memory system (global, user, group) stored in Redis. Memories are injected into the system prompt at conversation start. New LLM tools: `read_memory`, `write_memory`, `delete_memory` (all require `assistant` permission). New REST endpoints: `GET/POST/DELETE /api/assistant/memory`. Nightly cleanup job with mechanical phase (orphan removal, size enforcement) and LLM-assisted dreaming phase (consolidation, deduplication). When global memory is empty, an onboarding prompt guides the LLM to ask the user about their platform.

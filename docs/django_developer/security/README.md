@@ -587,6 +587,20 @@ ipset = IPSet.objects.create(
 
 The `refresh_ipsets` cron fetches CIDRs from source URLs weekly and syncs to all servers.
 
+### Firewall Reconciliation (`sync_firewall`)
+
+`sync_firewall` runs hourly and is also the startup recovery path — it restores all ipsets after a server reboot (iptables/ipset state is lost on restart).
+
+**Performance:** `ipset_load()` uses `ipset restore` with an atomic swap instead of per-CIDR subprocess calls. All CIDRs are batched into a single stdin pipe to `sudo ipset restore`, regardless of set size. The live set is never empty during the swap — entries are loaded into a `<name>_tmp` set, which is then swapped with the live set and destroyed.
+
+**Skip-unchanged behavior:** To stay lightweight on subsequent runs, `sync_firewall` skips IPSets and permanent blocks that have not changed since the last sync:
+
+- For `mojo_blocked` (permanent IPs): checks whether any `GeoLocatedIP` with `is_blocked=True` has `modified > last_sync`. The last sync time is stored in Redis under `mojo:sync_firewall:last_sync`.
+- For each enabled `IPSet`: compares `ipset.modified` against the stored `last_sync` timestamp. Unchanged sets are skipped with a log message.
+- On first run (no Redis timestamp), everything is loaded — same as a full rebuild but now in one batch call per set.
+
+**Logging:** The job logs each loaded set (count/total CIDRs), skipped sets, and records the new sync timestamp in Redis on completion.
+
 ### Firewall Requirements
 
 - Runs on Linux with iptables/ipset installed
@@ -694,7 +708,8 @@ Default health rules are auto-created on first health check run. They send notif
 | Job | Schedule | What it does |
 |-----|----------|--------------|
 | `prune_events` | Daily 9:45 AM | Deletes events older than `INCIDENT_EVENT_PRUNE_DAYS` days with level < 6 |
-| `sweep_expired_blocks` | Every minute | Unblocks IPs where `blocked_until` has passed |
+| `sweep_expired_blocks` | Every 5 minutes | Unblocks IPs where `blocked_until` has passed |
+| `sync_firewall` | Hourly | Restores all ipsets from DB truth; skips unchanged sets; startup recovery after reboot |
 | `refresh_ipsets` | Weekly (Sunday 3 AM) | Re-fetches IPSet source URLs and syncs CIDRs to fleet |
 | `check_system_health` | Every 3 minutes | Checks runner health, system metrics (if `HEALTH_MONITORING_ENABLED`) |
 
