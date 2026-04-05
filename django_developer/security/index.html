@@ -4181,6 +4181,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#firewall-reconciliation-sync_firewall" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Firewall Reconciliation (sync_firewall)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#firewall-requirements" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -5509,6 +5520,16 @@
 <a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a><span class="p">)</span>
 </code></pre></div>
 <p>The <code>refresh_ipsets</code> cron fetches CIDRs from source URLs weekly and syncs to all servers.</p>
+<h3 id="firewall-reconciliation-sync_firewall">Firewall Reconciliation (<code>sync_firewall</code>)<a class="headerlink" href="#firewall-reconciliation-sync_firewall" title="Permanent link">&para;</a></h3>
+<p><code>sync_firewall</code> runs hourly and is also the startup recovery path — it restores all ipsets after a server reboot (iptables/ipset state is lost on restart).</p>
+<p><strong>Performance:</strong> <code>ipset_load()</code> uses <code>ipset restore</code> with an atomic swap instead of per-CIDR subprocess calls. All CIDRs are batched into a single stdin pipe to <code>sudo ipset restore</code>, regardless of set size. The live set is never empty during the swap — entries are loaded into a <code>&lt;name&gt;_tmp</code> set, which is then swapped with the live set and destroyed.</p>
+<p><strong>Skip-unchanged behavior:</strong> To stay lightweight on subsequent runs, <code>sync_firewall</code> skips IPSets and permanent blocks that have not changed since the last sync:</p>
+<ul>
+<li>For <code>mojo_blocked</code> (permanent IPs): checks whether any <code>GeoLocatedIP</code> with <code>is_blocked=True</code> has <code>modified &gt; last_sync</code>. The last sync time is stored in Redis under <code>mojo:sync_firewall:last_sync</code>.</li>
+<li>For each enabled <code>IPSet</code>: compares <code>ipset.modified</code> against the stored <code>last_sync</code> timestamp. Unchanged sets are skipped with a log message.</li>
+<li>On first run (no Redis timestamp), everything is loaded — same as a full rebuild but now in one batch call per set.</li>
+</ul>
+<p><strong>Logging:</strong> The job logs each loaded set (count/total CIDRs), skipped sets, and records the new sync timestamp in Redis on completion.</p>
 <h3 id="firewall-requirements">Firewall Requirements<a class="headerlink" href="#firewall-requirements" title="Permanent link">&para;</a></h3>
 <ul>
 <li>Runs on Linux with iptables/ipset installed</li>
@@ -5704,8 +5725,13 @@
 </tr>
 <tr>
 <td><code>sweep_expired_blocks</code></td>
-<td>Every minute</td>
+<td>Every 5 minutes</td>
 <td>Unblocks IPs where <code>blocked_until</code> has passed</td>
+</tr>
+<tr>
+<td><code>sync_firewall</code></td>
+<td>Hourly</td>
+<td>Restores all ipsets from DB truth; skips unchanged sets; startup recovery after reboot</td>
 </tr>
 <tr>
 <td><code>refresh_ipsets</code></td>
