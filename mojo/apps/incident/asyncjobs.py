@@ -127,35 +127,69 @@ def broadcast_ipset_del_blocked(data):
         logit.info("broadcast_ipset_del_blocked: removed %s from %s", ip, FIREWALL_BLOCKED_IPSET_NAME)
 
 
+SYNC_FIREWALL_REDIS_KEY = "mojo:sync_firewall:last_sync"
+
+
 def sync_firewall(job):
     """
-    Hourly reconciliation job: rebuilds all ipsets from DB truth.
+    Hourly reconciliation job: restores ipsets from DB truth.
     Doubles as startup recovery — first run after restart restores all blocks.
 
-    1. Load all permanently blocked IPs into the mojo_blocked ipset
-    2. Load all enabled IPSet records (country, abuse, etc.)
+    Skips ipsets that haven't changed since the last sync to stay lightweight.
+    Uses ipset restore (batch stdin) for fast bulk loading.
+
+    1. Load permanently blocked IPs into mojo_blocked (if changed)
+    2. Load enabled IPSet records that have been modified since last sync
     """
     from mojo.apps.incident import firewall
     from mojo.apps.account.models import GeoLocatedIP
     from mojo.apps.incident.models import IPSet
+    from mojo.apps.jobs.adapters import get_adapter
+    from mojo.helpers import dates
 
-    # Permanent blocks → mojo_blocked ipset
-    permanent_ips = list(
-        GeoLocatedIP.objects.filter(
-            is_blocked=True,
-            blocked_until__isnull=True,
-        ).values_list("ip_address", flat=True)
+    redis_client = get_adapter()
+    now = dates.utcnow()
+
+    # Check when we last synced permanent blocks
+    last_sync_raw = redis_client.get(SYNC_FIREWALL_REDIS_KEY)
+    last_sync = None
+    if last_sync_raw:
+        try:
+            last_sync = dates.parse(last_sync_raw)
+        except Exception:
+            pass
+
+    # Permanent blocks → mojo_blocked ipset (only if changed since last sync)
+    perm_query = GeoLocatedIP.objects.filter(
+        is_blocked=True,
+        blocked_until__isnull=True,
     )
-    ok, loaded = firewall.ipset_load(FIREWALL_BLOCKED_IPSET_NAME, permanent_ips)
-    job.add_log(f"sync_firewall: loaded {loaded}/{len(permanent_ips)} permanent blocks into {FIREWALL_BLOCKED_IPSET_NAME}")
+    if last_sync and not perm_query.filter(modified__gt=last_sync).exists():
+        job.add_log(f"sync_firewall: {FIREWALL_BLOCKED_IPSET_NAME} unchanged, skipped")
+    else:
+        permanent_ips = list(perm_query.values_list("ip_address", flat=True))
+        ok, loaded = firewall.ipset_load(FIREWALL_BLOCKED_IPSET_NAME, permanent_ips)
+        job.add_log(f"sync_firewall: loaded {loaded}/{len(permanent_ips)} permanent blocks into {FIREWALL_BLOCKED_IPSET_NAME}")
 
-    # Enabled IPSets (country, abuse, datacenter, custom)
+    # Enabled IPSets — skip those unchanged since last sync
     ipsets = IPSet.objects.filter(is_enabled=True)
+    synced = 0
+    skipped = 0
     for ipset in ipsets:
+        if last_sync and ipset.last_synced and ipset.modified <= last_sync:
+            skipped += 1
+            continue
         cidrs = ipset.cidrs
         ok, count = firewall.ipset_load(ipset.name, cidrs)
         if ok:
+            synced += 1
             job.add_log(f"sync_firewall: loaded {count}/{len(cidrs)} CIDRs into {ipset.name}")
+
+    if skipped:
+        job.add_log(f"sync_firewall: skipped {skipped} unchanged IPSets")
+
+    # Record sync time for next run
+    redis_client.set(SYNC_FIREWALL_REDIS_KEY, now.isoformat())
 
 
 def sweep_expired_blocks(job):

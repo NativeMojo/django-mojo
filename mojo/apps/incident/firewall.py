@@ -77,6 +77,24 @@ def _run(args, timeout=10):
         return False, "", str(e)
 
 
+def _run_stdin(args, stdin_data, timeout=30):
+    """Run a command via sudo with data piped to stdin. Returns (success, stdout, stderr)."""
+    if not _check_user():
+        return False, "", "wrong user"
+    try:
+        result = subprocess.run(
+            [SUDO] + args,
+            input=stdin_data, capture_output=True, text=True, timeout=timeout,
+        )
+        return result.returncode == 0, result.stdout, result.stderr
+    except subprocess.TimeoutExpired:
+        logit.error(f"Command timed out (stdin): {args}")
+        return False, "", "timeout"
+    except Exception as e:
+        logit.error(f"Command failed (stdin): {args} — {e}")
+        return False, "", str(e)
+
+
 # ---------------------------------------------------------------------------
 # Single IP blocking (iptables)
 # ---------------------------------------------------------------------------
@@ -191,15 +209,35 @@ def ipset_del(name, ip):
     return True
 
 
+def _build_restore_script(name, cidrs):
+    """Build an ipset restore script for atomic swap.
+
+    Validates each CIDR, loads into a temp set, then swaps with the live set.
+    Returns (script_string, valid_count).
+    """
+    tmp_name = f"{name}_tmp"
+    lines = [
+        f"create {tmp_name} hash:net -exist",
+        f"flush {tmp_name}",
+    ]
+    valid_count = 0
+    for cidr in cidrs:
+        cidr = _validate_ip(cidr)
+        if not cidr:
+            continue
+        lines.append(f"add {tmp_name} {cidr}")
+        valid_count += 1
+    lines.append(f"swap {name} {tmp_name}")
+    lines.append(f"destroy {tmp_name}")
+    return "\n".join(lines) + "\n", valid_count
+
+
 def ipset_load(name, cidrs):
     """
     Create/replace an ipset with the given CIDRs and attach an iptables rule.
 
-    This is the main entry point for bulk blocking. It:
-    1. Creates the ipset if it doesn't exist
-    2. Flushes any existing entries
-    3. Loads all CIDRs
-    4. Ensures an iptables DROP rule exists for the set
+    Uses `ipset restore` with atomic swap for bulk loading — one subprocess
+    call regardless of CIDR count. The live set is never empty during the swap.
 
     Returns (success, loaded_count).
     """
@@ -207,24 +245,18 @@ def ipset_load(name, cidrs):
     if not name:
         return False, 0
 
-    # Create the set (hash:net for CIDR support, -exist to skip if exists)
+    # Ensure the live set exists before we can swap into it
     ok, _, stderr = _run([IPSET, "create", name, "hash:net", "-exist"])
     if not ok:
         logit.error(f"ipset create failed for {name}: {stderr}")
         return False, 0
 
-    # Flush existing entries
-    _run([IPSET, "flush", name])
-
-    # Load CIDRs
-    loaded = 0
-    for cidr in cidrs:
-        cidr = _validate_ip(cidr)
-        if not cidr:
-            continue
-        ok, _, _ = _run([IPSET, "add", name, cidr, "-exist"])
-        if ok:
-            loaded += 1
+    # Build and execute the restore script (atomic swap via temp set)
+    script, loaded = _build_restore_script(name, cidrs)
+    ok, _, stderr = _run_stdin([IPSET, "restore"], script)
+    if not ok:
+        logit.error(f"ipset restore failed for {name}: {stderr}")
+        return False, 0
 
     # Ensure iptables rule exists for this set (check first to avoid duplicates)
     ok, stdout, _ = _run([IPTABLES_SAVE])
