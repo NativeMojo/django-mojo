@@ -77,6 +77,7 @@ group.metadata = {
         "stripe_account_id": "acct_123",  # requires manage_groups
         "webhook_secret": "whsec_abc",    # requires manage_groups
         "plan": "enterprise",
+        "no_disable": True,               # exempt from auto-disable sweep
     }
 }
 ```
@@ -86,6 +87,25 @@ group.metadata = {
 When `LOG_META_CHANGES = True`, all root-level key changes across the entire `metadata` field are also logged with `kind="meta:changed"`.
 
 See [MojoModel — Protected JSON Fields](../core/mojo_model.md#protected-json-fields) for full framework details.
+
+### Python Helpers for Protected Metadata
+
+`Group` provides helpers to read and write individual keys within `metadata["protected"]` without loading and re-saving the whole metadata dict:
+
+```python
+# Read a single key from metadata["protected"]
+plan = group.get_protected_metadata("plan", default=None)
+exempted = group.get_protected_metadata("no_disable", default=False)
+
+# Write a single key (saves immediately via update_fields=["metadata", "modified"])
+group.set_protected_metadata("plan", "enterprise")
+group.set_protected_metadata("no_disable", True)   # exempt from auto-disable sweep
+
+# Delete a key by setting it to None
+group.set_protected_metadata("disable_warned", None)
+```
+
+`set_protected_metadata` always persists immediately. It does not bypass the REST write-protection — that gate applies only to REST requests. Direct Python calls are unrestricted.
 
 ## Membership
 

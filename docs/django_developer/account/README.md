@@ -9,3 +9,4 @@
 - [Notifications](notifications.md) — User inbox, WebSocket + push delivery, expiry
 - [GeoIP](geoip.md) — IP geolocation, threat intelligence, time lookup
 - [Login Events](login_events.md) — UserLoginEvent model, geo tracking, anomaly flags, metrics
+- [Inactive User/Group Sweep](inactive_sweep.md) — Auto-warn and disable inactive users and groups; feature flags, exemptions, email templates, incident events

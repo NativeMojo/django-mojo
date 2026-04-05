@@ -40,6 +40,9 @@ Add `"mojo.apps.assistant"` to `INSTALLED_APPS` and run migrations.
 | `LLM_ADMIN_MAX_TURNS` | `25` | Max tool-calling turns per request |
 | `LLM_ADMIN_MAX_HISTORY` | `50` | Max messages loaded as conversation context |
 | `LLM_ADMIN_SYSTEM_PROMPT` | (built-in) | Override the default system prompt |
+| `LLM_BROWSE_MAX_LENGTH` | `20000` | Max character length of content returned by `browse_url` and `read_docs` |
+| `LLM_BROWSE_TIMEOUT` | `10` | HTTP request timeout in seconds for `browse_url` |
+| `LLM_DOCS_BASE_URL` | `https://raw.githubusercontent.com/NativeMojo/django-mojo/refs/heads/main/docs/` | Base URL for fetching framework docs via `read_docs` |
 
 ## Built-in Tools
 
@@ -115,6 +118,75 @@ Add `"mojo.apps.assistant"` to `INSTALLED_APPS` and run migrations.
 | `fetch_metrics` | `view_admin` | No |
 | `get_system_health` | `view_admin` | No |
 | `get_incident_trends` | `view_security` | No |
+
+### Web Domain (`view_admin`)
+
+| Tool | Permission | Mutates | Description |
+|---|---|---|---|
+| `browse_url` | `view_admin` | No | Fetch a web page and return clean readable text. Supports an optional CSS selector to narrow content to a specific element. Only `http`/`https` URLs are allowed; private/internal IPs are blocked (SSRF protection). Content is truncated to `LLM_BROWSE_MAX_LENGTH` chars. |
+
+### Docs Domain (`view_admin`)
+
+| Tool | Permission | Mutates | Description |
+|---|---|---|---|
+| `read_docs` | `view_admin` | No | Fetch django-mojo framework documentation by path or topic keyword search. Use `path` for a specific doc (e.g. `django_developer/account/push.md`) or `topic` for keyword search (e.g. `push notifications`, `rate limiting`). Returns raw markdown content. Falls back to the index when no topic match is found. |
+
+### Models Domain (`view_admin`)
+
+| Tool | Permission | Mutates | Description |
+|---|---|---|---|
+| `describe_model` | `view_admin` | No | Describe a MojoModel's fields, graphs, permissions, and search fields. Use this to discover what data is available before querying. Requires `app_name` and `model_name`. Sensitive fields (`password`, `auth_key`, `onetime_code`, `secret`, `token_secret`) are excluded from output. Only works on MojoModels with a `RestMeta` definition and without `NO_REST = True`. |
+| `query_model` | `view_admin` | No | Query any MojoModel with filters, search, ordering, and output format options. Respects the model's `RestMeta` permissions and owner/group filtering — the same rules as the REST API. Supports JSON and CSV output, count-only mode, and configurable limits (default 50, max 200). Sensitive fields are blocked as filter keys. |
+
+`query_model` parameters:
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `app_name` | string | required | Django app label (e.g. `account`, `incident`, `jobs`) |
+| `model_name` | string | required | Model class name (e.g. `User`, `Incident`, `Job`) |
+| `filters` | object | `{}` | ORM filter dict (e.g. `{"status": "active", "created__gte": "2026-01-01"}`) |
+| `search` | string | — | Free-text search using the model's `SEARCH_FIELDS` |
+| `ordering` | string | `-pk` | Order by field, prefix with `-` for descending (e.g. `-created`) |
+| `limit` | integer | `50` | Max results to return (max 200) |
+| `graph` | string | `default` | Serialization graph name |
+| `format` | string | `json` | Output format: `json` or `csv` |
+| `count_only` | boolean | `false` | If true, return only the total count with no row data |
+
+The tool enforces the same permission and owner/group scoping as the REST layer via `rest_check_permission` and `_apply_owner_group_filter`. Attempts to filter on sensitive fields are blocked and reported as security events.
+
+### Logs Domain (`view_logs`)
+
+| Tool | Permission | Mutates | Description |
+|---|---|---|---|
+| `query_logs` | `view_logs` | No | Query the `logit.Log` audit trail. Every HTTP request/response, model change, API error, and custom event is recorded here. Filter by time range, level, kind, model_name, model_id, uid, IP, path, method, or free-text search. |
+
+`query_logs` parameters:
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `minutes` | integer | `60` | Look back N minutes (max 10080 = 7 days) |
+| `level` | string | — | Filter by log level: `info`, `warn`, `error`, `debug` |
+| `kind` | string | — | Filter by log kind (e.g. `request`, `response`, `api_error`, `model:created`, `model:changed`) |
+| `model_name` | string | — | Filter by target model (e.g. `account.User`, `incident.Incident`) |
+| `model_id` | integer | — | Filter by target model instance ID |
+| `uid` | integer | — | Filter by user ID who triggered the event |
+| `ip` | string | — | Filter by client IP address |
+| `path` | string | — | Filter by request path (substring match) |
+| `method` | string | — | Filter by HTTP method (GET, POST, etc.) |
+| `search` | string | — | Free-text search in log content |
+| `limit` | integer | `50` | Max results to return (max 200) |
+| `count_only` | boolean | `false` | If true, return only the count with no row data |
+| `verbose` | boolean | `false` | If true, include full log content, payload, and user_agent |
+
+By default, log content is truncated at 500 characters. Pass `verbose: true` to get the full `log`, `payload`, and `user_agent` fields.
+
+### Files Domain (`view_fileman`)
+
+| Tool | Permission | Mutates | Description |
+|---|---|---|---|
+| `query_files` | `view_fileman` | No | List/search uploaded files by category, content type, filename, or group |
+| `get_file` | `view_fileman` | No | Detailed metadata for a single file |
+| `analyze_image` | `view_fileman` | No | Send an image file to Claude vision for analysis (content description, OCR, error messages, etc.) |
 
 ### Discovery Domain (`view_admin` / `view_security` / `view_jobs`)
 
@@ -369,3 +441,9 @@ Test files:
 - `tests/test_assistant/1_test_permissions.py` — Registry, permission gate, feature flag, sensitive field exclusion
 - `tests/test_assistant/2_test_conversations.py` — Conversation CRUD, owner-only access, message ordering
 - `tests/test_assistant/4_test_security_tools.py` — Security tool handlers, IP management, rule management, bulk operations, user security actions
+- `tests/test_assistant/5_test_web_tools.py` — Web domain tool: URL fetching, SSRF protection, CSS selector filtering, error handling
+- `tests/test_assistant/6_test_docs_tools.py` — Docs domain tool: path fetch, topic lookup, unknown topic fallback, truncation, path traversal rejection, registration
+- `tests/test_assistant/7_test_model_tools.py` — Models domain tools: describe_model, query_model, permission enforcement, owner/group filtering, sensitive field blocking, count-only mode, CSV export
+- `tests/test_assistant/8_test_log_tools.py` — Logs domain tool: query_logs, time range, filter combinations, count-only mode, verbose mode, log truncation
+- `tests/test_assistant/9_test_ticket_tools.py` — Ticket management tools (get, update, add note)
+- `tests/test_assistant/10_test_file_tools.py` — File domain tools: query, metadata, image analysis

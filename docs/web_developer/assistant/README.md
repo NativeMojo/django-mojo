@@ -93,6 +93,12 @@ The `blocks` array is only present when the LLM includes structured data. See [S
 "How many open incidents are there by category?"
 "What permissions does user john@example.com have?"
 "Block IP 1.2.3.4 for brute force attacks"
+"Fetch https://example.com/docs/api and summarize the authentication section"
+"Show me all active users created in the last 7 days"
+"How many incidents are in 'open' status?"
+"Export the last 50 jobs to CSV"
+"Show me all errors in the last hour"
+"What did user 42 do today?"
 ```
 
 ---
@@ -255,12 +261,144 @@ The assistant checks the user's permissions before executing each tool. The tool
 | `manage_security` | All `view_security` tools + update incident, block IP, create ticket |
 | `view_jobs` | Query jobs, job events, job logs, job stats, queue health, list job channels |
 | `manage_jobs` | All `view_jobs` tools + cancel job, retry job |
-| `view_admin` | Query users, user detail, user activity, rate limits, permission summary, fetch metrics, system health, list tools, list metric categories/slugs, list permissions |
+| `view_admin` | Query users, user detail, user activity, rate limits, permission summary, fetch metrics, system health, list tools, list metric categories/slugs, list permissions, browse web URLs, describe and query any MojoModel |
 | `view_groups` | Query groups, group detail, group members, group activity |
+| `view_logs` | Query the audit log trail (logit.Log) — request history, model changes, API errors, custom events |
 
 Users without any of these permissions will receive: `"You don't have permissions for any assistant tools."`
 
 If the LLM tries to call a tool the user doesn't have permission for, the tool returns a permission error to the LLM (not to the client), and the LLM explains what permission is needed.
+
+## Models Domain
+
+Users with `view_admin` can ask the assistant to introspect and query any MojoModel directly. Two tools support this:
+
+### `describe_model`
+
+Returns a model's fields, available graphs, permissions, and search fields. Useful for discovery before querying.
+
+**Required permission**: `view_admin`
+
+Sensitive fields (`password`, `auth_key`, `onetime_code`, `secret`, `token_secret`) are never included in the output. Only models with a `RestMeta` definition are available.
+
+**Example response shape**:
+
+```json
+{
+    "model": "account.User",
+    "fields": [
+        {"name": "id", "type": "integer", "nullable": false},
+        {"name": "email", "type": "email", "nullable": false},
+        {"name": "is_active", "type": "boolean", "nullable": false}
+    ],
+    "graphs": {
+        "default": ["id", "email", "username", "is_active", "created"],
+        "detail": ["id", "email", "username", "first_name", "last_name", "is_active", "created"]
+    },
+    "permissions": {
+        "view": ["view_admin"],
+        "save": ["manage_users"]
+    },
+    "search_fields": ["email", "username", "first_name", "last_name"]
+}
+```
+
+### `query_model`
+
+Query a MojoModel with filters, search, ordering, and format options. Respects the same `RestMeta` permissions and owner/group scoping as the REST API — a user can only see records they are normally allowed to see.
+
+**Required permission**: `view_admin` plus any permissions the model's `RestMeta` `VIEW_PERMS` requires.
+
+**Supports**:
+- ORM filter expressions (e.g. `{"status": "active", "created__gte": "2026-01-01"}`)
+- Free-text search via the model's `SEARCH_FIELDS`
+- Ordering (prefix field with `-` for descending)
+- JSON output (default) or CSV export
+- Count-only mode — returns total without row data
+- Configurable limit (default 50, max 200)
+
+Filtering on sensitive fields is blocked and logged as a security event.
+
+**Example response shape (JSON)**:
+
+```json
+{
+    "model": "incident.Incident",
+    "results": [
+        {"id": 1, "status": "open", "priority": 10, "category": "brute_force", "created": "2026-04-01T10:00:00Z"}
+    ],
+    "count": 1,
+    "total": 47
+}
+```
+
+**Example response shape (count only)**:
+
+```json
+{
+    "model": "incident.Incident",
+    "count": 47
+}
+```
+
+## Logs Domain
+
+Users with `view_logs` can ask the assistant to search and analyze the audit log trail. Every HTTP request/response, model change, API error, and custom event is recorded in `logit.Log`.
+
+### `query_logs`
+
+**Required permission**: `view_logs`
+
+Query the audit trail with filters. Always time-bounded — defaults to the last 60 minutes, maximum 7 days.
+
+**Filters available**: time range, log level, kind, model name/ID, user ID, IP address, request path, HTTP method, and free-text search in log content.
+
+**Example queries**:
+
+```
+"Show me all errors in the last hour"
+"What did user 42 do today?"
+"Were there any failed login attempts from 1.2.3.4?"
+"Show me every change made to incident 99"
+"How many API errors occurred in the last 24 hours?"
+```
+
+**Example response shape**:
+
+```json
+{
+    "results": [
+        {
+            "id": 12345,
+            "created": "2026-04-05 14:23:11+00:00",
+            "level": "error",
+            "kind": "api_error",
+            "method": "POST",
+            "path": "/api/account/login",
+            "ip": "1.2.3.4",
+            "uid": null,
+            "username": null,
+            "model_name": null,
+            "model_id": null,
+            "log": "Invalid credentials"
+        }
+    ],
+    "count": 1,
+    "total": 47,
+    "period_minutes": 60
+}
+```
+
+In verbose mode (`verbose: true`), each result also includes `log` (full content, not truncated), `payload`, and `user_agent`. By default, log content is truncated at 500 characters and `log_truncated: true` is added to indicate trimming occurred.
+
+**Count-only mode** returns just the total:
+
+```json
+{
+    "count": 47,
+    "period_minutes": 60
+}
+```
 
 ## Multi-turn Conversations
 

@@ -1,5 +1,12 @@
 ## v1.1.0 - (current)
 
+### Added
+- **Email template seed auto-load** — `EmailTemplate.get_or_load_from_seed(name)` checks the DB first; on a miss it auto-loads from `mojo/apps/aws/seeds/email_templates/{name}.json` and creates the record. Used by `send_template_email()` and `User.send_template_email()`. Add a seed JSON file and no manual DB setup is needed.
+- **Auto-disable inactive users and groups** — opt-in nightly sweep (`inactive_sweep`) warns entities 7 days before the threshold and disables them after 90 days of inactivity. Controlled by `ACCOUNT_AUTO_DISABLE_ENABLED` / `GROUP_AUTO_DISABLE_ENABLED`. Superusers, staff, and entities with `metadata["protected"]["no_disable"] = True` are exempt. Warning and disable actions emit incident events.
+- **`Group.get_protected_metadata()` / `Group.set_protected_metadata()`** — single-key helpers for `metadata["protected"]`, matching the same API already on `User`.
+- **Assistant `query_logs` tool** — new Logs domain tool that queries the `logit.Log` audit trail. Filterable by time range, level, kind, model, user, IP, path, method, and free-text. Requires `view_logs` permission.
+- **`account_inactive_warning` and `group_inactive_warning` email seed templates** — ship with default HTML/text content and auto-load on first send.
+
 ## v1.1.10 - April 03, 2026
 
 ipset blocking now in place

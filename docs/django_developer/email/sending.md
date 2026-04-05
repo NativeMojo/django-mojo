@@ -215,9 +215,54 @@ jobs.enqueue("mojo.apps.aws.send_email", kwargs={
 
 ---
 
+## EmailTemplate Seed Auto-Load
+
+`EmailTemplate.get_or_load_from_seed(name)` looks up a template by name. If no database record exists, it tries to auto-load from a JSON file at:
+
+```
+mojo/apps/aws/seeds/email_templates/{name}.json
+```
+
+If the seed file exists, the template is created in the database and returned. If neither exists, `None` is returned.
+
+This is the lookup used by `send_template_email()` and `User.send_template_email()` — no code change is needed to take advantage of it.
+
+### Seed File Format
+
+```json
+{
+  "name": "my_template",
+  "subject_template": "Hello {{ display_name }}",
+  "text_template": "Plain text body with {{ variable }}.",
+  "html_template": "<!doctype html>...",
+  "metadata": {
+    "description": "Human-readable description",
+    "context_keys": ["display_name", "variable"]
+  }
+}
+```
+
+All fields except `name` are optional. Place the file in `mojo/apps/aws/seeds/email_templates/` and the framework auto-creates the DB record on the first send.
+
+### Use in Application Code
+
+```python
+# Direct lookup — returns EmailTemplate or None
+tpl = EmailTemplate.get_or_load_from_seed("my_template")
+
+# send_template_email already uses it — just reference the name
+aws.send_template_email(
+    to="alice@example.com",
+    template_name="my_template",
+    context={"display_name": "Alice"}
+)
+```
+
+---
+
 ## Built-in Templates
 
-These template names are used by the framework. Create matching `EmailTemplate` records with your desired content.
+These template names are used by the framework. Create matching `EmailTemplate` records or seed files with your desired content.
 
 | Template Name | Used By | Key Context Variables |
 |---|---|---|
@@ -227,6 +272,8 @@ These template names are used by the framework. Create matching `EmailTemplate` 
 | `password_reset_link` | Forgot password (link flow) | `token`, `display_name` |
 | `magic_login_link` | Magic login | `token`, `display_name` |
 | `email_verify` | Email verification | `token`, `display_name` |
+| `account_inactive_warning` | Auto-disable sweep (users) | `days_until_disable`, `inactive_days` |
+| `group_inactive_warning` | Auto-disable sweep (groups) | `group_name`, `group_id`, `days_until_disable`, `inactive_days` |
 
 ---
 
