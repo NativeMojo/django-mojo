@@ -55,8 +55,43 @@ def register_tool(name, description, input_schema, handler,
 
 def register_tools(tools):
     """Register multiple tools at once from a list of dicts."""
-    for tool in tools:
-        register_tool(**tool)
+    for t in tools:
+        register_tool(**t)
+
+
+def tool(name, domain, permission, input_schema, description, mutates=False):
+    """
+    Decorator that registers a function as an assistant tool.
+
+    Usage::
+
+        from mojo.apps.assistant import tool
+
+        @tool(
+            name="query_orders",
+            domain="orders",
+            permission="view_orders",
+            description="Query orders by status and date range",
+            input_schema={"type": "object", "properties": {...}},
+        )
+        def _tool_query_orders(params, user):
+            ...
+
+    The decorated function is registered immediately on import.
+    External apps can use this in any module that gets imported at startup.
+    """
+    def decorator(func):
+        register_tool(
+            name=name,
+            description=description,
+            input_schema=input_schema,
+            handler=func,
+            permission=permission,
+            mutates=mutates,
+            domain=domain,
+        )
+        return func
+    return decorator
 
 
 def get_registry():

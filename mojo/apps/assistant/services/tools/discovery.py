@@ -4,10 +4,23 @@ Discovery tools — let the LLM (and users) explore what's available.
 These tools answer questions like "what can you do?", "what metrics exist?",
 "what job channels are configured?", and "what event categories are there?".
 """
+from mojo.apps.assistant import tool
 
 MAX_RESULTS = 100
 
 
+@tool(
+    name="list_tools",
+    domain="discovery",
+    permission="view_admin",
+    description="List all tools available to you, grouped by domain. Use this when the user asks 'what can you do?' or you need to find the right tool for a task.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "domain": {"type": "string", "description": "Filter by domain (security, jobs, users, groups, metrics, discovery). Omit to see all."},
+        },
+    },
+)
 def _tool_list_tools(params, user):
     """Return all tools the current user has access to, grouped by domain."""
     from mojo.apps.assistant import get_registry
@@ -37,6 +50,18 @@ def _tool_list_tools(params, user):
     }
 
 
+@tool(
+    name="list_metric_categories",
+    domain="discovery",
+    permission="view_admin",
+    description="List all metric categories being tracked. Use this to discover what metrics exist before fetching data.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "account": {"type": "string", "description": "Account scope (public, global, group-<id>)", "default": "public"},
+        },
+    },
+)
 def _tool_list_metric_categories(params, user):
     """List all metric categories in a given account scope."""
     from mojo.apps import metrics
@@ -58,6 +83,20 @@ def _tool_list_metric_categories(params, user):
     }
 
 
+@tool(
+    name="list_metric_slugs",
+    domain="discovery",
+    permission="view_admin",
+    description="List all metric slugs within a category. Use this to find specific metrics to fetch.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "category": {"type": "string", "description": "The metric category to list slugs for"},
+            "account": {"type": "string", "description": "Account scope (public, global, group-<id>)", "default": "public"},
+        },
+        "required": ["category"],
+    },
+)
 def _tool_list_metric_slugs(params, user):
     """List all metric slugs within a category."""
     from mojo.apps import metrics
@@ -81,6 +120,16 @@ def _tool_list_metric_slugs(params, user):
     }
 
 
+@tool(
+    name="list_job_channels",
+    domain="discovery",
+    permission="view_jobs",
+    description="List all configured job channels and their current queue depth.",
+    input_schema={
+        "type": "object",
+        "properties": {},
+    },
+)
 def _tool_list_job_channels(params, user):
     """List configured job channels and their current queue depth."""
     from mojo.helpers.settings import settings
@@ -108,6 +157,18 @@ def _tool_list_job_channels(params, user):
     }
 
 
+@tool(
+    name="list_event_categories",
+    domain="discovery",
+    permission="view_security",
+    description="List distinct security event categories seen in the system over a time period.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "minutes": {"type": "integer", "description": "Look back N minutes (default 10080 = 7 days)", "default": 10080},
+        },
+    },
+)
 def _tool_list_event_categories(params, user):
     """List distinct event categories seen in the system."""
     from mojo.apps.incident.models import Event
@@ -130,6 +191,16 @@ def _tool_list_event_categories(params, user):
     }
 
 
+@tool(
+    name="list_permissions",
+    domain="discovery",
+    permission="view_admin",
+    description="List all known permission keys from the system's models. Useful for understanding what permissions exist.",
+    input_schema={
+        "type": "object",
+        "properties": {},
+    },
+)
 def _tool_list_permissions(params, user):
     """List all known permission keys from RestMeta and active users."""
     from django.apps import apps
@@ -154,81 +225,3 @@ def _tool_list_permissions(params, user):
         "permissions": sorted(perm_set),
         "count": len(perm_set),
     }
-
-
-# ---------------------------------------------------------------------------
-# Tool definitions
-# ---------------------------------------------------------------------------
-
-TOOLS = [
-    {
-        "name": "list_tools",
-        "description": "List all tools available to you, grouped by domain. Use this when the user asks 'what can you do?' or you need to find the right tool for a task.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "domain": {"type": "string", "description": "Filter by domain (security, jobs, users, groups, metrics, discovery). Omit to see all."},
-            },
-        },
-        "handler": _tool_list_tools,
-        "permission": "view_admin",
-    },
-    {
-        "name": "list_metric_categories",
-        "description": "List all metric categories being tracked. Use this to discover what metrics exist before fetching data.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "account": {"type": "string", "description": "Account scope (public, global, group-<id>)", "default": "public"},
-            },
-        },
-        "handler": _tool_list_metric_categories,
-        "permission": "view_admin",
-    },
-    {
-        "name": "list_metric_slugs",
-        "description": "List all metric slugs within a category. Use this to find specific metrics to fetch.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "category": {"type": "string", "description": "The metric category to list slugs for"},
-                "account": {"type": "string", "description": "Account scope (public, global, group-<id>)", "default": "public"},
-            },
-            "required": ["category"],
-        },
-        "handler": _tool_list_metric_slugs,
-        "permission": "view_admin",
-    },
-    {
-        "name": "list_job_channels",
-        "description": "List all configured job channels and their current queue depth.",
-        "input_schema": {
-            "type": "object",
-            "properties": {},
-        },
-        "handler": _tool_list_job_channels,
-        "permission": "view_jobs",
-    },
-    {
-        "name": "list_event_categories",
-        "description": "List distinct security event categories seen in the system over a time period.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "minutes": {"type": "integer", "description": "Look back N minutes (default 10080 = 7 days)", "default": 10080},
-            },
-        },
-        "handler": _tool_list_event_categories,
-        "permission": "view_security",
-    },
-    {
-        "name": "list_permissions",
-        "description": "List all known permission keys from the system's models. Useful for understanding what permissions exist.",
-        "input_schema": {
-            "type": "object",
-            "properties": {},
-        },
-        "handler": _tool_list_permissions,
-        "permission": "view_admin",
-    },
-]

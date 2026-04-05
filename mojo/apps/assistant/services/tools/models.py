@@ -3,6 +3,7 @@ import objict
 
 from django.apps import apps
 
+from mojo.apps.assistant import tool
 from mojo.helpers import logit
 
 logger = logit.get_logger("assistant", "assistant.log")
@@ -211,6 +212,30 @@ def _apply_owner_group_filter(model, request, queryset):
 # Tool handlers
 # ---------------------------------------------------------------------------
 
+@tool(
+    name="describe_model",
+    domain="models",
+    permission="view_admin",
+    description=(
+        "Describe a MojoModel's fields, available graphs, permissions, and search fields. "
+        "Use this to discover what data is available before querying. "
+        "Example: describe_model(app_name='account', model_name='User')"
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "app_name": {
+                "type": "string",
+                "description": "Django app label (e.g. 'account', 'incident', 'jobs')",
+            },
+            "model_name": {
+                "type": "string",
+                "description": "Model class name (e.g. 'User', 'Incident', 'Job')",
+            },
+        },
+        "required": ["app_name", "model_name"],
+    },
+)
 def _tool_describe_model(params, user):
     """Describe a model's fields, graphs, and permissions."""
     app_name = params.get("app_name", "").strip()
@@ -255,6 +280,62 @@ def _tool_describe_model(params, user):
     }
 
 
+@tool(
+    name="query_model",
+    domain="models",
+    permission="view_admin",
+    description=(
+        "Query any MojoModel with filters, search, ordering, and format options. "
+        "Respects RestMeta permissions and owner/group filtering. "
+        "Supports JSON and CSV output, count-only mode, and configurable limits (max 200). "
+        "Use describe_model first to discover available fields and graphs. "
+        "Example: query_model(app_name='account', model_name='User', "
+        "filters={'is_active': true}, ordering='-created', limit=10)"
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "app_name": {
+                "type": "string",
+                "description": "Django app label (e.g. 'account', 'incident', 'jobs')",
+            },
+            "model_name": {
+                "type": "string",
+                "description": "Model class name (e.g. 'User', 'Incident', 'Job')",
+            },
+            "filters": {
+                "type": "object",
+                "description": "ORM filter dict (e.g. {'status': 'active', 'created__gte': '2026-01-01'})",
+            },
+            "search": {
+                "type": "string",
+                "description": "Free-text search (uses model's SEARCH_FIELDS)",
+            },
+            "ordering": {
+                "type": "string",
+                "description": "Order by field, prefix with - for descending (e.g. '-created')",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Max results to return (default 50, max 200)",
+            },
+            "graph": {
+                "type": "string",
+                "description": "Serialization graph name (default 'default')",
+            },
+            "format": {
+                "type": "string",
+                "enum": ["json", "csv"],
+                "description": "Output format (default 'json')",
+            },
+            "count_only": {
+                "type": "boolean",
+                "description": "If true, return only the count (no data)",
+            },
+        },
+        "required": ["app_name", "model_name"],
+    },
+)
 def _tool_query_model(params, user):
     """Query a model with filters, search, ordering, and format options."""
     app_name = params.get("app_name", "").strip()
@@ -371,91 +452,3 @@ def _tool_query_model(params, user):
         "count": len(results),
         "total": total,
     }
-
-
-# ---------------------------------------------------------------------------
-# Tool definitions
-# ---------------------------------------------------------------------------
-
-TOOLS = [
-    {
-        "name": "describe_model",
-        "description": (
-            "Describe a MojoModel's fields, available graphs, permissions, and search fields. "
-            "Use this to discover what data is available before querying. "
-            "Example: describe_model(app_name='account', model_name='User')"
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "app_name": {
-                    "type": "string",
-                    "description": "Django app label (e.g. 'account', 'incident', 'jobs')",
-                },
-                "model_name": {
-                    "type": "string",
-                    "description": "Model class name (e.g. 'User', 'Incident', 'Job')",
-                },
-            },
-            "required": ["app_name", "model_name"],
-        },
-        "handler": _tool_describe_model,
-        "permission": "view_admin",
-    },
-    {
-        "name": "query_model",
-        "description": (
-            "Query any MojoModel with filters, search, ordering, and format options. "
-            "Respects RestMeta permissions and owner/group filtering. "
-            "Supports JSON and CSV output, count-only mode, and configurable limits (max 200). "
-            "Use describe_model first to discover available fields and graphs. "
-            "Example: query_model(app_name='account', model_name='User', "
-            "filters={'is_active': true}, ordering='-created', limit=10)"
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "app_name": {
-                    "type": "string",
-                    "description": "Django app label (e.g. 'account', 'incident', 'jobs')",
-                },
-                "model_name": {
-                    "type": "string",
-                    "description": "Model class name (e.g. 'User', 'Incident', 'Job')",
-                },
-                "filters": {
-                    "type": "object",
-                    "description": "ORM filter dict (e.g. {'status': 'active', 'created__gte': '2026-01-01'})",
-                },
-                "search": {
-                    "type": "string",
-                    "description": "Free-text search (uses model's SEARCH_FIELDS)",
-                },
-                "ordering": {
-                    "type": "string",
-                    "description": "Order by field, prefix with - for descending (e.g. '-created')",
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "Max results to return (default 50, max 200)",
-                },
-                "graph": {
-                    "type": "string",
-                    "description": "Serialization graph name (default 'default')",
-                },
-                "format": {
-                    "type": "string",
-                    "enum": ["json", "csv"],
-                    "description": "Output format (default 'json')",
-                },
-                "count_only": {
-                    "type": "boolean",
-                    "description": "If true, return only the count (no data)",
-                },
-            },
-            "required": ["app_name", "model_name"],
-        },
-        "handler": _tool_query_model,
-        "permission": "view_admin",
-    },
-]

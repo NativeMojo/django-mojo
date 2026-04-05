@@ -1,11 +1,34 @@
 """Metrics domain tools — fetch metrics, system health, incident trends."""
 import re
+
+from mojo.apps.assistant import tool
 from mojo.helpers import dates
 
 # Valid account scopes for metrics
 _VALID_ACCOUNT_RE = re.compile(r"^(public|global|group-\d+|user-\d+)$")
 
 
+@tool(
+    name="fetch_metrics",
+    domain="metrics",
+    permission="view_admin",
+    description="Fetch time-series metrics data for given slugs and date range.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "slugs": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "List of metric slugs to fetch",
+            },
+            "dt_start": {"type": "string", "description": "Start date (ISO format, optional)"},
+            "dt_end": {"type": "string", "description": "End date (ISO format, optional)"},
+            "granularity": {"type": "string", "description": "Data granularity (hours, days, months)", "default": "hours"},
+            "account": {"type": "string", "description": "Account scope (public, global, group-<id>)", "default": "public"},
+        },
+        "required": ["slugs"],
+    },
+)
 def _tool_fetch_metrics(params, user):
     from mojo.apps import metrics
 
@@ -36,6 +59,16 @@ def _tool_fetch_metrics(params, user):
     return records
 
 
+@tool(
+    name="get_system_health",
+    domain="metrics",
+    permission="view_admin",
+    description="Overview of system health: active users, job queue depth, error rates, open incident counts.",
+    input_schema={
+        "type": "object",
+        "properties": {},
+    },
+)
 def _tool_get_system_health(params, user):
     """Aggregate cross-domain health stats."""
     from mojo.apps.account.models import User
@@ -76,6 +109,16 @@ def _tool_get_system_health(params, user):
     }
 
 
+@tool(
+    name="get_incident_trends",
+    domain="metrics",
+    permission="view_security",
+    description="Incident and event trends over time (1h, 6h, 24h, 7d) with category breakdown.",
+    input_schema={
+        "type": "object",
+        "properties": {},
+    },
+)
 def _tool_get_incident_trends(params, user):
     """Incident and event counts over recent time periods for comparison."""
     from mojo.apps.incident.models import Incident, Event
@@ -107,52 +150,3 @@ def _tool_get_incident_trends(params, user):
     result["categories_24h"] = categories
 
     return result
-
-
-# ---------------------------------------------------------------------------
-# Tool definitions
-# ---------------------------------------------------------------------------
-
-TOOLS = [
-    {
-        "name": "fetch_metrics",
-        "description": "Fetch time-series metrics data for given slugs and date range.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "slugs": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "List of metric slugs to fetch",
-                },
-                "dt_start": {"type": "string", "description": "Start date (ISO format, optional)"},
-                "dt_end": {"type": "string", "description": "End date (ISO format, optional)"},
-                "granularity": {"type": "string", "description": "Data granularity (hours, days, months)", "default": "hours"},
-                "account": {"type": "string", "description": "Account scope (public, global, group-<id>)", "default": "public"},
-            },
-            "required": ["slugs"],
-        },
-        "handler": _tool_fetch_metrics,
-        "permission": "view_admin",
-    },
-    {
-        "name": "get_system_health",
-        "description": "Overview of system health: active users, job queue depth, error rates, open incident counts.",
-        "input_schema": {
-            "type": "object",
-            "properties": {},
-        },
-        "handler": _tool_get_system_health,
-        "permission": "view_admin",
-    },
-    {
-        "name": "get_incident_trends",
-        "description": "Incident and event trends over time (1h, 6h, 24h, 7d) with category breakdown.",
-        "input_schema": {
-            "type": "object",
-            "properties": {},
-        },
-        "handler": _tool_get_incident_trends,
-        "permission": "view_security",
-    },
-]

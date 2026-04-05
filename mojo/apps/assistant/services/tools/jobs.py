@@ -1,4 +1,5 @@
 """Jobs domain tools — query jobs, stats, queue health, cancel, retry."""
+from mojo.apps.assistant import tool
 from mojo.helpers import dates
 
 
@@ -6,6 +7,22 @@ MAX_RESULTS = 50
 MAX_MINUTES = 43200  # 30 days
 
 
+@tool(
+    name="query_jobs",
+    domain="jobs",
+    permission="view_jobs",
+    description="Filter jobs by status, channel, function name, date range. Returns up to 50 jobs.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "status": {"type": "string", "description": "Filter by status (pending, running, completed, failed, canceled)"},
+            "channel": {"type": "string", "description": "Filter by channel name"},
+            "func": {"type": "string", "description": "Filter by function name (partial match)"},
+            "minutes": {"type": "integer", "description": "Look back N minutes (default 1440 = 24h)", "default": 1440},
+            "limit": {"type": "integer", "description": "Max results (default 50)", "default": 50},
+        },
+    },
+)
 def _tool_query_jobs(params, user):
     from mojo.apps.jobs.models import Job
 
@@ -40,6 +57,20 @@ def _tool_query_jobs(params, user):
     ]
 
 
+@tool(
+    name="query_job_events",
+    domain="jobs",
+    permission="view_jobs",
+    description="Get the event log for a specific job.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "job_id": {"type": "string", "description": "The job ID"},
+            "limit": {"type": "integer", "description": "Max results (default 50)", "default": 50},
+        },
+        "required": ["job_id"],
+    },
+)
 def _tool_query_job_events(params, user):
     from mojo.apps.jobs.models import JobEvent
 
@@ -59,6 +90,20 @@ def _tool_query_job_events(params, user):
     ]
 
 
+@tool(
+    name="query_job_logs",
+    domain="jobs",
+    permission="view_jobs",
+    description="Get structured logs for a specific job.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "job_id": {"type": "string", "description": "The job ID"},
+            "limit": {"type": "integer", "description": "Max results (default 50)", "default": 50},
+        },
+        "required": ["job_id"],
+    },
+)
 def _tool_query_job_logs(params, user):
     from mojo.apps.jobs.models import JobLog
 
@@ -78,6 +123,19 @@ def _tool_query_job_logs(params, user):
     ]
 
 
+@tool(
+    name="get_job_stats",
+    domain="jobs",
+    permission="view_jobs",
+    description="Get job statistics: counts by status, average duration, failure rate.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "channel": {"type": "string", "description": "Filter by channel (optional)"},
+            "minutes": {"type": "integer", "description": "Look back N minutes (default 1440 = 24h)", "default": 1440},
+        },
+    },
+)
 def _tool_get_job_stats(params, user):
     from mojo.apps.jobs.models import Job
     from django.db.models import Count, Avg, F
@@ -112,6 +170,18 @@ def _tool_get_job_stats(params, user):
     }
 
 
+@tool(
+    name="get_queue_health",
+    domain="jobs",
+    permission="view_jobs",
+    description="Get pending/running job counts per channel and number of stuck jobs.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "channel": {"type": "string", "description": "Filter by channel (optional)"},
+        },
+    },
+)
 def _tool_get_queue_health(params, user):
     from mojo.apps.jobs.models import Job
     from django.db.models import Count
@@ -140,6 +210,20 @@ def _tool_get_queue_health(params, user):
     }
 
 
+@tool(
+    name="cancel_job",
+    domain="jobs",
+    permission="manage_jobs",
+    description="Request cancellation of a job. IMPORTANT: Confirm with the user before executing.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "job_id": {"type": "string", "description": "The job ID to cancel"},
+        },
+        "required": ["job_id"],
+    },
+    mutates=True,
+)
 def _tool_cancel_job(params, user):
     from mojo.apps.jobs import cancel
 
@@ -152,6 +236,21 @@ def _tool_cancel_job(params, user):
     }
 
 
+@tool(
+    name="retry_job",
+    domain="jobs",
+    permission="manage_jobs",
+    description="Retry a failed job. IMPORTANT: Confirm with the user before executing.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "job_id": {"type": "string", "description": "The job ID to retry"},
+            "delay": {"type": "integer", "description": "Delay in seconds before retrying (optional)"},
+        },
+        "required": ["job_id"],
+    },
+    mutates=True,
+)
 def _tool_retry_job(params, user):
     from mojo.apps.jobs.models import Job
 
@@ -164,109 +263,3 @@ def _tool_retry_job(params, user):
     from mojo.apps.jobs.services import JobActionsService
     result = JobActionsService.retry_job(job, delay=params.get("delay"))
     return result
-
-
-# ---------------------------------------------------------------------------
-# Tool definitions
-# ---------------------------------------------------------------------------
-
-TOOLS = [
-    {
-        "name": "query_jobs",
-        "description": "Filter jobs by status, channel, function name, date range. Returns up to 50 jobs.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "status": {"type": "string", "description": "Filter by status (pending, running, completed, failed, canceled)"},
-                "channel": {"type": "string", "description": "Filter by channel name"},
-                "func": {"type": "string", "description": "Filter by function name (partial match)"},
-                "minutes": {"type": "integer", "description": "Look back N minutes (default 1440 = 24h)", "default": 1440},
-                "limit": {"type": "integer", "description": "Max results (default 50)", "default": 50},
-            },
-        },
-        "handler": _tool_query_jobs,
-        "permission": "view_jobs",
-    },
-    {
-        "name": "query_job_events",
-        "description": "Get the event log for a specific job.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "job_id": {"type": "string", "description": "The job ID"},
-                "limit": {"type": "integer", "description": "Max results (default 50)", "default": 50},
-            },
-            "required": ["job_id"],
-        },
-        "handler": _tool_query_job_events,
-        "permission": "view_jobs",
-    },
-    {
-        "name": "query_job_logs",
-        "description": "Get structured logs for a specific job.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "job_id": {"type": "string", "description": "The job ID"},
-                "limit": {"type": "integer", "description": "Max results (default 50)", "default": 50},
-            },
-            "required": ["job_id"],
-        },
-        "handler": _tool_query_job_logs,
-        "permission": "view_jobs",
-    },
-    {
-        "name": "get_job_stats",
-        "description": "Get job statistics: counts by status, average duration, failure rate.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "channel": {"type": "string", "description": "Filter by channel (optional)"},
-                "minutes": {"type": "integer", "description": "Look back N minutes (default 1440 = 24h)", "default": 1440},
-            },
-        },
-        "handler": _tool_get_job_stats,
-        "permission": "view_jobs",
-    },
-    {
-        "name": "get_queue_health",
-        "description": "Get pending/running job counts per channel and number of stuck jobs.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "channel": {"type": "string", "description": "Filter by channel (optional)"},
-            },
-        },
-        "handler": _tool_get_queue_health,
-        "permission": "view_jobs",
-    },
-    {
-        "name": "cancel_job",
-        "description": "Request cancellation of a job. IMPORTANT: Confirm with the user before executing.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "job_id": {"type": "string", "description": "The job ID to cancel"},
-            },
-            "required": ["job_id"],
-        },
-        "handler": _tool_cancel_job,
-        "permission": "manage_jobs",
-        "mutates": True,
-    },
-    {
-        "name": "retry_job",
-        "description": "Retry a failed job. IMPORTANT: Confirm with the user before executing.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "job_id": {"type": "string", "description": "The job ID to retry"},
-                "delay": {"type": "integer", "description": "Delay in seconds before retrying (optional)"},
-            },
-            "required": ["job_id"],
-        },
-        "handler": _tool_retry_job,
-        "permission": "manage_jobs",
-        "mutates": True,
-    },
-]

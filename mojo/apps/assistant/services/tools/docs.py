@@ -4,6 +4,7 @@ from urllib.parse import urlparse
 
 import requests
 
+from mojo.apps.assistant import tool
 from mojo.helpers.settings import settings
 
 DEFAULT_BASE_URL = "https://raw.githubusercontent.com/NativeMojo/django-mojo/refs/heads/main/docs/"
@@ -105,6 +106,31 @@ def _normalize_path(path):
     return path, None
 
 
+@tool(
+    name="read_docs",
+    domain="docs",
+    permission="view_admin",
+    description=(
+        "Fetch django-mojo framework documentation. Use 'path' for a specific doc "
+        "(e.g. 'django_developer/account/push.md') or 'topic' for keyword search "
+        "(e.g. 'push notifications', 'rate limiting', 'job queue'). "
+        "Returns raw markdown content. Use this to look up how framework features work, "
+        "check available settings, or find code examples."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "Relative doc path (e.g. 'django_developer/account/push.md')",
+            },
+            "topic": {
+                "type": "string",
+                "description": "Free-text topic to search for (e.g. 'push notifications')",
+            },
+        },
+    },
+)
 def _tool_read_docs(params, user):
     path = params.get("path", "").strip()
     topic = params.get("topic", "").strip()
@@ -197,36 +223,3 @@ def _tool_read_docs(params, user):
         result["other_matches"] = others
 
     return result
-
-
-# ---------------------------------------------------------------------------
-# Tool definitions
-# ---------------------------------------------------------------------------
-
-TOOLS = [
-    {
-        "name": "read_docs",
-        "description": (
-            "Fetch django-mojo framework documentation. Use 'path' for a specific doc "
-            "(e.g. 'django_developer/account/push.md') or 'topic' for keyword search "
-            "(e.g. 'push notifications', 'rate limiting', 'job queue'). "
-            "Returns raw markdown content. Use this to look up how framework features work, "
-            "check available settings, or find code examples."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Relative doc path (e.g. 'django_developer/account/push.md')",
-                },
-                "topic": {
-                    "type": "string",
-                    "description": "Free-text topic to search for (e.g. 'push notifications')",
-                },
-            },
-        },
-        "handler": _tool_read_docs,
-        "permission": "view_admin",
-    },
-]

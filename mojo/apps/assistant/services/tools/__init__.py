@@ -1,43 +1,16 @@
 """
 Built-in tool registration for the admin assistant.
 
-Imports each domain module which defines tool handlers, then registers
-them all via the public ``register_tool()`` API.
+Each tool module self-registers via the @tool decorator on import.
 """
-from mojo.apps.assistant import register_tool
-
-from . import security
-from . import jobs
-from . import users
-from . import groups
-from . import metrics
-from . import discovery
-from . import web
-from . import docs
-from . import models
-from . import logs
-
-
-def _register_domain(domain_name, tool_list):
-    for tool in tool_list:
-        register_tool(
-            name=tool["name"],
-            description=tool["description"],
-            input_schema=tool["input_schema"],
-            handler=tool["handler"],
-            permission=tool["permission"],
-            mutates=tool.get("mutates", False),
-            domain=domain_name,
-        )
-
-
-_register_domain("security", security.TOOLS)
-_register_domain("jobs", jobs.TOOLS)
-_register_domain("users", users.TOOLS)
-_register_domain("groups", groups.TOOLS)
-_register_domain("metrics", metrics.TOOLS)
-_register_domain("discovery", discovery.TOOLS)
-_register_domain("web", web.TOOLS)
-_register_domain("docs", docs.TOOLS)
-_register_domain("models", models.TOOLS)
-_register_domain("logs", logs.TOOLS)
+from . import security  # noqa: F401
+from . import jobs  # noqa: F401
+from . import users  # noqa: F401
+from . import groups  # noqa: F401
+from . import metrics  # noqa: F401
+from . import discovery  # noqa: F401
+from . import web  # noqa: F401
+from . import docs  # noqa: F401
+from . import models  # noqa: F401
+from . import logs  # noqa: F401
+from . import files  # noqa: F401

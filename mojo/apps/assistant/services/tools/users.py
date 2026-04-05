@@ -1,4 +1,5 @@
 """Users domain tools — query users, activity, permissions, rate limits."""
+from mojo.apps.assistant import tool
 
 
 MAX_RESULTS = 50
@@ -24,6 +25,21 @@ def _safe_user_dict(user):
     }
 
 
+@tool(
+    name="query_users",
+    domain="users",
+    permission="view_admin",
+    description="Search/filter users by name, email, status, or permission. Returns up to 50 users.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "search": {"type": "string", "description": "Search by username, email, or display name"},
+            "is_active": {"type": "boolean", "description": "Filter by active status"},
+            "permission": {"type": "string", "description": "Filter to users who have this permission (e.g. 'manage_users')"},
+            "limit": {"type": "integer", "description": "Max results (default 50)", "default": 50},
+        },
+    },
+)
 def _tool_query_users(params, user):
     from mojo.apps.account.models import User
     from django.db.models import Q
@@ -51,6 +67,19 @@ def _tool_query_users(params, user):
     return [_safe_user_dict(u) for u in users]
 
 
+@tool(
+    name="get_user_detail",
+    domain="users",
+    permission="view_admin",
+    description="Get full user profile, permissions, and group memberships. Sensitive fields (password, auth_key) are never included.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "user_id": {"type": "integer", "description": "The user ID"},
+        },
+        "required": ["user_id"],
+    },
+)
 def _tool_get_user_detail(params, user):
     from mojo.apps.account.models import User
     from mojo.apps.account.models.group import GroupMember
@@ -76,6 +105,20 @@ def _tool_get_user_detail(params, user):
     return result
 
 
+@tool(
+    name="get_user_activity",
+    domain="users",
+    permission="view_admin",
+    description="Get recent security events for a specific user.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "user_id": {"type": "integer", "description": "The user ID"},
+            "minutes": {"type": "integer", "description": "Look back N minutes (default 1440 = 24h)", "default": 1440},
+        },
+        "required": ["user_id"],
+    },
+)
 def _tool_get_user_activity(params, user):
     from mojo.apps.incident.models import Event
 
@@ -102,6 +145,16 @@ def _tool_get_user_activity(params, user):
     ]
 
 
+@tool(
+    name="query_rate_limits",
+    domain="users",
+    permission="view_admin",
+    description="Show currently active rate limit entries from Redis.",
+    input_schema={
+        "type": "object",
+        "properties": {},
+    },
+)
 def _tool_query_rate_limits(params, user):
     """Query currently rate-limited keys from Redis."""
     from mojo.helpers.settings import settings
@@ -130,6 +183,19 @@ def _tool_query_rate_limits(params, user):
         return {"error": str(e)}
 
 
+@tool(
+    name="get_permission_summary",
+    domain="users",
+    permission="view_admin",
+    description="Get a user's permissions and where they come from (user-level and group-level).",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "user_id": {"type": "integer", "description": "The user ID"},
+        },
+        "required": ["user_id"],
+    },
+)
 def _tool_get_permission_summary(params, user):
     from mojo.apps.account.models import User
     from mojo.apps.account.models.group import GroupMember
@@ -156,6 +222,21 @@ def _tool_get_permission_summary(params, user):
     return result
 
 
+@tool(
+    name="disable_user",
+    domain="users",
+    permission="manage_users",
+    description="Disable a user account and invalidate all active sessions. Cannot disable yourself. IMPORTANT: Confirm with the user before executing.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "user_id": {"type": "integer", "description": "The user ID to disable"},
+            "reason": {"type": "string", "description": "Reason for disabling the account"},
+        },
+        "required": ["user_id", "reason"],
+    },
+    mutates=True,
+)
 def _tool_disable_user(params, user):
     from mojo.apps.account.models import User
     import uuid
@@ -192,6 +273,21 @@ def _tool_disable_user(params, user):
     }
 
 
+@tool(
+    name="enable_user",
+    domain="users",
+    permission="manage_users",
+    description="Re-enable a disabled user account. IMPORTANT: Confirm with the user before executing.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "user_id": {"type": "integer", "description": "The user ID to enable"},
+            "reason": {"type": "string", "description": "Reason for re-enabling the account"},
+        },
+        "required": ["user_id", "reason"],
+    },
+    mutates=True,
+)
 def _tool_enable_user(params, user):
     from mojo.apps.account.models import User
 
@@ -222,6 +318,21 @@ def _tool_enable_user(params, user):
     }
 
 
+@tool(
+    name="force_logout",
+    domain="users",
+    permission="manage_users",
+    description="Invalidate all active sessions for a user by rotating their auth key. Account stays active — user can log back in. IMPORTANT: Confirm with the user before executing.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "user_id": {"type": "integer", "description": "The user ID to force logout"},
+            "reason": {"type": "string", "description": "Reason for force logout"},
+        },
+        "required": ["user_id", "reason"],
+    },
+    mutates=True,
+)
 def _tool_force_logout(params, user):
     from mojo.apps.account.models import User
     import uuid
@@ -254,6 +365,22 @@ def _tool_force_logout(params, user):
     }
 
 
+@tool(
+    name="update_user_permission",
+    domain="users",
+    permission="manage_users",
+    description="Add or remove a permission from a user. IMPORTANT: Confirm with the user before executing.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "user_id": {"type": "integer", "description": "The user ID"},
+            "permission": {"type": "string", "description": "Permission key (e.g. 'manage_users', 'view_security')"},
+            "action": {"type": "string", "enum": ["add", "remove"], "description": "Whether to add or remove the permission"},
+        },
+        "required": ["user_id", "permission", "action"],
+    },
+    mutates=True,
+)
 def _tool_update_user_permission(params, user):
     from mojo.apps.account.models import User
 
@@ -284,137 +411,3 @@ def _tool_update_user_permission(params, user):
             "permission": perm_key,
             "action": "added",
         }
-
-
-# ---------------------------------------------------------------------------
-# Tool definitions
-# ---------------------------------------------------------------------------
-
-TOOLS = [
-    {
-        "name": "query_users",
-        "description": "Search/filter users by name, email, status, or permission. Returns up to 50 users.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "search": {"type": "string", "description": "Search by username, email, or display name"},
-                "is_active": {"type": "boolean", "description": "Filter by active status"},
-                "permission": {"type": "string", "description": "Filter to users who have this permission (e.g. 'manage_users')"},
-                "limit": {"type": "integer", "description": "Max results (default 50)", "default": 50},
-            },
-        },
-        "handler": _tool_query_users,
-        "permission": "view_admin",
-    },
-    {
-        "name": "get_user_detail",
-        "description": "Get full user profile, permissions, and group memberships. Sensitive fields (password, auth_key) are never included.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "user_id": {"type": "integer", "description": "The user ID"},
-            },
-            "required": ["user_id"],
-        },
-        "handler": _tool_get_user_detail,
-        "permission": "view_admin",
-    },
-    {
-        "name": "get_user_activity",
-        "description": "Get recent security events for a specific user.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "user_id": {"type": "integer", "description": "The user ID"},
-                "minutes": {"type": "integer", "description": "Look back N minutes (default 1440 = 24h)", "default": 1440},
-            },
-            "required": ["user_id"],
-        },
-        "handler": _tool_get_user_activity,
-        "permission": "view_admin",
-    },
-    {
-        "name": "query_rate_limits",
-        "description": "Show currently active rate limit entries from Redis.",
-        "input_schema": {
-            "type": "object",
-            "properties": {},
-        },
-        "handler": _tool_query_rate_limits,
-        "permission": "view_admin",
-    },
-    {
-        "name": "get_permission_summary",
-        "description": "Get a user's permissions and where they come from (user-level and group-level).",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "user_id": {"type": "integer", "description": "The user ID"},
-            },
-            "required": ["user_id"],
-        },
-        "handler": _tool_get_permission_summary,
-        "permission": "view_admin",
-    },
-    {
-        "name": "disable_user",
-        "description": "Disable a user account and invalidate all active sessions. Cannot disable yourself. IMPORTANT: Confirm with the user before executing.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "user_id": {"type": "integer", "description": "The user ID to disable"},
-                "reason": {"type": "string", "description": "Reason for disabling the account"},
-            },
-            "required": ["user_id", "reason"],
-        },
-        "handler": _tool_disable_user,
-        "permission": "manage_users",
-        "mutates": True,
-    },
-    {
-        "name": "enable_user",
-        "description": "Re-enable a disabled user account. IMPORTANT: Confirm with the user before executing.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "user_id": {"type": "integer", "description": "The user ID to enable"},
-                "reason": {"type": "string", "description": "Reason for re-enabling the account"},
-            },
-            "required": ["user_id", "reason"],
-        },
-        "handler": _tool_enable_user,
-        "permission": "manage_users",
-        "mutates": True,
-    },
-    {
-        "name": "force_logout",
-        "description": "Invalidate all active sessions for a user by rotating their auth key. Account stays active — user can log back in. IMPORTANT: Confirm with the user before executing.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "user_id": {"type": "integer", "description": "The user ID to force logout"},
-                "reason": {"type": "string", "description": "Reason for force logout"},
-            },
-            "required": ["user_id", "reason"],
-        },
-        "handler": _tool_force_logout,
-        "permission": "manage_users",
-        "mutates": True,
-    },
-    {
-        "name": "update_user_permission",
-        "description": "Add or remove a permission from a user. IMPORTANT: Confirm with the user before executing.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "user_id": {"type": "integer", "description": "The user ID"},
-                "permission": {"type": "string", "description": "Permission key (e.g. 'manage_users', 'view_security')"},
-                "action": {"type": "string", "enum": ["add", "remove"], "description": "Whether to add or remove the permission"},
-            },
-            "required": ["user_id", "permission", "action"],
-        },
-        "handler": _tool_update_user_permission,
-        "permission": "manage_users",
-        "mutates": True,
-    },
-]

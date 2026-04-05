@@ -1,10 +1,26 @@
 """Groups domain tools — query groups, members, detail, activity."""
+from mojo.apps.assistant import tool
 
 
 MAX_RESULTS = 50
 MAX_MINUTES = 43200  # 30 days
 
 
+@tool(
+    name="query_groups",
+    domain="groups",
+    permission="view_groups",
+    description="Filter groups by name, kind (type), active status. Returns up to 50 groups.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "description": "Search by group name (partial match)"},
+            "kind": {"type": "string", "description": "Filter by group kind/type"},
+            "is_active": {"type": "boolean", "description": "Filter by active status"},
+            "limit": {"type": "integer", "description": "Max results (default 50)", "default": 50},
+        },
+    },
+)
 def _tool_query_groups(params, user):
     from mojo.apps.account.models import Group
 
@@ -34,6 +50,19 @@ def _tool_query_groups(params, user):
     ]
 
 
+@tool(
+    name="get_group_detail",
+    domain="groups",
+    permission="view_groups",
+    description="Get group info including member count, children count, and metadata.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "group_id": {"type": "integer", "description": "The group ID"},
+        },
+        "required": ["group_id"],
+    },
+)
 def _tool_get_group_detail(params, user):
     from mojo.apps.account.models import Group
     from mojo.apps.account.models.group import GroupMember
@@ -63,6 +92,20 @@ def _tool_get_group_detail(params, user):
     }
 
 
+@tool(
+    name="get_group_members",
+    domain="groups",
+    permission="view_groups",
+    description="List members of a group with their roles and permissions.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "group_id": {"type": "integer", "description": "The group ID"},
+            "limit": {"type": "integer", "description": "Max results (default 50)", "default": 50},
+        },
+        "required": ["group_id"],
+    },
+)
 def _tool_get_group_members(params, user):
     from mojo.apps.account.models.group import GroupMember
 
@@ -89,6 +132,20 @@ def _tool_get_group_members(params, user):
     ]
 
 
+@tool(
+    name="get_group_activity",
+    domain="groups",
+    permission="view_groups",
+    description="Get recent security events related to a specific group.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "group_id": {"type": "integer", "description": "The group ID"},
+            "minutes": {"type": "integer", "description": "Look back N minutes (default 1440 = 24h)", "default": 1440},
+        },
+        "required": ["group_id"],
+    },
+)
 def _tool_get_group_activity(params, user):
     from mojo.apps.incident.models import Event
     from mojo.helpers import dates
@@ -115,6 +172,22 @@ def _tool_get_group_activity(params, user):
     ]
 
 
+@tool(
+    name="create_group",
+    domain="groups",
+    permission="manage_groups",
+    description="Create a new group (organization, merchant, team, etc.). IMPORTANT: Confirm with the user before executing.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "description": "Group name"},
+            "kind": {"type": "string", "description": "Group type (e.g. 'org', 'merchant', 'team', 'group')", "default": "group"},
+            "parent_id": {"type": "integer", "description": "Parent group ID (for creating child groups under an org)"},
+        },
+        "required": ["name"],
+    },
+    mutates=True,
+)
 def _tool_create_group(params, user):
     from mojo.apps.account.models import Group
 
@@ -145,6 +218,26 @@ def _tool_create_group(params, user):
     }
 
 
+@tool(
+    name="invite_to_group",
+    domain="groups",
+    permission="manage_groups",
+    description="Invite a user to a group by email. Creates the user if they don't exist and sends an invite. IMPORTANT: Confirm with the user before executing.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "group_id": {"type": "integer", "description": "The group to invite the user to"},
+            "email": {"type": "string", "description": "Email address of the user to invite"},
+            "permissions": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Permission keys to grant (e.g. ['manage_users', 'view_security']). Empty for read-only access.",
+            },
+        },
+        "required": ["group_id", "email"],
+    },
+    mutates=True,
+)
 def _tool_invite_to_group(params, user):
     from mojo.apps.account.models import Group
 
@@ -171,103 +264,3 @@ def _tool_invite_to_group(params, user):
         "member_id": ms.pk if ms else None,
         "permissions": permissions,
     }
-
-
-# ---------------------------------------------------------------------------
-# Tool definitions
-# ---------------------------------------------------------------------------
-
-TOOLS = [
-    {
-        "name": "query_groups",
-        "description": "Filter groups by name, kind (type), active status. Returns up to 50 groups.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "name": {"type": "string", "description": "Search by group name (partial match)"},
-                "kind": {"type": "string", "description": "Filter by group kind/type"},
-                "is_active": {"type": "boolean", "description": "Filter by active status"},
-                "limit": {"type": "integer", "description": "Max results (default 50)", "default": 50},
-            },
-        },
-        "handler": _tool_query_groups,
-        "permission": "view_groups",
-    },
-    {
-        "name": "get_group_detail",
-        "description": "Get group info including member count, children count, and metadata.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "group_id": {"type": "integer", "description": "The group ID"},
-            },
-            "required": ["group_id"],
-        },
-        "handler": _tool_get_group_detail,
-        "permission": "view_groups",
-    },
-    {
-        "name": "get_group_members",
-        "description": "List members of a group with their roles and permissions.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "group_id": {"type": "integer", "description": "The group ID"},
-                "limit": {"type": "integer", "description": "Max results (default 50)", "default": 50},
-            },
-            "required": ["group_id"],
-        },
-        "handler": _tool_get_group_members,
-        "permission": "view_groups",
-    },
-    {
-        "name": "get_group_activity",
-        "description": "Get recent security events related to a specific group.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "group_id": {"type": "integer", "description": "The group ID"},
-                "minutes": {"type": "integer", "description": "Look back N minutes (default 1440 = 24h)", "default": 1440},
-            },
-            "required": ["group_id"],
-        },
-        "handler": _tool_get_group_activity,
-        "permission": "view_groups",
-    },
-    {
-        "name": "create_group",
-        "description": "Create a new group (organization, merchant, team, etc.). IMPORTANT: Confirm with the user before executing.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "name": {"type": "string", "description": "Group name"},
-                "kind": {"type": "string", "description": "Group type (e.g. 'org', 'merchant', 'team', 'group')", "default": "group"},
-                "parent_id": {"type": "integer", "description": "Parent group ID (for creating child groups under an org)"},
-            },
-            "required": ["name"],
-        },
-        "handler": _tool_create_group,
-        "permission": "manage_groups",
-        "mutates": True,
-    },
-    {
-        "name": "invite_to_group",
-        "description": "Invite a user to a group by email. Creates the user if they don't exist and sends an invite. IMPORTANT: Confirm with the user before executing.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "group_id": {"type": "integer", "description": "The group to invite the user to"},
-                "email": {"type": "string", "description": "Email address of the user to invite"},
-                "permissions": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Permission keys to grant (e.g. ['manage_users', 'view_security']). Empty for read-only access.",
-                },
-            },
-            "required": ["group_id", "email"],
-        },
-        "handler": _tool_invite_to_group,
-        "permission": "manage_groups",
-        "mutates": True,
-    },
-]
