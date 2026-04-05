@@ -260,3 +260,62 @@ def test_browse_url_registered(opts):
         f"Permission should be view_admin, got: {entry['permission']}"
     assert entry["mutates"] is False, "browse_url should not be a mutating tool"
     assert entry["domain"] == "web", f"Domain should be 'web', got: {entry['domain']}"
+
+
+# ---------------------------------------------------------------------------
+# SSRF hardening — IPv4-mapped IPv6 and ip.is_private
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test()
+def test_blocks_ipv4_mapped_ipv6_localhost(opts):
+    from mojo.apps.assistant.services.tools.web import _is_blocked_ip
+    import ipaddress
+
+    ip = ipaddress.ip_address("::ffff:127.0.0.1")
+    assert _is_blocked_ip(ip), "IPv4-mapped ::ffff:127.0.0.1 should be blocked"
+
+
+@th.django_unit_test()
+def test_blocks_ipv4_mapped_ipv6_private(opts):
+    from mojo.apps.assistant.services.tools.web import _is_blocked_ip
+    import ipaddress
+
+    ip = ipaddress.ip_address("::ffff:10.0.0.1")
+    assert _is_blocked_ip(ip), "IPv4-mapped ::ffff:10.0.0.1 should be blocked"
+
+
+@th.django_unit_test()
+def test_blocks_ipv4_mapped_ipv6_metadata(opts):
+    from mojo.apps.assistant.services.tools.web import _is_blocked_ip
+    import ipaddress
+
+    ip = ipaddress.ip_address("::ffff:169.254.169.254")
+    assert _is_blocked_ip(ip), "IPv4-mapped ::ffff:169.254.169.254 should be blocked"
+
+
+@th.django_unit_test()
+def test_blocks_zero_network(opts):
+    from mojo.apps.assistant.services.tools.web import _is_blocked_ip
+    import ipaddress
+
+    ip = ipaddress.ip_address("0.0.0.0")
+    assert _is_blocked_ip(ip), "0.0.0.0 should be blocked"
+
+
+@th.django_unit_test()
+def test_allows_public_ip(opts):
+    from mojo.apps.assistant.services.tools.web import _is_blocked_ip
+    import ipaddress
+
+    ip = ipaddress.ip_address("8.8.8.8")
+    assert not _is_blocked_ip(ip), "8.8.8.8 (Google DNS) should not be blocked"
+
+
+@th.django_unit_test()
+def test_error_message_no_internal_leak(opts):
+    """Catch-all RequestException should not leak internal details."""
+    result = _browse({"url": "https://this-domain-does-not-exist-xyz123.com/"}, opts.admin)
+    assert "error" in result, "Bad domain should return error"
+    # Should NOT contain connection pool details
+    assert "ConnectionPool" not in result.get("error", ""), \
+        f"Error should not leak connection pool info: {result['error']}"
