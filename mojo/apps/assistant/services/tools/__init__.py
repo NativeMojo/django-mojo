@@ -14,6 +14,7 @@ from . import metrics
 from . import discovery
 from . import web
 from . import docs
+from . import models
 
 
 def _register_domain(domain_name, tool_list):
@@ -37,3 +38,4 @@ _register_domain("metrics", metrics.TOOLS)
 _register_domain("discovery", discovery.TOOLS)
 _register_domain("web", web.TOOLS)
 _register_domain("docs", docs.TOOLS)
+_register_domain("models", models.TOOLS)
