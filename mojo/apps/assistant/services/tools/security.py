@@ -614,6 +614,8 @@ def _tool_merge_incidents(params, user):
     source_ids = params.get("source_ids", [])
     if not source_ids:
         return {"error": "No source incident IDs provided"}
+    if len(source_ids) > 50:
+        return {"error": "Maximum 50 source incidents per merge"}
 
     target.on_action_merge(source_ids)
     return {"ok": True, "target_id": target.pk, "merged_count": len(source_ids)}

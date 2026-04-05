@@ -442,6 +442,34 @@ def test_disable_user_self_blocked(opts):
 
 
 @th.django_unit_test()
+def test_disable_superuser_blocked(opts):
+    """disable_user should refuse to disable a superuser if caller is not superuser."""
+    from mojo.apps.assistant.services.tools.users import _tool_disable_user
+
+    opts.target.is_superuser = True
+    opts.target.is_active = True
+    opts.target.save(update_fields=["is_superuser", "is_active"])
+
+    result = _tool_disable_user({"user_id": opts.target.pk, "reason": "test"}, opts.admin)
+    assert_true("error" in result, "Should return error when non-superuser targets superuser")
+    assert_true("superuser" in result["error"].lower(),
+                f"Error should mention superuser: {result['error']}")
+
+    # Reset
+    opts.target.is_superuser = False
+    opts.target.save(update_fields=["is_superuser"])
+
+
+@th.django_unit_test()
+def test_force_logout_self_blocked(opts):
+    """force_logout should refuse to logout the calling user."""
+    from mojo.apps.assistant.services.tools.users import _tool_force_logout
+
+    result = _tool_force_logout({"user_id": opts.admin.pk, "reason": "test"}, opts.admin)
+    assert_true("error" in result, "Should return error for self force-logout")
+
+
+@th.django_unit_test()
 def test_enable_user(opts):
     """enable_user should reactivate a disabled account."""
     from mojo.apps.assistant.services.tools.users import _tool_enable_user

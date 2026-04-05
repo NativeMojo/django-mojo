@@ -160,7 +160,7 @@ def _tool_disable_user(params, user):
     from mojo.apps.account.models import User
     import uuid
 
-    user_id = params["user_id"]
+    user_id = int(params["user_id"])
     if user_id == user.pk:
         return {"error": "Cannot disable your own account"}
 
@@ -168,6 +168,9 @@ def _tool_disable_user(params, user):
         target = User.objects.get(pk=user_id)
     except User.DoesNotExist:
         return {"error": f"User {user_id} not found"}
+
+    if target.is_superuser and not user.is_superuser:
+        return {"error": "Cannot disable a superuser account"}
 
     if not target.is_active:
         return {"error": f"User {user_id} is already disabled"}
@@ -192,11 +195,14 @@ def _tool_disable_user(params, user):
 def _tool_enable_user(params, user):
     from mojo.apps.account.models import User
 
-    user_id = params["user_id"]
+    user_id = int(params["user_id"])
     try:
         target = User.objects.get(pk=user_id)
     except User.DoesNotExist:
         return {"error": f"User {user_id} not found"}
+
+    if target.is_superuser and not user.is_superuser:
+        return {"error": "Cannot modify a superuser account"}
 
     if target.is_active:
         return {"error": f"User {user_id} is already active"}
@@ -220,11 +226,17 @@ def _tool_force_logout(params, user):
     from mojo.apps.account.models import User
     import uuid
 
-    user_id = params["user_id"]
+    user_id = int(params["user_id"])
+    if user_id == user.pk:
+        return {"error": "Cannot force-logout your own session via assistant"}
+
     try:
         target = User.objects.get(pk=user_id)
     except User.DoesNotExist:
         return {"error": f"User {user_id} not found"}
+
+    if target.is_superuser and not user.is_superuser:
+        return {"error": "Cannot force-logout a superuser account"}
 
     target.auth_key = uuid.uuid4().hex
     target.save(update_fields=["auth_key", "modified"])
