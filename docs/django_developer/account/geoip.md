@@ -63,7 +63,7 @@ Caches geolocation results per IP to reduce redundant API calls. Tracks security
 | `GeoLocatedIP.lookup(ip_address)` | Alias for `geolocate()` |
 | `instance.refresh(check_threats=False)` | Re-fetch geolocation data from provider |
 | `instance.check_threats()` | Run threat intelligence checks |
-| `instance.update_threat_from_incident(priority)` | Escalate threat level from incident priority (0–15 scale) |
+| `instance.update_threat_from_incident(priority, block=False)` | Escalate threat level from incident priority (0–15 scale). Pass `block=True` to allow auto-blocking when threat reaches `high`/`critical`. |
 | `instance.block(reason, ttl, broadcast)` | Block this IP fleet-wide (DB + broadcast) |
 | `instance.unblock(reason, broadcast)` | Unblock this IP fleet-wide |
 | `instance.whitelist(reason)` | Whitelist — also unblocks if currently blocked |
@@ -122,16 +122,20 @@ Removes whitelist protection. Does not auto-block — the IP would need to trigg
 
 ### Auto-block via threat escalation
 
-`update_threat_from_incident(priority)` is called when incidents are created for an IP. It escalates `threat_level` (never downgrades) and **auto-blocks** IPs that reach `high` or `critical`:
+`update_threat_from_incident(priority, block=False)` is called when incidents are created for an IP. It escalates `threat_level` (never downgrades) based on incident priority:
 
-| Incident Priority | Threat Level | Auto-Block? |
-|---|---|---|
-| 0–6 | No change | No |
-| 7–9 | `medium` | No |
-| 10–12 | `high` | Yes |
-| 13–15 | `critical` | Yes |
+| Incident Priority | Threat Level |
+|---|---|
+| 0–6 | No change |
+| 7–9 | `medium` |
+| 10–12 | `high` |
+| 13–15 | `critical` |
 
-Whitelisted IPs get the threat level update but are never auto-blocked.
+By default (`block=False`) the method only updates the threat level — no automatic blocking occurs. This is intentional: blocking is delegated to the rule engine (`block://` handlers), which has full context on conditions and can apply TTLs and thresholds appropriately.
+
+Pass `block=True` if you want the method to also block the IP when the new level reaches `high` or `critical`. When blocking is enabled, a 15-minute TTL (`ttl=900`) is applied via `block()`.
+
+Whitelisted IPs get the threat level update but are never blocked regardless of the `block` parameter.
 
 ### Expiry sweep
 
@@ -273,6 +277,6 @@ GET /api/system/geoip/time
 `GeoLocatedIP` and the incident system form a feedback loop. See [Incident System](../logging/incidents.md) for the full architecture.
 
 1. **Events enrich GeoLocatedIP**: `sync_metadata()` calls `geolocate()` to attach geo/threat data to events.
-2. **Incidents escalate threat levels**: `update_threat_from_incident()` is called on incident creation, escalating `threat_level` and auto-blocking at `high`/`critical`.
+2. **Incidents escalate threat levels**: `update_threat_from_incident()` is called on incident creation, escalating `threat_level` (never downgrades). It does not auto-block — blocking is delegated to the rule engine.
 3. **Rules can auto-block**: The `block://` handler in a RuleSet calls `GeoLocatedIP.block()` when conditions are met.
 4. **Admins manage via CRUD**: Block, unblock, whitelist actions through the standard REST interface with `manage_users` permission.

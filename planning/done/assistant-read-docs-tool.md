@@ -1,7 +1,7 @@
 # Assistant Read Framework Docs Tool
 
 **Type**: request
-**Status**: planned
+**Status**: resolved
 **Date**: 2026-04-05
 **Priority**: medium
 
@@ -126,3 +126,30 @@ Add a `read_docs` tool that fetches django-mojo framework docs from GitHub raw U
 
 ### Docs
 - `docs/django_developer/assistant/README.md` — Docs Domain tools table
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-04-05
+
+### What Was Built
+`read_docs` assistant tool that fetches django-mojo framework documentation from GitHub raw URLs. Supports direct path access and topic-based keyword search that scans the doc indexes. Includes SSRF validation on base URL, path traversal protection on both user input and index-extracted paths, and sanitized error messages.
+
+### Files Changed
+- `mojo/apps/assistant/services/tools/docs.py` — New file: read_docs handler, index search, path validation
+- `mojo/apps/assistant/services/tools/__init__.py` — Register docs domain
+- `docs/django_developer/assistant/README.md` — Docs Domain table, settings, test file
+
+### Tests
+- `tests/test_assistant/6_test_docs_tools.py` — 19 tests (input validation, path fetch, topic search, truncation, index parsing, security hardening)
+- Run: `bin/run_tests --agent -t test_assistant`
+
+### Security Review
+- Added SSRF validation on LLM_DOCS_BASE_URL (must be https, public host)
+- Filtered index-extracted link paths: reject .., //, /, http prefixes
+- Run _normalize_path on topic-resolved paths before fetching
+- Sanitized 404 error messages (no base URL leak)
+- Removed raw topic reflection from "not found" note
+
+### Follow-up
+- None

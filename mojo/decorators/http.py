@@ -98,7 +98,7 @@ def dispatch_error_handler(func):
             if _events_on_errors():
                 rest.MojoModel.class_report_incident_for_user(
                     details=f"Rest Mojo Error: {err.reason}",
-                    event_type="rest_error",
+                    event_type="mojo_rest_error",
                     request_data=request.DATA,
                     request=request,
                     level=5,
@@ -127,7 +127,7 @@ def dispatch_error_handler(func):
             if _events_on_errors():
                 rest.MojoModel.class_report_incident_for_user(
                     details=f"Rest Value Error: {err}",
-                    event_type="rest_error",
+                    event_type="rest_value_error",
                     request_data=request.DATA,
                     request=request,
                     level=4,

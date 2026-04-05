@@ -638,7 +638,7 @@ Rulesets installed by `ensure_ossec_rules()` are identified by name. If you need
 The incident system and `GeoLocatedIP` form a feedback loop:
 
 1. **Events enrich GeoLocatedIP**: When events arrive with a `source_ip`, `sync_metadata()` calls `GeoLocatedIP.geolocate()` to attach geo and threat data.
-2. **Incidents escalate threat levels**: `GeoLocatedIP.update_threat_from_incident(priority)` is called when incidents are created. This escalates `threat_level` (never downgrades) and auto-blocks IPs that reach `high` or `critical`.
+2. **Incidents escalate threat levels**: `GeoLocatedIP.update_threat_from_incident(priority)` is called when incidents are created. This escalates `threat_level` (never downgrades). It does not auto-block — blocking is handled by the rule engine (`block://` handlers) which has full context on conditions and TTLs.
 3. **GeoLocatedIP data feeds rules**: Rules can match on `risk_score`, `is_tor`, `is_vpn`, `threat_level`, `country_code` — any GeoIP field that ends up in event metadata.
 4. **Block/unblock flows through GeoLocatedIP**: The `block://` handler and admin actions both go through `GeoLocatedIP.block()`, ensuring a single code path for DB updates and fleet broadcasts.
 

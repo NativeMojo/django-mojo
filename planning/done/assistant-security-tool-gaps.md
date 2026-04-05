@@ -1,7 +1,7 @@
 # Assistant Security Tool Gaps
 
 **Type**: request
-**Status**: planned
+**Status**: resolved
 **Date**: 2026-04-05
 **Priority**: high
 
@@ -263,3 +263,29 @@ Add 15 new assistant tools and improve 4 existing tools to close all operational
 ### Docs
 
 - `docs/django_developer/assistant/README.md` — add all new tools to built-in tools table, document user security action tools and permissions
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-04-05
+
+### What Was Built
+15 new assistant tools and 4 existing tool improvements to close all operational gaps identified by the live agent during incident triage. Includes rule management (get/add/update/delete), IP management (unblock/whitelist/unwhitelist/query), bulk incident ops (bulk update/merge), event detail, and user security actions (disable/enable/force logout).
+
+### Files Changed
+- `mojo/apps/assistant/services/tools/security.py` — 12 new tool handlers + 4 existing tool fixes + TOOLS entries
+- `mojo/apps/assistant/services/tools/users.py` — 3 new handlers (disable_user, enable_user, force_logout) + TOOLS entries
+- `docs/django_developer/assistant/README.md` — Updated security (25 tools) and users domain tables
+
+### Tests
+- `tests/test_assistant/4_test_security_tools.py` — 25 tests covering all new + fixed tools
+- Run: `bin/run_tests --agent -t test_assistant`
+
+### Security Review
+- Added superuser guards on disable/enable/force_logout (non-superuser cannot target superuser)
+- Added self-logout guard on force_logout
+- Capped merge_incidents source_ids at 50
+- Added int() cast on user_id comparisons
+
+### Follow-up
+- None — all items from the request are addressed

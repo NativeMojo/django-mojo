@@ -251,7 +251,7 @@ class GeoLocatedIP(models.Model, MojoModel):
 
     THREAT_LEVEL_ORDER = [None, 'low', 'medium', 'high', 'critical']
 
-    def update_threat_from_incident(self, priority):
+    def update_threat_from_incident(self, priority, block=False):
         """
         Called when a new incident is created for this IP.
         Escalates threat_level based on incident priority (0-15 scale).
@@ -276,37 +276,14 @@ class GeoLocatedIP(models.Model, MojoModel):
         update_fields = ['threat_level']
 
         # Never auto-block whitelisted IPs
-        if self.is_whitelisted:
+        if self.is_whitelisted or not block:
             self.save(update_fields=update_fields)
             return
 
         # Auto-block when threat reaches high/critical
         if not self.is_blocked and new_level in ('high', 'critical'):
-            self.is_blocked = True
-            self.blocked_at = dates.utcnow()
-            self.blocked_reason = 'auto:threat_escalation'
-            self.block_count = (self.block_count or 0) + 1
-            update_fields += ['is_blocked', 'blocked_at', 'blocked_reason', 'block_count']
-
+            self.block('auto:threat_escalation', ttl=900)
         self.save(update_fields=update_fields)
-
-        if self.is_blocked and 'is_blocked' in update_fields:
-            self.log(
-                f"Auto-blocked: {self.ip_address} (threat escalated to {new_level}, priority {priority})",
-                "firewall:auto_block",
-                payload=ujson.dumps({
-                    "ip": self.ip_address,
-                    "reason": "auto:threat_escalation",
-                    "trigger": "auto:threat_escalation",
-                    "threat_level": new_level,
-                    "incident_priority": priority,
-                    "block_count": self.block_count,
-                }),
-            )
-            metrics.record("firewall:blocks", category="firewall")
-            metrics.record("firewall:auto_blocks", category="firewall")
-            if self.country_code:
-                metrics.record(f"firewall:blocks:country:{self.country_code}", category="firewall")
 
     def block(self, reason="manual", ttl=None, broadcast=True):
         """

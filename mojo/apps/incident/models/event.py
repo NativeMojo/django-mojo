@@ -354,7 +354,8 @@ class Event(models.Model, MojoModel):
             # Update IP threat level when a new incident is created
             if self.source_ip and self.geo_ip:
                 try:
-                    self.geo_ip.update_threat_from_incident(self.level)
+                    # do not block because we let the rule engine handle blocking
+                    self.geo_ip.update_threat_from_incident(self.level, block=False)
                 except Exception:
                     pass
 

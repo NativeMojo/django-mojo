@@ -1,7 +1,7 @@
 # Assistant Web Browse Tool
 
 **Type**: request
-**Status**: planned
+**Status**: resolved
 **Date**: 2026-04-05
 **Priority**: medium
 
@@ -122,3 +122,33 @@ Add a `browse_url` assistant tool that fetches web pages, extracts readable text
 
 ### Docs
 - `docs/django_developer/assistant/README.md` — Web Domain tools table
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-04-05
+
+### What Was Built
+`browse_url` assistant tool that fetches web pages and returns clean, readable text. Includes SSRF protection (private IP blocking with IPv4-mapped IPv6 handling, redirect re-validation, response streaming), scheme validation, BeautifulSoup text extraction with boilerplate stripping, CSS selector support, and configurable content truncation.
+
+### Files Changed
+- `mojo/apps/assistant/services/tools/web.py` — New file: browse_url handler, SSRF guards, text extraction
+- `mojo/apps/assistant/services/tools/__init__.py` — Register web domain
+- `pyproject.toml` — Add beautifulsoup4 dependency
+- `docs/django_developer/assistant/README.md` — Web Domain table, settings, test file
+- `docs/web_developer/assistant/README.md` — Permission mapping, example query
+
+### Tests
+- `tests/test_assistant/5_test_web_tools.py` — 27 tests (scheme validation, SSRF, IPv6 bypass, fetch, truncation, selector, extraction, registration)
+- Run: `bin/run_tests --agent -t test_assistant`
+
+### Security Review
+- Fixed IPv4-mapped IPv6 SSRF bypass (::ffff:127.0.0.1)
+- Added manual redirect loop with per-hop IP re-validation
+- Streamed response body with 1MB cap
+- Sanitized catch-all error messages
+- Added missing blocked ranges (0.0.0.0/8, 100.64.0.0/10, 2002::/16)
+- Added prompt injection warning to tool description
+
+### Follow-up
+- None

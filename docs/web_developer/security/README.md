@@ -108,7 +108,7 @@ GET /api/logs?kind=firewall:block&sort=-created&size=20
 | `firewall:unblock` | IP unblocked |
 | `firewall:whitelist` | IP whitelisted |
 | `firewall:unwhitelist` | Whitelist removed |
-| `firewall:auto_block` | Auto-blocked from incident escalation |
+| `firewall:auto_block` | Auto-blocked by a rule handler (`block://`) |
 
 All firewall logs include structured `payload` JSON with `ip`, `reason`, `trigger`, and action-specific fields. Parse `payload` for dashboard cards.
 
@@ -171,7 +171,7 @@ GET /api/metrics/fetch?category=incident_events_by_country&account=incident&gran
 | Slug | Category | What it tracks |
 |------|----------|---------------|
 | `firewall:blocks` | firewall | Manual + rule-based IP blocks |
-| `firewall:auto_blocks` | firewall | Auto-blocks from threat escalation |
+| `firewall:auto_blocks` | firewall | Auto-blocks triggered by rule handlers |
 | `firewall:blocks:country:{CC}` | firewall | Blocks by country code |
 | `firewall:broadcasts` | firewall | Fleet-wide block broadcasts |
 | `incidents` | — | Incidents created |

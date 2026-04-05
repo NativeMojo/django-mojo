@@ -18,7 +18,7 @@ class Conversation(models.Model, MojoModel):
 
     class RestMeta:
         NO_REST_SAVE = True
-        VIEW_PERMS = ["view_admin", "owner"]
+        VIEW_PERMS = ["view_admin", "assistant", "owner"]
         OWNER_FIELD = "user"
         CAN_DELETE = True
         GRAPHS = {

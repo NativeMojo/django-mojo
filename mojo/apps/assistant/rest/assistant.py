@@ -9,11 +9,11 @@ Endpoints:
 """
 from mojo import decorators as md
 from mojo.helpers.response import JsonResponse
-from mojo.apps.assistant.models import Conversation
+from mojo.apps.assistant.models import Conversation, Message
 
 
 @md.POST('/api/assistant')
-@md.requires_perms('view_admin')
+@md.requires_perms('view_admin', 'assistant')
 @md.rate_limit("assistant", ip_limit=60, duid_limit=30)
 @md.requires_params('message')
 def on_assistant_message(request):
@@ -43,6 +43,65 @@ def on_assistant_message(request):
         data["blocks"] = blocks
 
     return JsonResponse({"status": True, "data": data})
+
+
+@md.POST('/api/assistant/context')
+@md.requires_perms('view_admin', 'assistant')
+@md.requires_params('model', 'pk')
+def on_assistant_context(request):
+    """Create a conversation pre-loaded with context from any MojoModel instance."""
+    from mojo.apps.assistant.services.context import resolve_model, build_context
+
+    model_string = request.DATA.model
+    pk = request.DATA.pk
+
+    # Validate model exists
+    model, err = resolve_model(model_string)
+    if err:
+        return JsonResponse({"status": False, "error": err["error"]}, status=400)
+
+    # Check user has VIEW_PERMS for this model
+    view_perms = getattr(model.RestMeta, "VIEW_PERMS", [])
+    has_access = False
+    for perm in view_perms:
+        if perm == "owner":
+            continue
+        if request.user.has_permission(perm):
+            has_access = True
+            break
+    if not has_access:
+        return JsonResponse({"status": False, "error": "Permission denied"}, status=403)
+
+    # Duplicate prevention: same user + same model + same pk
+    existing = Conversation.objects.filter(
+        user=request.user,
+        metadata__source_model=model_string.lower(),
+        metadata__source_pk=pk,
+    ).first()
+    if existing:
+        return JsonResponse({"status": True, "data": {"conversation_id": existing.pk, "existing": True}})
+
+    # Build the context message
+    title, message, error = build_context(model_string, pk)
+    if error:
+        return JsonResponse({"status": False, "error": error}, status=404)
+
+    # Create conversation + first message
+    conversation = Conversation.objects.create(
+        user=request.user,
+        title=title[:255],
+        metadata={
+            "source_model": model_string.lower(),
+            "source_pk": pk,
+        },
+    )
+    Message.objects.create(
+        conversation=conversation,
+        role="user",
+        content=message,
+    )
+
+    return JsonResponse({"status": True, "data": {"conversation_id": conversation.pk}})
 
 
 @md.URL('conversation')

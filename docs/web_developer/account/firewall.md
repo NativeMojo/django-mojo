@@ -205,7 +205,7 @@ GET /api/logs?kind__startswith=firewall:&sort=-created&size=50
 |-------|-------|
 | `?kind=firewall:block` | Manual and API-triggered blocks |
 | `?kind=firewall:unblock` | Unblock events |
-| `?kind=firewall:auto_block` | Automatic blocks from threat escalation |
+| `?kind=firewall:auto_block` | Automatic blocks triggered by a rule handler |
 | `?kind=firewall:whitelist` | Whitelist additions |
 | `?kind=firewall:unwhitelist` | Whitelist removals |
 | `?kind=firewall:broadcast_block` | Fleet-wide block broadcasts |
@@ -253,7 +253,7 @@ The `payload` field is a JSON string with structured data. Parse it client-side 
 
 ## Connecting Incidents to Blocks
 
-When an incident auto-escalates an IP's threat level, it may trigger an automatic block. To see the full chain:
+Incidents escalate an IP's `threat_level` but do not directly trigger blocks. Blocking is handled by the rule engine — when a rule with a `block://` handler fires, it calls `GeoLocatedIP.block()` fleet-wide. To trace the full chain for a given IP:
 
 ### 1. Get incidents for an IP
 
@@ -314,7 +314,7 @@ Only blocking events are tracked as metrics. Unblocks and whitelist changes are 
 | Slug | Description |
 |------|-------------|
 | `firewall:blocks` | Total IP blocks (manual + auto) |
-| `firewall:auto_blocks` | Automatic blocks from threat escalation |
+| `firewall:auto_blocks` | Automatic blocks triggered by rule handlers |
 | `firewall:broadcasts` | Fleet-wide broadcast operations |
 | `firewall:blocks:country:{CC}` | Blocks by country code (e.g. `firewall:blocks:country:CN`) |
 

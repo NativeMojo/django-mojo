@@ -103,6 +103,74 @@ The `blocks` array is only present when the LLM includes structured data. See [S
 
 ---
 
+### Create Context Conversation
+
+```
+POST /api/assistant/context
+```
+
+Create a conversation pre-loaded with the full context of any model instance. Use this for "Open in Assistant" buttons on detail views.
+
+**Permission**: `view_admin` + the model's own `VIEW_PERMS`
+
+**Request body**:
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `model` | string | Yes | Model identifier in `app_label.ModelName` format (e.g. `incident.Ticket`, `incident.Incident`) |
+| `pk` | integer | Yes | Primary key of the instance |
+
+**Response** (success — new conversation):
+
+```json
+{
+    "status": true,
+    "data": {
+        "conversation_id": 789
+    }
+}
+```
+
+**Response** (success — existing conversation found):
+
+```json
+{
+    "status": true,
+    "data": {
+        "conversation_id": 789,
+        "existing": true
+    }
+}
+```
+
+**Duplicate prevention**: If the same user has already opened an assistant conversation for the same model + pk, the existing conversation is returned instead of creating a new one.
+
+**Errors**:
+
+| Status | Condition |
+|---|---|
+| 400 | Invalid model format or model not found |
+| 403 | User lacks `view_admin` or model `VIEW_PERMS` |
+| 404 | Instance with given pk not found |
+
+**Example — open assistant from a ticket detail view**:
+
+```javascript
+async function openAssistant(ticketId) {
+    const resp = await api.post('/api/assistant/context', {
+        model: 'incident.Ticket',
+        pk: ticketId,
+    });
+    if (resp.data.status) {
+        assistantPanel.open(resp.data.data.conversation_id);
+    }
+}
+```
+
+After creation, use the standard `POST /api/assistant` or WebSocket `assistant_message` with the returned `conversation_id` to continue the conversation.
+
+---
+
 ### List Conversations
 
 ```

@@ -352,39 +352,49 @@ def test_find_scheduled_functions(opts):
     from mojo.decorators.cron import schedule
     from mojo.helpers.cron import find_scheduled_functions
 
+    # Save existing state so we can restore it after the test
+    existing = list(getattr(schedule, 'scheduled_functions', []))
+
     # Clear any existing scheduled functions
     if hasattr(schedule, 'scheduled_functions'):
         schedule.scheduled_functions.clear()
     else:
         schedule.scheduled_functions = []
 
-    # Define test functions with different schedules
-    @schedule(minutes='50', hours='11')
-    def test_func1():
-        return "test1"
+    try:
+        # Define test functions with different schedules
+        @schedule(minutes='50', hours='11')
+        def test_func1():
+            return "test1"
 
-    @schedule(minutes='*')
-    def test_func2():
-        return "test2"
+        @schedule(minutes='*')
+        def test_func2():
+            return "test2"
 
-    @schedule(minutes='30', hours='9')
-    def test_func3():
-        return "test3"
+        @schedule(minutes='30', hours='9')
+        def test_func3():
+            return "test3"
 
-    # Mock datetime.now to return our test time (11:50)
-    with patch('mojo.helpers.cron.datetime') as mock_datetime:
-        mock_datetime.datetime.now.return_value = opts.test_time
+        # Mock datetime.now to return our test time (11:50)
+        with patch('mojo.helpers.cron.datetime') as mock_datetime:
+            mock_datetime.datetime.now.return_value = opts.test_time
 
-        # Find functions that should run at 11:50
-        funcs = find_scheduled_functions()
+            # Find functions that should run at 11:50
+            funcs = find_scheduled_functions()
 
-        # test_func1 should match (11:50)
-        # test_func2 should match (every minute)
-        # test_func3 should not match (9:30)
-        assert len(funcs) == 2, f"Expected 2 functions to match at 11:50, got {len(funcs)}"
-        assert test_func1 in funcs, "test_func1 (11:50) should be in matched functions"
-        assert test_func2 in funcs, "test_func2 (every minute) should be in matched functions"
-        assert test_func3 not in funcs, "test_func3 (9:30) should not be in matched functions"
+            # test_func1 should match (11:50)
+            # test_func2 should match (every minute)
+            # test_func3 should not match (9:30)
+            assert len(funcs) == 2, f"Expected 2 functions to match at 11:50, got {len(funcs)}"
+            assert test_func1 in funcs, "test_func1 (11:50) should be in matched functions"
+            assert test_func2 in funcs, "test_func2 (every minute) should be in matched functions"
+            assert test_func3 not in funcs, "test_func3 (9:30) should not be in matched functions"
+    finally:
+        # Restore original registered functions so parallel tests are not affected
+        if hasattr(schedule, 'scheduled_functions'):
+            schedule.scheduled_functions[:] = existing
+        else:
+            schedule.scheduled_functions = existing
 
 
 @th.django_unit_test()
@@ -436,6 +446,9 @@ def test_run_now(opts):
     from mojo.helpers.cron import run_now
     from mojo.decorators.cron import schedule
 
+    # Save existing state so we can restore it after the test
+    existing = list(getattr(schedule, 'scheduled_functions', []))
+
     # Clear existing functions
     if hasattr(schedule, 'scheduled_functions'):
         schedule.scheduled_functions.clear()
@@ -445,30 +458,37 @@ def test_run_now(opts):
     # Track function executions
     executed = []
 
-    @schedule(minutes='*')  # Runs every minute
-    def always_run():
-        executed.append('always')
+    try:
+        @schedule(minutes='*')  # Runs every minute
+        def always_run():
+            executed.append('always')
 
-    @schedule(minutes='50', hours='11')  # Runs at 11:50
-    def specific_time():
-        executed.append('specific')
+        @schedule(minutes='50', hours='11')  # Runs at 11:50
+        def specific_time():
+            executed.append('specific')
 
-    @schedule(minutes='30', hours='9')  # Runs at 9:30
-    def other_time():
-        executed.append('other')
+        @schedule(minutes='30', hours='9')  # Runs at 9:30
+        def other_time():
+            executed.append('other')
 
-    # Mock datetime to return 11:50
-    with patch('mojo.helpers.cron.datetime') as mock_datetime:
-        mock_datetime.datetime.now.return_value = opts.test_time
+        # Mock datetime to return 11:50
+        with patch('mojo.helpers.cron.datetime') as mock_datetime:
+            mock_datetime.datetime.now.return_value = opts.test_time
 
-        # Run scheduled functions
-        run_now()
+            # Run scheduled functions
+            run_now()
 
-        # Check which functions executed
-        assert 'always' in executed, "always_run should have executed"
-        assert 'specific' in executed, "specific_time should have executed"
-        assert 'other' not in executed, "other_time should not have executed"
-        assert len(executed) == 2, f"Expected 2 functions to execute, got {len(executed)}: {executed}"
+            # Check which functions executed
+            assert 'always' in executed, "always_run should have executed"
+            assert 'specific' in executed, "specific_time should have executed"
+            assert 'other' not in executed, "other_time should not have executed"
+            assert len(executed) == 2, f"Expected 2 functions to execute, got {len(executed)}: {executed}"
+    finally:
+        # Restore original registered functions so parallel tests are not affected
+        if hasattr(schedule, 'scheduled_functions'):
+            schedule.scheduled_functions[:] = existing
+        else:
+            schedule.scheduled_functions = existing
 
 
 @th.django_unit_test()
@@ -476,37 +496,47 @@ def test_decorator_registration(opts):
     """Test that the @schedule decorator properly registers functions"""
     from mojo.decorators.cron import schedule
 
+    # Save existing state so we can restore it after the test
+    existing = list(getattr(schedule, 'scheduled_functions', []))
+
     # Clear any existing functions
     if hasattr(schedule, 'scheduled_functions'):
         schedule.scheduled_functions.clear()
     else:
         schedule.scheduled_functions = []
 
-    # Define functions with decorator
-    @schedule(minutes='0,30', hours='*')
-    def half_hourly():
-        return "half_hourly"
+    try:
+        # Define functions with decorator
+        @schedule(minutes='0,30', hours='*')
+        def half_hourly():
+            return "half_hourly"
 
-    @schedule(minutes='0', hours='0', days='1', months='*', weekdays='*')
-    def monthly():
-        return "monthly"
+        @schedule(minutes='0', hours='0', days='1', months='*', weekdays='*')
+        def monthly():
+            return "monthly"
 
-    # Check that functions were registered
-    assert hasattr(schedule, 'scheduled_functions'), "schedule should have scheduled_functions attribute"
-    assert len(schedule.scheduled_functions) == 2, f"Should have 2 scheduled functions, got {len(schedule.scheduled_functions)}"
+        # Check that functions were registered
+        assert hasattr(schedule, 'scheduled_functions'), "schedule should have scheduled_functions attribute"
+        assert len(schedule.scheduled_functions) == 2, f"Should have 2 scheduled functions, got {len(schedule.scheduled_functions)}"
 
-    # Check first function registration
-    func1 = schedule.scheduled_functions[0]
-    assert func1['func'] == half_hourly, "First function should be half_hourly"
-    assert func1['minutes'] == '0,30', "First function minutes should be '0,30'"
-    assert func1['hours'] == '*', "First function hours should be '*'"
+        # Check first function registration
+        func1 = schedule.scheduled_functions[0]
+        assert func1['func'] == half_hourly, "First function should be half_hourly"
+        assert func1['minutes'] == '0,30', "First function minutes should be '0,30'"
+        assert func1['hours'] == '*', "First function hours should be '*'"
 
-    # Check second function registration
-    func2 = schedule.scheduled_functions[1]
-    assert func2['func'] == monthly, "Second function should be monthly"
-    assert func2['minutes'] == '0', "Second function minutes should be '0'"
-    assert func2['hours'] == '0', "Second function hours should be '0'"
-    assert func2['days'] == '1', "Second function days should be '1'"
+        # Check second function registration
+        func2 = schedule.scheduled_functions[1]
+        assert func2['func'] == monthly, "Second function should be monthly"
+        assert func2['minutes'] == '0', "Second function minutes should be '0'"
+        assert func2['hours'] == '0', "Second function hours should be '0'"
+        assert func2['days'] == '1', "Second function days should be '1'"
+    finally:
+        # Restore original registered functions so parallel tests are not affected
+        if hasattr(schedule, 'scheduled_functions'):
+            schedule.scheduled_functions[:] = existing
+        else:
+            schedule.scheduled_functions = existing
 
 
 # ============================================================================
@@ -557,9 +587,15 @@ def test_load_app_cron_real_modules_no_errors(opts):
         if not isinstance(exc, (ImportError, ModuleNotFoundError)):
             assert False, f"load_app_cron() raised unexpected {type(exc).__name__}: {exc}"
 
-    # Restore: remove any duplicate registrations added by the fresh imports
+    # Restore: remove any duplicate registrations added by the fresh imports.
+    # Also pop the freshly-imported modules from sys.modules so that other tests
+    # that import them will trigger fresh decorator registration — leaving a module
+    # in sys.modules while its functions are absent from scheduled_functions is an
+    # inconsistent state that breaks parallel/serial test isolation.
     if hasattr(schedule, 'scheduled_functions'):
         schedule.scheduled_functions[:] = existing
+    for module_name in known_modules:
+        sys.modules.pop(module_name, None)
 
 
 @th.django_unit_test()
@@ -603,8 +639,12 @@ def test_incident_cronjobs_registered(opts):
     assert refresh_spec['weekdays'] == '0', \
         f"refresh_ipsets should run on weekday 0 (weekdays='0'), got {refresh_spec['weekdays']!r}"
 
+    # Restore scheduled_functions and pop the freshly-imported module from
+    # sys.modules so that subsequent tests that import it will trigger fresh
+    # decorator registration, keeping sys.modules and scheduled_functions consistent.
     if hasattr(schedule, 'scheduled_functions'):
         schedule.scheduled_functions[:] = existing
+    sys.modules.pop("mojo.apps.incident.cronjobs", None)
 
 
 @th.django_unit_test()

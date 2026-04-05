@@ -1,3 +1,4 @@
 TESTIT = {
     "requires_apps": ["mojo.apps.incident"],
+    "serial": True,
 }
