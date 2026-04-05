@@ -67,6 +67,19 @@ def handle_assistant_message(user, data):
             return _handle_message(user, data)
         except Exception:
             logger.exception("assistant handler crashed for user %s", user.pk)
+            try:
+                from mojo.apps.incident import report_event
+                report_event(
+                    f"Assistant WS handler crashed for user {user.email} (id={user.pk})",
+                    title="Assistant handler crash",
+                    category="assistant:error",
+                    level=7,
+                    uid=user.pk,
+                    model_name="account.User",
+                    model_id=user.pk,
+                )
+            except Exception:
+                pass
             return {"type": "assistant_error", "error": "Failed to process message. Please try again."}
 
     return {"type": "assistant_error", "error": f"Unknown assistant message type: {message_type}"}
@@ -85,6 +98,19 @@ def _handle_message(user, data):
     # Check permission
     if not user.has_permission("view_admin"):
         logger.info("assistant: permission denied for user %s", user.pk)
+        try:
+            from mojo.apps.incident import report_event
+            report_event(
+                f"WS assistant access denied for user {user.email} (id={user.pk})",
+                title="WS assistant permission denied",
+                category="assistant:permission_denied",
+                level=5,
+                uid=user.pk,
+                model_name="account.User",
+                model_id=user.pk,
+            )
+        except Exception:
+            pass
         return {"type": "assistant_error", "error": "Permission denied. You need 'view_admin' permission."}
 
     message = (data.get("message") or "").strip()
@@ -104,7 +130,16 @@ def _handle_message(user, data):
 
     if not conversation:
         title = message[:100]
-        conversation = Conversation.objects.create(user=user, title=title)
+        # Resolve group from data if provided
+        group = None
+        group_id = data.get("group_id")
+        if group_id:
+            try:
+                from mojo.apps.account.models import Group
+                group = Group.objects.get(pk=group_id)
+            except Exception:
+                pass
+        conversation = Conversation.objects.create(user=user, title=title, group=group)
 
     # Store user message
     Message.objects.create(
@@ -190,6 +225,17 @@ def _run_agent_thread(user_id, conversation_id, message):
     except Exception:
         logger.exception("assistant thread: agent crashed for user %s conv %s",
                          user_id, conversation_id)
+        try:
+            from mojo.apps.incident import report_event
+            report_event(
+                f"Assistant thread crashed for user id={user_id}, conv={conversation_id}",
+                title="Assistant thread crash",
+                category="assistant:error",
+                level=7,
+                uid=user_id,
+            )
+        except Exception:
+            pass
         on_event("error", {"error": "The assistant encountered an unexpected error. Please try again."})
         return
 

@@ -14,3 +14,4 @@ from . import docs  # noqa: F401
 from . import models  # noqa: F401
 from . import logs  # noqa: F401
 from . import files  # noqa: F401
+from . import memory  # noqa: F401

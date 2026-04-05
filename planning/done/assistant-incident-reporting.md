@@ -1,7 +1,7 @@
 # Assistant Incident Event Reporting
 
 **Type**: request
-**Status**: open
+**Status**: done
 **Date**: 2026-04-05
 **Priority**: high
 

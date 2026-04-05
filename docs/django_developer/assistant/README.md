@@ -201,6 +201,44 @@ By default, log content is truncated at 500 characters. Pass `verbose: true` to 
 
 Discovery tools let the LLM explore the system. When a user asks "what metrics do we track?" or "what can you do?", the LLM calls these tools to find valid slugs, categories, channels, and permissions — rather than guessing.
 
+## Incident Event Reporting
+
+The assistant reports security-relevant actions and errors to the incident system via `incident.report_event()`. Events flow through the rule engine for automated response (blocking, ticketing, notifications).
+
+### Event Categories
+
+| Category | Level | Trigger |
+|---|---|---|
+| `assistant:permission_denied` | 5 | User's tool call blocked by permission gate |
+| `assistant:permission_denied` | 6 | LLM requested a tool not in the registry |
+| `assistant:tool:<name>` | 5 | Successful mutating tool execution (block_ip, disable_user, etc.) |
+| `assistant:error` | 6 | Tool handler raised an unhandled exception |
+| `assistant:error` | 7 | Agent loop crashed |
+| `assistant:error` | 5 | Max tool turns exhausted |
+| `assistant:error:api` | 7 | LLM API auth failure or model not found |
+| `assistant:error:api` | 5 | LLM API rate limit hit |
+
+### Design
+
+- **Permission denied = always an event.** These are security signals for probing/brute-force detection.
+- **Mutating tools = event on success only.** No event when the tool returns an error dict (operation failed).
+- **Read-only tools = no events.** Too high volume, low signal.
+- **Events supplement, not replace, file logging.** Existing `logger` calls remain for debug.
+- **`_report_event()` never raises** — wrapped in try/except to avoid breaking the assistant if the incident system is down.
+
+### Suggested RuleSets
+
+| Name | Category | Bundle | Trigger | Handler |
+|---|---|---|---|---|
+| Permission Probing | `assistant:permission_denied` | SOURCE_IP | 5 in 10 min | `ticket://?priority=7` |
+| Rapid Permission Changes | `assistant:tool:update_permission` | SOURCE_IP | 3 in 5 min | `ticket://?priority=8,notify://perm@manage_security` |
+| Error Spike | `assistant:error` | HOSTNAME | 10 in 30 min | `notify://perm@manage_security` |
+
+### Key Files
+
+- `mojo/apps/assistant/services/agent.py` — `_report_event()` helper, events in both REST and WS agent loops
+- `mojo/apps/assistant/handler.py` — events for WS permission denied and handler/thread crashes
+
 ## Context Conversations
 
 Create a conversation pre-loaded with the full context of any MojoModel instance. The UI calls this to provide an "Open in Assistant" button from any detail view (tickets, incidents, or any other model).
@@ -552,3 +590,4 @@ Test files:
 - `tests/test_assistant/9_test_ticket_tools.py` — Ticket management tools (get, update, add note)
 - `tests/test_assistant/10_test_file_tools.py` — File domain tools: query, metadata, image analysis
 - `tests/test_assistant/11_test_context.py` — Context conversations: ticket, incident, generic model, duplicate prevention, permission checks
+- `tests/test_assistant/12_test_incident_reporting.py` — Incident event reporting: permission denied events, mutating tool events, error events, category conventions

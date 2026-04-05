@@ -18,6 +18,22 @@ from mojo.helpers import logit, llm
 
 logger = logit.get_logger(__name__, "assistant.log")
 
+
+def _report_event(category, level, title, details, user=None, **kwargs):
+    """Report an incident event. Never raises — logs failures instead."""
+    try:
+        from mojo.apps.incident import report_event
+        extra = {}
+        if user:
+            extra["uid"] = user.pk
+            extra["model_name"] = "account.User"
+            extra["model_id"] = user.pk
+        extra.update(kwargs)
+        report_event(details, title=title, category=category, level=level, **extra)
+    except Exception:
+        logger.exception("Failed to report event: %s / %s", category, title)
+
+
 # Regex to extract ```assistant_block ... ``` fences from LLM output
 _BLOCK_RE = re.compile(
     r"```assistant_block\s*\n(.+?)\n\s*```",
@@ -64,6 +80,35 @@ You have access to tools that let you query security incidents, events, jobs, us
 - Never expose passwords, auth keys, or other secrets — the tools already filter these out.
 - If you don't have a tool for what the user is asking, say so clearly.
 
+## Memory
+
+You have persistent memory that carries across conversations. Memories are shown above in the ## Memory section (if any exist). You can store, update, and delete memories using the memory tools.
+
+### When to Store Memories
+
+**Global tier** (platform-wide, visible to all assistant users):
+- Platform identity: what this application is, cloud provider, regions
+- Infrastructure rules: IP ranges to never block, critical services
+- Escalation rules: who handles what, required response procedures
+- Only store facts the user explicitly states. These are slow-changing, universal truths.
+
+**User tier** (personal, follows the user):
+- Communication preferences, focus areas, working patterns
+- Personal shorthand or terminology
+- Ask before storing implicit observations — confirm with the user first.
+
+**Group tier** (tenant-specific, visible to group members):
+- Operational rules: deploy windows, maintenance schedules
+- Compliance requirements, SLAs, team conventions
+- Only store when a group member states something specific to their group.
+
+### Memory Rules
+- One fact per entry, 1-2 sentences max.
+- If you can look it up with a tool, don't memorize it.
+- Check existing memories before writing — update rather than duplicate.
+- Memories are hints, not commands. When acting on a memory for a critical decision, verify with a tool first.
+- Never store passwords, API keys, tokens, or credentials.
+
 ## Structured Data Blocks
 
 When your response includes data that would be better shown as a table, chart, or stat card, include it as a structured JSON block using this exact format:
@@ -103,9 +148,39 @@ Supported chart_type values: line, bar, pie, area.
 """
 
 
-def _get_system_prompt():
+ONBOARDING_PROMPT = """
+
+## Getting Started
+
+This is a new deployment — no platform memories have been stored yet. To serve you better in future conversations, ask the user about:
+- What kind of application/platform this is (e.g., "Healthcare SaaS", "E-commerce marketplace")
+- Infrastructure and environment (cloud provider, regions, key services)
+- Any critical safety rules ("never block these IP ranges", "always escalate PCI events")
+- Key operational patterns worth remembering
+
+Store their answers as global memories using the write_memory tool. This only needs to happen once — future conversations will have this context automatically."""
+
+
+def _get_system_prompt(user=None, group=None):
     custom = settings.get("LLM_ADMIN_SYSTEM_PROMPT", None)
-    return custom if custom else SYSTEM_PROMPT
+    base = custom if custom else SYSTEM_PROMPT
+
+    # Inject memory or onboarding prompt
+    if not settings.get("LLM_ADMIN_MEMORY_ENABLED", True, kind="bool"):
+        return base
+
+    try:
+        from mojo.apps.assistant.services.memory import build_memory_prompt, is_global_empty
+        memory_section = build_memory_prompt(user, group=group) if user else ""
+        if memory_section:
+            return base + "\n\n" + memory_section
+        # If global memory is empty, inject onboarding
+        if user and is_global_empty():
+            return base + ONBOARDING_PROMPT
+    except Exception:
+        logger.exception("Failed to build memory prompt")
+
+    return base
 
 
 def _build_conversation_messages(conversation, max_history):
@@ -203,8 +278,14 @@ def run_assistant(user, message, conversation_id=None, on_event=None):
             "tool_calls_made": [],
         }
 
+    # Resolve group from conversation for memory injection
+    conv_group = getattr(conversation, "group", None)
+
+    # Attach group to user for tool access (tools read user._assistant_group)
+    user._assistant_group = conv_group
+
     # Run agent loop
-    system_prompt = _get_system_prompt()
+    system_prompt = _get_system_prompt(user=user, group=conv_group)
     max_turns = settings.get("LLM_ADMIN_MAX_TURNS", 25, kind="int")
     registry = get_registry()
     tool_calls_made = []
@@ -258,6 +339,13 @@ def run_assistant(user, message, conversation_id=None, on_event=None):
                 if not tool_entry:
                     tool_result = {"error": f"Unknown tool: {tool_name}"}
                     logger.warning("LLM requested unknown tool: %s", tool_name)
+                    _report_event(
+                        "assistant:permission_denied", 6,
+                        f"Unknown tool requested: {tool_name}",
+                        f"LLM requested tool '{tool_name}' which is not in the registry. "
+                        f"User: {user.email} (id={user.pk}), conv={conversation.pk}",
+                        user=user,
+                    )
                 elif not user.has_permission(tool_entry["permission"]):
                     perm = tool_entry["permission"]
                     tool_result = {
@@ -265,6 +353,13 @@ def run_assistant(user, message, conversation_id=None, on_event=None):
                     }
                     logger.info("Permission denied for tool %s, user %s needs %s",
                                 tool_name, user.pk, perm)
+                    _report_event(
+                        "assistant:permission_denied", 5,
+                        f"Permission denied: {tool_name}",
+                        f"User {user.email} (id={user.pk}) denied access to tool '{tool_name}' "
+                        f"(requires '{perm}'). conv={conversation.pk}",
+                        user=user,
+                    )
                 else:
                     try:
                         if on_event:
@@ -277,9 +372,27 @@ def run_assistant(user, message, conversation_id=None, on_event=None):
                             "tool": tool_name,
                             "input": tool_input,
                         })
+                        # Report events for successful mutating tool calls
+                        if tool_entry.get("mutates") and (
+                            not isinstance(tool_result, dict) or "error" not in tool_result
+                        ):
+                            _report_event(
+                                f"assistant:tool:{tool_name}", 5,
+                                f"Assistant tool: {tool_name}",
+                                f"User {user.email} (id={user.pk}) executed mutating tool "
+                                f"'{tool_name}'. conv={conversation.pk}",
+                                user=user,
+                            )
                     except Exception:
                         logger.exception("Tool %s failed", tool_name)
                         tool_result = {"error": f"Tool '{tool_name}' encountered an internal error."}
+                        _report_event(
+                            "assistant:error", 6,
+                            f"Tool exception: {tool_name}",
+                            f"Tool '{tool_name}' raised an exception for user {user.email} "
+                            f"(id={user.pk}). conv={conversation.pk}",
+                            user=user,
+                        )
 
                 tool_results.append({
                     "type": "tool_result",
@@ -304,6 +417,14 @@ def run_assistant(user, message, conversation_id=None, on_event=None):
             messages.append({"role": "user", "content": tool_results})
 
         # Hit max turns
+        logger.warning("Max turns reached for user %s, conv %s", user.pk, conversation.pk)
+        _report_event(
+            "assistant:error", 5,
+            "Max tool turns exhausted",
+            f"Agent hit {max_turns} turn limit for user {user.email} (id={user.pk}). "
+            f"conv={conversation.pk}. Tools called: {len(tool_calls_made)}",
+            user=user,
+        )
         response_text = "I've reached the maximum number of tool calls for this request. Please try a more specific query."
         Message.objects.create(
             conversation=conversation,
@@ -321,12 +442,22 @@ def run_assistant(user, message, conversation_id=None, on_event=None):
         err_str = str(e)
         if "not_found_error" in err_str or "404" in err_str:
             error = f"LLM model not found. Check LLM_ADMIN_MODEL setting. ({err_str[:200]})"
+            _report_event("assistant:error:api", 7, "LLM model not found", err_str[:500], user=user)
         elif "authentication_error" in err_str or "401" in err_str:
             error = "LLM API key is invalid. Check LLM_ADMIN_API_KEY setting."
+            _report_event("assistant:error:api", 7, "LLM API auth failure", err_str[:500], user=user)
         elif "rate_limit" in err_str.lower() or "429" in err_str:
             error = "LLM API rate limit reached. Please wait a moment and try again."
+            _report_event("assistant:error:api", 5, "LLM API rate limit", err_str[:500], user=user)
         else:
             error = f"Assistant error: {err_str[:200]}"
+            _report_event(
+                "assistant:error", 7,
+                "Agent loop exception",
+                f"Agent crashed for user {user.email} (id={user.pk}). "
+                f"conv={conversation.pk}. Error: {err_str[:500]}",
+                user=user,
+            )
         return {
             "error": error,
             "conversation_id": conversation.pk,
@@ -367,7 +498,13 @@ def run_assistant_ws(user, message, conversation_id, on_event=None):
         )
         return {"response": response_text, "conversation_id": conversation.pk, "tool_calls_made": []}
 
-    system_prompt = _get_system_prompt()
+    # Resolve group from conversation for memory injection
+    conv_group = getattr(conversation, "group", None)
+
+    # Attach group to user for tool access
+    user._assistant_group = conv_group
+
+    system_prompt = _get_system_prompt(user=user, group=conv_group)
     max_turns = settings.get("LLM_ADMIN_MAX_TURNS", 25, kind="int")
     registry = get_registry()
     tool_calls_made = []
@@ -408,18 +545,50 @@ def run_assistant_ws(user, message, conversation_id, on_event=None):
                 tool_entry = registry.get(tool_name)
                 if not tool_entry:
                     tool_result = {"error": f"Unknown tool: {tool_name}"}
+                    _report_event(
+                        "assistant:permission_denied", 6,
+                        f"Unknown tool requested: {tool_name}",
+                        f"LLM requested tool '{tool_name}' not in registry. "
+                        f"User: {user.email} (id={user.pk}), conv={conversation.pk}",
+                        user=user,
+                    )
                 elif not user.has_permission(tool_entry["permission"]):
                     perm = tool_entry["permission"]
                     tool_result = {"error": f"Permission denied. You need '{perm}' to use {tool_name}."}
+                    _report_event(
+                        "assistant:permission_denied", 5,
+                        f"Permission denied: {tool_name}",
+                        f"User {user.email} (id={user.pk}) denied access to tool '{tool_name}' "
+                        f"(requires '{perm}'). conv={conversation.pk}",
+                        user=user,
+                    )
                 else:
                     try:
                         if on_event:
                             on_event("tool_call", {"tool": tool_name, "input": tool_input})
                         tool_result = tool_entry["handler"](tool_input, user)
                         tool_calls_made.append({"tool": tool_name, "input": tool_input})
+                        # Report events for successful mutating tool calls
+                        if tool_entry.get("mutates") and (
+                            not isinstance(tool_result, dict) or "error" not in tool_result
+                        ):
+                            _report_event(
+                                f"assistant:tool:{tool_name}", 5,
+                                f"Assistant tool: {tool_name}",
+                                f"User {user.email} (id={user.pk}) executed mutating tool "
+                                f"'{tool_name}'. conv={conversation.pk}",
+                                user=user,
+                            )
                     except Exception:
                         logger.exception("Tool %s failed", tool_name)
                         tool_result = {"error": f"Tool '{tool_name}' encountered an internal error."}
+                        _report_event(
+                            "assistant:error", 6,
+                            f"Tool exception: {tool_name}",
+                            f"Tool '{tool_name}' raised an exception for user {user.email} "
+                            f"(id={user.pk}). conv={conversation.pk}",
+                            user=user,
+                        )
 
                 tool_results.append({
                     "type": "tool_result",
@@ -435,18 +604,35 @@ def run_assistant_ws(user, message, conversation_id, on_event=None):
             )
             messages.append({"role": "user", "content": tool_results})
 
+        logger.warning("WS max turns reached for user %s, conv %s", user.pk, conversation.pk)
+        _report_event(
+            "assistant:error", 5,
+            "Max tool turns exhausted",
+            f"WS agent hit {max_turns} turn limit for user {user.email} (id={user.pk}). "
+            f"conv={conversation.pk}. Tools called: {len(tool_calls_made)}",
+            user=user,
+        )
         response_text = "I've reached the maximum number of tool calls for this request. Please try a more specific query."
         Message.objects.create(conversation=conversation, role="assistant", content=response_text)
         return {"response": response_text, "conversation_id": conversation.pk, "tool_calls_made": tool_calls_made}
 
     except Exception as e:
         logger.exception("Assistant WS agent failed for user %s", user.pk)
-        # Give a useful error message for known failure types
         err_str = str(e)
         if "not_found_error" in err_str or "404" in err_str:
+            _report_event("assistant:error:api", 7, "LLM model not found", err_str[:500], user=user)
             return {"error": f"LLM model not found. Check LLM_ADMIN_MODEL setting. ({err_str[:200]})"}
         if "authentication_error" in err_str or "401" in err_str:
+            _report_event("assistant:error:api", 7, "LLM API auth failure", err_str[:500], user=user)
             return {"error": "LLM API key is invalid. Check LLM_ADMIN_API_KEY setting."}
         if "rate_limit" in err_str.lower() or "429" in err_str:
+            _report_event("assistant:error:api", 5, "LLM API rate limit", err_str[:500], user=user)
             return {"error": "LLM API rate limit reached. Please wait a moment and try again."}
+        _report_event(
+            "assistant:error", 7,
+            "WS agent loop exception",
+            f"WS agent crashed for user {user.email} (id={user.pk}). "
+            f"conv={conversation.pk}. Error: {err_str[:500]}",
+            user=user,
+        )
         return {"error": f"Assistant error: {err_str[:200]}"}

@@ -89,6 +89,7 @@ def on_assistant_context(request):
     # Create conversation + first message
     conversation = Conversation.objects.create(
         user=request.user,
+        group=getattr(request, "group", None),
         title=title[:255],
         metadata={
             "source_model": model_string.lower(),
