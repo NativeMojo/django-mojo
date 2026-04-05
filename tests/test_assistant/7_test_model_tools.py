@@ -339,6 +339,8 @@ def test_is_sensitive_field(opts):
     assert _is_sensitive_field("onetime_code") is True, "onetime_code should be sensitive"
     assert _is_sensitive_field("secret_token") is True, "secret_token should be sensitive"
     assert _is_sensitive_field("token_secret") is True, "token_secret should be sensitive"
+    assert _is_sensitive_field("access_token") is True, "access_token should be sensitive"
+    assert _is_sensitive_field("refresh_token") is True, "refresh_token should be sensitive"
     assert _is_sensitive_field("email") is False, "email should not be sensitive"
     assert _is_sensitive_field("title") is False, "title should not be sensitive"
 
@@ -385,3 +387,74 @@ def test_query_model_registered(opts):
         f"Permission should be view_admin, got: {entry['permission']}"
     assert entry["mutates"] is False, "query_model should not be mutating"
     assert entry["domain"] == "models", f"Domain should be 'models', got: {entry['domain']}"
+
+
+# ---------------------------------------------------------------------------
+# Security hardening — relational traversal, ordering, error sanitization
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test()
+def test_query_blocks_relational_sensitive_traversal(opts):
+    """user__password__icontains should be blocked even though 'user' is a valid field."""
+    result = _query({
+        "app_name": "incident", "model_name": "Event",
+        "filters": {"uid__password__icontains": "admin"},
+    }, opts.admin)
+    assert "error" in result, "Relational traversal to sensitive field should be blocked"
+    assert "not allowed" in result["error"], f"Error should mention not allowed: {result['error']}"
+
+
+@th.django_unit_test()
+def test_query_blocks_deep_traversal_to_token(opts):
+    """Multi-hop traversal to token fields should be blocked."""
+    result = _query({
+        "app_name": "incident", "model_name": "Event",
+        "filters": {"uid__access_token__startswith": "x"},
+    }, opts.admin)
+    assert "error" in result, "Deep traversal to token field should be blocked"
+    assert "not allowed" in result["error"], f"Error should mention not allowed: {result['error']}"
+
+
+@th.django_unit_test()
+def test_query_blocks_relational_secret_traversal(opts):
+    """Traversal containing 'secret' in any segment should be blocked."""
+    result = _query({
+        "app_name": "incident", "model_name": "Event",
+        "filters": {"uid__secret_key__exact": "x"},
+    }, opts.admin)
+    assert "error" in result, "Secret traversal should be blocked"
+    assert "not allowed" in result["error"], f"Error should mention not allowed: {result['error']}"
+
+
+@th.django_unit_test()
+def test_query_ordering_rejects_sensitive_field(opts):
+    """Ordering by a sensitive field name should be rejected."""
+    result = _query({
+        "app_name": "incident", "model_name": "Event",
+        "ordering": "-password",
+    }, opts.admin)
+    assert "error" in result, "Ordering by sensitive field should be rejected"
+    assert "not allowed" in result["error"], f"Error should mention not allowed: {result['error']}"
+
+
+@th.django_unit_test()
+def test_query_ordering_rejects_relational_traversal(opts):
+    """Ordering with __ traversal should be rejected."""
+    result = _query({
+        "app_name": "incident", "model_name": "Event",
+        "ordering": "uid__date_joined",
+    }, opts.admin)
+    assert "error" in result, "Relational ordering should be rejected"
+    assert "not supported" in result["error"], f"Error should mention not supported: {result['error']}"
+
+
+@th.django_unit_test()
+def test_query_error_no_internal_leak(opts):
+    """ORM errors should not leak internal details."""
+    result = _query({
+        "app_name": "incident", "model_name": "Event",
+        "filters": {"level": "not_a_number"},
+    }, opts.admin)
+    assert "error" in result, "Bad filter value should return error"
+    assert "Invalid filter parameters" in result["error"], \
+        f"Error should be generic, not leak internals: {result['error']}"

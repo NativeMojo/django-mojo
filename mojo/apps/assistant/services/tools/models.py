@@ -11,7 +11,7 @@ MAX_LIMIT = 200
 DEFAULT_LIMIT = 50
 
 # Fields containing these substrings are excluded from describe output and rejected as filter keys
-SENSITIVE_SUBSTRINGS = ("password", "auth_key", "onetime_code", "secret", "token_secret")
+SENSITIVE_SUBSTRINGS = ("password", "auth_key", "onetime_code", "secret", "token")
 
 # Django field type name mapping for cleaner output
 FIELD_TYPE_MAP = {
@@ -147,21 +147,32 @@ def _get_valid_field_names(model):
 
 def _validate_filter_keys(filters, valid_fields, user, model_label):
     """Validate filter keys against model fields. Returns error dict or None."""
-    for key in filters:
-        # Strip ORM suffixes to get base field name
-        base = key.split("__")[0]
+    # ORM lookup suffixes that are not field names
+    ORM_SUFFIXES = {"in", "not", "not_in", "isnull", "gte", "gt", "lte", "lt",
+                    "exact", "iexact", "contains", "icontains", "startswith",
+                    "istartswith", "endswith", "iendswith", "range", "isnull",
+                    "regex", "iregex", "date", "year", "month", "day", "hour",
+                    "minute", "second", "week_day"}
 
-        if _is_sensitive_field(base):
-            details = f"Sensitive field filter attempt: {key} on {model_label} by user {user.id}"
-            logger.warning(details)
-            _report_security_event(
-                "assistant_sensitive_field",
-                7,
-                details,
-                user,
-                model_name=model_label,
-            )
-            return {"error": f"Filtering on '{base}' is not allowed"}
+    for key in filters:
+        parts = key.split("__")
+        base = parts[0]
+
+        # Check every segment for sensitive content (blocks relational traversal)
+        for segment in parts:
+            if segment in ORM_SUFFIXES:
+                continue
+            if _is_sensitive_field(segment):
+                details = f"Sensitive field filter attempt: {key} on {model_label} by user {user.id}"
+                logger.warning(details)
+                _report_security_event(
+                    "assistant_sensitive_field",
+                    7,
+                    details,
+                    user,
+                    model_name=model_label,
+                )
+                return {"error": f"Filtering on '{segment}' is not allowed"}
 
         if base not in valid_fields:
             return {"error": f"Unknown field '{base}' on {model_label}"}
@@ -281,10 +292,14 @@ def _tool_query_model(params, user):
     if filter_err:
         return filter_err
 
-    # Validate ordering field
+    # Validate ordering field — must be a direct field, no relational traversals
     ordering = params.get("ordering", "").strip()
     if ordering:
         order_field = ordering.lstrip("-")
+        if "__" in order_field:
+            return {"error": f"Relational ordering is not supported"}
+        if _is_sensitive_field(order_field):
+            return {"error": f"Ordering on '{order_field}' is not allowed"}
         if order_field not in valid_fields:
             return {"error": f"Unknown ordering field '{order_field}' on {model_label}"}
 
@@ -305,7 +320,8 @@ def _tool_query_model(params, user):
         try:
             queryset = queryset.filter(**filters)
         except Exception as e:
-            return {"error": f"Invalid filter: {e}"}
+            logger.warning("query_model filter error", model_label, str(e))
+            return {"error": "Invalid filter parameters"}
 
     # Apply ordering
     if ordering:
@@ -340,7 +356,8 @@ def _tool_query_model(params, user):
                 "count": queryset.count(),
             }
         except Exception as e:
-            return {"error": f"CSV export failed: {e}"}
+            logger.warning("query_model csv error", model_label, str(e))
+            return {"error": "CSV export failed"}
 
     # JSON (default)
     results = model.queryset_to_dict(queryset[:limit], graph=graph)
