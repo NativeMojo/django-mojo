@@ -4309,7 +4309,7 @@
 </tr>
 <tr>
 <td><code>?kind=firewall:auto_block</code></td>
-<td>Automatic blocks from threat escalation</td>
+<td>Automatic blocks triggered by a rule handler</td>
 </tr>
 <tr>
 <td><code>?kind=firewall:whitelist</code></td>
@@ -4356,7 +4356,7 @@
 </code></pre></div>
 <p>The <code>payload</code> field is a JSON string with structured data. Parse it client-side for detailed filtering and display.</p>
 <h2 id="connecting-incidents-to-blocks">Connecting Incidents to Blocks<a class="headerlink" href="#connecting-incidents-to-blocks" title="Permanent link">&para;</a></h2>
-<p>When an incident auto-escalates an IP's threat level, it may trigger an automatic block. To see the full chain:</p>
+<p>Incidents escalate an IP's <code>threat_level</code> but do not directly trigger blocks. Blocking is handled by the rule engine — when a rule with a <code>block://</code> handler fires, it calls <code>GeoLocatedIP.block()</code> fleet-wide. To trace the full chain for a given IP:</p>
 <h3 id="1-get-incidents-for-an-ip">1. Get incidents for an IP<a class="headerlink" href="#1-get-incidents-for-an-ip" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>GET /api/incident/incident?search=203.0.113.50&amp;sort=-created
 </code></pre></div>
@@ -4401,7 +4401,7 @@
 </tr>
 <tr>
 <td><code>firewall:auto_blocks</code></td>
-<td>Automatic blocks from threat escalation</td>
+<td>Automatic blocks triggered by rule handlers</td>
 </tr>
 <tr>
 <td><code>firewall:broadcasts</code></td>

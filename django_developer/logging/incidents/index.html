@@ -6029,7 +6029,7 @@
 <p>The incident system and <code>GeoLocatedIP</code> form a feedback loop:</p>
 <ol>
 <li><strong>Events enrich GeoLocatedIP</strong>: When events arrive with a <code>source_ip</code>, <code>sync_metadata()</code> calls <code>GeoLocatedIP.geolocate()</code> to attach geo and threat data.</li>
-<li><strong>Incidents escalate threat levels</strong>: <code>GeoLocatedIP.update_threat_from_incident(priority)</code> is called when incidents are created. This escalates <code>threat_level</code> (never downgrades) and auto-blocks IPs that reach <code>high</code> or <code>critical</code>.</li>
+<li><strong>Incidents escalate threat levels</strong>: <code>GeoLocatedIP.update_threat_from_incident(priority)</code> is called when incidents are created. This escalates <code>threat_level</code> (never downgrades). It does not auto-block — blocking is handled by the rule engine (<code>block://</code> handlers) which has full context on conditions and TTLs.</li>
 <li><strong>GeoLocatedIP data feeds rules</strong>: Rules can match on <code>risk_score</code>, <code>is_tor</code>, <code>is_vpn</code>, <code>threat_level</code>, <code>country_code</code> — any GeoIP field that ends up in event metadata.</li>
 <li><strong>Block/unblock flows through GeoLocatedIP</strong>: The <code>block://</code> handler and admin actions both go through <code>GeoLocatedIP.block()</code>, ensuring a single code path for DB updates and fleet broadcasts.</li>
 </ol>

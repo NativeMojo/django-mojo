@@ -10,7 +10,7 @@
       
       
       
-        <link rel="canonical" href="https://NativeMojo.github.io/django-mojo/django_developer/account/geoip/">
+        <link rel="canonical" href="https://NativeMojo.github.io/django-mojo/django_developer/account/inactive_sweep/">
       
       
       
@@ -23,7 +23,7 @@
     
     
       
-        <title>GeoIP — Django Developer Reference - Django-MOJO</title>
+        <title>Auto-Disable Inactive Users and Groups - Django-MOJO</title>
       
     
     
@@ -74,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#geoip-django-developer-reference" class="md-skip">
+        <a href="#auto-disable-inactive-users-and-groups" class="md-skip">
           Skip to content
         </a>
       
@@ -108,7 +108,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              GeoIP — Django Developer Reference
+              Auto-Disable Inactive Users and Groups
             
           </span>
         </div>
@@ -3621,274 +3621,13 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#model-geolocatedip" class="md-nav__link">
+  <a href="#how-it-works" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Model: GeoLocatedIP
+        How It Works
       
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Model: GeoLocatedIP">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#key-fields" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Key Fields
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#blocking-fields" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Blocking Fields
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#whitelisting-fields" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Whitelisting Fields
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#computed-properties" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Computed Properties
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#key-methods" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Key Methods
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#fleet-wide-ip-blocking" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Fleet-Wide IP Blocking
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Fleet-Wide IP Blocking">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#blockreason-ttl-broadcast" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        block(reason, ttl, broadcast)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#unblockreason-broadcast" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        unblock(reason, broadcast)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#whitelistreason" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        whitelist(reason)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#unwhitelist" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        unwhitelist()
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#auto-block-via-threat-escalation" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Auto-block via threat escalation
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#expiry-sweep" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Expiry sweep
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#post_save_actions" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        POST_SAVE_ACTIONS
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="POST_SAVE_ACTIONS">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#example-rest-calls" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Example REST calls
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#restmeta" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        RestMeta
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="RestMeta">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#graphs" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Graphs
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#rest-endpoints" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        REST Endpoints
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="REST Endpoints">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#getpost-systemgeoip-list-create" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        GET/POST system/geoip — List / Create
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#getputdelete-systemgeoippk-detail-update-delete" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        GET/PUT/DELETE system/geoip/&lt;pk&gt; — Detail / Update / Delete
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#get-systemgeoiplookup-public-ip-lookup" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        GET system/geoip/lookup — Public IP Lookup
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#get-systemgeoiptime-public-ip-time-lookup" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        GET system/geoip/time — Public IP Time Lookup
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -3904,10 +3643,76 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#integration-with-incident-system" class="md-nav__link">
+  <a href="#exemptions" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Integration with Incident System
+        Exemptions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#warning-emails" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Warning Emails
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#incident-events" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Incident Events
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#protected-metadata-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Protected Metadata Keys
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#service-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Service API
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cron-schedule" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cron Schedule
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related
       
     </span>
   </a>
@@ -3934,447 +3739,16 @@
   
 
 
-<h1 id="geoip-django-developer-reference">GeoIP — Django Developer Reference<a class="headerlink" href="#geoip-django-developer-reference" title="Permanent link">&para;</a></h1>
-<p>IP geolocation, threat intelligence, fleet-wide blocking, and whitelisting via the <code>GeoLocatedIP</code> model.</p>
-<h2 id="model-geolocatedip">Model: <code>GeoLocatedIP</code><a class="headerlink" href="#model-geolocatedip" title="Permanent link">&para;</a></h2>
-<p>Located at <code>mojo.apps.account.models.geolocated_ip</code>.</p>
-<p>Caches geolocation results per IP to reduce redundant API calls. Tracks security metadata (VPN, Tor, proxy, cloud, known attacker/abuser), maintains threat scoring, and serves as the <strong>source of truth for IP blocking</strong> across the fleet.</p>
-<h3 id="key-fields">Key Fields<a class="headerlink" href="#key-fields" title="Permanent link">&para;</a></h3>
-<table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>ip_address</code></td>
-<td>Unique, indexed IP address</td>
-</tr>
-<tr>
-<td><code>subnet</code></td>
-<td>First three octets, used for subnet-based fallback lookups</td>
-</tr>
-<tr>
-<td><code>country_code</code>, <code>country_name</code>, <code>region</code>, <code>city</code>, <code>postal_code</code></td>
-<td>Location fields</td>
-</tr>
-<tr>
-<td><code>latitude</code>, <code>longitude</code></td>
-<td>Coordinates</td>
-</tr>
-<tr>
-<td><code>timezone</code></td>
-<td>IANA timezone string (e.g. <code>America/New_York</code>)</td>
-</tr>
-<tr>
-<td><code>is_tor</code>, <code>is_vpn</code>, <code>is_proxy</code>, <code>is_cloud</code>, <code>is_datacenter</code>, <code>is_mobile</code></td>
-<td>Connection type flags</td>
-</tr>
-<tr>
-<td><code>is_known_attacker</code>, <code>is_known_abuser</code></td>
-<td>Threat flags</td>
-</tr>
-<tr>
-<td><code>threat_level</code></td>
-<td><code>low</code>, <code>medium</code>, <code>high</code>, or <code>critical</code></td>
-</tr>
-<tr>
-<td><code>asn</code>, <code>asn_org</code>, <code>isp</code></td>
-<td>Network provider info</td>
-</tr>
-<tr>
-<td><code>mobile_carrier</code></td>
-<td>Mobile carrier name (Verizon, AT&amp;T, etc.)</td>
-</tr>
-<tr>
-<td><code>connection_type</code></td>
-<td><code>residential</code>, <code>business</code>, <code>hosting</code>, <code>cellular</code>, etc.</td>
-</tr>
-<tr>
-<td><code>last_seen</code></td>
-<td>Last time this IP was encountered in the system</td>
-</tr>
-<tr>
-<td><code>provider</code></td>
-<td>Source of the geolocation data</td>
-</tr>
-<tr>
-<td><code>data</code></td>
-<td>JSON bag for raw provider data and threat check results</td>
-</tr>
-<tr>
-<td><code>expires_at</code></td>
-<td>Cache expiration (internal records never expire)</td>
-</tr>
-</tbody>
-</table>
-<h3 id="blocking-fields">Blocking Fields<a class="headerlink" href="#blocking-fields" title="Permanent link">&para;</a></h3>
-<table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>is_blocked</code></td>
-<td>Whether this IP is currently blocked</td>
-</tr>
-<tr>
-<td><code>blocked_at</code></td>
-<td>When the block was applied</td>
-</tr>
-<tr>
-<td><code>blocked_until</code></td>
-<td>When the block expires (<code>null</code> = permanent)</td>
-</tr>
-<tr>
-<td><code>blocked_reason</code></td>
-<td>Why the IP was blocked (e.g. <code>auto:threat_escalation</code>, <code>manual block: by admin</code>)</td>
-</tr>
-<tr>
-<td><code>block_count</code></td>
-<td>Number of times this IP has been blocked</td>
-</tr>
-</tbody>
-</table>
-<h3 id="whitelisting-fields">Whitelisting Fields<a class="headerlink" href="#whitelisting-fields" title="Permanent link">&para;</a></h3>
-<table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>is_whitelisted</code></td>
-<td>Whitelisted IPs are never blocked, even by auto-escalation</td>
-</tr>
-<tr>
-<td><code>whitelisted_reason</code></td>
-<td>Why this IP is whitelisted</td>
-</tr>
-</tbody>
-</table>
-<h3 id="computed-properties">Computed Properties<a class="headerlink" href="#computed-properties" title="Permanent link">&para;</a></h3>
-<table>
-<thead>
-<tr>
-<th>Property</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>is_expired</code></td>
-<td>True if the cached data needs a refresh</td>
-</tr>
-<tr>
-<td><code>is_threat</code></td>
-<td>True if <code>is_known_attacker</code> or <code>is_known_abuser</code></td>
-</tr>
-<tr>
-<td><code>is_suspicious</code></td>
-<td>True if Tor, VPN, proxy, or high/critical threat level</td>
-</tr>
-<tr>
-<td><code>risk_score</code></td>
-<td>0–100 score based on threat indicators</td>
-</tr>
-<tr>
-<td><code>block_active</code></td>
-<td>True if <code>is_blocked</code> AND not whitelisted AND <code>blocked_until</code> hasn't passed</td>
-</tr>
-</tbody>
-</table>
-<h3 id="key-methods">Key Methods<a class="headerlink" href="#key-methods" title="Permanent link">&para;</a></h3>
-<table>
-<thead>
-<tr>
-<th>Method</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>GeoLocatedIP.geolocate(ip_address, auto_refresh=True)</code></td>
-<td>Get or create a record; refreshes if expired</td>
-</tr>
-<tr>
-<td><code>GeoLocatedIP.lookup(ip_address)</code></td>
-<td>Alias for <code>geolocate()</code></td>
-</tr>
-<tr>
-<td><code>instance.refresh(check_threats=False)</code></td>
-<td>Re-fetch geolocation data from provider</td>
-</tr>
-<tr>
-<td><code>instance.check_threats()</code></td>
-<td>Run threat intelligence checks</td>
-</tr>
-<tr>
-<td><code>instance.update_threat_from_incident(priority, block=False)</code></td>
-<td>Escalate threat level from incident priority (0–15 scale). Pass <code>block=True</code> to allow auto-blocking when threat reaches <code>high</code>/<code>critical</code>.</td>
-</tr>
-<tr>
-<td><code>instance.block(reason, ttl, broadcast)</code></td>
-<td>Block this IP fleet-wide (DB + broadcast)</td>
-</tr>
-<tr>
-<td><code>instance.unblock(reason, broadcast)</code></td>
-<td>Unblock this IP fleet-wide</td>
-</tr>
-<tr>
-<td><code>instance.whitelist(reason)</code></td>
-<td>Whitelist — also unblocks if currently blocked</td>
-</tr>
-<tr>
-<td><code>instance.unwhitelist()</code></td>
-<td>Remove whitelist status</td>
-</tr>
-</tbody>
-</table>
+<h1 id="auto-disable-inactive-users-and-groups">Auto-Disable Inactive Users and Groups<a class="headerlink" href="#auto-disable-inactive-users-and-groups" title="Permanent link">&para;</a></h1>
+<p>A nightly cron job (<code>inactive_sweep</code>) automatically warns and then disables users and groups that have not been active for a configurable number of days. The feature is opt-in via settings flags and affects both <code>User</code> and <code>Group</code> independently.</p>
 <hr />
-<h2 id="fleet-wide-ip-blocking">Fleet-Wide IP Blocking<a class="headerlink" href="#fleet-wide-ip-blocking" title="Permanent link">&para;</a></h2>
-<p><code>GeoLocatedIP</code> is the single source of truth for IP blocking. When <code>block()</code> is called, it:</p>
+<h2 id="how-it-works">How It Works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
+<p>The sweep runs every night at 03:00 UTC. For each enabled resource type it runs three phases:</p>
 <ol>
-<li>Returns <code>True</code> immediately if <code>is_blocked</code> is already <code>True</code> and the block has not expired (idempotent — no re-broadcast, no <code>block_count</code> increment)</li>
-<li>Updates the database record (<code>is_blocked</code>, <code>blocked_at</code>, <code>blocked_until</code>, <code>blocked_reason</code>, <code>block_count</code>)</li>
-<li>Broadcasts <code>broadcast_block_ip</code> to all instances via <code>jobs.broadcast_execute()</code></li>
-<li>Each instance's job runner (as <code>ec2-user</code>) applies the iptables DROP rule</li>
+<li><strong>Clear stale warnings</strong> — If an entity has a pending warning flag but its <code>last_activity</code> is more recent than the warning date, it reactivated. The warning flag is cleared.</li>
+<li><strong>Warn</strong> — Entities whose <code>last_activity</code> has passed <code>inactive_days - warning_days</code> ago and have not yet been warned get a warning email and a <code>disable_warned</code> flag in <code>metadata["protected"]</code>.</li>
+<li><strong>Disable</strong> — Entities whose <code>last_activity</code> has passed <code>inactive_days</code> ago are set <code>is_active = False</code> atomically. An incident event is emitted at level 4.</li>
 </ol>
-<h3 id="blockreason-ttl-broadcast">block(reason, ttl, broadcast)<a class="headerlink" href="#blockreason-ttl-broadcast" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">geo</span> <span class="o">=</span> <span class="n">GeoLocatedIP</span><span class="o">.</span><span class="n">geolocate</span><span class="p">(</span><span class="s2">&quot;1.2.3.4&quot;</span><span class="p">)</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">geo</span><span class="o">.</span><span class="n">block</span><span class="p">(</span><span class="n">reason</span><span class="o">=</span><span class="s2">&quot;ssh_brute_force&quot;</span><span class="p">,</span> <span class="n">ttl</span><span class="o">=</span><span class="mi">3600</span><span class="p">)</span>  <span class="c1"># Block for 1 hour fleet-wide</span>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">geo</span><span class="o">.</span><span class="n">block</span><span class="p">(</span><span class="n">reason</span><span class="o">=</span><span class="s2">&quot;repeat_offender&quot;</span><span class="p">)</span>             <span class="c1"># Permanent block (no ttl)</span>
-</code></pre></div>
-<ul>
-<li>Returns <code>True</code> if the block succeeded or the IP was already actively blocked</li>
-<li>Returns <code>False</code> if the IP is whitelisted (whitelisting always wins)</li>
-<li><code>ttl</code> in seconds. <code>None</code> or <code>0</code> = permanent (no auto-unblock)</li>
-<li><code>broadcast=False</code> to update DB only (used during bulk operations)</li>
-</ul>
-<h3 id="unblockreason-broadcast">unblock(reason, broadcast)<a class="headerlink" href="#unblockreason-broadcast" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">geo</span><span class="o">.</span><span class="n">unblock</span><span class="p">(</span><span class="n">reason</span><span class="o">=</span><span class="s2">&quot;manual: false positive&quot;</span><span class="p">)</span>
-</code></pre></div>
-<ul>
-<li>Updates DB and broadcasts fleet-wide iptables removal</li>
-<li><code>broadcast=False</code> for DB-only updates</li>
-</ul>
-<h3 id="whitelistreason">whitelist(reason)<a class="headerlink" href="#whitelistreason" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">geo</span><span class="o">.</span><span class="n">whitelist</span><span class="p">(</span><span class="n">reason</span><span class="o">=</span><span class="s2">&quot;office IP range&quot;</span><span class="p">)</span>
-</code></pre></div>
-<ul>
-<li>Sets <code>is_whitelisted=True</code></li>
-<li>If the IP is currently blocked, it unblocks fleet-wide immediately</li>
-<li>Prevents all future auto-blocks (threat escalation, rule handlers)</li>
-</ul>
-<h3 id="unwhitelist">unwhitelist()<a class="headerlink" href="#unwhitelist" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">geo</span><span class="o">.</span><span class="n">unwhitelist</span><span class="p">()</span>
-</code></pre></div>
-<p>Removes whitelist protection. Does not auto-block — the IP would need to trigger rules again.</p>
-<h3 id="auto-block-via-threat-escalation">Auto-block via threat escalation<a class="headerlink" href="#auto-block-via-threat-escalation" title="Permanent link">&para;</a></h3>
-<p><code>update_threat_from_incident(priority, block=False)</code> is called when incidents are created for an IP. It escalates <code>threat_level</code> (never downgrades) based on incident priority:</p>
-<table>
-<thead>
-<tr>
-<th>Incident Priority</th>
-<th>Threat Level</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>0–6</td>
-<td>No change</td>
-</tr>
-<tr>
-<td>7–9</td>
-<td><code>medium</code></td>
-</tr>
-<tr>
-<td>10–12</td>
-<td><code>high</code></td>
-</tr>
-<tr>
-<td>13–15</td>
-<td><code>critical</code></td>
-</tr>
-</tbody>
-</table>
-<p>By default (<code>block=False</code>) the method only updates the threat level — no automatic blocking occurs. This is intentional: blocking is delegated to the rule engine (<code>block://</code> handlers), which has full context on conditions and can apply TTLs and thresholds appropriately.</p>
-<p>Pass <code>block=True</code> if you want the method to also block the IP when the new level reaches <code>high</code> or <code>critical</code>. When blocking is enabled, a 15-minute TTL (<code>ttl=900</code>) is applied via <code>block()</code>.</p>
-<p>Whitelisted IPs get the threat level update but are never blocked regardless of the <code>block</code> parameter.</p>
-<h3 id="expiry-sweep">Expiry sweep<a class="headerlink" href="#expiry-sweep" title="Permanent link">&para;</a></h3>
-<p>A cron job runs every minute (<code>sweep_expired_blocks</code>) that:
-1. Finds all <code>GeoLocatedIP</code> records where <code>is_blocked=True</code> and <code>blocked_until</code> has passed
-2. Bulk updates <code>is_blocked=False</code> in the DB
-3. Broadcasts fleet-wide unblock for all expired IPs</p>
-<p>This is a single job per minute — not one job per blocked IP.</p>
-<hr />
-<h2 id="post_save_actions">POST_SAVE_ACTIONS<a class="headerlink" href="#post_save_actions" title="Permanent link">&para;</a></h2>
-<p>All blocking and management operations are exposed as POST_SAVE_ACTIONS on the model, following the standard CRUD pattern.</p>
-<table>
-<thead>
-<tr>
-<th>Action</th>
-<th>Payload</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>block</code></td>
-<td><code>{"reason": "...", "ttl": 600}</code> or omit for defaults</td>
-<td>Block IP fleet-wide. Defaults to 600s TTL and logs the admin username.</td>
-</tr>
-<tr>
-<td><code>unblock</code></td>
-<td><code>"reason string"</code> or omit for default</td>
-<td>Unblock IP fleet-wide</td>
-</tr>
-<tr>
-<td><code>whitelist</code></td>
-<td><code>"reason string"</code> or omit for default</td>
-<td>Whitelist IP, unblocks if currently blocked</td>
-</tr>
-<tr>
-<td><code>unwhitelist</code></td>
-<td>—</td>
-<td>Remove whitelist status</td>
-</tr>
-<tr>
-<td><code>refresh</code></td>
-<td>—</td>
-<td>Re-fetch geolocation data from provider (with threat checks)</td>
-</tr>
-<tr>
-<td><code>threat_analysis</code></td>
-<td>—</td>
-<td>Run threat intelligence checks only</td>
-</tr>
-</tbody>
-</table>
-<h3 id="example-rest-calls">Example REST calls<a class="headerlink" href="#example-rest-calls" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>POST /api/system/geoip/123
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>{&quot;block&quot;: {&quot;reason&quot;: &quot;confirmed attacker&quot;, &quot;ttl&quot;: 86400}}
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>POST /api/system/geoip/123
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>{&quot;unblock&quot;: &quot;false positive confirmed&quot;}
-<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>
-<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>POST /api/system/geoip/123
-<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>{&quot;whitelist&quot;: &quot;office VPN exit node&quot;}
-<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>
-<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>POST /api/system/geoip/123
-<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>{&quot;unwhitelist&quot;: 1}
-</code></pre></div>
-<p>All actions require <code>manage_users</code> permission (from RestMeta).</p>
-<hr />
-<h2 id="restmeta">RestMeta<a class="headerlink" href="#restmeta" title="Permanent link">&para;</a></h2>
-<table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Value</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>VIEW_PERMS</code></td>
-<td><code>['manage_users']</code></td>
-</tr>
-<tr>
-<td><code>SEARCH_FIELDS</code></td>
-<td><code>ip_address</code>, <code>city</code>, <code>country_name</code>, <code>asn_org</code>, <code>isp</code></td>
-</tr>
-<tr>
-<td><code>POST_SAVE_ACTIONS</code></td>
-<td><code>refresh</code>, <code>threat_analysis</code>, <code>block</code>, <code>unblock</code>, <code>whitelist</code>, <code>unwhitelist</code></td>
-</tr>
-</tbody>
-</table>
-<h3 id="graphs">Graphs<a class="headerlink" href="#graphs" title="Permanent link">&para;</a></h3>
-<table>
-<thead>
-<tr>
-<th>Graph</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>default</code></td>
-<td>All fields except <code>data</code> and <code>provider</code>, plus computed extras</td>
-</tr>
-<tr>
-<td><code>basic</code></td>
-<td>Core location + threat + blocking fields</td>
-</tr>
-<tr>
-<td><code>detailed</code></td>
-<td>All fields including raw <code>data</code></td>
-</tr>
-</tbody>
-</table>
-<p>All graphs include <code>is_threat</code>, <code>is_suspicious</code>, and <code>risk_score</code> as extras. The <code>basic</code> graph also includes <code>block_active</code>.</p>
-<hr />
-<h2 id="rest-endpoints">REST Endpoints<a class="headerlink" href="#rest-endpoints" title="Permanent link">&para;</a></h2>
-<p>The account app sets <code>APP_NAME = ""</code>, so these endpoints register directly under <code>/api/system/</code>.</p>
-<h3 id="getpost-systemgeoip-list-create"><code>GET/POST system/geoip</code> — List / Create<a class="headerlink" href="#getpost-systemgeoip-list-create" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>GET  /api/system/geoip
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>POST /api/system/geoip
-</code></pre></div>
-<p>Standard CRUD via <code>GeoLocatedIP.on_rest_request</code>. Requires <code>manage_users</code> permission.</p>
-<h3 id="getputdelete-systemgeoippk-detail-update-delete"><code>GET/PUT/DELETE system/geoip/&lt;pk&gt;</code> — Detail / Update / Delete<a class="headerlink" href="#getputdelete-systemgeoippk-detail-update-delete" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>GET    /api/system/geoip/123
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>PUT    /api/system/geoip/123
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>DELETE /api/system/geoip/123
-</code></pre></div>
-<p>Requires <code>manage_users</code> permission. PUT supports POST_SAVE_ACTIONS for block/unblock/whitelist.</p>
-<h3 id="get-systemgeoiplookup-public-ip-lookup"><code>GET system/geoip/lookup</code> — Public IP Lookup<a class="headerlink" href="#get-systemgeoiplookup-public-ip-lookup" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>GET /api/system/geoip/lookup?ip=1.2.3.4
-</code></pre></div>
-<p><strong>Public endpoint</strong> — no authentication required. Rate limited to 30 requests/minute per IP.</p>
-<table>
-<thead>
-<tr>
-<th>Param</th>
-<th>Required</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>ip</code></td>
-<td>Yes</td>
-<td>IP address to geolocate</td>
-</tr>
-<tr>
-<td><code>auto_refresh</code></td>
-<td>No</td>
-<td>Refresh expired cache (default: <code>true</code>)</td>
-</tr>
-</tbody>
-</table>
-<p>Returns the <code>GeoLocatedIP</code> record via <code>on_rest_get</code> (default graph).</p>
-<h3 id="get-systemgeoiptime-public-ip-time-lookup"><code>GET system/geoip/time</code> — Public IP Time Lookup<a class="headerlink" href="#get-systemgeoiptime-public-ip-time-lookup" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>GET /api/system/geoip/time
-</code></pre></div>
-<p><strong>Public endpoint</strong> — no authentication required. Rate limited to 30 requests/minute per IP. Uses the caller's IP address automatically.</p>
-<p><strong>Response:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="p">{</span>
-<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">    </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">    </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">        </span><span class="nt">&quot;ip&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;1.2.3.4&quot;</span><span class="p">,</span>
-<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="w">        </span><span class="nt">&quot;timezone&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;America/New_York&quot;</span><span class="p">,</span>
-<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="w">        </span><span class="nt">&quot;epoch&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1711300800</span><span class="p">,</span>
-<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="w">        </span><span class="nt">&quot;iso&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-03-24T12:00:00-04:00&quot;</span>
-<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="w">    </span><span class="p">}</span>
-<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="p">}</span>
-</code></pre></div>
 <hr />
 <h2 id="settings">Settings<a class="headerlink" href="#settings" title="Permanent link">&para;</a></h2>
 <table>
@@ -4387,26 +3761,175 @@
 </thead>
 <tbody>
 <tr>
-<td><code>GEOLOCATION_ALLOW_SUBNET_LOOKUP</code></td>
+<td><code>ACCOUNT_AUTO_DISABLE_ENABLED</code></td>
 <td><code>False</code></td>
-<td>Allow fallback to subnet match when exact IP not found</td>
+<td>Enable/disable the user sweep. Off by default.</td>
 </tr>
 <tr>
-<td><code>GEOLOCATION_CACHE_DURATION_DAYS</code></td>
+<td><code>ACCOUNT_INACTIVE_DAYS</code></td>
 <td><code>90</code></td>
-<td>Days before a cached record expires</td>
+<td>Days of inactivity before a user is disabled</td>
+</tr>
+<tr>
+<td><code>ACCOUNT_INACTIVE_WARNING_DAYS</code></td>
+<td><code>7</code></td>
+<td>Days before disable threshold to send the warning email</td>
+</tr>
+<tr>
+<td><code>GROUP_AUTO_DISABLE_ENABLED</code></td>
+<td><code>False</code></td>
+<td>Enable/disable the group sweep. Off by default.</td>
+</tr>
+<tr>
+<td><code>GROUP_INACTIVE_DAYS</code></td>
+<td><code>90</code></td>
+<td>Days of inactivity before a group is disabled</td>
 </tr>
 </tbody>
 </table>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># settings.py</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">ACCOUNT_AUTO_DISABLE_ENABLED</span> <span class="o">=</span> <span class="kc">True</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">ACCOUNT_INACTIVE_DAYS</span> <span class="o">=</span> <span class="mi">90</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="n">ACCOUNT_INACTIVE_WARNING_DAYS</span> <span class="o">=</span> <span class="mi">7</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="n">GROUP_AUTO_DISABLE_ENABLED</span> <span class="o">=</span> <span class="kc">True</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="n">GROUP_INACTIVE_DAYS</span> <span class="o">=</span> <span class="mi">90</span>
+</code></pre></div>
 <hr />
-<h2 id="integration-with-incident-system">Integration with Incident System<a class="headerlink" href="#integration-with-incident-system" title="Permanent link">&para;</a></h2>
-<p><code>GeoLocatedIP</code> and the incident system form a feedback loop. See <a href="../../logging/incidents/">Incident System</a> for the full architecture.</p>
-<ol>
-<li><strong>Events enrich GeoLocatedIP</strong>: <code>sync_metadata()</code> calls <code>geolocate()</code> to attach geo/threat data to events.</li>
-<li><strong>Incidents escalate threat levels</strong>: <code>update_threat_from_incident()</code> is called on incident creation, escalating <code>threat_level</code> (never downgrades). It does not auto-block — blocking is delegated to the rule engine.</li>
-<li><strong>Rules can auto-block</strong>: The <code>block://</code> handler in a RuleSet calls <code>GeoLocatedIP.block()</code> when conditions are met.</li>
-<li><strong>Admins manage via CRUD</strong>: Block, unblock, whitelist actions through the standard REST interface with <code>manage_users</code> permission.</li>
-</ol>
+<h2 id="exemptions">Exemptions<a class="headerlink" href="#exemptions" title="Permanent link">&para;</a></h2>
+<p>The following users are always skipped — both for warnings and for disable:</p>
+<ul>
+<li><code>is_superuser = True</code></li>
+<li><code>is_staff = True</code></li>
+<li><code>metadata["protected"]["no_disable"] = True</code></li>
+<li><code>last_activity</code> is null <strong>and</strong> <code>last_login</code> is null (never logged in)</li>
+</ul>
+<p>For groups, only the <code>no_disable</code> flag applies (no staff/superuser concept).</p>
+<p>To permanently exempt an entity from the sweep:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">user</span><span class="o">.</span><span class="n">set_protected_metadata</span><span class="p">(</span><span class="s2">&quot;no_disable&quot;</span><span class="p">,</span> <span class="kc">True</span><span class="p">)</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="n">group</span><span class="o">.</span><span class="n">set_protected_metadata</span><span class="p">(</span><span class="s2">&quot;no_disable&quot;</span><span class="p">,</span> <span class="kc">True</span><span class="p">)</span>
+</code></pre></div>
+<hr />
+<h2 id="warning-emails">Warning Emails<a class="headerlink" href="#warning-emails" title="Permanent link">&para;</a></h2>
+<p>The sweep sends template emails when warning. Both templates ship as seed files and are auto-loaded from <code>mojo/apps/aws/seeds/email_templates/</code> on first use.</p>
+<table>
+<thead>
+<tr>
+<th>Template</th>
+<th>Sent To</th>
+<th>Context Variables</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>account_inactive_warning</code></td>
+<td>The user directly</td>
+<td><code>days_until_disable</code>, <code>inactive_days</code></td>
+</tr>
+<tr>
+<td><code>group_inactive_warning</code></td>
+<td>All active users with <code>manage_groups</code> or <code>groups</code> permission</td>
+<td><code>group_name</code>, <code>group_id</code>, <code>days_until_disable</code>, <code>inactive_days</code></td>
+</tr>
+</tbody>
+</table>
+<p>Customize or override either template by creating or editing the <code>EmailTemplate</code> database record with the same name.</p>
+<hr />
+<h2 id="incident-events">Incident Events<a class="headerlink" href="#incident-events" title="Permanent link">&para;</a></h2>
+<p>Each warning and disable action emits an incident event via <code>incident.report_event()</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Action</th>
+<th>Category</th>
+<th>Level</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>User warned</td>
+<td><code>account:inactive_warning</code></td>
+<td>2</td>
+</tr>
+<tr>
+<td>User disabled</td>
+<td><code>account:auto_disabled</code></td>
+<td>4</td>
+</tr>
+<tr>
+<td>Group warned</td>
+<td><code>group:inactive_warning</code></td>
+<td>2</td>
+</tr>
+<tr>
+<td>Group disabled</td>
+<td><code>group:auto_disabled</code></td>
+<td>4</td>
+</tr>
+</tbody>
+</table>
+<p>These appear in the security incident feed and in the assistant's <code>query_events</code> tool.</p>
+<hr />
+<h2 id="protected-metadata-keys">Protected Metadata Keys<a class="headerlink" href="#protected-metadata-keys" title="Permanent link">&para;</a></h2>
+<p>The sweep uses <code>metadata["protected"]</code> on both <code>User</code> and <code>Group</code> to track state:</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>no_disable</code></td>
+<td><code>True</code></td>
+<td>Permanent exemption from the sweep</td>
+</tr>
+<tr>
+<td><code>disable_warned</code></td>
+<td><code>True</code></td>
+<td>Set when a warning has been sent; cleared after disable or reactivation</td>
+</tr>
+<tr>
+<td><code>disable_warn_date</code></td>
+<td>ISO datetime string</td>
+<td>UTC timestamp of when the warning was sent; used to detect reactivation</td>
+</tr>
+</tbody>
+</table>
+<p>These keys are written by the sweep service and are write-protected from REST clients. See <a href="../group/#protected-metadata">Group protected metadata</a> and the <code>user.md</code> protected metadata section.</p>
+<hr />
+<h2 id="service-api">Service API<a class="headerlink" href="#service-api" title="Permanent link">&para;</a></h2>
+<p>The service functions are in <code>mojo.apps.account.services.inactive</code> and can be called directly in code or tests:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.services.inactive</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>    <span class="n">warn_inactive_users</span><span class="p">,</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    <span class="n">disable_inactive_users</span><span class="p">,</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>    <span class="n">warn_inactive_groups</span><span class="p">,</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>    <span class="n">disable_inactive_groups</span><span class="p">,</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>    <span class="n">_clear_stale_warnings</span><span class="p">,</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="p">)</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">User</span><span class="p">,</span> <span class="n">Group</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="c1"># Run individual phases manually</span>
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="n">cleared</span> <span class="o">=</span> <span class="n">_clear_stale_warnings</span><span class="p">(</span><span class="n">User</span><span class="p">,</span> <span class="n">inactive_days</span><span class="o">=</span><span class="mi">90</span><span class="p">)</span>
+<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="n">warned</span>  <span class="o">=</span> <span class="n">warn_inactive_users</span><span class="p">()</span>
+<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="n">disabled</span> <span class="o">=</span> <span class="n">disable_inactive_users</span><span class="p">()</span>
+</code></pre></div>
+<p>Each function returns the count of entities affected.</p>
+<hr />
+<h2 id="cron-schedule">Cron Schedule<a class="headerlink" href="#cron-schedule" title="Permanent link">&para;</a></h2>
+<p>The sweep is registered as a cron job in <code>mojo/apps/account/cronjobs.py</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>0 3 * * *   → account.inactive_sweep   (daily at 03:00 UTC)
+</code></pre></div>
+<p>It runs as an async job on the <code>cleanup</code> channel. No action is taken when both <code>ACCOUNT_AUTO_DISABLE_ENABLED</code> and <code>GROUP_AUTO_DISABLE_ENABLED</code> are <code>False</code>.</p>
+<hr />
+<h2 id="related">Related<a class="headerlink" href="#related" title="Permanent link">&para;</a></h2>
+<ul>
+<li><a href="../user/">User model</a></li>
+<li><a href="../group/">Group model</a></li>
+<li><a href="../../email/sending/">Email sending</a></li>
+</ul>
 
 
 
