@@ -1,5 +1,5 @@
 """Logs domain tools — query the logit.Log audit trail."""
-from mojo.helpers import dates
+from mojo.helpers import dates, logit
 
 MAX_LIMIT = 200
 DEFAULT_LIMIT = 50
@@ -50,7 +50,10 @@ def _tool_query_logs(params, user):
     if params.get("count_only", False):
         return {"count": queryset.count(), "period_minutes": minutes}
 
-    limit = min(params.get("limit", DEFAULT_LIMIT), MAX_LIMIT)
+    limit = params.get("limit", DEFAULT_LIMIT)
+    if not isinstance(limit, int) or limit < 1:
+        limit = DEFAULT_LIMIT
+    limit = min(limit, MAX_LIMIT)
     verbose = params.get("verbose", False)
     logs = queryset[:limit]
 
@@ -74,8 +77,16 @@ def _tool_query_logs(params, user):
         log_content = entry.log or ""
         if verbose:
             row["log"] = log_content
-            row["payload"] = entry.payload
-            row["user_agent"] = entry.user_agent
+            # Mask sensitive data in payload before returning
+            payload = entry.payload or ""
+            if payload:
+                payload = logit.mask_sensitive_data(payload)
+            row["payload"] = payload or None
+            # Mask user_agent in case it contains tokens
+            ua = entry.user_agent or ""
+            if ua:
+                ua = logit.mask_sensitive_data(ua)
+            row["user_agent"] = ua or None
         else:
             if len(log_content) > LOG_TRUNCATE_LENGTH:
                 row["log"] = log_content[:LOG_TRUNCATE_LENGTH]

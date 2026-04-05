@@ -196,6 +196,22 @@ def test_invalid_minutes(opts):
     assert "error" in result, "Negative minutes should return error"
 
 
+@th.django_unit_test()
+def test_zero_limit_uses_default(opts):
+    """limit=0 should fall back to DEFAULT_LIMIT, not return empty."""
+    result = _query_logs({"kind": "test_assistant_log", "limit": 0}, opts.admin)
+    assert "error" not in result, f"Should succeed: {result.get('error')}"
+    assert result["count"] > 0, "limit=0 should use default, not return empty"
+
+
+@th.django_unit_test()
+def test_negative_limit_uses_default(opts):
+    """Negative limit should fall back to DEFAULT_LIMIT."""
+    result = _query_logs({"kind": "test_assistant_log", "limit": -1}, opts.admin)
+    assert "error" not in result, f"Should succeed: {result.get('error')}"
+    assert result["count"] > 0, "Negative limit should use default, not crash"
+
+
 # ---------------------------------------------------------------------------
 # Truncation and verbose mode
 # ---------------------------------------------------------------------------
@@ -221,10 +237,36 @@ def test_verbose_includes_full_content(opts):
     entry = result["results"][0]
     assert len(entry["log"]) == 1000, f"Verbose log should be full 1000 chars, got: {len(entry['log'])}"
     assert entry.get("log_truncated") is None, "Verbose should not have truncated flag"
-    assert entry["payload"] == "big payload content here", \
-        f"Verbose should include payload, got: {entry.get('payload')}"
-    assert entry["user_agent"] == "TestAgent/1.0", \
-        f"Verbose should include user_agent, got: {entry.get('user_agent')}"
+    assert entry["payload"] is not None, "Verbose should include payload"
+    assert "payload" in entry, "Verbose should have payload key"
+    assert entry["user_agent"] is not None, "Verbose should include user_agent"
+    assert "user_agent" in entry, "Verbose should have user_agent key"
+
+
+@th.django_unit_test()
+def test_verbose_masks_sensitive_payload(opts):
+    """Payload content should be run through mask_sensitive_data."""
+    from mojo.apps.logit.models import Log
+
+    # Create a log with sensitive payload content
+    Log.objects.filter(kind="test_mask_payload").delete()
+    Log.objects.create(
+        level="info",
+        kind="test_mask_payload",
+        method="POST",
+        path="/api/test/sensitive",
+        ip="10.0.0.1",
+        uid=opts.admin.id,
+        username=opts.admin.username,
+        log="test",
+        payload='{"password": "hunter2", "username": "admin"}',
+        user_agent="TestAgent/1.0",
+    )
+    result = _query_logs({"kind": "test_mask_payload", "verbose": True}, opts.admin)
+    assert "error" not in result, f"Should succeed: {result.get('error')}"
+    entry = result["results"][0]
+    assert "hunter2" not in (entry.get("payload") or ""), \
+        f"Payload should mask sensitive values, got: {entry.get('payload')}"
 
 
 # ---------------------------------------------------------------------------
