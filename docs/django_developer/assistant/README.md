@@ -201,6 +201,14 @@ By default, log content is truncated at 500 characters. Pass `verbose: true` to 
 
 Discovery tools let the LLM explore the system. When a user asks "what metrics do we track?" or "what can you do?", the LLM calls these tools to find valid slugs, categories, channels, and permissions — rather than guessing.
 
+### Memory Domain (`assistant`)
+
+| Tool | Permission | Mutates | Description |
+|---|---|---|---|
+| `read_memory` | `assistant` | No | Read stored memory entries grouped by tier. The system prompt already injects memories, but this tool lets the LLM check raw keys before updating or deleting. |
+| `write_memory` | `assistant` | Yes | Store or update a memory entry. Requires `tier`, `key`, `value`. Enforces key format, size limits, and secret detection. |
+| `delete_memory` | `assistant` | Yes | Delete a memory entry by tier and key. |
+
 ## Incident Event Reporting
 
 The assistant reports security-relevant actions and errors to the incident system via `incident.report_event()`. Events flow through the rule engine for automated response (blocking, ticketing, notifications).
@@ -238,6 +246,114 @@ The assistant reports security-relevant actions and errors to the incident syste
 
 - `mojo/apps/assistant/services/agent.py` — `_report_event()` helper, events in both REST and WS agent loops
 - `mojo/apps/assistant/handler.py` — events for WS permission denied and handler/thread crashes
+
+## Memory System
+
+The assistant has persistent three-tier memory stored in Redis. Memories are injected into the system prompt at the start of every conversation so the LLM has continuous context across sessions.
+
+### Tiers
+
+| Tier | Redis Key | Who Reads | Who Writes | Injected When |
+|---|---|---|---|---|
+| **Global** | `assistant:memory:global` | `assistant` perm or superuser | `assistant` perm or superuser | Every conversation |
+| **User** | `assistant:memory:user:<user_id>` | The user themselves, or superuser | The user themselves, or superuser | Conversations by that user |
+| **Group** | `assistant:memory:group:<group_id>` | Any member of the group | Members with `assistant` perm on their Member record | Conversations in group context |
+
+Groups are resolved from the Conversation's `group` FK. The `group` field is set when a conversation is created in a group context (via REST or WebSocket with `group_id`).
+
+### System Prompt Injection
+
+At conversation start, `_get_system_prompt(user, group)` calls `build_memory_prompt()`, which loads all applicable memory tiers and formats them as a `## Memory` section:
+
+```
+## Memory
+
+### Platform
+- platform: Healthcare SaaS (HIPAA-compliant) on AWS us-east-1
+- internal_ips: Never block 10.0.0.0/8 or 172.16.0.0/12
+
+### Your Notes
+- preferred_channel: Prefers Slack notifications for non-critical alerts
+
+### Group: Acme Corp
+- deploy_window: Deploys run Tuesdays 9-11 PM UTC only
+```
+
+Empty tiers are omitted. When global memory is empty and the user has `assistant` permission, an onboarding prompt is injected instead — it instructs the LLM to ask the user about their platform and store answers as global memories.
+
+### Memory Limits
+
+Configurable per tier:
+
+| Setting | Default | Description |
+|---|---|---|
+| `LLM_ADMIN_MEMORY_ENABLED` | `True` | Feature flag — disables all memory when False |
+| `LLM_ADMIN_MEMORY_GLOBAL_MAX` | `50` | Max entries in the global tier |
+| `LLM_ADMIN_MEMORY_USER_MAX` | `30` | Max entries per user tier |
+| `LLM_ADMIN_MEMORY_GROUP_MAX` | `40` | Max entries per group tier |
+| `LLM_ADMIN_MEMORY_ENTRY_MAX_CHARS` | `500` | Max character length per entry value |
+
+### Key Format
+
+Keys must be lowercase alphanumeric with colons, underscores, or hyphens, max 64 characters. Examples: `platform`, `rule:internal_ips`, `preferred_channel`. The reserved field `_meta` is used internally.
+
+### Secret Detection
+
+The write path rejects values matching known secret patterns (API keys, passwords, tokens, connection strings). Writes containing these patterns return an error dict.
+
+### LLM Tools
+
+Three tools in the `memory` domain (all require `assistant` permission):
+
+| Tool | Mutates | Description |
+|---|---|---|
+| `read_memory` | No | Read raw entries grouped by tier. The system prompt already has memories, but this is useful before updating or deleting. Optional `tier` param. |
+| `write_memory` | Yes | Create or update an entry. Params: `tier`, `key`, `value`. Enforces size limits, key format, and secret detection. |
+| `delete_memory` | Yes | Remove an entry. Params: `tier`, `key`. |
+
+The group context is passed via `user._assistant_group` — set on the user object by the agent loop before tools are called.
+
+### Nightly Cleanup Job
+
+Register `mojo.apps.assistant.jobs.assistant_memory_cleanup` as a scheduled job. Two phases run nightly:
+
+**Phase 1 — Mechanical** (always runs, no LLM):
+- Orphan cleanup: delete memory hashes for users/groups that no longer exist
+- Size enforcement: prune oldest-touched entries if a tier is over its limit
+- Suspicious pattern scan: log warnings for entries matching secret patterns
+
+**Phase 2 — Dreaming** (conditional, uses LLM):
+- Only runs per tier if memory was modified since the last dream pass, or if `LLM_ADMIN_MEMORY_DREAM_INTERVAL` days have elapsed
+- LLM reviews all entries and proposes `keep`, `delete`, `rewrite`, or `merge` actions
+- Changes are logged before application (original values preserved in log)
+- `LLM_ADMIN_MEMORY_DREAM_AUTO_APPLY = False` switches to log-only mode
+
+| Setting | Default | Description |
+|---|---|---|
+| `LLM_ADMIN_MEMORY_DREAM_ENABLED` | `True` | Enable/disable the dreaming phase |
+| `LLM_ADMIN_MEMORY_DREAM_AUTO_APPLY` | `True` | If False, proposed changes are logged but not applied |
+| `LLM_ADMIN_MEMORY_DREAM_INTERVAL` | `7` | Days between forced dream passes even without changes |
+
+### Service API
+
+```python
+from mojo.apps.assistant.services.memory import (
+    read_memories,      # Read all applicable tiers for a user/group context
+    write_memory,       # Write a single entry (validates key, value, secrets, limits)
+    delete_memory,      # Delete a single entry
+    build_memory_prompt,  # Build the ## Memory section string for the system prompt
+    is_global_empty,    # Check if global tier has zero entries (used for onboarding)
+)
+```
+
+All functions degrade gracefully when Redis is unavailable — they return empty results or error dicts rather than raising.
+
+### Key Files
+
+- `mojo/apps/assistant/services/memory.py` — all memory operations, cleanup, dreaming
+- `mojo/apps/assistant/services/tools/memory.py` — `read_memory`, `write_memory`, `delete_memory` tool handlers
+- `mojo/apps/assistant/rest/memory.py` — REST endpoints for memory management
+- `mojo/apps/assistant/jobs.py` — nightly cleanup job entry point
 
 ## Context Conversations
 
@@ -445,6 +561,7 @@ Tracks a multi-turn conversation between a user and the assistant.
 | Field | Type | Description |
 |---|---|---|
 | `user` | FK(User) | Owner of the conversation |
+| `group` | FK(Group, nullable) | Optional group context. Set when the conversation is started in a group context. Used for group-tier memory injection. |
 | `title` | CharField | Set from the first 100 chars of the first message on creation (field max 255) |
 | `metadata` | JSONField | Extensible metadata |
 | `created` | DateTimeField | When the conversation started |
@@ -591,3 +708,5 @@ Test files:
 - `tests/test_assistant/10_test_file_tools.py` — File domain tools: query, metadata, image analysis
 - `tests/test_assistant/11_test_context.py` — Context conversations: ticket, incident, generic model, duplicate prevention, permission checks
 - `tests/test_assistant/12_test_incident_reporting.py` — Incident event reporting: permission denied events, mutating tool events, error events, category conventions
+- `tests/test_assistant/13_test_memory.py` — Memory service: read/write/delete, tier permissions, key validation, secret detection, size limits, build_memory_prompt, onboarding flag
+- `tests/test_assistant/14_test_memory_cleanup.py` — Nightly cleanup: mechanical phase (orphans, size prune, suspicious scan), dreaming phase (should_dream, dream_tier, apply_dream_actions)

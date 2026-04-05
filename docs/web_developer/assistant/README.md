@@ -319,6 +319,145 @@ Delete a conversation and all its messages. The conversation owner or any user w
 
 ---
 
+---
+
+### Memory Endpoints
+
+The assistant exposes REST endpoints to read, write, and delete memory entries. These are independent of any conversation — they operate directly on the Redis-backed memory store.
+
+#### List All Memory Tiers
+
+```
+GET /api/assistant/memory
+```
+
+Returns all memory entries the user can see, grouped by tier.
+
+**Permission**: `assistant`
+
+**Response**:
+
+```json
+{
+    "status": true,
+    "data": {
+        "global": {
+            "platform": "Healthcare SaaS (HIPAA-compliant) on AWS us-east-1",
+            "internal_ips": "Never block 10.0.0.0/8 or 172.16.0.0/12"
+        },
+        "user": {
+            "preferred_channel": "Prefers Slack for non-critical alerts"
+        },
+        "group": {
+            "deploy_window": "Deploys run Tuesdays 9-11 PM UTC only"
+        }
+    }
+}
+```
+
+Empty tiers are omitted from the response. If the user has no group context, the `group` key will be absent.
+
+#### List Single Tier
+
+```
+GET /api/assistant/memory/<tier>
+```
+
+Where `tier` is `global`, `user`, or `group`.
+
+**Permission**: `assistant`
+
+**Response**:
+
+```json
+{
+    "status": true,
+    "data": {
+        "platform": "Healthcare SaaS (HIPAA-compliant) on AWS us-east-1"
+    }
+}
+```
+
+**Error** (invalid tier — HTTP 400):
+
+```json
+{"status": false, "error": "Invalid tier: unknown"}
+```
+
+#### Write Memory Entry
+
+```
+POST /api/assistant/memory/<tier>
+```
+
+Create or update a memory entry.
+
+**Permission**: `assistant`
+
+**Request body**:
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `key` | string | Yes | Slug key: lowercase, alphanumeric, colons/underscores/hyphens, max 64 chars |
+| `value` | string | Yes | Entry content. Plain text, max 500 characters. |
+
+**Response** (created):
+
+```json
+{"status": true, "data": {"status": "created", "key": "platform", "tier": "global"}}
+```
+
+**Response** (updated):
+
+```json
+{"status": true, "data": {"status": "updated", "key": "platform", "tier": "global"}}
+```
+
+**Errors** (HTTP 400):
+
+| Condition | Error |
+|---|---|
+| Invalid tier | `"Invalid tier: unknown"` |
+| Invalid key format | `"Key must be lowercase alphanumeric with colons, underscores, or hyphens (max 64 chars)"` |
+| Value too long | `"Value too long (N chars). Maximum is 500"` |
+| Secret detected | `"Value appears to contain a secret (API key, password, token, etc.)..."` |
+| Tier full | `"Memory full (N/max entries). Delete an entry before adding a new one."` |
+| Permission denied | `"Permission denied for global memory"` |
+
+#### Delete Memory Entry
+
+```
+DELETE /api/assistant/memory/<tier>/<key>
+```
+
+**Permission**: `assistant`
+
+**Response**:
+
+```json
+{"status": true, "data": {"status": "deleted", "key": "platform", "tier": "global"}}
+```
+
+**Errors** (HTTP 400):
+
+| Condition | Error |
+|---|---|
+| Invalid tier | `"Invalid tier: unknown"` |
+| Key not found | `"Memory entry 'platform' not found"` |
+| Permission denied | `"Permission denied for global memory"` |
+
+#### Tier Permission Summary
+
+| Tier | Read | Write/Delete |
+|---|---|---|
+| `global` | `assistant` permission or superuser | `assistant` permission or superuser |
+| `user` | Own entries; superuser can read any | Own entries; superuser can write any |
+| `group` | Any member of the group | Members with `assistant` permission on their Member record |
+
+The group is resolved from the request context. If the user is not in a group context, the `group` tier is not accessible via these endpoints.
+
+---
+
 ## Permission Mapping
 
 The assistant checks the user's permissions before executing each tool. The tools available to a user depend on their permissions:
@@ -332,6 +471,7 @@ The assistant checks the user's permissions before executing each tool. The tool
 | `view_admin` | Query users, user detail, user activity, rate limits, permission summary, fetch metrics, system health, list tools, list metric categories/slugs, list permissions, browse web URLs, describe and query any MojoModel |
 | `view_groups` | Query groups, group detail, group members, group activity |
 | `view_logs` | Query the audit log trail (logit.Log) — request history, model changes, API errors, custom events |
+| `assistant` | Read, write, and delete memory entries across all tiers (subject to per-tier access rules) |
 
 Users without any of these permissions will receive: `"You don't have permissions for any assistant tools."`
 
