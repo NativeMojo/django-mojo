@@ -130,3 +130,39 @@ class EmailTemplate(models.Model, MojoModel):
             "text": self.render_text(context),
             "html": self.render_html(context),
         }
+
+    # --- Seed auto-load ----------------------------------------------------
+
+    @classmethod
+    def get_or_load_from_seed(cls, name):
+        """Look up template by name; auto-load from seed file if missing."""
+        tpl = cls.objects.filter(name=name).first()
+        if tpl is not None:
+            return tpl
+        # Try to load from seed file
+        return cls._load_from_seed(name)
+
+    @classmethod
+    def _load_from_seed(cls, name):
+        """Load a template from the seed file at seeds/email_templates/{name}.json."""
+        import json
+        import os
+        seed_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "seeds", "email_templates")
+        seed_path = os.path.join(seed_dir, f"{name}.json")
+        if not os.path.isfile(seed_path):
+            return None
+        try:
+            with open(seed_path, "r") as f:
+                data = json.load(f)
+            tpl = cls.objects.create(
+                name=data["name"],
+                subject_template=data.get("subject_template", ""),
+                html_template=data.get("html_template", ""),
+                text_template=data.get("text_template", ""),
+                metadata=data.get("metadata", {}),
+            )
+            return tpl
+        except Exception as err:
+            from mojo.helpers import logit
+            logit.error(f"Failed to auto-load email template seed '{name}': {err}")
+            return None

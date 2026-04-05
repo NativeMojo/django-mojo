@@ -1075,7 +1075,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             template_prefix = self.org.get_metadata_value("email_template")
         if template_prefix:
             new_template_name = f"{template_prefix}_{template_name}"
-            if EmailTemplate.objects.filter(name=new_template_name).exists():
+            if EmailTemplate.get_or_load_from_seed(new_template_name):
                 template_name = new_template_name
 
         # Add user to context if not already present
