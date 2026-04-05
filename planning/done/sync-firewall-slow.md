@@ -1,7 +1,7 @@
 # sync_firewall runs 30 minutes due to per-CIDR subprocess calls
 
 **Type**: bug
-**Status**: planned
+**Status**: resolved
 **Date**: 2026-04-05
 **Severity**: high
 
@@ -98,3 +98,33 @@ Make firewall sync lightweight by using `ipset restore` for bulk loads and elimi
 ### Docs
 - `docs/django_developer/incident/firewall.md` — update to reflect `ipset restore` and sync behavior change
 - `CHANGELOG.md` — note performance fix
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-04-05
+
+### What Was Built
+Replaced per-CIDR subprocess loop with single `ipset restore` call using atomic swap. Reworked `sync_firewall` to skip unchanged IPSets and permanent blocks via Redis timestamp tracking.
+
+### Files Changed
+- `mojo/apps/incident/firewall.py` — `_run_stdin()`, `_build_restore_script()` (atomic swap), rewritten `ipset_load()`
+- `mojo/apps/incident/asyncjobs.py` — `sync_firewall` now skips unchanged sets, tracks last sync in Redis with TTL
+
+### Tests
+- `tests/test_incident/test_firewall_restore.py` — restore script structure, filtering, empty list, IPv6, large list, invalid name
+- `tests/test_incident/test_sync_firewall.py` — first run loads all, skips unchanged, reloads modified, Redis timestamp
+- Run: `bin/run_tests --agent -t test_incident.test_firewall_restore -t test_incident.test_sync_firewall`
+
+### Docs Updated
+- `docs/django_developer/security/README.md` — firewall reconciliation section, cronjobs table
+- `CHANGELOG.md` — performance fix entry
+
+### Security Review
+- Added name validation in `_build_restore_script` (defense in depth)
+- Empty CIDR list no longer swaps (prevents silent wipe of live ipset)
+- Redis key uses TTL=7200s to bound stale/manipulated values
+- Concurrent swap race (shared tmp name) noted as low-risk — single-runner architecture makes overlap unlikely
+
+### Follow-up
+- None
