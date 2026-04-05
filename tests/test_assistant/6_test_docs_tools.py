@@ -179,3 +179,57 @@ def test_read_docs_registered(opts):
         f"Permission should be view_admin, got: {entry['permission']}"
     assert entry["mutates"] is False, "read_docs should not be a mutating tool"
     assert entry["domain"] == "docs", f"Domain should be 'docs', got: {entry['domain']}"
+
+
+# ---------------------------------------------------------------------------
+# Security hardening
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test()
+def test_index_link_rejects_traversal(opts):
+    """Links extracted from index content with .. should be filtered out."""
+    from mojo.apps.assistant.services.tools.docs import _find_topic_in_index
+
+    index = '| [evil](../../../etc/passwd.md) | Secret stuff with traversal |'
+    matches = _find_topic_in_index(index, "traversal")
+    assert len(matches) == 0, f"Traversal links should be filtered: {matches}"
+
+
+@th.django_unit_test()
+def test_index_link_rejects_protocol_relative(opts):
+    """Links starting with // should be filtered out."""
+    from mojo.apps.assistant.services.tools.docs import _find_topic_in_index
+
+    index = '| [evil](//attacker.com/payload.md) | Evil protocol-relative link |'
+    matches = _find_topic_in_index(index, "evil")
+    assert len(matches) == 0, f"Protocol-relative links should be filtered: {matches}"
+
+
+@th.django_unit_test()
+def test_index_link_rejects_absolute(opts):
+    """Links starting with / should be filtered out."""
+    from mojo.apps.assistant.services.tools.docs import _find_topic_in_index
+
+    index = '| [evil](/etc/passwd.md) | Absolute path link |'
+    matches = _find_topic_in_index(index, "evil")
+    assert len(matches) == 0, f"Absolute links should be filtered: {matches}"
+
+
+@th.django_unit_test()
+def test_404_error_no_url_leak(opts):
+    """404 error should not expose the full base URL."""
+    result = _read_docs({"path": "django_developer/nonexistent_page.md"}, opts.admin)
+    assert "error" in result, "Should return error"
+    assert "raw.githubusercontent" not in result["error"], \
+        f"Error should not leak base URL: {result['error']}"
+
+
+@th.django_unit_test()
+def test_validate_base_url(opts):
+    from mojo.apps.assistant.services.tools.docs import _validate_base_url
+    assert _validate_base_url("https://raw.githubusercontent.com/foo/bar/") is True, \
+        "Public https URL should be valid"
+    assert _validate_base_url("http://raw.githubusercontent.com/foo/bar/") is False, \
+        "http (not https) should be rejected"
+    assert _validate_base_url("https://127.0.0.1/docs/") is False, \
+        "Localhost should be rejected"

@@ -1,5 +1,6 @@
 """Docs domain tools — fetch django-mojo framework documentation."""
 import re
+from urllib.parse import urlparse
 
 import requests
 
@@ -14,6 +15,18 @@ USER_AGENT = "Mojo-Assistant/1.0"
 _LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+\.md[^)]*)\)")
 
 
+def _validate_base_url(base_url):
+    """Validate that the base URL is https and not a private/internal host."""
+    parsed = urlparse(base_url)
+    if parsed.scheme != "https":
+        return False
+    # Import SSRF guard from web module
+    from mojo.apps.assistant.services.tools.web import _is_private_hostname
+    if parsed.hostname and _is_private_hostname(parsed.hostname):
+        return False
+    return True
+
+
 def _fetch_doc(url):
     """Fetch a raw doc URL. Returns (content, error_dict)."""
     try:
@@ -26,13 +39,26 @@ def _fetch_doc(url):
         return None, {"error": "Request failed"}
 
     if resp.status_code == 404:
-        return None, {"error": f"Document not found: {url.split('/docs/')[-1] if '/docs/' in url else url}"}
+        return None, {"error": "Document not found"}
     if resp.status_code == 403:
         return None, {"error": "GitHub rate limit reached. Try again in a few minutes."}
     if resp.status_code != 200:
         return None, {"error": f"HTTP {resp.status_code} fetching documentation"}
 
     return resp.text, None
+
+
+def _is_safe_link_path(link_path):
+    """Check if a link path extracted from index content is safe to fetch."""
+    if ".." in link_path:
+        return False
+    if link_path.startswith("http") or link_path.startswith("#"):
+        return False
+    if link_path.startswith("//"):
+        return False
+    if link_path.startswith("/"):
+        return False
+    return True
 
 
 def _find_topic_in_index(index_content, topic):
@@ -50,10 +76,10 @@ def _find_topic_in_index(index_content, topic):
             continue
 
         for link_text, link_path in _LINK_RE.findall(line):
-            # Skip non-doc links (anchors, external URLs)
-            if link_path.startswith("http") or link_path.startswith("#"):
+            link_path = link_path.strip()
+            if not _is_safe_link_path(link_path):
                 continue
-            matches.append((link_text.strip(), link_path.strip()))
+            matches.append((link_text.strip(), link_path))
 
     return matches
 
@@ -66,9 +92,11 @@ def _normalize_path(path):
     if path.startswith("docs/"):
         path = path[5:]
 
-    # Security: reject path traversal
+    # Security: reject path traversal and absolute/protocol-relative paths
     if ".." in path:
         return None, {"error": "Path traversal ('..') is not allowed"}
+    if path.startswith("//") or path.startswith("/"):
+        return None, {"error": "Absolute paths are not allowed"}
 
     # Must end in .md
     if not path.endswith(".md"):
@@ -86,6 +114,11 @@ def _tool_read_docs(params, user):
 
     base_url = settings.get("LLM_DOCS_BASE_URL", DEFAULT_BASE_URL)
     base_url = base_url.rstrip("/") + "/"
+
+    # Validate base URL against SSRF
+    if not _validate_base_url(base_url):
+        return {"error": "LLM_DOCS_BASE_URL must be an https URL pointing to a public host"}
+
     max_length = settings.get("LLM_BROWSE_MAX_LENGTH", DEFAULT_MAX_LENGTH, kind="int")
 
     if path:
@@ -131,7 +164,7 @@ def _tool_read_docs(params, user):
             "content": dev_index[:max_length],
             "content_length": len(dev_index),
             "truncated": truncated,
-            "note": f"No docs matched topic '{topic}'. Returning the index — browse for the right section.",
+            "note": "No docs matched that topic. Returning the index — browse for the right section.",
         }
 
     # Fetch the first match
@@ -141,13 +174,18 @@ def _tool_read_docs(params, user):
     if not best_path.startswith("web_developer/"):
         best_path = f"django_developer/{best_path}"
 
-    content, err = _fetch_doc(f"{base_url}{best_path}")
+    # Validate the resolved path before fetching
+    clean_path, err = _normalize_path(best_path)
+    if err:
+        return err
+
+    content, err = _fetch_doc(f"{base_url}{clean_path}")
     if err:
         return err
 
     truncated = len(content) > max_length
     result = {
-        "path": best_path,
+        "path": clean_path,
         "content": content[:max_length],
         "content_length": len(content),
         "truncated": truncated,
