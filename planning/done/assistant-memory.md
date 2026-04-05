@@ -1,7 +1,7 @@
 # Assistant Memory
 
 **Type**: request
-**Status**: planned
+**Status**: resolved
 **Date**: 2026-04-05
 **Priority**: high
 
@@ -475,3 +475,40 @@ Add a three-tier persistent memory system (global / user / group) to the assista
 
 - `docs/django_developer/assistant/README.md` — New "Memory" section: tiers, permission model, settings, system prompt injection, guided onboarding, LLM tool reference, cleanup job (mechanical + dreaming), robustness model
 - `docs/web_developer/assistant/README.md` — REST memory endpoints: request/response format, tier-level permission requirements, CRUD examples
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-04-05
+
+### What Was Built
+Three-tier persistent memory system (global/user/group) for the admin assistant, stored in Redis hashes with LLM tools, REST endpoints, system prompt injection with guided onboarding, and a nightly cleanup job with mechanical + LLM-assisted dreaming phases.
+
+### Files Changed
+- `mojo/apps/assistant/services/memory.py` — Core memory service (CRUD, permissions, prompt building, cleanup, dreaming)
+- `mojo/apps/assistant/services/tools/memory.py` — LLM tools (read_memory, write_memory, delete_memory)
+- `mojo/apps/assistant/services/tools/__init__.py` — Registered memory tools
+- `mojo/apps/assistant/services/agent.py` — System prompt injection, onboarding, memory guidance
+- `mojo/apps/assistant/models/conversation.py` — Added group FK
+- `mojo/apps/assistant/migrations/0003_conversation_group.py` — Migration for group FK
+- `mojo/apps/assistant/rest/memory.py` — REST CRUD endpoints
+- `mojo/apps/assistant/rest/__init__.py` — Registered memory REST module
+- `mojo/apps/assistant/rest/assistant.py` — Group context on conversation creation
+- `mojo/apps/assistant/handler.py` — Group context in WS handler with membership validation
+- `mojo/apps/assistant/jobs.py` — Nightly cleanup job (mechanical + dreaming)
+
+### Tests
+- `tests/test_assistant/13_test_memory.py` — 27 tests: CRUD, permissions, validation, prompt injection, timestamps, group isolation
+- `tests/test_assistant/14_test_memory_cleanup.py` — 12 tests: orphan cleanup, suspicious patterns, size enforcement, dreaming conditional logic, dream action application
+- Run: `bin/run_tests -t test_assistant.13_test_memory -t test_assistant.14_test_memory_cleanup`
+
+### Security Review
+- Fixed: service-layer permission gates on user tier (was relying on REST gate only)
+- Fixed: group membership validation in WS handler (was accepting arbitrary group_id)
+- Fixed: LLM dream output validation (secret checks, key format, value length on rewrite/merge)
+- Remaining advisory: consider view/manage split for global tier writes, prompt injection delimiter in memory prompt
+
+### Follow-up
+- Consider `manage_assistant` permission for global tier writes (currently any `assistant` user can write)
+- Consider prompt injection delimiters in `build_memory_prompt` (code blocks or role markers)
+- Monitor dreaming cost in production — disable with `LLM_ADMIN_MEMORY_DREAM_ENABLED=False` if needed
