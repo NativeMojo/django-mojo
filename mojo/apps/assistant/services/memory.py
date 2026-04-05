@@ -148,8 +148,8 @@ def _can_read_tier(tier, user, group=None):
     if tier == "global":
         return user.has_permission("assistant")
     if tier == "user":
-        # Users can always read their own tier; checked at call site for other users
-        return True
+        # Users can read their own tier; superuser check above handles cross-user reads
+        return user.has_permission("assistant")
     if tier == "group":
         if not group:
             return False
@@ -165,8 +165,8 @@ def _can_write_tier(tier, user, group=None):
     if tier == "global":
         return user.has_permission("assistant")
     if tier == "user":
-        # Users can write their own tier; superuser check above handles others
-        return True
+        # Users can write their own tier; superuser check above handles cross-user writes
+        return user.has_permission("assistant")
     if tier == "group":
         if not group:
             return False
@@ -763,6 +763,16 @@ def apply_dream_actions(redis_key, actions):
             key = action.get("key")
             new_value = action.get("new_value")
             if key and key in entries and new_value:
+                # Validate LLM output — treat as untrusted input
+                if _check_secrets(new_value):
+                    logger.warning("dream: skipping rewrite of '%s' — new_value matches secret pattern", key)
+                    stats["errors"] += 1
+                    continue
+                max_chars = settings.get("LLM_ADMIN_MEMORY_MAX_CHARS", 500, kind="int")
+                if len(new_value) > max_chars:
+                    logger.warning("dream: skipping rewrite of '%s' — new_value too long (%d)", key, len(new_value))
+                    stats["errors"] += 1
+                    continue
                 logger.info("dream: rewriting '%s' in %s (was: %s) → (now: %s) reason: %s",
                             key, redis_key, entries[key], new_value, reason)
                 try:
@@ -778,6 +788,21 @@ def apply_dream_actions(redis_key, actions):
             new_key = action.get("new_key")
             new_value = action.get("new_value")
             if keys and new_key and new_value:
+                # Validate LLM output — treat as untrusted input
+                key_error = _validate_key(new_key)
+                if key_error:
+                    logger.warning("dream: skipping merge — invalid new_key '%s': %s", new_key, key_error)
+                    stats["errors"] += 1
+                    continue
+                if _check_secrets(new_value):
+                    logger.warning("dream: skipping merge into '%s' — new_value matches secret pattern", new_key)
+                    stats["errors"] += 1
+                    continue
+                max_chars = settings.get("LLM_ADMIN_MEMORY_MAX_CHARS", 500, kind="int")
+                if len(new_value) > max_chars:
+                    logger.warning("dream: skipping merge into '%s' — new_value too long (%d)", new_key, len(new_value))
+                    stats["errors"] += 1
+                    continue
                 existing_keys = [k for k in keys if k in entries]
                 if existing_keys:
                     for k in existing_keys:

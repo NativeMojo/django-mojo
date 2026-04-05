@@ -137,6 +137,11 @@ def _handle_message(user, data):
             try:
                 from mojo.apps.account.models import Group
                 group = Group.objects.get(pk=group_id)
+                # Verify user is a member of this group (superusers bypass)
+                if not user.is_superuser:
+                    member = group.get_member_for_user(user, check_parents=True)
+                    if not member:
+                        group = None
             except Exception:
                 pass
         conversation = Conversation.objects.create(user=user, title=title, group=group)
