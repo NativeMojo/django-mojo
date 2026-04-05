@@ -212,9 +212,14 @@ def ipset_del(name, ip):
 def _build_restore_script(name, cidrs):
     """Build an ipset restore script for atomic swap.
 
-    Validates each CIDR, loads into a temp set, then swaps with the live set.
-    Returns (script_string, valid_count).
+    Validates name and each CIDR, loads into a temp set, then swaps with the
+    live set. Returns ("", 0) if name is invalid or no valid CIDRs remain
+    (prevents accidentally wiping a live set with an empty swap).
     """
+    name = _validate_ipset_name(name)
+    if not name:
+        return "", 0
+
     tmp_name = f"{name}_tmp"
     lines = [
         f"create {tmp_name} hash:net -exist",
@@ -227,6 +232,12 @@ def _build_restore_script(name, cidrs):
             continue
         lines.append(f"add {tmp_name} {cidr}")
         valid_count += 1
+
+    if valid_count == 0:
+        # Don't swap — would silently wipe the live set
+        lines.append(f"destroy {tmp_name}")
+        return "\n".join(lines) + "\n", 0
+
     lines.append(f"swap {name} {tmp_name}")
     lines.append(f"destroy {tmp_name}")
     return "\n".join(lines) + "\n", valid_count

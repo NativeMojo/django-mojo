@@ -188,8 +188,8 @@ def sync_firewall(job):
     if skipped:
         job.add_log(f"sync_firewall: skipped {skipped} unchanged IPSets")
 
-    # Record sync time for next run
-    redis_client.set(SYNC_FIREWALL_REDIS_KEY, now.isoformat())
+    # Record sync time for next run (TTL = 2x hourly interval as safety net)
+    redis_client.set(SYNC_FIREWALL_REDIS_KEY, now.isoformat(), ex=7200)
 
 
 def sweep_expired_blocks(job):

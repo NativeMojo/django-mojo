@@ -29,7 +29,7 @@ def _mock_redis(last_sync_value=None):
 
     r = mock.MagicMock()
     r.get = lambda key: store.get(key)
-    r.set = lambda key, val: store.__setitem__(key, val)
+    r.set = lambda key, val, **kwargs: store.__setitem__(key, val)
     return r
 
 

@@ -44,7 +44,7 @@ def test_restore_script_filters_invalid(opts):
     assert "192.168.1.0/24" in add_lines[1], f"Second add should be 192.168.1.0/24, got: {add_lines[1]}"
 
 
-@th.unit_test("restore script handles empty CIDR list")
+@th.unit_test("restore script skips swap on empty CIDR list")
 def test_restore_script_empty(opts):
     from mojo.apps.incident.firewall import _build_restore_script
 
@@ -52,15 +52,23 @@ def test_restore_script_empty(opts):
     lines = script.strip().splitlines()
 
     assert count == 0, f"Expected 0 valid CIDRs, got {count}"
-    # Should still have create, flush, swap, destroy (empty set swap)
+    # Should create and flush tmp, then destroy it — NO swap (prevents wiping live set)
     assert lines[0] == "create empty_set_tmp hash:net -exist", \
-        f"Should still create tmp set, got: {lines[0]}"
+        f"Should create tmp set, got: {lines[0]}"
     assert lines[1] == "flush empty_set_tmp", \
-        f"Should still flush tmp set, got: {lines[1]}"
-    assert lines[2] == "swap empty_set empty_set_tmp", \
-        f"Should swap even with empty set, got: {lines[2]}"
-    assert lines[3] == "destroy empty_set_tmp", \
-        f"Should destroy tmp set, got: {lines[3]}"
+        f"Should flush tmp set, got: {lines[1]}"
+    assert lines[2] == "destroy empty_set_tmp", \
+        f"Should destroy tmp set without swapping, got: {lines[2]}"
+    assert "swap" not in script, "Should NOT swap when CIDR list is empty"
+
+
+@th.unit_test("restore script rejects invalid name")
+def test_restore_script_invalid_name(opts):
+    from mojo.apps.incident.firewall import _build_restore_script
+
+    script, count = _build_restore_script("bad name!", ["10.0.0.0/8"])
+    assert script == "", f"Should return empty script for invalid name, got: {script!r}"
+    assert count == 0, f"Should return 0 count for invalid name, got {count}"
 
 
 @th.unit_test("restore script handles IPv6 CIDRs")
