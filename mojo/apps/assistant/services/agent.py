@@ -14,6 +14,7 @@ Flow:
 import re
 import uuid
 import ujson
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from mojo.helpers.settings import settings
 from mojo.helpers import logit, llm
 
@@ -231,6 +232,9 @@ Don't create a plan for simple queries — if the user asks "how many open incid
 
 ### Parallel Steps
 When steps are independent (no data dependencies), mark them parallel=true and include the tool and tool_input. The system executes these concurrently — you don't need to call them yourself. Only the final synthesis step should be sequential (parallel=false, no tool field).
+
+## Parallel Execution
+When you need data from multiple independent sources (e.g., incidents AND jobs AND users), call all the tools in a single turn rather than one at a time. The system executes concurrent tool calls in parallel for faster results. Only serialize tool calls when one tool's result informs the next tool's input.
 """
 
 
@@ -405,6 +409,258 @@ def _handle_plan_tool(conversation, tool_name, tool_input, tool_result, on_event
     return False
 
 
+META_TOOLS = {"load_tools", "create_plan", "update_plan"}
+
+
+def _execute_tool(block, registry, user, conversation, tools, on_event, tool_calls_made):
+    """
+    Execute a single tool call with permission gate, meta-tool handling,
+    and event reporting.
+
+    Returns a dict with 'tool_use_id' and 'result' for building tool_results.
+    """
+    tool_name = block["name"]
+    tool_input = block["input"]
+    tool_id = block["id"]
+
+    tool_entry = registry.get(tool_name)
+    if not tool_entry:
+        tool_result = {"error": f"Unknown tool: {tool_name}"}
+        logger.warning("LLM requested unknown tool: %s", tool_name)
+        _report_event(
+            "assistant:permission_denied", 6,
+            f"Unknown tool requested: {tool_name}",
+            f"LLM requested tool '{tool_name}' which is not in the registry. "
+            f"User: {user.email} (id={user.pk}), conv={conversation.pk}",
+            user=user,
+        )
+    elif not user.has_permission(tool_entry["permission"]):
+        perm = tool_entry["permission"]
+        tool_result = {
+            "error": f"Permission denied. You need '{perm}' to use {tool_name}."
+        }
+        logger.info("Permission denied for tool %s, user %s needs %s",
+                     tool_name, user.pk, perm)
+        _report_event(
+            "assistant:permission_denied", 5,
+            f"Permission denied: {tool_name}",
+            f"User {user.email} (id={user.pk}) denied access to tool '{tool_name}' "
+            f"(requires '{perm}'). conv={conversation.pk}",
+            user=user,
+        )
+    else:
+        try:
+            if on_event:
+                on_event("tool_call", {
+                    "tool": tool_name,
+                    "input": tool_input,
+                })
+            tool_result = tool_entry["handler"](tool_input, user)
+            tool_calls_made.append({
+                "tool": tool_name,
+                "input": tool_input,
+            })
+            # Handle meta-tools — side effects in the agent loop
+            if tool_name == "load_tools":
+                added = _handle_load_tools(
+                    conversation, tool_input, tools, user,
+                )
+                if added:
+                    logger.info("Loaded %d tools for domains via load_tools, conv=%s",
+                                len(added), conversation.pk)
+            _handle_plan_tool(
+                conversation, tool_name, tool_input, tool_result, on_event,
+            )
+            # Report events for successful mutating tool calls
+            if tool_entry.get("mutates") and (
+                not isinstance(tool_result, dict) or "error" not in tool_result
+            ):
+                _report_event(
+                    f"assistant:tool:{tool_name}", 5,
+                    f"Assistant tool: {tool_name}",
+                    f"User {user.email} (id={user.pk}) executed mutating tool "
+                    f"'{tool_name}'. conv={conversation.pk}",
+                    user=user,
+                )
+        except Exception:
+            logger.exception("Tool %s failed", tool_name)
+            tool_result = {"error": f"Tool '{tool_name}' encountered an internal error."}
+            _report_event(
+                "assistant:error", 6,
+                f"Tool exception: {tool_name}",
+                f"Tool '{tool_name}' raised an exception for user {user.email} "
+                f"(id={user.pk}). conv={conversation.pk}",
+                user=user,
+            )
+
+    return {
+        "type": "tool_result",
+        "tool_use_id": tool_id,
+        "content": ujson.dumps(tool_result),
+    }
+
+
+def _execute_tools(tool_blocks, registry, user, conversation, tools, on_event, tool_calls_made):
+    """
+    Execute tool calls, using parallel execution when multiple non-meta tools
+    are present in a single turn.
+
+    Meta-tools (load_tools, create_plan, update_plan) always run first serially
+    since they have side effects on the agent loop state.
+    """
+    if not tool_blocks:
+        return []
+
+    max_workers = settings.get("LLM_ADMIN_MAX_PARALLEL_TOOLS", 4, kind="int")
+
+    # Separate meta-tools from regular tools
+    meta_blocks = [b for b in tool_blocks if b["name"] in META_TOOLS]
+    regular_blocks = [b for b in tool_blocks if b["name"] not in META_TOOLS]
+
+    results = []
+
+    # Meta-tools run first, serially (they modify conversation state)
+    for block in meta_blocks:
+        result = _execute_tool(block, registry, user, conversation, tools, on_event, tool_calls_made)
+        results.append(result)
+
+    # Regular tools run in parallel if there are multiple
+    if len(regular_blocks) <= 1:
+        for block in regular_blocks:
+            result = _execute_tool(block, registry, user, conversation, tools, on_event, tool_calls_made)
+            results.append(result)
+    else:
+        with ThreadPoolExecutor(max_workers=min(max_workers, len(regular_blocks))) as pool:
+            futures = {}
+            for block in regular_blocks:
+                future = pool.submit(
+                    _execute_tool, block, registry, user, conversation,
+                    tools, on_event, tool_calls_made,
+                )
+                futures[future] = block["id"]
+
+            for future in as_completed(futures):
+                try:
+                    result = future.result(timeout=30)
+                    results.append(result)
+                except Exception:
+                    tool_id = futures[future]
+                    logger.exception("Parallel tool execution failed for tool_use_id %s", tool_id)
+                    results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tool_id,
+                        "content": ujson.dumps({"error": "Tool execution timed out or failed."}),
+                    })
+
+    return results
+
+
+def _execute_parallel_plan_steps(plan, registry, user, conversation, tools, on_event, tool_calls_made):
+    """
+    Execute parallel plan steps concurrently.
+
+    For plan steps with parallel=True and a tool+tool_input, execute them
+    all via ThreadPoolExecutor and return the results as tool_result dicts
+    that can be injected into the LLM conversation.
+
+    Returns (tool_results, fake_tool_blocks) where fake_tool_blocks are
+    synthetic tool_use blocks to pair with the results in message history.
+    """
+    parallel_steps = [
+        s for s in plan.get("steps", [])
+        if s.get("parallel") and s.get("tool") and s.get("status") == "pending"
+    ]
+    if not parallel_steps:
+        return [], []
+
+    max_workers = settings.get("LLM_ADMIN_MAX_PARALLEL_TOOLS", 4, kind="int")
+    results = []
+    fake_blocks = []
+
+    # Build synthetic tool_use blocks for each parallel step
+    step_blocks = []
+    for step in parallel_steps:
+        tool_id = f"plan_step_{step['id']}_{uuid.uuid4().hex[:8]}"
+        block = {
+            "type": "tool_use",
+            "id": tool_id,
+            "name": step["tool"],
+            "input": step.get("tool_input", {}),
+        }
+        step_blocks.append((step, block))
+        fake_blocks.append(block)
+
+    # Mark all parallel steps as in_progress
+    for step, _ in step_blocks:
+        _handle_plan_tool(conversation, "update_plan", {},
+                          {"step_id": step["id"], "status": "in_progress", "updated": True},
+                          on_event)
+
+    # Execute all in parallel
+    if len(step_blocks) <= 1:
+        for step, block in step_blocks:
+            result = _execute_tool(block, registry, user, conversation, tools, on_event, tool_calls_made)
+            results.append(result)
+            # Parse the result to extract a summary
+            try:
+                parsed = ujson.loads(result["content"])
+                summary = _summarize_tool_result(parsed)
+            except Exception:
+                summary = "Completed"
+            _handle_plan_tool(conversation, "update_plan", {},
+                              {"step_id": step["id"], "status": "done", "summary": summary, "updated": True},
+                              on_event)
+    else:
+        with ThreadPoolExecutor(max_workers=min(max_workers, len(step_blocks))) as pool:
+            future_to_step = {}
+            for step, block in step_blocks:
+                future = pool.submit(
+                    _execute_tool, block, registry, user, conversation,
+                    tools, on_event, tool_calls_made,
+                )
+                future_to_step[future] = (step, block)
+
+            for future in as_completed(future_to_step):
+                step, block = future_to_step[future]
+                try:
+                    result = future.result(timeout=30)
+                    results.append(result)
+                    try:
+                        parsed = ujson.loads(result["content"])
+                        summary = _summarize_tool_result(parsed)
+                    except Exception:
+                        summary = "Completed"
+                    _handle_plan_tool(conversation, "update_plan", {},
+                                      {"step_id": step["id"], "status": "done", "summary": summary, "updated": True},
+                                      on_event)
+                except Exception:
+                    logger.exception("Parallel plan step %d failed", step["id"])
+                    results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block["id"],
+                        "content": ujson.dumps({"error": f"Step '{step['description']}' failed."}),
+                    })
+                    _handle_plan_tool(conversation, "update_plan", {},
+                                      {"step_id": step["id"], "status": "skipped", "summary": "Failed", "updated": True},
+                                      on_event)
+
+    return results, fake_blocks
+
+
+def _summarize_tool_result(result):
+    """Create a brief summary from a tool result for plan step updates."""
+    if isinstance(result, dict):
+        if "error" in result:
+            return f"Error: {result['error'][:80]}"
+        if "message" in result:
+            return str(result["message"])[:80]
+        if "total" in result:
+            return f"{result['total']} results"
+    if isinstance(result, list):
+        return f"{len(result)} results"
+    return "Completed"
+
+
 def _build_conversation_messages(conversation, max_history):
     """Load previous messages from the conversation into Claude message format."""
     from mojo.apps.assistant.models import Message
@@ -547,91 +803,11 @@ def run_assistant(user, message, conversation_id=None, on_event=None):
                     "tool_calls_made": tool_calls_made,
                 }
 
-            # Process tool calls with permission gate
-            tool_results = []
-            for block in result["content"]:
-                if block.get("type") != "tool_use":
-                    continue
-
-                tool_name = block["name"]
-                tool_input = block["input"]
-                tool_id = block["id"]
-
-                tool_entry = registry.get(tool_name)
-                if not tool_entry:
-                    tool_result = {"error": f"Unknown tool: {tool_name}"}
-                    logger.warning("LLM requested unknown tool: %s", tool_name)
-                    _report_event(
-                        "assistant:permission_denied", 6,
-                        f"Unknown tool requested: {tool_name}",
-                        f"LLM requested tool '{tool_name}' which is not in the registry. "
-                        f"User: {user.email} (id={user.pk}), conv={conversation.pk}",
-                        user=user,
-                    )
-                elif not user.has_permission(tool_entry["permission"]):
-                    perm = tool_entry["permission"]
-                    tool_result = {
-                        "error": f"Permission denied. You need '{perm}' to use {tool_name}."
-                    }
-                    logger.info("Permission denied for tool %s, user %s needs %s",
-                                tool_name, user.pk, perm)
-                    _report_event(
-                        "assistant:permission_denied", 5,
-                        f"Permission denied: {tool_name}",
-                        f"User {user.email} (id={user.pk}) denied access to tool '{tool_name}' "
-                        f"(requires '{perm}'). conv={conversation.pk}",
-                        user=user,
-                    )
-                else:
-                    try:
-                        if on_event:
-                            on_event("tool_call", {
-                                "tool": tool_name,
-                                "input": tool_input,
-                            })
-                        tool_result = tool_entry["handler"](tool_input, user)
-                        tool_calls_made.append({
-                            "tool": tool_name,
-                            "input": tool_input,
-                        })
-                        # Handle meta-tools — side effects in the agent loop
-                        if tool_name == "load_tools":
-                            added = _handle_load_tools(
-                                conversation, tool_input, tools, user,
-                            )
-                            if added:
-                                logger.info("Loaded %d tools for domains via load_tools, conv=%s",
-                                            len(added), conversation.pk)
-                        _handle_plan_tool(
-                            conversation, tool_name, tool_input, tool_result, on_event,
-                        )
-                        # Report events for successful mutating tool calls
-                        if tool_entry.get("mutates") and (
-                            not isinstance(tool_result, dict) or "error" not in tool_result
-                        ):
-                            _report_event(
-                                f"assistant:tool:{tool_name}", 5,
-                                f"Assistant tool: {tool_name}",
-                                f"User {user.email} (id={user.pk}) executed mutating tool "
-                                f"'{tool_name}'. conv={conversation.pk}",
-                                user=user,
-                            )
-                    except Exception:
-                        logger.exception("Tool %s failed", tool_name)
-                        tool_result = {"error": f"Tool '{tool_name}' encountered an internal error."}
-                        _report_event(
-                            "assistant:error", 6,
-                            f"Tool exception: {tool_name}",
-                            f"Tool '{tool_name}' raised an exception for user {user.email} "
-                            f"(id={user.pk}). conv={conversation.pk}",
-                            user=user,
-                        )
-
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": tool_id,
-                    "content": ujson.dumps(tool_result),
-                })
+            # Process tool calls — parallel when multiple non-meta tools
+            tool_blocks = [b for b in result["content"] if b.get("type") == "tool_use"]
+            tool_results = _execute_tools(
+                tool_blocks, registry, user, conversation, tools, on_event, tool_calls_made,
+            )
 
             # Store tool interaction messages
             Message.objects.create(
@@ -648,6 +824,31 @@ def run_assistant(user, message, conversation_id=None, on_event=None):
             )
 
             messages.append({"role": "user", "content": tool_results})
+
+            # Plan-aware parallel execution: if create_plan just ran and
+            # the plan has parallel steps with tools, execute them now
+            plan = (conversation.metadata or {}).get("plan")
+            if plan and any(b["name"] == "create_plan" for b in tool_blocks):
+                plan_results, plan_blocks = _execute_parallel_plan_steps(
+                    plan, registry, user, conversation, tools, on_event, tool_calls_made,
+                )
+                if plan_results:
+                    # Inject parallel results as if the LLM had called them
+                    Message.objects.create(
+                        conversation=conversation,
+                        role="assistant",
+                        content="",
+                        tool_calls=plan_blocks,
+                    )
+                    Message.objects.create(
+                        conversation=conversation,
+                        role="tool_result",
+                        content="",
+                        tool_calls=plan_results,
+                    )
+                    # Add to messages so the LLM sees the results
+                    messages.append({"role": "assistant", "content": plan_blocks})
+                    messages.append({"role": "user", "content": plan_results})
 
         # Hit max turns
         logger.warning("Max turns reached for user %s, conv %s", user.pk, conversation.pk)
@@ -766,80 +967,11 @@ def run_assistant_ws(user, message, conversation_id, on_event=None):
                     "tool_calls_made": tool_calls_made,
                 }
 
-            # Process tool calls with permission gate
-            tool_results = []
-            for block in result["content"]:
-                if block.get("type") != "tool_use":
-                    continue
-
-                tool_name = block["name"]
-                tool_input = block["input"]
-                tool_id = block["id"]
-
-                tool_entry = registry.get(tool_name)
-                if not tool_entry:
-                    tool_result = {"error": f"Unknown tool: {tool_name}"}
-                    _report_event(
-                        "assistant:permission_denied", 6,
-                        f"Unknown tool requested: {tool_name}",
-                        f"LLM requested tool '{tool_name}' not in registry. "
-                        f"User: {user.email} (id={user.pk}), conv={conversation.pk}",
-                        user=user,
-                    )
-                elif not user.has_permission(tool_entry["permission"]):
-                    perm = tool_entry["permission"]
-                    tool_result = {"error": f"Permission denied. You need '{perm}' to use {tool_name}."}
-                    _report_event(
-                        "assistant:permission_denied", 5,
-                        f"Permission denied: {tool_name}",
-                        f"User {user.email} (id={user.pk}) denied access to tool '{tool_name}' "
-                        f"(requires '{perm}'). conv={conversation.pk}",
-                        user=user,
-                    )
-                else:
-                    try:
-                        if on_event:
-                            on_event("tool_call", {"tool": tool_name, "input": tool_input})
-                        tool_result = tool_entry["handler"](tool_input, user)
-                        tool_calls_made.append({"tool": tool_name, "input": tool_input})
-                        # Handle meta-tools — side effects in the agent loop
-                        if tool_name == "load_tools":
-                            added = _handle_load_tools(
-                                conversation, tool_input, tools, user,
-                            )
-                            if added:
-                                logger.info("WS loaded %d tools for domains via load_tools, conv=%s",
-                                            len(added), conversation.pk)
-                        _handle_plan_tool(
-                            conversation, tool_name, tool_input, tool_result, on_event,
-                        )
-                        # Report events for successful mutating tool calls
-                        if tool_entry.get("mutates") and (
-                            not isinstance(tool_result, dict) or "error" not in tool_result
-                        ):
-                            _report_event(
-                                f"assistant:tool:{tool_name}", 5,
-                                f"Assistant tool: {tool_name}",
-                                f"User {user.email} (id={user.pk}) executed mutating tool "
-                                f"'{tool_name}'. conv={conversation.pk}",
-                                user=user,
-                            )
-                    except Exception:
-                        logger.exception("Tool %s failed", tool_name)
-                        tool_result = {"error": f"Tool '{tool_name}' encountered an internal error."}
-                        _report_event(
-                            "assistant:error", 6,
-                            f"Tool exception: {tool_name}",
-                            f"Tool '{tool_name}' raised an exception for user {user.email} "
-                            f"(id={user.pk}). conv={conversation.pk}",
-                            user=user,
-                        )
-
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": tool_id,
-                    "content": ujson.dumps(tool_result),
-                })
+            # Process tool calls — parallel when multiple non-meta tools
+            tool_blocks = [b for b in result["content"] if b.get("type") == "tool_use"]
+            tool_results = _execute_tools(
+                tool_blocks, registry, user, conversation, tools, on_event, tool_calls_made,
+            )
 
             Message.objects.create(
                 conversation=conversation, role="assistant", content="", tool_calls=result["content"],
@@ -848,6 +980,23 @@ def run_assistant_ws(user, message, conversation_id, on_event=None):
                 conversation=conversation, role="tool_result", content="", tool_calls=tool_results,
             )
             messages.append({"role": "user", "content": tool_results})
+
+            # Plan-aware parallel execution: if create_plan just ran and
+            # the plan has parallel steps with tools, execute them now
+            plan = (conversation.metadata or {}).get("plan")
+            if plan and any(b["name"] == "create_plan" for b in tool_blocks):
+                plan_results, plan_blocks = _execute_parallel_plan_steps(
+                    plan, registry, user, conversation, tools, on_event, tool_calls_made,
+                )
+                if plan_results:
+                    Message.objects.create(
+                        conversation=conversation, role="assistant", content="", tool_calls=plan_blocks,
+                    )
+                    Message.objects.create(
+                        conversation=conversation, role="tool_result", content="", tool_calls=plan_results,
+                    )
+                    messages.append({"role": "assistant", "content": plan_blocks})
+                    messages.append({"role": "user", "content": plan_results})
 
         logger.warning("WS max turns reached for user %s, conv %s", user.pk, conversation.pk)
         _report_event(
