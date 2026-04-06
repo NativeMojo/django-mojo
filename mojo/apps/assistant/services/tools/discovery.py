@@ -1,8 +1,15 @@
 """
 Discovery tools — let the LLM (and users) explore what's available.
 
-These tools answer questions like "what can you do?", "what metrics exist?",
-"what job channels are configured?", and "what event categories are there?".
+load_tools (core) is the primary gateway — lists available domains or loads
+domain-specific tools into the conversation.
+
+list_tools (non-core) provides a full listing of all tools; available when
+the discovery domain is loaded.
+
+Domain-specific discovery tools (list_job_channels, list_event_categories,
+list_metric_categories, list_metric_slugs, list_permissions) are registered
+under their parent domains so they load alongside related tools.
 """
 from mojo.apps.assistant import tool
 
@@ -10,14 +17,81 @@ MAX_RESULTS = 100
 
 
 @tool(
-    name="list_tools",
+    name="load_tools",
     domain="discovery",
     permission="view_admin",
-    description="List all tools available to you, grouped by domain. Use this when the user asks 'what can you do?' or you need to find the right tool for a task.",
+    core=True,
+    description=(
+        "Discover and load domain-specific tools. "
+        "Call with no arguments to see available domains with descriptions and tool counts. "
+        "Call with a domain name to load that domain's tools for this conversation. "
+        "Loaded tools persist for the rest of the conversation. "
+        "Available domains: security, jobs, users, groups, metrics, discovery."
+    ),
     input_schema={
         "type": "object",
         "properties": {
-            "domain": {"type": "string", "description": "Filter by domain (security, jobs, users, groups, metrics, discovery). Omit to see all."},
+            "domain": {
+                "type": "string",
+                "description": "Load tools for a single domain.",
+            },
+            "domains": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Load tools for multiple domains at once.",
+            },
+        },
+    },
+)
+def _tool_load_tools(params, user):
+    """List available domains or load domain tools."""
+    from mojo.apps.assistant import get_available_domains, get_domain_tools_for_user
+
+    domain = params.get("domain")
+    domains = params.get("domains")
+
+    # Merge single and list into one list
+    requested = []
+    if domain:
+        requested.append(domain)
+    if domains:
+        requested.extend(domains)
+
+    if not requested:
+        # No domain specified — list available domains
+        available = get_available_domains(user)
+        return {
+            "message": "Available domains. Call load_tools with a domain name to load its tools.",
+            "domains": available,
+        }
+
+    # Load requested domains
+    loaded = {}
+    for d in set(requested):
+        tools = get_domain_tools_for_user(user, [d])
+        if tools:
+            loaded[d] = [
+                {"name": t["name"], "description": t["description"][:120]}
+                for t in tools
+            ]
+        else:
+            loaded[d] = {"note": f"No tools available for domain '{d}' (check permissions)"}
+
+    return {
+        "message": "Tools loaded. They are now available for use in this conversation.",
+        "loaded": loaded,
+    }
+
+
+@tool(
+    name="list_tools",
+    domain="discovery",
+    permission="view_admin",
+    description="List all tools available to you, grouped by domain. Use this when the user asks 'what can you do?' or you need a complete tool listing.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "domain": {"type": "string", "description": "Filter by domain. Omit to see all."},
         },
     },
 )
@@ -35,13 +109,14 @@ def _tool_list_tools(params, user):
         if not user.has_permission(entry["permission"]):
             continue
 
-        domain = entry["domain"]
-        if domain not in domains:
-            domains[domain] = []
-        domains[domain].append({
+        d = entry["domain"]
+        if d not in domains:
+            domains[d] = []
+        domains[d].append({
             "name": name,
             "description": entry["definition"]["description"],
             "mutates": entry["mutates"],
+            "core": entry["core"],
         })
 
     return {
@@ -50,9 +125,13 @@ def _tool_list_tools(params, user):
     }
 
 
+# ---------------------------------------------------------------------------
+# Domain-specific discovery tools — registered under their parent domains
+# ---------------------------------------------------------------------------
+
 @tool(
     name="list_metric_categories",
-    domain="discovery",
+    domain="metrics",
     permission="view_admin",
     description="List all metric categories being tracked. Use this to discover what metrics exist before fetching data.",
     input_schema={
@@ -85,7 +164,7 @@ def _tool_list_metric_categories(params, user):
 
 @tool(
     name="list_metric_slugs",
-    domain="discovery",
+    domain="metrics",
     permission="view_admin",
     description="List all metric slugs within a category. Use this to find specific metrics to fetch.",
     input_schema={
@@ -122,7 +201,7 @@ def _tool_list_metric_slugs(params, user):
 
 @tool(
     name="list_job_channels",
-    domain="discovery",
+    domain="jobs",
     permission="view_jobs",
     description="List all configured job channels and their current queue depth.",
     input_schema={
@@ -159,7 +238,7 @@ def _tool_list_job_channels(params, user):
 
 @tool(
     name="list_event_categories",
-    domain="discovery",
+    domain="security",
     permission="view_security",
     description="List distinct security event categories seen in the system over a time period.",
     input_schema={
@@ -193,9 +272,9 @@ def _tool_list_event_categories(params, user):
 
 @tool(
     name="list_permissions",
-    domain="discovery",
+    domain="users",
     permission="view_admin",
-    description="List all known permission keys from the system's models. Useful for understanding what permissions exist.",
+    description="List all known permission keys from the system's models. Useful for understanding what permissions exist before granting or checking user permissions.",
     input_schema={
         "type": "object",
         "properties": {},

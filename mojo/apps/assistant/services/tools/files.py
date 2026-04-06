@@ -14,6 +14,7 @@ MAX_IMAGE_BYTES = 20 * 1024 * 1024  # 20 MB limit for image analysis
     name="query_files",
     domain="files",
     permission="view_fileman",
+    core=True,
     description="Search and list uploaded files. Filter by category, content type, filename, or group. Returns up to 50 files.",
     input_schema={
         "type": "object",
@@ -62,6 +63,7 @@ def _tool_query_files(params, user):
     name="get_file",
     domain="files",
     permission="view_fileman",
+    core=True,
     description="Get detailed metadata for a specific file by ID, including storage info, checksums, and group/user ownership.",
     input_schema={
         "type": "object",
@@ -108,6 +110,7 @@ def _tool_get_file(params, user):
     name="analyze_image",
     domain="files",
     permission="view_fileman",
+    core=True,
     description="Analyze an uploaded image using Claude vision. Describe contents, detect text, identify objects, etc. Only works on image files under 20 MB. IMPORTANT: Confirm with the user before executing.",
     input_schema={
         "type": "object",

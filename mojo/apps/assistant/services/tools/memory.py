@@ -6,6 +6,7 @@ from mojo.apps.assistant import tool
     name="read_memory",
     domain="memory",
     permission="assistant",
+    core=True,
     description=(
         "Read stored memories for the current context. Memories are already injected "
         "into the system prompt, but this tool lets you see raw keys for reference "
@@ -37,6 +38,7 @@ def _tool_read_memory(params, user):
     name="write_memory",
     domain="memory",
     permission="assistant",
+    core=True,
     mutates=True,
     description=(
         "Store or update a memory entry. Memories persist across conversations.\n\n"
@@ -89,6 +91,7 @@ def _tool_write_memory(params, user):
     name="delete_memory",
     domain="memory",
     permission="assistant",
+    core=True,
     mutates=True,
     description=(
         "Delete a memory entry. Use this to remove outdated, incorrect, or "

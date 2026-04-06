@@ -216,6 +216,7 @@ def _apply_owner_group_filter(model, request, queryset):
     name="describe_model",
     domain="models",
     permission="view_admin",
+    core=True,
     description=(
         "Describe a MojoModel's fields, available graphs, permissions, and search fields. "
         "Use this to discover what data is available before querying. "
@@ -284,6 +285,7 @@ def _tool_describe_model(params, user):
     name="query_model",
     domain="models",
     permission="view_admin",
+    core=True,
     description=(
         "Query any MojoModel with filters, search, ordering, and format options. "
         "Respects RestMeta permissions and owner/group filtering. "

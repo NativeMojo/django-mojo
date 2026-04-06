@@ -13,6 +13,7 @@ LOG_TRUNCATE_LENGTH = 500
     name="query_logs",
     domain="logs",
     permission="view_logs",
+    core=True,
     description=(
         "Query the audit log trail (logit.Log). Every HTTP request/response, model change, "
         "API error, and custom event is recorded here. Filter by time range, level, kind, "

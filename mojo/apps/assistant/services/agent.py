@@ -69,7 +69,7 @@ def _parse_blocks(text):
 
 SYSTEM_PROMPT = """You are an admin assistant for a web application platform. You help administrators query and manage their system through natural language.
 
-You have access to tools that let you query security incidents, events, jobs, users, groups, and metrics. Each tool call is checked against the requesting user's permissions.
+You have access to tools for querying and managing the system. Each tool call is checked against the requesting user's permissions.
 
 ## Guidelines
 - Answer questions clearly and concisely using the data from your tools.
@@ -79,20 +79,17 @@ You have access to tools that let you query security incidents, events, jobs, us
 - Bound your queries: use reasonable time ranges and limits. Don't query everything at once.
 - Never expose passwords, auth keys, or other secrets — the tools already filter these out.
 - If you don't have a tool for what the user is asking, say so clearly.
+- If a tool returns empty results, that means there is no matching data — it does NOT mean the tool is broken.
 
-## Tool Selection
+## Tool Loading
 
-You have many tools. Always prefer the **dedicated domain tool** over query_model when one exists:
-- For jobs: use query_jobs, query_job_events, query_job_logs, get_job_stats, get_queue_health
-- For incidents: use query_incidents, get_incident_details
-- For users: use query_users, get_user_details
-- For groups: use query_groups, get_group_details
-- For metrics: use the metrics tools
-- For security: use the security tools
+You start with core tools (memory, models, docs, web, logs, files). For domain-specific work, call `load_tools` to discover and load additional tools.
 
-Use query_model/describe_model **only** when no dedicated tool covers the model or query you need. Dedicated tools return curated, optimized output — query_model returns raw data that is noisier and uses more tokens.
-
-If a tool returns empty results, that means there is no matching data — it does NOT mean the tool is broken. Do not fall back to query_model just because a dedicated tool returned an empty result.
+- **Discover domains**: Call `load_tools()` with no arguments to see available domains (security, jobs, users, groups, metrics) with descriptions and tool counts.
+- **Load a domain**: Call `load_tools(domain="security")` or `load_tools(domains=["security", "jobs"])` to load domain tools. Loaded tools persist for the rest of this conversation.
+- **Auto-load when clear**: When the user's request clearly maps to a domain (e.g., "show me failed jobs" → jobs, "who logged in today?" → users), load the domain tools without asking.
+- **Ask when ambiguous**: When the request is vague (e.g., "something seems off"), ask the user which area to investigate before loading.
+- **Prefer dedicated tools**: Once a domain is loaded, prefer its dedicated tools over query_model. Dedicated tools return curated, optimized output — query_model returns raw data that is noisier and uses more tokens.
 
 ## Memory
 
@@ -197,6 +194,89 @@ def _get_system_prompt(user=None, group=None):
     return base
 
 
+def _build_tools_for_conversation(user, conversation, messages):
+    """
+    Build the tool list for a conversation.
+
+    - New conversations: core tools only.
+    - Resumed conversations with active_domains: core + those domains.
+    - Old conversations (pre-two-tier) with tool_use in history: all tools.
+    """
+    from mojo.apps.assistant import (
+        get_core_tools_for_user, get_domain_tools_for_user, get_tools_for_user,
+    )
+
+    active_domains = (conversation.metadata or {}).get("active_domains", [])
+
+    if active_domains:
+        # Resumed conversation with previously loaded domains
+        tools = get_core_tools_for_user(user)
+        domain_tools = get_domain_tools_for_user(user, active_domains)
+        # Deduplicate (core tools might overlap with domain)
+        core_names = {t["name"] for t in tools}
+        for dt in domain_tools:
+            if dt["name"] not in core_names:
+                tools.append(dt)
+        return tools
+
+    # Check if history contains tool_use blocks (old conversation, pre-two-tier)
+    has_tool_use = any(
+        isinstance(m.get("content"), list)
+        and any(b.get("type") == "tool_use" for b in m["content"] if isinstance(b, dict))
+        for m in messages
+        if m.get("role") == "assistant"
+    )
+    if has_tool_use:
+        # Backward compat — send all tools so history references resolve
+        return get_tools_for_user(user)
+
+    # New conversation — core tools only
+    return get_core_tools_for_user(user)
+
+
+def _handle_load_tools(conversation, tool_input, tools, user):
+    """
+    Handle a load_tools call: update conversation metadata and inject
+    domain tools into the active tools list.
+
+    Returns the list of newly added tool names (for logging).
+    """
+    from mojo.apps.assistant import get_domain_tools_for_user
+
+    # Collect requested domains
+    requested = []
+    if tool_input.get("domain"):
+        requested.append(tool_input["domain"])
+    if tool_input.get("domains"):
+        requested.extend(tool_input["domains"])
+
+    if not requested:
+        return []  # Listing mode, no domains to load
+
+    # Update conversation metadata
+    metadata = conversation.metadata or {}
+    active = metadata.get("active_domains", [])
+    new_domains = [d for d in set(requested) if d not in active]
+    if not new_domains:
+        return []  # Already loaded
+
+    active.extend(new_domains)
+    metadata["active_domains"] = active
+    conversation.metadata = metadata
+    conversation.save(update_fields=["metadata"])
+
+    # Inject new domain tools into the active tools list
+    domain_tools = get_domain_tools_for_user(user, new_domains)
+    existing_names = {t["name"] for t in tools}
+    added = []
+    for dt in domain_tools:
+        if dt["name"] not in existing_names:
+            tools.append(dt)
+            added.append(dt["name"])
+
+    return added
+
+
 def _build_conversation_messages(conversation, max_history):
     """Load previous messages from the conversation into Claude message format."""
     from mojo.apps.assistant.models import Message
@@ -244,7 +324,7 @@ def run_assistant(user, message, conversation_id=None, on_event=None):
         dict with keys: response, conversation_id, tool_calls_made, error
     """
     from mojo.apps.assistant.models import Conversation, Message
-    from mojo.apps.assistant import get_registry, get_tools_for_user
+    from mojo.apps.assistant import get_registry
 
     # Check feature flag
     if not settings.get("LLM_ADMIN_ENABLED", False, kind="bool"):
@@ -277,8 +357,8 @@ def run_assistant(user, message, conversation_id=None, on_event=None):
     max_history = settings.get("LLM_ADMIN_MAX_HISTORY", 50, kind="int")
     messages = _build_conversation_messages(conversation, max_history)
 
-    # Get tools the user has permission for
-    tools = get_tools_for_user(user)
+    # Build tool list — two-tier: core + active domains, or all for old conversations
+    tools = _build_tools_for_conversation(user, conversation, messages)
     if not tools:
         response_text = "You don't have permissions for any assistant tools."
         Message.objects.create(
@@ -386,6 +466,14 @@ def run_assistant(user, message, conversation_id=None, on_event=None):
                             "tool": tool_name,
                             "input": tool_input,
                         })
+                        # Handle load_tools — inject domain tools for next turn
+                        if tool_name == "load_tools":
+                            added = _handle_load_tools(
+                                conversation, tool_input, tools, user,
+                            )
+                            if added:
+                                logger.info("Loaded %d tools for domains via load_tools, conv=%s",
+                                            len(added), conversation.pk)
                         # Report events for successful mutating tool calls
                         if tool_entry.get("mutates") and (
                             not isinstance(tool_result, dict) or "error" not in tool_result
@@ -486,7 +574,7 @@ def run_assistant_ws(user, message, conversation_id, on_event=None):
     and message storage, delegates to the core loop.
     """
     from mojo.apps.assistant.models import Conversation, Message
-    from mojo.apps.assistant import get_registry, get_tools_for_user
+    from mojo.apps.assistant import get_registry
 
     # Check feature flag
     if not settings.get("LLM_ADMIN_ENABLED", False, kind="bool"):
@@ -504,7 +592,8 @@ def run_assistant_ws(user, message, conversation_id, on_event=None):
     max_history = settings.get("LLM_ADMIN_MAX_HISTORY", 50, kind="int")
     messages = _build_conversation_messages(conversation, max_history)
 
-    tools = get_tools_for_user(user)
+    # Build tool list — two-tier: core + active domains, or all for old conversations
+    tools = _build_tools_for_conversation(user, conversation, messages)
     if not tools:
         response_text = "You don't have permissions for any assistant tools."
         Message.objects.create(
@@ -582,6 +671,14 @@ def run_assistant_ws(user, message, conversation_id, on_event=None):
                             on_event("tool_call", {"tool": tool_name, "input": tool_input})
                         tool_result = tool_entry["handler"](tool_input, user)
                         tool_calls_made.append({"tool": tool_name, "input": tool_input})
+                        # Handle load_tools — inject domain tools for next turn
+                        if tool_name == "load_tools":
+                            added = _handle_load_tools(
+                                conversation, tool_input, tools, user,
+                            )
+                            if added:
+                                logger.info("WS loaded %d tools for domains via load_tools, conv=%s",
+                                            len(added), conversation.pk)
                         # Report events for successful mutating tool calls
                         if tool_entry.get("mutates") and (
                             not isinstance(tool_result, dict) or "error" not in tool_result

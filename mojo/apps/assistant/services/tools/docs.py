@@ -110,6 +110,7 @@ def _normalize_path(path):
     name="read_docs",
     domain="docs",
     permission="view_admin",
+    core=True,
     description=(
         "Fetch django-mojo framework documentation. Use 'path' for a specific doc "
         "(e.g. 'django_developer/account/push.md') or 'topic' for keyword search "

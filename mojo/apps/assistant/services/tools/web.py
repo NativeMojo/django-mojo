@@ -132,6 +132,7 @@ def _safe_fetch(url, timeout):
     name="browse_url",
     domain="web",
     permission="view_admin",
+    core=True,
     description=(
         "Fetch a web page and return its content as clean, readable text. "
         "Use this to read documentation, reference pages, changelogs, or any public URL. "
