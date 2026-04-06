@@ -12,6 +12,7 @@ Flow:
     6. Return response dict
 """
 import re
+import uuid
 import ujson
 from mojo.helpers.settings import settings
 from mojo.helpers import logit, llm
@@ -40,7 +41,37 @@ _BLOCK_RE = re.compile(
     re.DOTALL,
 )
 
-VALID_BLOCK_TYPES = {"table", "chart", "stat"}
+VALID_BLOCK_TYPES = {"table", "chart", "stat", "action", "list", "alert"}
+
+VALID_ALERT_LEVELS = {"info", "success", "warning", "error"}
+
+
+def _validate_block(block):
+    """
+    Validate a parsed block dict beyond just type membership.
+
+    Returns True if the block is valid and should be included,
+    False if it should be silently dropped.
+    """
+    block_type = block.get("type")
+    if block_type not in VALID_BLOCK_TYPES:
+        return False
+    if block_type == "action":
+        actions = block.get("actions")
+        if not isinstance(actions, list) or not actions:
+            return False
+        # Tag with a unique action_id for frontend tracking
+        block["action_id"] = str(uuid.uuid4())
+    elif block_type == "alert":
+        if block.get("level") not in VALID_ALERT_LEVELS:
+            return False
+        if not block.get("message"):
+            return False
+    elif block_type == "list":
+        items = block.get("items")
+        if not isinstance(items, list) or not items:
+            return False
+    return True
 
 
 def _parse_blocks(text):
@@ -55,7 +86,7 @@ def _parse_blocks(text):
         raw = match.group(1).strip()
         try:
             block = ujson.loads(raw)
-            if isinstance(block, dict) and block.get("type") in VALID_BLOCK_TYPES:
+            if isinstance(block, dict) and _validate_block(block):
                 blocks.append(block)
         except Exception:
             logger.warning("Failed to parse assistant_block: %s", raw[:200])
@@ -148,11 +179,32 @@ Supported chart_type values: line, bar, pie, area.
 {"type": "stat", "items": [{"label": "Open Incidents", "value": 42}, {"label": "Failed Jobs (24h)", "value": 7}, {"label": "Active Users", "value": 156}]}
 ```
 
+**action** — for mutating operations that need user confirmation:
+```assistant_block
+{"type": "action", "title": "Block IP", "description": "Block 1.2.3.4 on all firewall sets for 24 hours", "actions": [{"label": "Confirm", "value": "confirm"}, {"label": "Cancel", "value": "cancel"}]}
+```
+Use when you need user confirmation before executing a mutating operation (blocking IPs, disabling users, canceling jobs, etc.). Always include a Cancel option. The user clicks a button and their choice is sent back as a message. Do not execute the operation until you receive confirmation.
+
+**list** — for single-record details, key/value summaries:
+```assistant_block
+{"type": "list", "title": "User Detail", "items": [{"label": "Email", "value": "admin@example.com"}, {"label": "Role", "value": "Admin"}, {"label": "Last Login", "value": "2024-01-15 09:30 UTC"}]}
+```
+Use for single-record summaries instead of a 1-row table. Prefer this for user profiles, incident details, job info, and any single object with multiple fields.
+
+**alert** — for warnings, errors, and important notices:
+```assistant_block
+{"type": "alert", "level": "warning", "title": "Rate Limited", "message": "User exceeded 100 req/min threshold. Current rate: 142 req/min."}
+```
+Supported level values: info, success, warning, error. Use for permission denials, important warnings, error conditions, and success confirmations that need visual distinction from narrative text. Don't overuse — reserve for genuinely important information.
+
 ### Rules
 - Always include brief narrative text — a sentence or two of context, key takeaways, or warnings. Do NOT repeat the data that is already in the blocks. The blocks carry the detail; the text provides interpretation.
-- Use tables for 3+ rows of data. For 1-2 items, just describe them in text.
+- Use tables for 3+ rows of data. For 1-2 items, just describe them in text or use a list block.
+- Use list blocks for single-record details — never use a table with 1 row.
 - Use stat blocks for dashboard-style overviews (system health, summaries).
 - Use chart blocks when the user asks about trends or when time-series data is available.
+- Use action blocks for confirmations — never ask "type yes to confirm" when an action block is appropriate.
+- Use alert blocks sparingly — only for genuinely important warnings, errors, or status changes.
 - Keep table rows bounded — show the most relevant 20 rows max, mention the total if there are more.
 - Column names should be human-readable (Title Case).
 - The JSON must be valid and on a single line within the code fence.

@@ -25,6 +25,7 @@ logger = logit.get_logger("assistant", "assistant.log")
 
 ASSISTANT_MESSAGE_TYPES = {
     "assistant_message",
+    "assistant_action",
 }
 
 
@@ -61,6 +62,14 @@ def handle_assistant_message(user, data):
     background job, and returns an immediate ack.
     """
     message_type = data.get("type") or data.get("action")
+
+    if message_type == "assistant_action":
+        # Action block response — convert to a regular message with the chosen value
+        action_value = (data.get("value") or "").strip()
+        if not action_value:
+            return {"type": "assistant_error", "error": "Action value is required"}
+        data["message"] = action_value
+        message_type = "assistant_message"
 
     if message_type == "assistant_message":
         try:
