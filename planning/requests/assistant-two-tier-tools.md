@@ -71,9 +71,9 @@ Replace the all-at-once 70-tool payload with two-tier loading: ~13 core tools al
 
 7. **`mojo/apps/assistant/services/tools/files.py`** — Add `core=True` to `query_files`, `get_file`, `analyze_image`.
 
-8. **`mojo/apps/assistant/services/tools/discovery.py`** — Rewrite `list_tools` → `load_tools` with `core=True`:
-   - When called with no `domain`: returns available domains with tool count and brief description per domain. Does NOT load any tools — just shows what's available.
-   - When called with `domain`: returns the full tool definitions for that domain (names + descriptions). The agent loop adds those tools to the active set for subsequent turns.
+8. **`mojo/apps/assistant/services/tools/discovery.py`** — Add `load_tools` with `core=True`. Keep `list_tools` as non-core (available when discovery domain is loaded, or as a fallback alias):
+   - `load_tools` (core): When called with no `domain`, returns available domains with tool count, brief description, and example tool names per domain. Does NOT load any tools — just shows what's available. When called with `domain`, returns the tool names + descriptions for that domain. The agent loop adds those tools to the active set for subsequent turns.
+   - `list_tools` (non-core): Stays as-is — lists all tools the user has access to. Available when the user or LLM explicitly loads discovery domain, or as a legacy fallback. Not sent on every turn.
    - Move `list_job_channels` to `jobs.py` (domain `jobs`), `list_event_categories` to `security.py` (domain `security`), `list_metric_categories` and `list_metric_slugs` to `metrics.py` (domain `metrics`).
    - Keep `list_permissions` as `core=True` (cross-domain utility).
 
@@ -86,18 +86,39 @@ Replace the all-at-once 70-tool payload with two-tier loading: ~13 core tools al
    - Tool execution still uses the full `get_registry()` — if the LLM somehow calls an unloaded tool (e.g., from conversation history), it still executes. The loading tier is about what the LLM *sees*, not what it's *allowed* to call.
 
 10. **`mojo/apps/assistant/services/agent.py`** — Update system prompt:
-    - Remove the "## Tool Selection" section (no longer needed).
-    - Add brief guidance: "You start with core tools. Use `load_tools` to discover and load domain-specific tools (security, jobs, users, groups, metrics) when you need them. Loaded tools persist for the rest of this conversation."
-    - Keep the `list_tools` domain enum in the `load_tools` description up to date with actual domains.
+    - Remove the "## Tool Selection" section (no longer needed — the LLM only sees relevant tools now).
+    - Replace with "## Tool Loading" guidance:
+      - "You start with core tools (memory, models, docs, web, logs, files). For domain-specific work, call `load_tools` to discover and load additional tools."
+      - "Loaded tools persist for the rest of this conversation."
+      - Auto-load behavior: "When the user's request clearly maps to a domain (e.g., 'show me failed jobs' → jobs, 'who logged in today?' → users/security), load the domain tools without asking. When the request is ambiguous (e.g., 'something seems off'), ask the user which area to investigate before loading."
+      - "If a tool returns empty results, that means no matching data exists — it does not mean the tool is broken."
 
 ### Design Decisions
 
 - **`core=True` on the decorator**: Minimal change to registration — each tool self-declares whether it's core. No separate config file to maintain. External project tools default to `core=False` (domain tools), which is the right default.
 - **Conversation-scoped, not turn-scoped**: Active domains persist in `conversation.metadata["active_domains"]`. Resuming a conversation auto-loads previously activated domains. The LLM doesn't have to re-load tools when continuing a multi-turn conversation.
 - **Full registry still used for execution**: Loading controls visibility (what tool schemas the LLM sees), not permission (what it's allowed to call). If the LLM somehow names an unloaded tool, it still works — the permission gate is the real security boundary. This prevents weird edge cases with conversation history containing tool calls from unloaded domains.
-- **`load_tools` replaces `list_tools`**: One tool instead of two. No-argument call lists domains, argument call loads a domain. The LLM learns one tool name.
+- **`load_tools` is the primary tool, `list_tools` stays as non-core**: `load_tools` is the core gateway — no-arg lists domains, with-arg loads a domain. `list_tools` remains available as a non-core tool (loads with discovery domain) for users who explicitly ask "list all your tools." The LLM learns `load_tools` as the one it uses routinely.
+- **Auto-load when obvious, ask when ambiguous**: "Show me failed jobs" → auto-load jobs. "Something seems off" → ask the user. The LLM shouldn't ask permission for clear domain matches — that's friction. But ambiguous requests deserve clarification to avoid loading 3 domains and flooding the user with irrelevant data.
 - **Discovery tools move to their parent domains**: `list_job_channels` is only useful when working with jobs — it should load with the jobs domain. Same for `list_event_categories` (security) and `list_metric_*` (metrics). This keeps core clean and domain bundles self-contained.
 - **Domain descriptions in `load_tools` output**: When listing domains, include a one-sentence description + tool count so the LLM can judge which domain to load without seeing all 70 schemas.
+
+### User Interaction Patterns
+
+How domain loading happens in practice — the LLM decides based on user intent:
+
+| User message | LLM behavior | Why |
+|---|---|---|
+| "Show me failed jobs" | Auto-load `jobs`, query immediately | Clear domain match — no friction |
+| "Load the security tools" | Load `security` | Explicit request |
+| "What can you help with?" | Call `load_tools()` (no domain), describe available domains | Discovery mode |
+| "Something seems off" | Ask: "I can check security incidents, jobs, users, or system metrics — which area?" | Ambiguous — ask first |
+| "Why is this user getting rate limited?" | Auto-load `users` + `security` | Multi-domain but clear intent |
+| "What happened at 2am?" | Ask what area to investigate, or load `jobs` + `security` if context suggests ops | Depends on conversation context |
+| "Check the incident queue and any stuck jobs" | Auto-load `security` + `jobs` | Two clear domains in one request |
+| "Show me everything" | Call `load_tools()`, describe domains, ask which to start with | Too broad — guide the user |
+
+**Rule**: auto-load when the domain is obvious from the request. Ask when it's genuinely ambiguous. Never ask for permission on a clear match — that's unnecessary friction.
 
 ### Edge Cases
 
