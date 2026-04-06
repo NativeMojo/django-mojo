@@ -41,7 +41,7 @@ _BLOCK_RE = re.compile(
     re.DOTALL,
 )
 
-VALID_BLOCK_TYPES = {"table", "chart", "stat", "action", "list", "alert"}
+VALID_BLOCK_TYPES = {"table", "chart", "stat", "action", "list", "alert", "progress"}
 
 VALID_ALERT_LEVELS = {"info", "success", "warning", "error"}
 
@@ -208,6 +208,29 @@ Supported level values: info, success, warning, error. Use for permission denial
 - Keep table rows bounded — show the most relevant 20 rows max, mention the total if there are more.
 - Column names should be human-readable (Title Case).
 - The JSON must be valid and on a single line within the code fence.
+
+## Task Planning
+
+For complex requests that require 3+ tool calls across different areas, create a plan first using the create_plan tool. This shows the user a progress tracker so they can see what you're doing.
+
+1. Call create_plan with a title and list of steps. Mark independent steps as parallel=true with their tool name and tool_input — the system will execute them concurrently for faster results.
+2. For sequential steps you handle yourself: call update_plan(step_id, "in_progress") before starting, then update_plan(step_id, "done", summary="...") when complete.
+3. After all steps complete, synthesize your findings into a final response.
+
+Don't create a plan for simple queries — if the user asks "how many open incidents?" just call the tool directly.
+
+### When to Plan
+- "Give me a security audit" — plan with parallel steps for incidents, events, blocked IPs, etc.
+- "What's the system health?" — plan with parallel steps for jobs, metrics, incidents.
+- "Investigate this user" — plan with steps for user detail, activity, rate limits, related incidents.
+
+### When NOT to Plan
+- Single-tool queries: "show me open incidents"
+- Follow-up questions in a conversation: "what about the last 7 days?"
+- Simple mutations: "block this IP"
+
+### Parallel Steps
+When steps are independent (no data dependencies), mark them parallel=true and include the tool and tool_input. The system executes these concurrently — you don't need to call them yourself. Only the final synthesis step should be sequential (parallel=false, no tool field).
 """
 
 
@@ -333,6 +356,53 @@ def _handle_load_tools(conversation, tool_input, tools, user):
             added.append(dt["name"])
 
     return added
+
+
+def _handle_plan_tool(conversation, tool_name, tool_input, tool_result, on_event):
+    """
+    Handle create_plan and update_plan meta-tool calls.
+
+    create_plan: stores plan in conversation metadata, publishes WS event.
+    update_plan: updates a step in the stored plan, publishes WS event.
+
+    Returns True if the tool was handled as a plan tool, False otherwise.
+    """
+    if tool_name == "create_plan":
+        if isinstance(tool_result, dict) and "plan_id" in tool_result:
+            metadata = conversation.metadata or {}
+            metadata["plan"] = tool_result
+            conversation.metadata = metadata
+            conversation.save(update_fields=["metadata"])
+            if on_event:
+                on_event("plan", {"plan": tool_result})
+            logger.info("Plan created: %s (conv=%s)", tool_result["plan_id"], conversation.pk)
+        return True
+
+    if tool_name == "update_plan":
+        if isinstance(tool_result, dict) and tool_result.get("updated"):
+            metadata = conversation.metadata or {}
+            plan = metadata.get("plan")
+            if plan:
+                step_id = tool_result["step_id"]
+                for step in plan.get("steps", []):
+                    if step["id"] == step_id:
+                        step["status"] = tool_result["status"]
+                        if tool_result.get("summary"):
+                            step["summary"] = tool_result["summary"]
+                        break
+                metadata["plan"] = plan
+                conversation.metadata = metadata
+                conversation.save(update_fields=["metadata"])
+                if on_event:
+                    on_event("plan_update", {
+                        "plan_id": plan["plan_id"],
+                        "step_id": step_id,
+                        "status": tool_result["status"],
+                        "summary": tool_result.get("summary"),
+                    })
+        return True
+
+    return False
 
 
 def _build_conversation_messages(conversation, max_history):
@@ -524,7 +594,7 @@ def run_assistant(user, message, conversation_id=None, on_event=None):
                             "tool": tool_name,
                             "input": tool_input,
                         })
-                        # Handle load_tools — inject domain tools for next turn
+                        # Handle meta-tools — side effects in the agent loop
                         if tool_name == "load_tools":
                             added = _handle_load_tools(
                                 conversation, tool_input, tools, user,
@@ -532,6 +602,9 @@ def run_assistant(user, message, conversation_id=None, on_event=None):
                             if added:
                                 logger.info("Loaded %d tools for domains via load_tools, conv=%s",
                                             len(added), conversation.pk)
+                        _handle_plan_tool(
+                            conversation, tool_name, tool_input, tool_result, on_event,
+                        )
                         # Report events for successful mutating tool calls
                         if tool_entry.get("mutates") and (
                             not isinstance(tool_result, dict) or "error" not in tool_result
@@ -729,7 +802,7 @@ def run_assistant_ws(user, message, conversation_id, on_event=None):
                             on_event("tool_call", {"tool": tool_name, "input": tool_input})
                         tool_result = tool_entry["handler"](tool_input, user)
                         tool_calls_made.append({"tool": tool_name, "input": tool_input})
-                        # Handle load_tools — inject domain tools for next turn
+                        # Handle meta-tools — side effects in the agent loop
                         if tool_name == "load_tools":
                             added = _handle_load_tools(
                                 conversation, tool_input, tools, user,
@@ -737,6 +810,9 @@ def run_assistant_ws(user, message, conversation_id, on_event=None):
                             if added:
                                 logger.info("WS loaded %d tools for domains via load_tools, conv=%s",
                                             len(added), conversation.pk)
+                        _handle_plan_tool(
+                            conversation, tool_name, tool_input, tool_result, on_event,
+                        )
                         # Report events for successful mutating tool calls
                         if tool_entry.get("mutates") and (
                             not isinstance(tool_result, dict) or "error" not in tool_result

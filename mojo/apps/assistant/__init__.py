@@ -35,6 +35,7 @@ DOMAIN_DESCRIPTIONS = {
     "web": "Fetch and read web pages",
     "logs": "Query the audit log trail",
     "files": "Query, view, and analyze uploaded files",
+    "planning": "Create and track multi-step execution plans",
 }
 
 
