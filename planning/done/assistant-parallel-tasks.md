@@ -1,7 +1,7 @@
 # Assistant Parallel Tool Execution
 
 **Type**: request
-**Status**: open
+**Status**: resolved
 **Date**: 2026-04-06
 **Priority**: medium
 **Depends on**: assistant-task-planning (for plan-aware batching in phase 2)
@@ -214,3 +214,27 @@ The final synthesis step should be sequential (parallel: false, no tool field).
 ### Docs
 
 10. Update both doc tracks: parallel execution behavior, `LLM_ADMIN_MAX_PARALLEL_TOOLS` setting, plan-aware batching.
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-04-06
+
+### What Was Built
+Phase 1 (ThreadPoolExecutor for concurrent tool calls) and Phase 2 (plan-aware parallel step execution) — both implemented in the existing agent loop with no new modules or Redis coordination.
+
+### Files Changed
+- `mojo/apps/assistant/services/agent.py` — _execute_tool(), _execute_tools(), _execute_parallel_plan_steps(), _summarize_tool_result(), META_TOOLS ordering, system prompt parallel guidance
+- `docs/django_developer/assistant/README.md` — Parallel execution section, LLM_ADMIN_MAX_PARALLEL_TOOLS setting
+- `docs/web_developer/assistant/README.md` — Plan tracker, WS events for step progress
+- `CHANGELOG.md` — v1.1.14 entry
+
+### Tests
+- `tests/test_assistant/18_test_parallel_tools.py` — 10 tests covering single/multi tool execution, meta-tool ordering, error isolation, parallel plan steps, skip logic, result summarization
+- Run: `bin/run_tests --agent -t test_assistant.18_test_parallel_tools`
+
+### Security Review
+Thread safety: each tool call gets its own DB connection via Django's connection-per-thread model. No shared mutable state between concurrent tools.
+
+### Follow-up
+None

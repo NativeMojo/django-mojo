@@ -1,7 +1,7 @@
 # Assistant Rich Blocks
 
 **Type**: request
-**Status**: open
+**Status**: resolved
 **Date**: 2026-04-06
 **Priority**: medium
 
@@ -122,3 +122,29 @@ Schema:
     - `test_invalid_block_type_rejected` — unknown type silently dropped
     - `test_action_block_missing_actions_rejected` — action without actions array rejected
     - `test_alert_block_invalid_level_rejected` — alert with bad level rejected
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-04-06
+
+### What Was Built
+Three new block types (action, list, alert) with structural validation, action_id tagging, assistant_action WS message handling, and system prompt guidance.
+
+### Files Changed
+- `mojo/apps/assistant/services/agent.py` — Added action/list/alert to VALID_BLOCK_TYPES, _validate_block(), system prompt updates
+- `mojo/apps/assistant/handler.py` — Added assistant_action message type routing
+- `docs/django_developer/assistant/README.md` — New block type schemas and usage guidance
+- `docs/web_developer/assistant/README.md` — Rendering specs, WS message format, action interaction flow
+- `docs/web_developer/assistant/blocks.md` — Comprehensive UI implementation guide
+- `CHANGELOG.md` — v1.1.14 entry
+
+### Tests
+- `tests/test_assistant/16_test_rich_blocks.py` — 14 tests covering all block types, validation, edge cases
+- Run: `bin/run_tests --agent -t test_assistant.16_test_rich_blocks`
+
+### Security Review
+No concerns — action blocks are informational; actual mutations still require tool execution with permission gates.
+
+### Follow-up
+None

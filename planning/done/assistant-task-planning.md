@@ -1,7 +1,7 @@
 # Assistant Task Planning
 
 **Type**: request
-**Status**: open
+**Status**: resolved
 **Date**: 2026-04-06
 **Priority**: high
 **Depends on**: assistant-rich-blocks (progress block type)
@@ -128,3 +128,30 @@ Planning helps the user see what you're doing and gives you a checklist to work 
    - `test_plan_ws_events` — verify WS events published on create/update
    - `test_progress_block_parsed` — progress block type accepted by `_parse_blocks`
    - `test_no_plan_for_simple_query` — verify the LLM doesn't plan for single-tool requests (integration test, optional)
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-04-06
+
+### What Was Built
+create_plan and update_plan meta-tools (core=True), plan storage in conversation.metadata, progress block type, WS events for plan lifecycle, system prompt planning guidance.
+
+### Files Changed
+- `mojo/apps/assistant/services/tools/planning.py` — New file with create_plan and update_plan tools
+- `mojo/apps/assistant/services/tools/__init__.py` — Import planning module
+- `mojo/apps/assistant/services/agent.py` — _handle_plan_tool(), META_TOOLS set, progress block validation, system prompt updates
+- `mojo/apps/assistant/__init__.py` — Added planning domain description
+- `docs/django_developer/assistant/README.md` — Planning tools, progress block, WS events
+- `docs/web_developer/assistant/README.md` — Plan tracker rendering, WS event handling
+- `CHANGELOG.md` — v1.1.14 entry
+
+### Tests
+- `tests/test_assistant/17_test_planning.py` — 9 tests covering tool registration, plan creation, step updates, metadata storage, WS events, progress block parsing
+- Run: `bin/run_tests --agent -t test_assistant.17_test_planning`
+
+### Security Review
+No concerns — planning tools are read-only metadata operations gated by view_admin permission.
+
+### Follow-up
+None
