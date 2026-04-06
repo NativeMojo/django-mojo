@@ -268,6 +268,7 @@ def _run_agent_thread(user_id, conversation_id, message):
                 "response": result.get("response", ""),
                 "blocks": result.get("blocks") or None,
                 "tool_calls_made": result.get("tool_calls_made", []),
+                "duration_ms": result.get("duration_ms"),
             }
             on_event("response", response_data)
             logger.info("assistant thread completed: user=%s conv=%s tools=%d",

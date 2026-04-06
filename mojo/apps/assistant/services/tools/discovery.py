@@ -26,7 +26,7 @@ MAX_RESULTS = 100
         "Call with no arguments to see available domains with descriptions and tool counts. "
         "Call with a domain name to load that domain's tools for this conversation. "
         "Loaded tools persist for the rest of the conversation. "
-        "Available domains: security, jobs, users, groups, metrics, discovery."
+        "Available domains: security, jobs, users, groups, metrics, comms, discovery."
     ),
     input_schema={
         "type": "object",

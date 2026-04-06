@@ -12,6 +12,7 @@ Flow:
     6. Return response dict
 """
 import re
+import time
 import uuid
 import ujson
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -75,6 +76,111 @@ def _validate_block(block):
     return True
 
 
+# Regex to find fenced code blocks (protect from condensing)
+_CODE_FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
+
+# Regex to find a full markdown table: header row + separator + body rows
+_MD_TABLE_RE = re.compile(
+    r"^(\|.+\|)[ \t]*\n(\|[ \t]*[-:]+[-| \t:]*\|)[ \t]*\n((?:\|.+\|[ \t]*\n?)+)",
+    re.MULTILINE,
+)
+
+# Regex to collapse blank lines between pipe-delimited table rows
+_TABLE_BLANK_LINE_RE = re.compile(r"(\|[^\n]*\n)(\s*\n)+(\|)", re.MULTILINE)
+
+
+def _condense_markdown(text, blocks):
+    """
+    Clean up LLM markdown: collapse excess blank lines, repair broken
+    tables, and strip markdown tables that duplicate a structured block.
+    """
+    # Protect code fences from modification
+    code_blocks = []
+    def _save_code(match):
+        code_blocks.append(match.group(0))
+        return "\x00CODE%d\x00" % (len(code_blocks) - 1)
+    text = _CODE_FENCE_RE.sub(_save_code, text)
+
+    # Collapse 3+ consecutive blank lines to one blank line
+    text = re.sub(r"\n{3,}", "\n\n", text)
+
+    # Repair markdown tables with blank lines between rows
+    text = _TABLE_BLANK_LINE_RE.sub(r"\1\3", text)
+
+    # Strip markdown tables that duplicate a table block
+    table_blocks = [b for b in blocks if b.get("type") == "table"]
+    if table_blocks:
+        text = _strip_duplicate_tables(text, table_blocks)
+
+    # Restore code fences
+    for i, cb in enumerate(code_blocks):
+        text = text.replace("\x00CODE%d\x00" % i, cb)
+
+    # Final cleanup
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _strip_duplicate_tables(text, table_blocks):
+    """Remove markdown tables from text when they match a structured table block."""
+    block_signatures = []
+    for b in table_blocks:
+        cols = set()
+        for c in b.get("columns", []):
+            cols.add(str(c).strip().lower())
+        block_signatures.append({
+            "title": (b.get("title") or "").strip().lower(),
+            "columns": cols,
+        })
+
+    def _is_duplicate(match):
+        header_row = match.group(1)
+        # Parse column names from the markdown header row
+        md_cols = set()
+        for cell in header_row.split("|"):
+            cell = cell.strip()
+            if cell:
+                md_cols.add(cell.lower())
+        if not md_cols:
+            return False
+        for sig in block_signatures:
+            # Match by 2+ overlapping column names
+            overlap = md_cols & sig["columns"]
+            if len(overlap) >= 2:
+                return True
+        return False
+
+    def _replace_table(match):
+        if not _is_duplicate(match):
+            return match.group(0)
+        # Also remove a title line directly above the table
+        return ""
+
+    # Check for title lines above tables and strip them too
+    lines = text.split("\n")
+    result = _MD_TABLE_RE.sub(_replace_table, text)
+
+    # Remove orphaned title lines above removed tables
+    # (heading or bold text followed by only whitespace where table was)
+    if result != text:
+        for sig in block_signatures:
+            if sig["title"]:
+                # Remove heading lines that match the block title
+                title_re = re.compile(
+                    r"^#{1,6}\s+" + re.escape(sig["title"]) + r"\s*$",
+                    re.MULTILINE | re.IGNORECASE,
+                )
+                result = title_re.sub("", result)
+                # Remove bold title lines
+                bold_re = re.compile(
+                    r"^\*\*" + re.escape(sig["title"]) + r"\*\*\s*$",
+                    re.MULTILINE | re.IGNORECASE,
+                )
+                result = bold_re.sub("", result)
+
+    return result
+
+
 def _parse_blocks(text):
     """
     Extract structured data blocks from LLM response text.
@@ -94,8 +200,8 @@ def _parse_blocks(text):
 
     # Remove the fences from the text
     clean = _BLOCK_RE.sub("", text).strip()
-    # Collapse multiple blank lines left by removed blocks
-    clean = re.sub(r"\n{3,}", "\n\n", clean)
+    # Condense markdown: collapse whitespace, fix tables, strip duplicates
+    clean = _condense_markdown(clean, blocks)
     return clean, blocks
 
 
@@ -779,6 +885,7 @@ def run_assistant(user, message, conversation_id=None, on_event=None):
     max_turns = settings.get("LLM_ADMIN_MAX_TURNS", 25, kind="int")
     registry = get_registry()
     tool_calls_made = []
+    t_start = time.time()
 
     try:
         for _ in range(max_turns):
@@ -797,12 +904,14 @@ def run_assistant(user, message, conversation_id=None, on_event=None):
 
                 raw_text = "\n".join(text_parts) if text_parts else ""
                 response_text, blocks = _parse_blocks(raw_text)
+                duration_ms = int((time.time() - t_start) * 1000)
 
                 Message.objects.create(
                     conversation=conversation,
                     role="assistant",
                     content=response_text,
                     blocks=blocks or None,
+                    duration_ms=duration_ms,
                     tool_calls=result["content"] if any(
                         b.get("type") == "tool_use" for b in result["content"]
                     ) else None,
@@ -813,6 +922,7 @@ def run_assistant(user, message, conversation_id=None, on_event=None):
                     "blocks": blocks,
                     "conversation_id": conversation.pk,
                     "tool_calls_made": tool_calls_made,
+                    "duration_ms": duration_ms,
                 }
 
             # Process tool calls — parallel when multiple non-meta tools
@@ -872,15 +982,18 @@ def run_assistant(user, message, conversation_id=None, on_event=None):
             user=user,
         )
         response_text = "I've reached the maximum number of tool calls for this request. Please try a more specific query."
+        duration_ms = int((time.time() - t_start) * 1000)
         Message.objects.create(
             conversation=conversation,
             role="assistant",
             content=response_text,
+            duration_ms=duration_ms,
         )
         return {
             "response": response_text,
             "conversation_id": conversation.pk,
             "tool_calls_made": tool_calls_made,
+            "duration_ms": duration_ms,
         }
 
     except Exception as e:
@@ -955,6 +1068,7 @@ def run_assistant_ws(user, message, conversation_id, on_event=None):
     max_turns = settings.get("LLM_ADMIN_MAX_TURNS", 25, kind="int")
     registry = get_registry()
     tool_calls_made = []
+    t_start = time.time()
 
     try:
         for _ in range(max_turns):
@@ -966,9 +1080,11 @@ def run_assistant_ws(user, message, conversation_id, on_event=None):
                 text_parts = [b["text"] for b in result["content"] if b.get("type") == "text"]
                 raw_text = "\n".join(text_parts) if text_parts else ""
                 response_text, blocks = _parse_blocks(raw_text)
+                duration_ms = int((time.time() - t_start) * 1000)
                 msg = Message.objects.create(
                     conversation=conversation, role="assistant",
                     content=response_text, blocks=blocks or None,
+                    duration_ms=duration_ms,
                 )
                 return {
                     "response": response_text,
@@ -977,6 +1093,7 @@ def run_assistant_ws(user, message, conversation_id, on_event=None):
                     "created": msg.created.isoformat(),
                     "conversation_id": conversation.pk,
                     "tool_calls_made": tool_calls_made,
+                    "duration_ms": duration_ms,
                 }
 
             # Process tool calls — parallel when multiple non-meta tools
@@ -1019,8 +1136,9 @@ def run_assistant_ws(user, message, conversation_id, on_event=None):
             user=user,
         )
         response_text = "I've reached the maximum number of tool calls for this request. Please try a more specific query."
-        Message.objects.create(conversation=conversation, role="assistant", content=response_text)
-        return {"response": response_text, "conversation_id": conversation.pk, "tool_calls_made": tool_calls_made}
+        duration_ms = int((time.time() - t_start) * 1000)
+        Message.objects.create(conversation=conversation, role="assistant", content=response_text, duration_ms=duration_ms)
+        return {"response": response_text, "conversation_id": conversation.pk, "tool_calls_made": tool_calls_made, "duration_ms": duration_ms}
 
     except Exception as e:
         logger.exception("Assistant WS agent failed for user %s", user.pk)

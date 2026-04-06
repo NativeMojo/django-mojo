@@ -36,6 +36,7 @@ DOMAIN_DESCRIPTIONS = {
     "logs": "Query the audit log trail",
     "files": "Query, view, and analyze uploaded files",
     "planning": "Create and track multi-step execution plans",
+    "comms": "Send notifications via SMS, email, push, and in-app channels",
 }
 
 

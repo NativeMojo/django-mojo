@@ -53,6 +53,7 @@ class Message(models.Model, MojoModel):
     content = models.TextField(blank=True, default="")
     tool_calls = models.JSONField(default=None, null=True, blank=True)
     blocks = models.JSONField(default=None, null=True, blank=True)
+    duration_ms = models.IntegerField(null=True, blank=True, default=None)
 
     created = models.DateTimeField(auto_now_add=True, editable=False, db_index=True)
 
@@ -64,7 +65,7 @@ class Message(models.Model, MojoModel):
         VIEW_PERMS = ["view_admin"]
         GRAPHS = {
             "default": {
-                "fields": ["id", "role", "content", "tool_calls", "blocks", "created"],
+                "fields": ["id", "role", "content", "tool_calls", "blocks", "duration_ms", "created"],
             },
         }
 

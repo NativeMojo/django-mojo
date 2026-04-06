@@ -37,6 +37,7 @@ def on_assistant_message(request):
         "response": result["response"],
         "conversation_id": result["conversation_id"],
         "tool_calls_made": result.get("tool_calls_made", []),
+        "duration_ms": result.get("duration_ms"),
     }
     blocks = result.get("blocks")
     if blocks:

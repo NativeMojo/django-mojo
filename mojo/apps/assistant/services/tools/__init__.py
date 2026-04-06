@@ -16,3 +16,4 @@ from . import logs  # noqa: F401
 from . import files  # noqa: F401
 from . import memory  # noqa: F401
 from . import planning  # noqa: F401
+from . import notifications  # noqa: F401
