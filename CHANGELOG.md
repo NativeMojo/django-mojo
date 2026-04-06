@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## v1.1.13 - April 06, 2026
+
+huge changes in our AI Agent, ability to spawn agents, build tasks and plans, and much more
+
+
 ## v1.1.14 - April 06, 2026
 
 Rich blocks, task planning, and parallel tool execution for the admin assistant.
