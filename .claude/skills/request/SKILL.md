@@ -79,7 +79,7 @@ Create `planning/requests/<slug>.md`:
 Print:
 - The request file path
 - A one-line summary of the feature
-- `To plan the implementation, start a new session and run: /plan planning/requests/<slug>.md`
+- `To design the implementation, start a new session and run: /design planning/requests/<slug>.md`
 
 ## Rules
 

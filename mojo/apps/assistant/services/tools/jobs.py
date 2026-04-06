@@ -236,6 +236,192 @@ def _tool_cancel_job(params, user):
     }
 
 
+# ── Scheduled Tasks ──────────────────────────────────────────────
+
+
+@tool(
+    name="list_scheduled_tasks",
+    domain="jobs",
+    permission="view_jobs",
+    description="List the current user's scheduled tasks. Returns up to 50 tasks.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "enabled_only": {"type": "boolean", "description": "Only show enabled tasks (default true)", "default": True},
+            "limit": {"type": "integer", "description": "Max results (default 50)", "default": 50},
+        },
+    },
+)
+def _tool_list_scheduled_tasks(params, user):
+    from mojo.apps.jobs.models import ScheduledTask
+
+    criteria = {"user": user}
+    if params.get("enabled_only", True):
+        criteria["enabled"] = True
+
+    limit = min(params.get("limit", MAX_RESULTS), MAX_RESULTS)
+    tasks = ScheduledTask.objects.filter(**criteria).order_by("-created")[:limit]
+
+    return [
+        {
+            "id": t.id,
+            "name": t.name,
+            "enabled": t.enabled,
+            "run_once": t.run_once,
+            "task_type": t.task_type,
+            "run_times": t.run_times,
+            "run_days": t.run_days,
+            "notify": t.notify,
+            "last_run": str(t.last_run) if t.last_run else None,
+            "run_count": t.run_count,
+            "created": str(t.created),
+        }
+        for t in tasks
+    ]
+
+
+@tool(
+    name="create_scheduled_task",
+    domain="jobs",
+    permission="manage_jobs",
+    description=(
+        "Create a scheduled task for the user. "
+        "Requires: name, task_type (job/webhook/llm), run_times (list of HH:MM, max 2), job_config. "
+        "Optional: run_days (list of weekday ints 0-6, empty=every day), notify (list of channels), run_once. "
+        "IMPORTANT: Confirm with the user before executing."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "description": "Human-readable label"},
+            "description": {"type": "string", "description": "Optional description"},
+            "task_type": {"type": "string", "enum": ["job", "webhook", "llm"], "description": "Type of task"},
+            "run_times": {
+                "type": "array", "items": {"type": "string"},
+                "description": 'List of "HH:MM" strings, max 2 (e.g. ["09:00"])',
+            },
+            "run_days": {
+                "type": "array", "items": {"type": "integer"},
+                "description": "Weekday ints 0-6 (Mon=0). Empty = every day.",
+            },
+            "job_config": {
+                "type": "object",
+                "description": "Config for task type: job={func, payload}, webhook={url, data}, llm={system_prompt, user_prompt}",
+            },
+            "notify": {
+                "type": "array", "items": {"type": "string"},
+                "description": 'Notification channels: ["email", "in_app", "sms", "push"]',
+            },
+            "run_once": {"type": "boolean", "description": "Auto-disable after first run (default false)"},
+        },
+        "required": ["name", "task_type", "run_times", "job_config"],
+    },
+    mutates=True,
+)
+def _tool_create_scheduled_task(params, user):
+    from mojo.apps.jobs.models import ScheduledTask
+
+    try:
+        task = ScheduledTask(
+            user=user,
+            name=params["name"],
+            description=params.get("description", ""),
+            task_type=params["task_type"],
+            run_times=params["run_times"],
+            run_days=params.get("run_days", []),
+            job_config=params["job_config"],
+            notify=params.get("notify", []),
+            run_once=params.get("run_once", False),
+        )
+        task.save()
+        return {
+            "ok": True,
+            "id": task.id,
+            "name": task.name,
+            "message": f"Scheduled task '{task.name}' created",
+        }
+    except (ValueError, Exception) as e:
+        return {"ok": False, "error": str(e)}
+
+
+@tool(
+    name="update_scheduled_task",
+    domain="jobs",
+    permission="manage_jobs",
+    description=(
+        "Update an existing scheduled task. Provide the task ID and any fields to change. "
+        "IMPORTANT: Confirm with the user before executing."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "task_id": {"type": "string", "description": "The scheduled task ID"},
+            "name": {"type": "string"},
+            "description": {"type": "string"},
+            "enabled": {"type": "boolean"},
+            "run_once": {"type": "boolean"},
+            "run_times": {"type": "array", "items": {"type": "string"}},
+            "run_days": {"type": "array", "items": {"type": "integer"}},
+            "job_config": {"type": "object"},
+            "notify": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["task_id"],
+    },
+    mutates=True,
+)
+def _tool_update_scheduled_task(params, user):
+    from mojo.apps.jobs.models import ScheduledTask
+
+    try:
+        task = ScheduledTask.objects.get(id=params["task_id"], user=user)
+    except ScheduledTask.DoesNotExist:
+        return {"ok": False, "error": "Task not found"}
+
+    updatable = ["name", "description", "enabled", "run_once", "run_times",
+                 "run_days", "job_config", "notify"]
+    changed = []
+    for field in updatable:
+        if field in params:
+            setattr(task, field, params[field])
+            changed.append(field)
+
+    if not changed:
+        return {"ok": False, "error": "No fields to update"}
+
+    try:
+        task.save()
+        return {"ok": True, "id": task.id, "updated": changed}
+    except (ValueError, Exception) as e:
+        return {"ok": False, "error": str(e)}
+
+
+@tool(
+    name="delete_scheduled_task",
+    domain="jobs",
+    permission="manage_jobs",
+    description="Delete a scheduled task. IMPORTANT: Confirm with the user before executing.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "task_id": {"type": "string", "description": "The scheduled task ID to delete"},
+        },
+        "required": ["task_id"],
+    },
+    mutates=True,
+)
+def _tool_delete_scheduled_task(params, user):
+    from mojo.apps.jobs.models import ScheduledTask
+
+    try:
+        task = ScheduledTask.objects.get(id=params["task_id"], user=user)
+    except ScheduledTask.DoesNotExist:
+        return {"ok": False, "error": "Task not found"}
+
+    name = task.name
+    task.delete()
+    return {"ok": True, "message": f"Scheduled task '{name}' deleted"}
+
+
 @tool(
     name="retry_job",
     domain="jobs",

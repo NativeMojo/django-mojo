@@ -1,11 +1,13 @@
 ---
-name: plan
+name: design
 description: Design implementation approach for an issue or request file, adds a Plan section
 user-invocable: true
 argument-hint: <path to issue or request file>
 ---
 
 Takes an issue or request file and designs the implementation approach. Adds a ## Plan section to the file.
+
+IMPORTANT: Do NOT use Claude Code's built-in EnterPlanMode/ExitPlanMode. Work directly on the request/issue file — that is the persistent artifact. The `.claude/plans/` temp files are throwaway and lost between sessions.
 
 ## Arguments
 

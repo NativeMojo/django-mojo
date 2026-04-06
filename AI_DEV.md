@@ -20,8 +20,8 @@ Explores the codebase, clarifies scope interactively, writes a request file to `
 
 ### Plan an Implementation
 ```
-/plan planning/issues/<file>.md
-/plan planning/requests/<file>.md
+/designplanning/issues/<file>.md
+/designplanning/requests/<file>.md
 ```
 Reads the file, designs an implementation approach, adds a `## Plan` section after user confirmation.
 
@@ -46,7 +46,7 @@ Each step is ideally its own Claude session. The file carries context between se
   |
   |  writes file to planning/issues/ or planning/requests/
   v
-/plan <file>
+/design<file>
   |
   |  adds ## Plan section to the file
   v
