@@ -8,16 +8,74 @@ LLM-powered admin assistant that lets administrators query and manage the system
 User sends message via REST
   → run_assistant(user, message, conversation_id)
     → Load/create Conversation, store user Message
-    → Build tool list filtered by user permissions
+    → Build tool list (two-tier):
+        New conversation  → core tools only
+        Resumed with active_domains → core + those domain tools
+        Old conversation (pre-two-tier, has tool_use history) → all tools
     → Claude API tool-calling loop:
         → LLM selects tool + args
         → Permission gate: user.has_permission(tool.permission)?
           → No: return permission error to LLM
           → Yes: execute handler(params, user), return result to LLM
+        → If tool == load_tools with domain arg:
+            → Persist domain in conversation.metadata["active_domains"]
+            → Inject new domain tools into active tool list immediately
         → Repeat until LLM stops calling tools
     → Store assistant response as Message
     → Return response + conversation_id
 ```
+
+## Two-Tier Tool Loading
+
+Tools are split into two tiers to reduce token usage on every turn. The LLM starts with a small set of core tools and loads domain-specific tools on demand.
+
+### Core Tools (always sent)
+
+Core tools are sent to the LLM on every turn regardless of domain. They handle universal capabilities:
+
+| Domain | Tools |
+|---|---|
+| `discovery` | `load_tools` |
+| `memory` | `read_memory`, `write_memory`, `delete_memory` |
+| `models` | `describe_model`, `query_model` |
+| `docs` | `read_docs` |
+| `web` | `browse_url` |
+| `logs` | `query_logs` |
+| `files` | `query_files`, `get_file`, `analyze_image` |
+
+### Domain Tools (loaded on demand)
+
+All other tools (security, jobs, users, groups, metrics, full discovery) start unloaded. The LLM calls `load_tools` to activate them.
+
+**Domains and their tool counts:**
+
+| Domain | Description |
+|---|---|
+| `security` | Query and manage security incidents, events, tickets, rulesets, and IP blocking |
+| `jobs` | Query, monitor, cancel, and retry background jobs |
+| `users` | Query and manage users, permissions, rate limits, and activity |
+| `groups` | Query and manage groups, members, and group activity |
+| `metrics` | Fetch time-series metrics, system health, and incident trends |
+| `discovery` | Full tool listing (`list_tools`) |
+
+### `load_tools` — the primary gateway
+
+`load_tools` is a core tool that acts as the discovery and loading mechanism:
+
+- Called with **no arguments** — lists available domains with descriptions and tool counts
+- Called with **`domain`** — loads that domain's tools for the rest of the conversation
+- Called with **`domains`** (list) — loads multiple domains at once
+
+Loaded domains persist in `conversation.metadata["active_domains"]`. Resumed conversations automatically restore their loaded tools.
+
+**LLM behavior guidance (built into system prompt):**
+- When the user's request clearly maps to a domain, the LLM auto-loads that domain without asking
+- When the request is ambiguous, the LLM calls `load_tools()` with no args to show available domains, then asks the user
+- Once a domain is loaded, dedicated domain tools are preferred over `query_model`
+
+### Backward Compatibility
+
+Old conversations (pre-two-tier) that have `tool_use` blocks in their message history fall back to receiving all tools. This keeps existing conversations working without any migration.
 
 ## Enabling
 
@@ -188,18 +246,24 @@ By default, log content is truncated at 500 characters. Pass `verbose: true` to 
 | `get_file` | `view_fileman` | No | Detailed metadata for a single file |
 | `analyze_image` | `view_fileman` | No | Send an image file to Claude vision for analysis (content description, OCR, error messages, etc.) |
 
-### Discovery Domain (`view_admin` / `view_security` / `view_jobs`)
+### Discovery Domain (`view_admin`)
 
-| Tool | Permission | Mutates |
+| Tool | Permission | Core | Description |
+|---|---|---|---|
+| `load_tools` | `view_admin` | Yes | List available domains or load domain tools for this conversation |
+| `list_tools` | `view_admin` | No | Full listing of all tools grouped by domain. Loaded via `load_tools(domain="discovery")` |
+
+The domain-specific discovery tools have been moved to their parent domains so they load together with the tools they support:
+
+| Tool | Domain | Permission |
 |---|---|---|
-| `list_tools` | `view_admin` | No |
-| `list_metric_categories` | `view_admin` | No |
-| `list_metric_slugs` | `view_admin` | No |
-| `list_job_channels` | `view_jobs` | No |
-| `list_event_categories` | `view_security` | No |
-| `list_permissions` | `view_admin` | No |
+| `list_metric_categories` | `metrics` | `view_admin` |
+| `list_metric_slugs` | `metrics` | `view_admin` |
+| `list_job_channels` | `jobs` | `view_jobs` |
+| `list_event_categories` | `security` | `view_security` |
+| `list_permissions` | `users` | `view_admin` |
 
-Discovery tools let the LLM explore the system. When a user asks "what metrics do we track?" or "what can you do?", the LLM calls these tools to find valid slugs, categories, channels, and permissions — rather than guessing.
+`load_tools` (core) is the primary entry point. The LLM calls it to discover what's available and activate domain tools before using them.
 
 ### Memory Domain (`assistant`)
 
@@ -481,6 +545,7 @@ def _tool_query_orders(params, user):
 | `description` | Yes | Human-readable description shown to the LLM |
 | `input_schema` | Yes | JSON Schema dict for the tool's parameters |
 | `mutates` | No | Default `False`. If True, LLM is told to confirm before executing |
+| `core` | No | Default `False`. If `True`, tool is always sent to the LLM (two-tier tier 1). Set this for tools that should be available in every conversation without loading a domain. |
 
 #### Organizing Tools in Modules
 
@@ -531,6 +596,7 @@ register_tool(
 | `permission` | Yes | Permission string checked via `user.has_permission()` |
 | `mutates` | No | Default `False`. If True, LLM is told to confirm before executing |
 | `domain` | No | Default `"custom"`. Logical grouping for the tool |
+| `core` | No | Default `False`. If `True`, always included in every conversation (tier 1). |
 
 ### Tool Handler Guidelines
 
@@ -544,13 +610,20 @@ register_tool(
 
 ```python
 from mojo.apps.assistant import (
-    tool,                # @tool decorator (preferred)
-    register_tool,       # Register a single tool imperatively
-    register_tools,      # Register multiple tools from a list of dicts
-    get_registry,        # Get the full registry dict
-    get_tools_for_user,  # Get Claude tool definitions filtered by user perms
+    tool,                        # @tool decorator (preferred)
+    register_tool,               # Register a single tool imperatively
+    register_tools,              # Register multiple tools from a list of dicts
+    get_registry,                # Get the full registry dict (all tools, unfiltered)
+    get_tools_for_user,          # All tools the user has permission for (backward compat)
+    get_core_tools_for_user,     # Core tools only (tier 1, always sent)
+    get_domain_tools_for_user,   # Tools for specific domains, filtered by perms
+    get_available_domains,       # Domains the user has access to, with tool counts
 )
 ```
+
+`get_domain_tools_for_user(user, domains)` accepts a list or single string. Returns only tools where `entry["domain"] in domains` and the user has permission.
+
+`get_available_domains(user)` returns a dict keyed by domain name, each with `count`, `description`, and `examples` (first 3 tool names). Domains where every tool is already core are excluded — they're always loaded and don't need to be "activated".
 
 ## Models
 

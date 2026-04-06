@@ -1,5 +1,23 @@
 ## v1.1.0 - (current)
 
+## v1.1.13 - April 06, 2026
+
+Two-tier tool loading for the admin assistant.
+
+### Added
+- **Two-tier tool loading** — assistant tools are now split into core (always sent) and domain (loaded on demand). New conversations start with only the core tools, reducing token overhead. Domain tools are loaded by calling `load_tools(domain=...)` and persist in `conversation.metadata["active_domains"]`.
+- **`load_tools` core tool** — the primary discovery and activation mechanism. Call with no arguments to list available domains; call with `domain` or `domains` to activate tools for the rest of the conversation.
+- **`get_core_tools_for_user(user)`** — returns only tools with `core=True`, filtered by permission.
+- **`get_domain_tools_for_user(user, domains)`** — returns tools for the specified domain(s), filtered by permission.
+- **`get_available_domains(user)`** — returns a dict of domains the user can access, with tool count, description, and example tool names. Domains containing only core tools are excluded.
+- **`core=True` flag on `@tool` and `register_tool()`** — marks a tool as always-on. Core tools: `load_tools`, `read_memory`, `write_memory`, `delete_memory`, `describe_model`, `query_model`, `read_docs`, `browse_url`, `query_logs`, `query_files`, `get_file`, `analyze_image`.
+
+### Changed
+- **Discovery tool domain reassignment** — `list_metric_categories` and `list_metric_slugs` moved to the `metrics` domain; `list_job_channels` moved to `jobs`; `list_event_categories` moved to `security`; `list_permissions` moved to `users`. These now load alongside the tools they support rather than always loading with the discovery domain.
+- **`list_tools` is no longer a core tool** — it remains in the `discovery` domain and is available after calling `load_tools(domain="discovery")`.
+- **Backward compatibility** — old conversations with `tool_use` blocks in their message history automatically fall back to receiving all tools, so no migration is required.
+- **System prompt updated** — tool selection guidance replaced with tool loading guidance. The LLM is instructed to auto-load a domain when the user's request clearly maps to one.
+
 ## v1.1.12 - April 05, 2026
 
 bugfix in how ipsets are handled

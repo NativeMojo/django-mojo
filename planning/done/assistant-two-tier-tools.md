@@ -1,7 +1,7 @@
 # Two-Tier Tool Loading
 
 **Type**: request
-**Status**: planned
+**Status**: resolved
 **Date**: 2026-04-06
 **Priority**: high
 
@@ -150,3 +150,39 @@ How domain loading happens in practice — the LLM decides based on user intent:
 
 - `docs/django_developer/assistant/README.md` — Update tools section: document two-tier loading, `core=True` parameter on `@tool` decorator, `load_tools` behavior, conversation-scoped domain persistence. Update tool domain table.
 - `docs/web_developer/assistant/README.md` — Note that tool availability is now progressive — the assistant loads domain tools as needed rather than having all tools on every turn.
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-04-06
+
+### What Was Built
+Two-tier tool loading system that reduces per-call tool count from 70 to ~13 core tools. Domain-specific tools load on demand via the `load_tools` meta-tool and persist per conversation in `conversation.metadata["active_domains"]`.
+
+### Files Changed
+- `mojo/apps/assistant/__init__.py` — Added `core` flag to registry, `get_core_tools_for_user`, `get_domain_tools_for_user`, `get_available_domains`
+- `mojo/apps/assistant/services/agent.py` — Added `_build_tools_for_conversation`, `_handle_load_tools`, updated system prompt, modified both agent loops
+- `mojo/apps/assistant/services/tools/discovery.py` — Rewrote with `load_tools` (core) and `list_tools` (non-core), moved domain-specific discovery tools to parent domains
+- `mojo/apps/assistant/services/tools/memory.py` — Added `core=True` to 3 tools
+- `mojo/apps/assistant/services/tools/models.py` — Added `core=True` to 2 tools
+- `mojo/apps/assistant/services/tools/docs.py` — Added `core=True` to 1 tool
+- `mojo/apps/assistant/services/tools/web.py` — Added `core=True` to 1 tool
+- `mojo/apps/assistant/services/tools/logs.py` — Added `core=True` to 1 tool
+- `mojo/apps/assistant/services/tools/files.py` — Added `core=True` to 3 tools
+
+### Tests
+- `tests/test_assistant/15_test_two_tier_tools.py` — 20 tests covering registry, discovery, conversation building, handle_load_tools, permissions, backward compat
+- Run: `bin/run_tests -t test_assistant.15_test_two_tier_tools`
+
+### Docs Updated
+- `docs/django_developer/assistant/README.md` — Two-tier loading architecture, core tools table, domain table, `core` parameter docs, new registry functions
+- `docs/web_developer/assistant/README.md` — Tool loading section for frontend developers
+- `CHANGELOG.md` — v1.1.13 entry
+
+### Security Review
+- One finding fixed: domain strings now validated against registry before persisting to conversation metadata (prevents prompt injection writing arbitrary strings)
+- Permission enforcement on tool loading and execution verified as correct
+- Backward compatibility path verified as safe (still permission-gated)
+
+### Follow-up
+- None

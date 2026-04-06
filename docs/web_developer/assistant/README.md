@@ -458,6 +458,25 @@ The group is resolved from the request context. If the user is not in a group co
 
 ---
 
+## Tool Loading
+
+The assistant uses a two-tier system to manage which tools are active in each conversation.
+
+**Core tools** are always available from the first message: memory, models, docs, web, logs, and file tools. These handle general queries.
+
+**Domain tools** (security, jobs, users, groups, metrics) are loaded on demand. When the assistant needs domain-specific capabilities, it calls the built-in `load_tools` tool first. You will see this reflected in `tool_calls_made`:
+
+```json
+"tool_calls_made": [
+    {"tool": "load_tools", "input": {"domain": "jobs"}},
+    {"tool": "query_jobs", "input": {"status": "failed", "minutes": 60}}
+]
+```
+
+Domain tools persist for the rest of the conversation — the assistant will not call `load_tools` again for the same domain in the same conversation.
+
+**From your perspective as a UI developer:** No changes are needed. The `tool_calls_made` array may include a `load_tools` call at the start of domain-specific queries. You can display this as a status indicator (e.g., "Loading job tools...") or ignore it entirely.
+
 ## Permission Mapping
 
 The assistant checks the user's permissions before executing each tool. The tools available to a user depend on their permissions:
@@ -468,7 +487,7 @@ The assistant checks the user's permissions before executing each tool. The tool
 | `manage_security` | All `view_security` tools + update incident, block IP, create ticket |
 | `view_jobs` | Query jobs, job events, job logs, job stats, queue health, list job channels |
 | `manage_jobs` | All `view_jobs` tools + cancel job, retry job |
-| `view_admin` | Query users, user detail, user activity, rate limits, permission summary, fetch metrics, system health, list tools, list metric categories/slugs, list permissions, browse web URLs, describe and query any MojoModel |
+| `view_admin` | Query users, user detail, user activity, rate limits, permission summary, fetch metrics, system health, list tools, list metric categories/slugs, list permissions, browse web URLs, describe and query any MojoModel, load domain tools |
 | `view_groups` | Query groups, group detail, group members, group activity |
 | `view_logs` | Query the audit log trail (logit.Log) — request history, model changes, API errors, custom events |
 | `assistant` | Read, write, and delete memory entries across all tiers (subject to per-tier access rules) |
