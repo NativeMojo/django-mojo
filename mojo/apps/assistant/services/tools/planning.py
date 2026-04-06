@@ -63,6 +63,9 @@ def _tool_create_plan(params, user):
     if not raw_steps:
         return {"error": "Plan must have at least one step"}
 
+    if len(raw_steps) > 20:
+        return {"error": "Plan cannot have more than 20 steps"}
+
     steps = []
     for i, step in enumerate(raw_steps, 1):
         s = {

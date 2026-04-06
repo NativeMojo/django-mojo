@@ -328,6 +328,64 @@ def test_parallel_plan_skips_already_done(opts):
 
 @th.django_unit_test()
 @th.requires_app("mojo.apps.assistant")
+def test_parallel_plan_skips_mutating_tools(opts):
+    """Mutating tools should be skipped in parallel plan execution."""
+    from mojo.apps.assistant.services.agent import _execute_parallel_plan_steps
+    from mojo.apps.assistant import get_registry
+    from mojo.apps.assistant.models import Conversation
+
+    Conversation.objects.filter(user=opts.user, title="plan-skip-mutating").delete()
+    conv = Conversation.objects.create(
+        user=opts.user,
+        title="plan-skip-mutating",
+        metadata={
+            "plan": {
+                "plan_id": "test-plan-mutating",
+                "title": "Mutating Test",
+                "steps": [
+                    {"id": 1, "description": "Read memory", "status": "pending",
+                     "parallel": True, "tool": "read_memory", "tool_input": {},
+                     "summary": None},
+                    {"id": 2, "description": "Write memory (mutating)", "status": "pending",
+                     "parallel": True, "tool": "write_memory",
+                     "tool_input": {"key": "test", "value": "test"},
+                     "summary": None},
+                ],
+            },
+        },
+    )
+
+    registry = get_registry()
+    tool_calls_made = []
+    plan = conv.metadata["plan"]
+
+    results, blocks = _execute_parallel_plan_steps(
+        plan, registry, opts.user, conv, [], None, tool_calls_made,
+    )
+
+    # Only the non-mutating tool should have executed
+    assert_eq(len(results), 1, f"Expected 1 result (mutating skipped), got {len(results)}")
+    assert_eq(len(blocks), 1, f"Expected 1 block (mutating skipped), got {len(blocks)}")
+
+    # Mutating step should be marked as skipped
+    conv.refresh_from_db()
+    step2 = conv.metadata["plan"]["steps"][1]
+    assert_eq(step2["status"], "skipped", f"Mutating step should be skipped, got {step2['status']}")
+
+
+@th.django_unit_test()
+@th.requires_app("mojo.apps.assistant")
+def test_create_plan_max_steps(opts):
+    """create_plan should reject plans with more than 20 steps."""
+    from mojo.apps.assistant.services.tools.planning import _tool_create_plan
+
+    steps = [{"description": f"Step {i}"} for i in range(25)]
+    result = _tool_create_plan({"title": "Too Many", "steps": steps}, opts.user)
+    assert_true("error" in result, "Plan with >20 steps should be rejected")
+
+
+@th.django_unit_test()
+@th.requires_app("mojo.apps.assistant")
 def test_summarize_tool_result(opts):
     """_summarize_tool_result should extract useful summaries."""
     from mojo.apps.assistant.services.agent import _summarize_tool_result

@@ -580,12 +580,24 @@ def _execute_parallel_plan_steps(plan, registry, user, conversation, tools, on_e
     # Build synthetic tool_use blocks for each parallel step
     step_blocks = []
     for step in parallel_steps:
+        tool_name = step["tool"]
+        tool_entry = registry.get(tool_name)
+        # Reject mutating tools in parallel steps — they need user confirmation
+        if not tool_entry or tool_entry.get("mutates"):
+            _handle_plan_tool(conversation, "update_plan", {},
+                              {"step_id": step["id"], "status": "skipped",
+                               "summary": "Skipped: mutating tools cannot run in parallel",
+                               "updated": True}, on_event)
+            continue
+        tool_input = step.get("tool_input", {})
+        if not isinstance(tool_input, dict):
+            tool_input = {}
         tool_id = f"plan_step_{step['id']}_{uuid.uuid4().hex[:8]}"
         block = {
             "type": "tool_use",
             "id": tool_id,
-            "name": step["tool"],
-            "input": step.get("tool_input", {}),
+            "name": tool_name,
+            "input": tool_input,
         }
         step_blocks.append((step, block))
         fake_blocks.append(block)

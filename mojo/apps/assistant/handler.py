@@ -68,6 +68,8 @@ def handle_assistant_message(user, data):
         action_value = (data.get("value") or "").strip()
         if not action_value:
             return {"type": "assistant_error", "error": "Action value is required"}
+        if len(action_value) > 200:
+            return {"type": "assistant_error", "error": "Action value too long"}
         data["message"] = action_value
         message_type = "assistant_message"
 
