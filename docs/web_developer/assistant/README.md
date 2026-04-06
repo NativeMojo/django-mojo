@@ -654,20 +654,29 @@ const resp2 = await fetch('/api/assistant', {
 
 ## Mutating Operations
 
-Tools that modify data (block IP, cancel job, update incident, create ticket) require `manage_*` permissions. The LLM is instructed to confirm with the user before executing these, so the typical flow is:
+Tools that modify data (block IP, cancel job, update incident, create ticket) require `manage_*` permissions. The LLM confirms with the user before executing these using **action blocks** (see [Action Blocks](#action-blocks)).
+
+The typical flow:
 
 1. User: "Block IP 1.2.3.4"
-2. Assistant: "I'll block IP 1.2.3.4 with a 1-hour TTL. Confirm?"
-3. User: "Yes"
-4. Assistant: "Done. IP 1.2.3.4 has been blocked for 3600 seconds."
+2. Assistant sends an `action` block: "Block IP 1.2.3.4 for 24 hours?" with **Confirm** / **Cancel** buttons
+3. User clicks **Confirm** — client sends `assistant_action` message with `value: "confirm"`
+4. Assistant: "Done. IP 1.2.3.4 has been blocked for 86400 seconds."
 
-This confirmation happens via conversation turns, not a separate API call.
+See [Action Block Interaction Flow](#action-block-interaction-flow) for the full client-side wiring.
 
 ## WebSocket Interface
 
 For real-time chat UIs, the assistant supports a WebSocket interface alongside REST. Conversation CRUD stays as REST; the actual chat flows over the existing realtime WebSocket connection.
 
-### Sending a Message
+### Client-to-Server Messages
+
+| Message type | When to send | Key fields |
+|---|---|---|
+| `assistant_message` | User sends a chat message | `message` (string), `conversation_id` (int, optional) |
+| `assistant_action` | User clicks a button in an action block | `value` (string), `conversation_id` (int) |
+
+**`assistant_message`**:
 
 ```javascript
 ws.send(JSON.stringify({
@@ -677,7 +686,19 @@ ws.send(JSON.stringify({
 }));
 ```
 
-### Response Events
+**`assistant_action`**:
+
+```javascript
+ws.send(JSON.stringify({
+    type: 'assistant_action',
+    value: 'confirm',         // the action's value field from the action block
+    conversation_id: 42,
+}));
+```
+
+The server converts `assistant_action` into a regular user message containing the chosen value and continues the conversation. No special server-side state is needed.
+
+### Server-to-Client Events
 
 The server publishes events to the user's WebSocket topic as the assistant processes:
 
@@ -685,6 +706,8 @@ The server publishes events to the user's WebSocket topic as the assistant proce
 |---|---|---|
 | `assistant_thinking` | Immediately after message received | `{conversation_id}` |
 | `assistant_tool_call` | Each time a tool is called | `{conversation_id, tool, input}` |
+| `assistant_plan` | After the assistant creates a task plan | `{conversation_id, plan}` |
+| `assistant_plan_update` | After each plan step status changes | `{conversation_id, plan_id, step_id, status, summary}` |
 | `assistant_response` | Final LLM response | `{conversation_id, message_id, created, response, tool_calls_made, blocks}` |
 | `assistant_error` | On failure | `{conversation_id, error}` |
 
@@ -697,9 +720,42 @@ The server publishes events to the user's WebSocket topic as the assistant proce
 | `created` | string | ISO 8601 timestamp of when the message was saved |
 | `response` | string | Narrative text with block fences already stripped |
 | `tool_calls_made` | array | List of `{tool, input}` objects for tools called during this turn |
-| `blocks` | array or null | Parsed structured-data blocks (`table`, `chart`, `stat`). `null` when the response contains no blocks. Always present — never absent. |
+| `blocks` | array or null | Parsed structured-data blocks. `null` when none present. Always included — never absent. |
 
 The `message_id` and `created` fields make the WS event consistent with the REST detail graph shape, allowing the client to correlate WS events with conversation history retrieved via `GET /api/assistant/conversation/<id>?graph=detail`.
+
+**`assistant_plan` payload**:
+
+```json
+{
+    "type": "assistant_plan",
+    "conversation_id": 42,
+    "plan": {
+        "plan_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+        "title": "Security Audit (24h)",
+        "steps": [
+            {"id": 1, "description": "Check open incidents", "status": "pending", "summary": null, "parallel": true},
+            {"id": 2, "description": "Check blocked IPs", "status": "pending", "summary": null, "parallel": true},
+            {"id": 3, "description": "Synthesize findings", "status": "pending", "summary": null, "parallel": false}
+        ]
+    }
+}
+```
+
+**`assistant_plan_update` payload**:
+
+```json
+{
+    "type": "assistant_plan_update",
+    "conversation_id": 42,
+    "plan_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+    "step_id": 1,
+    "status": "done",
+    "summary": "14 open incidents"
+}
+```
+
+Step statuses: `pending`, `in_progress`, `done`, `skipped`.
 
 ### Client Wiring Example
 
@@ -711,6 +767,14 @@ ws.on('assistant_thinking', (data) => {
 
 ws.on('assistant_tool_call', (data) => {
     showToolCallStatus(data.tool, data.input);
+});
+
+ws.on('assistant_plan', (data) => {
+    showPlanTracker(data.conversation_id, data.plan);
+});
+
+ws.on('assistant_plan_update', (data) => {
+    updatePlanStep(data.plan_id, data.step_id, data.status, data.summary);
 });
 
 ws.on('assistant_response', (data) => {
@@ -732,19 +796,73 @@ ws.on('assistant_error', (data) => {
 
 ### How It Works
 
-1. Client sends `assistant_message` via WebSocket
+1. Client sends `assistant_message` or `assistant_action` via WebSocket
 2. Server validates permissions, stores the user message, returns `assistant_thinking` immediately
 3. A background thread runs the LLM agent (tool-calling loop may take seconds)
-4. During processing, `assistant_tool_call` events are published for each tool
+4. During processing, `assistant_tool_call` events are published per tool; if the LLM creates a plan, `assistant_plan` fires once, then `assistant_plan_update` fires per step change
 5. When done, `assistant_response` (or `assistant_error`) is published
 
-All events arrive in the same format — `{"type": "assistant_*", ...}` directly on the WebSocket. There is no `{"type": "message", "data": ...}` wrapper to unwrap.
+All events arrive as `{"type": "assistant_*", ...}` directly on the WebSocket. There is no `{"type": "message", "data": ...}` wrapper.
 
 The REST endpoints (`GET /api/assistant/conversation`, etc.) continue to work for listing and retrieving conversation history.
 
+### Action Block Interaction Flow
+
+When the assistant responds with an `action` block (see [Action Blocks](#action-blocks)), the user must click one of the provided buttons. Here is the full interaction pattern:
+
+```javascript
+function renderBlocks(blocks) {
+    for (const block of blocks) {
+        if (block.type === 'action') {
+            renderActionCard(block);
+        }
+        // ... other block types
+    }
+}
+
+function renderActionCard(block) {
+    const card = document.createElement('div');
+    card.className = 'action-card';
+    card.dataset.actionId = block.action_id;
+
+    const title = document.createElement('h4');
+    title.textContent = block.title;
+    card.appendChild(title);
+
+    if (block.description) {
+        const desc = document.createElement('p');
+        desc.textContent = block.description;
+        card.appendChild(desc);
+    }
+
+    for (const action of block.actions) {
+        const btn = document.createElement('button');
+        btn.textContent = action.label;
+        btn.onclick = () => sendAction(block.action_id, action.value, conversationId);
+        card.appendChild(btn);
+    }
+
+    messagesContainer.appendChild(card);
+}
+
+function sendAction(actionId, value, conversationId) {
+    // Disable all buttons in the card to prevent double-submit
+    const card = document.querySelector(`[data-action-id="${actionId}"]`);
+    card.querySelectorAll('button').forEach(btn => btn.disabled = true);
+
+    ws.send(JSON.stringify({
+        type: 'assistant_action',
+        value: value,
+        conversation_id: conversationId,
+    }));
+}
+```
+
+The server receives the `assistant_action`, converts the chosen value into a regular user message, and the conversation continues from there. The `assistant_thinking` event will fire as normal.
+
 ## Structured Data Blocks
 
-Responses may include a `blocks` array containing structured data for rendering as tables, charts, or stat cards. In REST responses the `blocks` key is only present when the LLM includes structured data. In WebSocket `assistant_response` events, `blocks` is always present — it is `null` when the response has no blocks and an array otherwise.
+Responses may include a `blocks` array containing structured data for rendering. In REST responses the `blocks` key is only present when the LLM includes structured data. In WebSocket `assistant_response` events, `blocks` is always present — it is `null` when the response has no blocks and an array otherwise.
 
 The `response` text field contains the narrative with block fences already stripped. The frontend renders text and blocks together.
 
@@ -815,6 +933,78 @@ For dashboard-style key metrics.
 |---|---|---|
 | `items` | object[] | Each with `label` (string) and `value` (string or number) |
 
+#### `action`
+
+For mutating operations that need user confirmation. Render as a card with buttons. When the user clicks a button, send an `assistant_action` WebSocket message.
+
+```json
+{
+    "type": "action",
+    "title": "Block IP",
+    "description": "Block 1.2.3.4 on all firewall sets for 24 hours",
+    "actions": [
+        {"label": "Confirm", "value": "confirm"},
+        {"label": "Cancel", "value": "cancel"}
+    ],
+    "action_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `title` | string | Card heading |
+| `description` | string | Details of the operation |
+| `actions` | object[] | Each with `label` (button text) and `value` (sent back to server) |
+| `action_id` | string | UUID assigned server-side. Use this to identify which card was interacted with. |
+
+**Rendering guidance**: Disable all buttons on the card immediately when the user clicks one, to prevent double-submission. The server will send `assistant_thinking` then `assistant_response` as normal after receiving the action.
+
+See [Action Block Interaction Flow](#action-block-interaction-flow) in the WebSocket section for the full wiring example.
+
+#### `list`
+
+For single-record key/value summaries. Prefer this over a one-row table for user profiles, incident details, job info, and any single object with multiple fields.
+
+```json
+{
+    "type": "list",
+    "title": "User Detail",
+    "items": [
+        {"label": "Email", "value": "admin@example.com"},
+        {"label": "Role", "value": "Admin"},
+        {"label": "Last Login", "value": "2026-04-01 09:30 UTC"}
+    ]
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `title` | string | Card heading |
+| `items` | object[] | Each with `label` (string) and `value` (string or number) |
+
+**Rendering guidance**: Render as a definition list or two-column card — label in muted text, value in regular weight.
+
+#### `alert`
+
+For permission denials, important warnings, error conditions, and success confirmations that need visual distinction from narrative text. Used sparingly — only for genuinely important information.
+
+```json
+{
+    "type": "alert",
+    "level": "warning",
+    "title": "Rate Limited",
+    "message": "User exceeded 100 req/min threshold. Current rate: 142 req/min."
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `level` | string | `info`, `success`, `warning`, or `error` |
+| `title` | string | Alert heading (optional but usually present) |
+| `message` | string | Alert body |
+
+**Rendering guidance**: Map `level` to a color/icon: `info` (blue/info icon), `success` (green/checkmark), `warning` (yellow/triangle), `error` (red/X). Render as a banner or callout — distinct from narrative text.
+
 ### Rendering Example
 
 ```javascript
@@ -830,7 +1020,36 @@ function renderBlocks(blocks) {
             case 'stat':
                 renderStatCards(block.items);
                 break;
+            case 'action':
+                renderActionCard(block);   // see Action Block Interaction Flow
+                break;
+            case 'list':
+                renderListCard(block.title, block.items);
+                break;
+            case 'alert':
+                renderAlert(block.level, block.title, block.message);
+                break;
         }
     }
 }
 ```
+
+## Plan Tracker
+
+When the assistant handles a complex multi-step request, it may create an execution plan. You receive `assistant_plan` once (when the plan is created) and then a stream of `assistant_plan_update` events as each step progresses.
+
+**Rendering guidance**: Render the plan as a vertical list of steps. Each step has a `status` badge (`pending` → grey, `in_progress` → blue/spinner, `done` → green, `skipped` → grey strikethrough). Show `summary` next to a completed step as a brief sub-label.
+
+```javascript
+ws.on('assistant_plan', (data) => {
+    const { plan_id, title, steps } = data.plan;
+    renderPlanTracker(plan_id, title, steps);
+});
+
+ws.on('assistant_plan_update', (data) => {
+    const { plan_id, step_id, status, summary } = data;
+    updatePlanStep(plan_id, step_id, status, summary);
+});
+```
+
+The plan tracker is informational — no user interaction is needed. The assistant drives all step transitions automatically. When `assistant_response` arrives, the plan is complete.

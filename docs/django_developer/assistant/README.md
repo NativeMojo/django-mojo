@@ -14,12 +14,22 @@ User sends message via REST
         Old conversation (pre-two-tier, has tool_use history) → all tools
     → Claude API tool-calling loop:
         → LLM selects tool + args
-        → Permission gate: user.has_permission(tool.permission)?
+        → Separate meta-tools from regular tools
+        → Meta-tools (load_tools, create_plan, update_plan) run first, serially
+        → Regular tools run in parallel via ThreadPoolExecutor (LLM_ADMIN_MAX_PARALLEL_TOOLS)
+        → Permission gate per tool: user.has_permission(tool.permission)?
           → No: return permission error to LLM
           → Yes: execute handler(params, user), return result to LLM
         → If tool == load_tools with domain arg:
             → Persist domain in conversation.metadata["active_domains"]
             → Inject new domain tools into active tool list immediately
+        → If tool == create_plan:
+            → Store plan in conversation.metadata["plan"]
+            → Publish WS event "assistant_plan"
+            → Execute parallel plan steps concurrently, publish "assistant_plan_update" per step
+        → If tool == update_plan:
+            → Update step status in conversation.metadata["plan"]
+            → Publish WS event "assistant_plan_update"
         → Repeat until LLM stops calling tools
     → Store assistant response as Message
     → Return response + conversation_id
@@ -97,6 +107,7 @@ Add `"mojo.apps.assistant"` to `INSTALLED_APPS` and run migrations.
 | `LLM_ADMIN_MODEL` | (auto-detect) | Claude model to use. If unset, auto-detects latest Sonnet via `mojo.helpers.llm.get_model()` |
 | `LLM_ADMIN_MAX_TURNS` | `25` | Max tool-calling turns per request |
 | `LLM_ADMIN_MAX_HISTORY` | `50` | Max messages loaded as conversation context |
+| `LLM_ADMIN_MAX_PARALLEL_TOOLS` | `4` | Max concurrent threads for parallel tool execution |
 | `LLM_ADMIN_SYSTEM_PROMPT` | (built-in) | Override the default system prompt |
 | `LLM_BROWSE_MAX_LENGTH` | `20000` | Max character length of content returned by `browse_url` and `read_docs` |
 | `LLM_BROWSE_TIMEOUT` | `10` | HTTP request timeout in seconds for `browse_url` |
@@ -264,6 +275,39 @@ The domain-specific discovery tools have been moved to their parent domains so t
 | `list_permissions` | `users` | `view_admin` |
 
 `load_tools` (core) is the primary entry point. The LLM calls it to discover what's available and activate domain tools before using them.
+
+### Planning Domain (`view_admin`)
+
+| Tool | Permission | Core | Mutates | Description |
+|---|---|---|---|---|
+| `create_plan` | `view_admin` | Yes | No | Create a multi-step execution plan shown to the user as a progress tracker |
+| `update_plan` | `view_admin` | Yes | No | Update the status of a plan step (`pending`, `in_progress`, `done`, `skipped`) |
+
+Both planning tools are **meta-tools** — they have side effects managed by the agent loop rather than by their handlers. The handler validates input and returns a result dict; the agent loop applies the actual side effect (storing the plan, publishing WS events).
+
+`create_plan` parameters:
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `title` | string | Yes | Short plan title shown to the user (e.g. `"Security Audit (24h)"`) |
+| `steps` | array | Yes | List of step objects |
+
+Each step object:
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `description` | string | Yes | What this step does |
+| `parallel` | boolean | No | If true, run concurrently with other parallel steps. Default false. |
+| `tool` | string | No | Tool name to execute. Required when `parallel=true` for auto-execution. |
+| `tool_input` | object | No | Input params for the tool. Only used when `tool` is specified. |
+
+`update_plan` parameters:
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `step_id` | integer | Yes | Step ID (1-indexed, assigned by `create_plan`) |
+| `status` | string | Yes | One of: `pending`, `in_progress`, `done`, `skipped` |
+| `summary` | string | No | Brief summary of what was found/done. Include when marking `done`. |
 
 ### Memory Domain (`assistant`)
 
@@ -739,9 +783,9 @@ Responses can include a `blocks` array with structured data for frontend renderi
 
 ### How It Works
 
-1. The system prompt defines three block types: `table`, `chart`, `stat`
+1. The system prompt defines seven block types: `table`, `chart`, `stat`, `action`, `list`, `alert`, `progress`
 2. The LLM wraps structured data in ` ```assistant_block ` code fences within its text response
-3. `_parse_blocks()` in `agent.py` extracts valid blocks and strips the fences from the text
+3. `_parse_blocks()` in `agent.py` extracts valid blocks, runs `_validate_block()`, and strips the fences from the text
 4. The response includes both clean `response` text and a `blocks` array
 5. Clean text and parsed blocks are stored on the `Message` — no re-parsing happens at read time
 
@@ -756,12 +800,172 @@ This is enforced via the system prompt, not code. Override `LLM_ADMIN_SYSTEM_PRO
 - **`table`** — `{type, title, columns, rows}` — query results, comparisons
 - **`chart`** — `{type, chart_type, title, labels, series}` — line/bar/pie/area for trends
 - **`stat`** — `{type, items: [{label, value}]}` — dashboard key metrics
+- **`action`** — `{type, title, description, actions: [{label, value}], action_id}` — user confirmation dialogs for mutating operations
+- **`list`** — `{type, title, items: [{label, value}]}` — single-record key/value summaries
+- **`alert`** — `{type, level, title, message}` — important warnings, errors, success notices
+
+### Block Validation
+
+`_validate_block()` in `agent.py` enforces structural requirements beyond just the type check. Invalid blocks are silently dropped.
+
+| Block type | Validation rules |
+|---|---|
+| `action` | `actions` must be a non-empty list. The block is tagged with a unique `action_id` (UUID string) on parse. |
+| `alert` | `level` must be one of `info`, `success`, `warning`, `error`. `message` must be non-empty. |
+| `list` | `items` must be a non-empty list. |
+| `progress` | No extra validation beyond type membership. |
+
+### `action` Block
+
+Used for mutating operations that need user confirmation. The LLM presents an action card; the user clicks a button; the choice is sent back as a message.
+
+```json
+{
+    "type": "action",
+    "title": "Block IP",
+    "description": "Block 1.2.3.4 on all firewall sets for 24 hours",
+    "actions": [
+        {"label": "Confirm", "value": "confirm"},
+        {"label": "Cancel", "value": "cancel"}
+    ],
+    "action_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+}
+```
+
+`action_id` is injected by the parser — the LLM does not set it. The frontend uses it to correlate the button click with the block.
+
+The system prompt instructs the LLM to use action blocks instead of asking "type yes to confirm". Always include a Cancel option.
+
+### `list` Block
+
+Used for single-record key/value summaries instead of a one-row table.
+
+```json
+{
+    "type": "list",
+    "title": "User Detail",
+    "items": [
+        {"label": "Email", "value": "admin@example.com"},
+        {"label": "Role", "value": "Admin"},
+        {"label": "Last Login", "value": "2026-04-01 09:30 UTC"}
+    ]
+}
+```
+
+### `alert` Block
+
+Used for permission denials, rate limit warnings, error conditions, and success confirmations that need visual distinction from narrative text.
+
+```json
+{
+    "type": "alert",
+    "level": "warning",
+    "title": "Rate Limited",
+    "message": "User exceeded 100 req/min threshold. Current rate: 142 req/min."
+}
+```
+
+Valid levels: `info`, `success`, `warning`, `error`.
 
 ### Customizing
 
-Override `LLM_ADMIN_SYSTEM_PROMPT` to change the block format instructions. The parser (`_parse_blocks`) only requires valid JSON with a recognized `type` field inside ` ```assistant_block ` fences.
+Override `LLM_ADMIN_SYSTEM_PROMPT` to change the block format instructions. The parser (`_parse_blocks`) only requires valid JSON with a recognized `type` field inside ` ```assistant_block ` fences, validated by `_validate_block()`.
 
 See [web_developer/assistant/README.md](../../web_developer/assistant/README.md#structured-data-blocks) for the full block schema reference and frontend rendering examples.
+
+## Task Planning
+
+For complex requests requiring 3+ tool calls across different areas, the LLM can create an explicit execution plan using the `create_plan` / `update_plan` meta-tools. The plan is stored in `conversation.metadata["plan"]` and displayed to the user as a live progress tracker.
+
+### How It Works
+
+1. The LLM calls `create_plan` with a title and list of steps
+2. The agent loop stores the plan in `conversation.metadata["plan"]` and publishes a `"plan"` WS event
+3. Steps marked `parallel=True` with a `tool` and `tool_input` are executed concurrently by `_execute_parallel_plan_steps()` immediately after `create_plan` returns — the LLM does not need to call those tools itself
+4. Each parallel step is marked `in_progress` at start, then `done` (with a brief summary) on completion
+5. Sequential steps (no `tool` field) are handled by the LLM itself using `update_plan` calls
+6. After all steps complete, the LLM synthesizes findings into a final response
+
+### Plan Structure
+
+```python
+# Stored in conversation.metadata["plan"]
+{
+    "plan_id": "f47ac10b-...",   # UUID string
+    "title": "Security Audit (24h)",
+    "steps": [
+        {
+            "id": 1,                    # 1-indexed, assigned by create_plan
+            "description": "Check open incidents",
+            "status": "done",           # pending | in_progress | done | skipped
+            "summary": "14 open",       # set when done
+            "parallel": True,
+            "tool": "query_incidents",
+            "tool_input": {"status": "open"},
+        },
+        {
+            "id": 2,
+            "description": "Synthesize findings",
+            "status": "pending",
+            "summary": None,
+            "parallel": False,
+        },
+    ],
+}
+```
+
+### When the LLM Should Plan
+
+The system prompt provides guidance — do not plan for simple queries. Examples where planning is appropriate:
+- "Give me a security audit" — parallel steps for incidents, events, blocked IPs, etc.
+- "What's the system health?" — parallel steps for jobs, metrics, incidents
+- "Investigate this user" — steps for user detail, activity, rate limits, related incidents
+
+Single-tool queries, follow-ups, and simple mutations do not need a plan.
+
+### WS Events
+
+| Event | When | Key Payload Fields |
+|---|---|---|
+| `assistant_plan` | After `create_plan` succeeds | `{plan: {plan_id, title, steps}}` |
+| `assistant_plan_update` | After each step status change | `{plan_id, step_id, status, summary}` |
+
+### Key Implementation Files
+
+- `mojo/apps/assistant/services/agent.py` — `_handle_plan_tool()`, `_execute_parallel_plan_steps()`, plan injection in both `run_assistant` and `run_assistant_ws`
+- `mojo/apps/assistant/services/tools/planning.py` — `create_plan` and `update_plan` tool handlers
+
+## Parallel Tool Execution
+
+When the LLM requests multiple tool calls in a single turn, they are executed in parallel using `ThreadPoolExecutor`.
+
+### Execution Order
+
+1. **Meta-tools run first, serially** — `load_tools`, `create_plan`, `update_plan` have side effects on the conversation state (modifying `metadata`, injecting tools, publishing WS events). These always run before regular tools.
+2. **Regular tools run in parallel** — when the LLM requests 2+ non-meta tools in one turn, they are submitted to a `ThreadPoolExecutor`.
+3. Results are returned to the LLM in completion order.
+
+### Configuration
+
+```python
+LLM_ADMIN_MAX_PARALLEL_TOOLS = 4  # default
+```
+
+The pool size is `min(LLM_ADMIN_MAX_PARALLEL_TOOLS, number_of_tools_in_batch)`.
+
+### Thread Safety
+
+- Each tool receives its own `user` reference. Tools do not share mutable state.
+- `tool_calls_made` is a shared list — appended from threads. This is safe for CPython due to the GIL, but the append order is non-deterministic with parallel execution.
+- The `on_event` callback (WS event publisher) may be called from multiple threads simultaneously. The underlying `send_to_user()` call is safe because it publishes to a queue; but `assistant_tool_call` events may arrive out of order when tools run in parallel.
+
+### Timeouts
+
+Each parallel tool call has a 30-second `future.result(timeout=30)` timeout. A timed-out or failed tool returns `{"error": "Tool execution timed out or failed."}` — the rest of the batch continues normally.
+
+### Key Implementation Files
+
+- `mojo/apps/assistant/services/agent.py` — `_execute_tool()`, `_execute_tools()`, `_execute_parallel_plan_steps()`
 
 ## Tests
 

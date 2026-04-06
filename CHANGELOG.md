@@ -1,5 +1,25 @@
 ## v1.1.0 - (current)
 
+## v1.1.14 - April 06, 2026
+
+Rich blocks, task planning, and parallel tool execution for the admin assistant.
+
+### Added
+- **New block types** — `action`, `list`, `alert` blocks added alongside existing `table`, `chart`, `stat`. Action blocks render as confirmation cards with clickable buttons. List blocks replace single-row tables for key/value summaries. Alert blocks surface important warnings and status notices with a `level` field (`info`, `success`, `warning`, `error`).
+- **`action_id` on action blocks** — each `action` block is tagged server-side with a UUID so the frontend can correlate button clicks with the originating card.
+- **`assistant_action` WebSocket message type** — client sends `{type: "assistant_action", value: "...", conversation_id: N}` when the user clicks a button in an action block. The server converts it to a regular user message and the conversation continues.
+- **Task planning tools** — `create_plan` and `update_plan` meta-tools (both `core=True`, `view_admin` permission). The LLM calls `create_plan` for complex requests requiring 3+ tool calls; `update_plan` marks step progress as work proceeds.
+- **`assistant_plan` WS event** — published after `create_plan` succeeds. Payload: `{plan_id, title, steps}`.
+- **`assistant_plan_update` WS event** — published after each plan step status change. Payload: `{plan_id, step_id, status, summary}`.
+- **Parallel tool execution** — when the LLM requests multiple tool calls in a single turn, non-meta tools now run concurrently via `ThreadPoolExecutor`. Meta-tools (`load_tools`, `create_plan`, `update_plan`) always run first serially since they modify conversation state.
+- **Plan-aware parallel step execution** — when `create_plan` is called with steps marked `parallel=True` and a `tool`+`tool_input`, the system immediately executes those steps concurrently without waiting for the LLM to call them individually.
+- **`LLM_ADMIN_MAX_PARALLEL_TOOLS` setting** — controls the `ThreadPoolExecutor` pool size. Default: `4`.
+- **`planning` domain** — new tool domain description added to `DOMAIN_DESCRIPTIONS`.
+- **`_validate_block()` in `agent.py`** — structural validation for all block types, called from `_parse_blocks()`. Invalid blocks are silently dropped.
+
+### Changed
+- **Mutating operation confirmation** — the system prompt now instructs the LLM to use `action` blocks for confirmations instead of asking the user to type "yes". Both tracks of documentation updated.
+
 ## v1.1.13 - April 06, 2026
 
 Two-tier tool loading for the admin assistant.
