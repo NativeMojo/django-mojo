@@ -241,7 +241,7 @@ def _handle_load_tools(conversation, tool_input, tools, user):
 
     Returns the list of newly added tool names (for logging).
     """
-    from mojo.apps.assistant import get_domain_tools_for_user
+    from mojo.apps.assistant import get_domain_tools_for_user, get_registry
 
     # Collect requested domains
     requested = []
@@ -252,6 +252,12 @@ def _handle_load_tools(conversation, tool_input, tools, user):
 
     if not requested:
         return []  # Listing mode, no domains to load
+
+    # Validate against known domains in the registry
+    known_domains = {entry["domain"] for entry in get_registry().values()}
+    requested = [d for d in requested if d in known_domains]
+    if not requested:
+        return []  # No valid domains
 
     # Update conversation metadata
     metadata = conversation.metadata or {}
