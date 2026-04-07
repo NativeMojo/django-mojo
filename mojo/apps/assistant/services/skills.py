@@ -64,7 +64,8 @@ def _can_write_tier(tier, user, group=None):
     if user.is_superuser:
         return True
     if tier == "global":
-        return user.has_permission("assistant")
+        # Global skills affect all users — require view_admin (stricter than assistant)
+        return user.has_permission("view_admin")
     if tier == "user":
         return user.has_permission("assistant")
     if tier == "group":
@@ -81,6 +82,11 @@ def _can_write_tier(tier, user, group=None):
 # Validation
 # ---------------------------------------------------------------------------
 
+MAX_STEPS_BYTES = 16384  # 16 KB cap on entire steps JSON payload
+MAX_TRIGGER_LENGTH = 200  # max chars per trigger phrase
+MAX_DESCRIPTION_LENGTH = 1000  # max chars for skill description
+
+
 def _validate_steps(steps, max_steps):
     """
     Validate step list structure.
@@ -93,6 +99,15 @@ def _validate_steps(steps, max_steps):
         return "steps must contain at least one step"
     if len(steps) > max_steps:
         return f"Too many steps (max {max_steps})"
+
+    # Size cap on entire payload to prevent bloat
+    import ujson
+    try:
+        if len(ujson.dumps(steps)) > MAX_STEPS_BYTES:
+            return f"Steps payload too large (max {MAX_STEPS_BYTES} bytes)"
+    except Exception:
+        return "Steps contain non-serializable data"
+
     for i, step in enumerate(steps):
         if not isinstance(step, dict):
             return f"Step {i + 1} must be a dict"
@@ -110,6 +125,8 @@ def _validate_triggers(triggers):
     for t in triggers:
         if not isinstance(t, str) or not t.strip():
             return "Each trigger must be a non-empty string"
+        if len(t) > MAX_TRIGGER_LENGTH:
+            return f"Trigger phrase too long (max {MAX_TRIGGER_LENGTH} characters)"
     if len(triggers) > 10:
         return "Too many trigger phrases (max 10)"
     return None
@@ -188,6 +205,8 @@ def save_skill(user, tier, name, description, triggers, steps,
     # Validate description
     if not description or not description.strip():
         return {"error": "Skill description is required"}
+    if len(description.strip()) > MAX_DESCRIPTION_LENGTH:
+        return {"error": f"Description too long (max {MAX_DESCRIPTION_LENGTH} characters)"}
 
     # Validate triggers
     if triggers:
@@ -280,19 +299,24 @@ def delete_skill(user, skill_id):
     except Skill.DoesNotExist:
         return {"error": f"Skill {skill_id} not found"}
 
-    # Owner or superuser can delete
+    # Superuser bypasses all checks
     if not user.is_superuser:
-        if skill.tier == "user" and skill.user_id != user.pk:
-            return {"error": "You can only delete your own skills"}
-        if skill.tier == "group":
+        # Fail-closed: check tier-specific permission with elif chain
+        if skill.tier == "user":
+            if skill.user_id != user.pk:
+                return {"error": "You can only delete your own skills"}
+        elif skill.tier == "group":
             if not skill.group:
                 return {"error": "Permission denied"}
             member = skill.group.get_member_for_user(user, check_parents=True)
             if not member or not member.has_permission("assistant"):
                 return {"error": "You need assistant permission in this group to delete skills"}
-        if skill.tier == "global":
-            if not user.has_permission("assistant"):
-                return {"error": "You need assistant permission to delete global skills"}
+        elif skill.tier == "global":
+            if not user.has_permission("view_admin"):
+                return {"error": "You need admin permission to delete global skills"}
+        else:
+            # Unknown tier — fail closed
+            return {"error": "Permission denied"}
 
     name = skill.name
     skill.delete()

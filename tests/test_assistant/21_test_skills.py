@@ -109,18 +109,28 @@ def test_save_user_skill(opts):
 @th.django_unit_test()
 @th.requires_app("mojo.apps.assistant")
 def test_save_global_skill(opts):
-    """Save a skill in the global tier (requires assistant perm)."""
+    """Save a global skill requires view_admin (superuser)."""
     from mojo.apps.assistant.services.skills import save_skill
     _cleanup()
-    _, user, _ = _load_users()
+    admin, user, _ = _load_users()
 
+    # Regular assistant user should NOT be able to create global skills
     result = save_skill(
         user, tier="global", name="test-skill-global",
         description="A global skill",
         triggers=["check health"],
         steps=SAMPLE_STEPS,
     )
-    assert_true("error" not in result, "User with assistant perm should save global skill")
+    assert_true("error" in result, "Regular assistant user should not save global skills")
+
+    # Admin (superuser) should be able to create global skills
+    result = save_skill(
+        admin, tier="global", name="test-skill-global",
+        description="A global skill",
+        triggers=["check health"],
+        steps=SAMPLE_STEPS,
+    )
+    assert_true("error" not in result, "Admin should save global skill")
 
 
 @th.django_unit_test()
@@ -405,7 +415,7 @@ def test_list_skills(opts):
     """list_skills returns all accessible skills grouped by tier."""
     from mojo.apps.assistant.services.skills import save_skill, list_skills
     _cleanup()
-    _, user, _ = _load_users()
+    admin, user, _ = _load_users()
 
     save_skill(
         user, tier="user", name="test-skill-list-user",
@@ -413,8 +423,9 @@ def test_list_skills(opts):
         triggers=["list test"],
         steps=SAMPLE_STEPS,
     )
+    # Global skills require admin
     save_skill(
-        user, tier="global", name="test-skill-list-global",
+        admin, tier="global", name="test-skill-list-global",
         description="Global skill for listing",
         triggers=["list test global"],
         steps=SAMPLE_STEPS,
@@ -437,7 +448,7 @@ def test_list_skills_tier_filter(opts):
     """list_skills can filter by tier."""
     from mojo.apps.assistant.services.skills import save_skill, list_skills
     _cleanup()
-    _, user, _ = _load_users()
+    admin, user, _ = _load_users()
 
     save_skill(
         user, tier="user", name="test-skill-filter-user",
@@ -446,7 +457,7 @@ def test_list_skills_tier_filter(opts):
         steps=SAMPLE_STEPS,
     )
     save_skill(
-        user, tier="global", name="test-skill-filter-global",
+        admin, tier="global", name="test-skill-filter-global",
         description="Global skill",
         triggers=["filter test"],
         steps=SAMPLE_STEPS,
