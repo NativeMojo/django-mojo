@@ -3869,6 +3869,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#skills-domain-assistant" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Skills Domain (assistant)
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -4731,6 +4742,10 @@
 <td><code>files</code></td>
 <td><code>query_files</code>, <code>get_file</code>, <code>analyze_image</code></td>
 </tr>
+<tr>
+<td><code>skills</code></td>
+<td><code>find_skill</code>, <code>save_skill</code>, <code>list_skills</code>, <code>delete_skill</code></td>
+</tr>
 </tbody>
 </table>
 <h3 id="domain-tools-loaded-on-demand">Domain Tools (loaded on demand)<a class="headerlink" href="#domain-tools-loaded-on-demand" title="Permanent link">&para;</a></h3>
@@ -5023,6 +5038,7 @@
 <th>Tool</th>
 <th>Permission</th>
 <th>Mutates</th>
+<th>Description</th>
 </tr>
 </thead>
 <tbody>
@@ -5030,36 +5046,79 @@
 <td><code>query_jobs</code></td>
 <td><code>view_jobs</code></td>
 <td>No</td>
+<td>Search/filter jobs by status, channel, func, time range</td>
 </tr>
 <tr>
 <td><code>query_job_events</code></td>
 <td><code>view_jobs</code></td>
 <td>No</td>
+<td>Events attached to a specific job</td>
 </tr>
 <tr>
 <td><code>query_job_logs</code></td>
 <td><code>view_jobs</code></td>
 <td>No</td>
+<td>Log lines written by a specific job</td>
 </tr>
 <tr>
 <td><code>get_job_stats</code></td>
 <td><code>view_jobs</code></td>
 <td>No</td>
+<td>Aggregate counts by status and channel</td>
 </tr>
 <tr>
 <td><code>get_queue_health</code></td>
 <td><code>view_jobs</code></td>
 <td>No</td>
+<td>Per-channel queue depth and worker status</td>
+</tr>
+<tr>
+<td><code>list_scheduled_tasks</code></td>
+<td><code>view_jobs</code></td>
+<td>No</td>
+<td>List the user's scheduled tasks</td>
 </tr>
 <tr>
 <td><code>cancel_job</code></td>
 <td><code>manage_jobs</code></td>
 <td>Yes</td>
+<td>Cancel a pending or running job</td>
 </tr>
 <tr>
 <td><code>retry_job</code></td>
 <td><code>manage_jobs</code></td>
 <td>Yes</td>
+<td>Requeue a failed, canceled, or expired job</td>
+</tr>
+<tr>
+<td><code>create_scheduled_task</code></td>
+<td><code>manage_jobs</code></td>
+<td>Yes</td>
+<td>Create a new recurring scheduled task</td>
+</tr>
+<tr>
+<td><code>update_scheduled_task</code></td>
+<td><code>manage_jobs</code></td>
+<td>Yes</td>
+<td>Edit a scheduled task (name, schedule, payload, enabled state)</td>
+</tr>
+<tr>
+<td><code>delete_scheduled_task</code></td>
+<td><code>manage_jobs</code></td>
+<td>Yes</td>
+<td>Delete a scheduled task</td>
+</tr>
+<tr>
+<td><code>run_job</code></td>
+<td><code>manage_jobs</code></td>
+<td>Yes</td>
+<td>Publish a new job by func+payload (fresh run) or by cloning an existing job as a template</td>
+</tr>
+<tr>
+<td><code>run_scheduled_task_now</code></td>
+<td><code>manage_jobs</code></td>
+<td>Yes</td>
+<td>Immediately execute a scheduled task regardless of schedule or enabled state</td>
 </tr>
 </tbody>
 </table>
@@ -5678,6 +5737,50 @@
 </tr>
 </tbody>
 </table>
+<h3 id="skills-domain-assistant">Skills Domain (<code>assistant</code>)<a class="headerlink" href="#skills-domain-assistant" title="Permanent link">&para;</a></h3>
+<p>All four tools are <code>core=True</code> — always available without calling <code>load_tools</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>Permission</th>
+<th>Core</th>
+<th>Mutates</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>find_skill</code></td>
+<td><code>assistant</code></td>
+<td>Yes</td>
+<td>No</td>
+<td>Search for a skill by keywords. Returns matching skills with full step definitions for replay.</td>
+</tr>
+<tr>
+<td><code>save_skill</code></td>
+<td><code>assistant</code></td>
+<td>Yes</td>
+<td>Yes</td>
+<td>Create or update a skill with name, description, trigger phrases, and ordered steps. Upserts on name within the same scope.</td>
+</tr>
+<tr>
+<td><code>list_skills</code></td>
+<td><code>assistant</code></td>
+<td>Yes</td>
+<td>No</td>
+<td>List all accessible skills grouped by tier. Returns summaries (no step details).</td>
+</tr>
+<tr>
+<td><code>delete_skill</code></td>
+<td><code>assistant</code></td>
+<td>Yes</td>
+<td>Yes</td>
+<td>Delete a skill by ID. Owner or admin only.</td>
+</tr>
+</tbody>
+</table>
+<p>See <a href="skills/">skills.md</a> for the full model reference, service API, step format, and settings.</p>
 <h2 id="incident-event-reporting">Incident Event Reporting<a class="headerlink" href="#incident-event-reporting" title="Permanent link">&para;</a></h2>
 <p>The assistant reports security-relevant actions and errors to the incident system via <code>incident.report_event()</code>. Events flow through the rule engine for automated response (blocking, ticketing, notifications).</p>
 <h3 id="event-categories">Event Categories<a class="headerlink" href="#event-categories" title="Permanent link">&para;</a></h3>
