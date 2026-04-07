@@ -484,6 +484,16 @@ def _tool_run_job(params, user):
         return {"ok": False, "error": "Provide either func (fresh run) or job_id (rerun from template)"}
 
     if func:
+        # Security: restrict func to allowed module prefixes (blocks stdlib, builtins, etc.)
+        from mojo.helpers.settings import settings
+        allowed = settings.get("JOBS_FUNC_ALLOWED_PREFIXES", ["mojo."])
+        if not any(func.startswith(prefix) for prefix in allowed):
+            return {"ok": False, "error": f"Function must start with one of: {', '.join(allowed)}"}
+
+        # Block internal framework functions that have dedicated tools
+        if func == "mojo.apps.jobs.asyncjobs.run_scheduled_task":
+            return {"ok": False, "error": "Use run_scheduled_task_now to trigger scheduled tasks"}
+
         # Validate the function is importable
         from mojo.apps.jobs.job_engine import load_job_function
         try:

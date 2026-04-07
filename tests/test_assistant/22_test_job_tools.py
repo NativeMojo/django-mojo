@@ -121,7 +121,7 @@ def test_run_job_fresh_with_delay(opts):
 @th.django_unit_test()
 def test_run_job_invalid_func(opts):
     result = _run_job({
-        "func": "totally.bogus.nonexistent_function",
+        "func": "mojo.apps.totally_bogus.nonexistent_function",
     }, opts.admin)
     assert result["ok"] is False, f"Should fail for invalid func: {result}"
     assert "Invalid job function" in result["error"], f"Error should mention invalid function: {result['error']}"
@@ -156,6 +156,27 @@ def test_run_job_rerun_with_payload_override(opts):
     new_job = Job.objects.get(id=new_id)
     assert new_job.payload.get("overridden") is True, \
         f"Payload should be overridden, got: {new_job.payload}"
+
+
+@th.django_unit_test()
+def test_run_job_blocked_stdlib_func(opts):
+    """Security: stdlib functions like os.system must be rejected."""
+    result = _run_job({"func": "os.system"}, opts.admin)
+    assert result["ok"] is False, f"Should block stdlib func: {result}"
+    assert "must start with" in result["error"].lower(), \
+        f"Error should mention allowed prefixes: {result['error']}"
+
+
+@th.django_unit_test()
+def test_run_job_blocked_run_scheduled_task(opts):
+    """Security: run_scheduled_task must go through its dedicated tool."""
+    result = _run_job({
+        "func": "mojo.apps.jobs.asyncjobs.run_scheduled_task",
+        "payload": {"task_id": opts.enabled_task.id, "force": True},
+    }, opts.admin)
+    assert result["ok"] is False, f"Should block direct run_scheduled_task: {result}"
+    assert "run_scheduled_task_now" in result["error"], \
+        f"Error should point to the dedicated tool: {result['error']}"
 
 
 @th.django_unit_test()
