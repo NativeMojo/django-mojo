@@ -1,7 +1,7 @@
 # Assistant Run Job & Run Scheduled Task Tools
 
 **Type**: request
-**Status**: planned
+**Status**: resolved
 **Date**: 2026-04-07
 **Priority**: medium
 
@@ -124,3 +124,33 @@ Add `run_job` and `run_scheduled_task_now` assistant tools so users can publish 
 ### Docs
 - `docs/django_developer/assistant/README.md` — Add 6 missing tools to Jobs Domain table
 - `docs/web_developer/assistant/README.md` — Mirror if applicable
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-04-07
+
+### What Was Built
+Two new assistant tools (`run_job`, `run_scheduled_task_now`) and a `force` flag in `run_scheduled_task` to bypass the enabled check for on-demand runs. Security hardened with a func prefix allowlist and a block on direct `run_scheduled_task` calls through `run_job`.
+
+### Files Changed
+- `mojo/apps/assistant/services/tools/jobs.py` — Added `run_job` and `run_scheduled_task_now` tools with prefix allowlist and bypass block
+- `mojo/apps/jobs/asyncjobs.py` — Added `force` flag to skip enabled check for on-demand runs
+- `docs/django_developer/assistant/README.md` — Jobs domain table expanded from 7 to 13 tools
+- `docs/web_developer/assistant/README.md` — Permissions summary updated
+
+### Tests
+- `tests/test_assistant/22_test_job_tools.py` — 18 tests covering fresh run, rerun from template, validation, security gates, scheduled task execution, user scoping, and tool registration
+- Run: `bin/run_tests -t test_assistant.22_test_job_tools`
+
+### Docs Updated
+- `docs/django_developer/assistant/README.md` — Full 13-row jobs domain table with descriptions
+- `docs/web_developer/assistant/README.md` — Updated permissions summary
+
+### Security Review
+- **Fixed**: func prefix allowlist (`JOBS_FUNC_ALLOWED_PREFIXES`, defaults to `["mojo."]`) prevents arbitrary code execution via stdlib callables
+- **Fixed**: `run_scheduled_task` blocked from `run_job` — must use dedicated `run_scheduled_task_now` tool which enforces user-scoping
+- No other concerns
+
+### Follow-up
+- Projects using `run_job` with non-mojo functions need to configure `JOBS_FUNC_ALLOWED_PREFIXES` in settings
