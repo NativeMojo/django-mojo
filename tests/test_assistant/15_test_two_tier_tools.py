@@ -124,13 +124,13 @@ def test_available_domains(opts):
     assert_true("jobs" in domains, f"Expected jobs domain, got {list(domains.keys())}")
     assert_true("users" in domains, f"Expected users domain, got {list(domains.keys())}")
 
-    # Each domain has count, description, examples
+    # Each domain has count, description, tools
     sec = domains["security"]
     assert_true(sec["count"] > 0, f"Expected security tool count > 0, got {sec['count']}")
     assert_true(len(sec["description"]) > 0,
                 f"Expected security description, got '{sec['description']}'")
-    assert_true(len(sec["examples"]) > 0,
-                f"Expected security examples, got {sec['examples']}")
+    assert_true(len(sec["tools"]) > 0,
+                f"Expected security tools list, got {sec['tools']}")
 
     # Core-only domains should NOT appear (they're already loaded)
     # Domains with non-core tools should appear

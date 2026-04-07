@@ -24,7 +24,7 @@ _REGISTRY = {}
 # Domain descriptions for load_tools listing
 DOMAIN_DESCRIPTIONS = {
     "security": "Query and manage security incidents, events, tickets, rulesets, and IP blocking",
-    "jobs": "Query, monitor, cancel, and retry background jobs",
+    "jobs": "Query, monitor, cancel, and retry background jobs; run jobs and scheduled tasks on demand",
     "users": "Query and manage users, permissions, rate limits, and activity",
     "groups": "Query and manage groups, members, and group activity",
     "metrics": "Fetch time-series metrics, system health, and incident trends",
@@ -190,6 +190,6 @@ def get_available_domains(user):
         result[domain] = {
             "count": info["count"],
             "description": DOMAIN_DESCRIPTIONS.get(domain, ""),
-            "examples": info["tools"][:3],
+            "tools": info["tools"],
         }
     return result

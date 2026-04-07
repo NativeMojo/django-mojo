@@ -10,15 +10,15 @@ Endpoints:
     GET  /api/assistant/skill              — List user's skills
     GET  /api/assistant/skill/<pk>         — Skill detail (?graph=detail for steps/triggers)
     DELETE /api/assistant/skill/<pk>       — Delete skill (owner or admin)
-    GET  /api/assistant/memory             — Read memories (?tier=global|user|group)
-    DELETE /api/assistant/memory           — Delete a memory entry (tier + key required)
+
+Memory endpoints are in memory.py.
 """
 from mojo import decorators as md
 from mojo.helpers.response import JsonResponse
 from mojo.apps.assistant.models import Conversation, Message, Skill
 
 
-@md.POST('/api/assistant')
+@md.POST('')
 @md.requires_perms('view_admin', 'assistant')
 @md.rate_limit("assistant", ip_limit=60, duid_limit=30)
 @md.requires_params('message')
@@ -52,7 +52,7 @@ def on_assistant_message(request):
     return JsonResponse({"status": True, "data": data})
 
 
-@md.POST('/api/assistant/context')
+@md.POST('context')
 @md.requires_perms('view_admin', 'assistant')
 @md.requires_params('model', 'pk')
 def on_assistant_context(request):
@@ -126,30 +126,3 @@ def on_skill(request, pk=None):
     return Skill.on_rest_request(request, pk)
 
 
-@md.GET('/api/assistant/memory')
-@md.requires_perms('view_admin', 'assistant')
-def on_memory_read(request):
-    """Read assistant memories for the current user, grouped by tier."""
-    from mojo.apps.assistant.services.memory import read_memories
-
-    tier = request.DATA.get("tier")
-    group = getattr(request, "group", None)
-    result = read_memories(request.user, group=group, tier=tier)
-    return {"status": True, "data": result}
-
-
-@md.DELETE('/api/assistant/memory')
-@md.requires_perms('view_admin', 'assistant')
-@md.requires_params('tier', 'key')
-def on_memory_delete(request):
-    """Delete a single memory entry."""
-    from mojo.apps.assistant.services.memory import delete_memory
-
-    tier = request.DATA.tier
-    key = request.DATA.key
-    group = getattr(request, "group", None)
-    result = delete_memory(request.user, tier=tier, key=key, group=group)
-
-    if "error" in result:
-        return JsonResponse({"status": False, "error": result["error"]}, status=400)
-    return {"status": True, "data": result}

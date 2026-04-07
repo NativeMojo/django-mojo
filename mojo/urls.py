@@ -42,24 +42,29 @@ def add_urlpatterns(app, prefix):
     Add app-specific URL patterns with appropriate prefixing.
 
     If REST_AUTO_PREFIX is enabled, patterns are wrapped with MOJO_PREFIX.
+    Registers both "prefix/" and bare "prefix" so that apps with an empty-string
+    root route (e.g. @md.POST('')) are reachable without a trailing slash.
     """
     app_module = modules.load_module(app)
-    if len(prefix) > 1:
-        prefix += "/"
     if not hasattr(app_module, "urlpatterns"):
         print(f"{app} has no api routes")
         return
 
-    # If REST_AUTO_PREFIX is enabled, wrap with MOJO_PREFIX
     if REST_AUTO_PREFIX and MOJO_PREFIX:
-        # Combine MOJO_PREFIX with app prefix
-        full_prefix = f"{MOJO_PREFIX}/{prefix}"
-        urls = path(full_prefix, include(app_module))
+        if len(prefix) > 1:
+            # Register with trailing slash for sub-routes: api/app/endpoint
+            urlpatterns.append(path(f"{MOJO_PREFIX}/{prefix}/", include(app_module)))
+            # Register without trailing slash for bare app root: api/app
+            urlpatterns.append(path(f"{MOJO_PREFIX}/{prefix}", include(app_module)))
+        else:
+            full_prefix = f"{MOJO_PREFIX}/{prefix}"
+            urlpatterns.append(path(full_prefix, include(app_module)))
     else:
-        # Old behavior: just use app prefix (Django project handles MOJO_PREFIX)
-        urls = path(prefix, include(app_module))
-
-    urlpatterns.append(urls)
+        if len(prefix) > 1:
+            urlpatterns.append(path(f"{prefix}/", include(app_module)))
+            urlpatterns.append(path(prefix, include(app_module)))
+        else:
+            urlpatterns.append(path(prefix, include(app_module)))
 
 def add_absolute_urlpatterns():
     """

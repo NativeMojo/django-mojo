@@ -47,6 +47,9 @@ You review the git diff of recent changes for security concerns.
 - Secrets in default field values or settings defaults
 - Logging or error messages that expose sensitive data
 
+### URL Routing
+- Absolute URL paths in REST decorators (paths starting with `/` like `@md.POST('/api/app/endpoint')`) — these bypass the app prefix and cause path duplication. All REST endpoints should use relative paths (e.g., `@md.POST('endpoint')`) unless there is an explicit reason to bypass the app prefix.
+
 ## Report Format
 
 For each finding:

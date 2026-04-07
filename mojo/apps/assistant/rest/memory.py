@@ -11,7 +11,7 @@ from mojo import decorators as md
 from mojo.helpers.response import JsonResponse
 
 
-@md.GET('/api/assistant/memory')
+@md.GET('memory')
 @md.requires_perms('assistant')
 def on_memory_list_all(request):
     """List all memory tiers for the current user and group context."""
@@ -22,7 +22,7 @@ def on_memory_list_all(request):
     return JsonResponse({"status": True, "data": result})
 
 
-@md.GET('/api/assistant/memory/<str:tier>')
+@md.GET('memory/<str:tier>')
 @md.requires_perms('assistant')
 def on_memory_list_tier(request, tier):
     """List memories for a specific tier."""
@@ -36,7 +36,7 @@ def on_memory_list_tier(request, tier):
     return JsonResponse({"status": True, "data": result.get(tier, {})})
 
 
-@md.POST('/api/assistant/memory/<str:tier>')
+@md.POST('memory/<str:tier>')
 @md.requires_perms('assistant')
 @md.requires_params('key', 'value')
 def on_memory_write(request, tier):
@@ -58,7 +58,7 @@ def on_memory_write(request, tier):
     return JsonResponse({"status": True, "data": result})
 
 
-@md.DELETE('/api/assistant/memory/<str:tier>/<str:key>')
+@md.DELETE('memory/<str:tier>/<str:key>')
 @md.requires_perms('assistant')
 def on_memory_delete(request, tier, key):
     """Delete a memory entry."""
