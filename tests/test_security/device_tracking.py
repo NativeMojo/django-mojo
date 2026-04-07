@@ -146,6 +146,66 @@ def test_fresh_browser_keeps_muid(opts):
 
 
 @th.django_unit_test()
+def test_ip_drift_creates_location_not_device(opts):
+    """When a user's IP changes between logins, _check_location_drift() creates
+    a new UserDeviceLocation without modifying the UserDevice record."""
+    from mojo.apps.account.models import User
+    from mojo.apps.account.models.device import UserDevice, UserDeviceLocation
+    from objict import objict
+
+    user = User.objects.get(username=TEST_USER)
+    device = UserDevice.objects.filter(user=user).order_by('-last_seen').first()
+    assert_true(device is not None, "expected device from prior login")
+
+    original_last_ip = device.last_ip
+    original_muid = device.muid
+    drift_ip = '10.0.0.42'
+
+    # Clean up any prior location for the drift IP
+    UserDeviceLocation.objects.filter(user=user, ip_address=drift_ip).delete()
+
+    # Simulate an authenticated request from a different IP
+    fake_request = objict(ip=drift_ip, user=user, muid=original_muid)
+    from mojo.models import rest
+    token = rest.ACTIVE_REQUEST.set(fake_request)
+    try:
+        # Force touch to fire by clearing last_activity
+        user.last_activity = None
+        user.touch()
+    finally:
+        rest.ACTIVE_REQUEST.reset(token)
+
+    # Device record should be unchanged
+    device.refresh_from_db()
+    assert_eq(device.last_ip, original_last_ip, "expected device last_ip unchanged after IP drift")
+    assert_eq(device.muid, original_muid, "expected device muid unchanged after IP drift")
+
+    # But a new location record should exist for the drift IP
+    loc = UserDeviceLocation.objects.filter(user=user, user_device=device, ip_address=drift_ip).first()
+    assert_true(loc is not None, f"expected new UserDeviceLocation for drift IP {drift_ip}")
+
+
+@th.django_unit_test()
+def test_geo_staleness_skips_fresh_update(opts):
+    """GeoLocatedIP.geolocate() skips the last_seen UPDATE when the record is fresh."""
+    from mojo.apps.account.models.geolocated_ip import GeoLocatedIP
+    from mojo.helpers import dates
+
+    test_ip = '10.99.99.1'
+    GeoLocatedIP.objects.filter(ip_address=test_ip).delete()
+
+    # First call creates the record
+    geo = GeoLocatedIP.geolocate(test_ip, auto_refresh=False)
+    assert_true(geo.pk is not None, "expected GeoLocatedIP created")
+    first_last_seen = geo.last_seen
+
+    # Second call immediately — last_seen should NOT change (record is fresh)
+    geo2 = GeoLocatedIP.geolocate(test_ip, auto_refresh=False)
+    geo2.refresh_from_db()
+    assert_eq(geo2.last_seen, first_last_seen, "expected last_seen unchanged for fresh geo record")
+
+
+@th.django_unit_test()
 def test_private_ip_geolocation(opts):
     """Private IPs are geolocated as 'internal' with 'Private Network' country."""
     from mojo.apps.account.models.geolocated_ip import GeoLocatedIP
