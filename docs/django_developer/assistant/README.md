@@ -148,15 +148,21 @@ Add `"mojo.apps.assistant"` to `INSTALLED_APPS` and run migrations.
 
 ### Jobs Domain (`view_jobs` / `manage_jobs`)
 
-| Tool | Permission | Mutates |
-|---|---|---|
-| `query_jobs` | `view_jobs` | No |
-| `query_job_events` | `view_jobs` | No |
-| `query_job_logs` | `view_jobs` | No |
-| `get_job_stats` | `view_jobs` | No |
-| `get_queue_health` | `view_jobs` | No |
-| `cancel_job` | `manage_jobs` | Yes |
-| `retry_job` | `manage_jobs` | Yes |
+| Tool | Permission | Mutates | Description |
+|---|---|---|---|
+| `query_jobs` | `view_jobs` | No | Search/filter jobs by status, channel, func, time range |
+| `query_job_events` | `view_jobs` | No | Events attached to a specific job |
+| `query_job_logs` | `view_jobs` | No | Log lines written by a specific job |
+| `get_job_stats` | `view_jobs` | No | Aggregate counts by status and channel |
+| `get_queue_health` | `view_jobs` | No | Per-channel queue depth and worker status |
+| `list_scheduled_tasks` | `view_jobs` | No | List the user's scheduled tasks |
+| `cancel_job` | `manage_jobs` | Yes | Cancel a pending or running job |
+| `retry_job` | `manage_jobs` | Yes | Requeue a failed, canceled, or expired job |
+| `create_scheduled_task` | `manage_jobs` | Yes | Create a new recurring scheduled task |
+| `update_scheduled_task` | `manage_jobs` | Yes | Edit a scheduled task (name, schedule, payload, enabled state) |
+| `delete_scheduled_task` | `manage_jobs` | Yes | Delete a scheduled task |
+| `run_job` | `manage_jobs` | Yes | Publish a new job by func+payload (fresh run) or by cloning an existing job as a template |
+| `run_scheduled_task_now` | `manage_jobs` | Yes | Immediately execute a scheduled task regardless of schedule or enabled state |
 
 ### Users Domain (`view_admin` / `manage_users`)
 

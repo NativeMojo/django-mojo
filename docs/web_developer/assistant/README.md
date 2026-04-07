@@ -485,8 +485,8 @@ The assistant checks the user's permissions before executing each tool. The tool
 |---|---|
 | `view_security` | Query incidents, events, event counts, tickets, rulesets, IP history, incident timeline, incident trends, list event categories |
 | `manage_security` | All `view_security` tools + update incident, block IP, create ticket |
-| `view_jobs` | Query jobs, job events, job logs, job stats, queue health, list job channels |
-| `manage_jobs` | All `view_jobs` tools + cancel job, retry job |
+| `view_jobs` | Query jobs, job events, job logs, job stats, queue health, list scheduled tasks |
+| `manage_jobs` | All `view_jobs` tools + cancel job, retry job, create/update/delete scheduled tasks, run job, run scheduled task now |
 | `view_admin` | Query users, user detail, user activity, rate limits, permission summary, fetch metrics, system health, list tools, list metric categories/slugs, list permissions, browse web URLs, describe and query any MojoModel, load domain tools |
 | `view_groups` | Query groups, group detail, group members, group activity |
 | `view_logs` | Query the audit log trail (logit.Log) — request history, model changes, API errors, custom events |
