@@ -1,7 +1,7 @@
 # Assistant Learned Skills
 
 **Type**: request
-**Status**: planned
+**Status**: resolved
 **Date**: 2026-04-07
 **Priority**: high
 

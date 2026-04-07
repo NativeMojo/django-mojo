@@ -490,7 +490,7 @@ The assistant checks the user's permissions before executing each tool. The tool
 | `view_admin` | Query users, user detail, user activity, rate limits, permission summary, fetch metrics, system health, list tools, list metric categories/slugs, list permissions, browse web URLs, describe and query any MojoModel, load domain tools |
 | `view_groups` | Query groups, group detail, group members, group activity |
 | `view_logs` | Query the audit log trail (logit.Log) — request history, model changes, API errors, custom events |
-| `assistant` | Read, write, and delete memory entries across all tiers (subject to per-tier access rules) |
+| `assistant` | Read, write, and delete memory entries and skills across all tiers (subject to per-tier access rules) |
 
 Users without any of these permissions will receive: `"You don't have permissions for any assistant tools."`
 

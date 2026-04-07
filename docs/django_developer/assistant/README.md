@@ -52,6 +52,7 @@ Core tools are sent to the LLM on every turn regardless of domain. They handle u
 | `web` | `browse_url` |
 | `logs` | `query_logs` |
 | `files` | `query_files`, `get_file`, `analyze_image` |
+| `skills` | `find_skill`, `save_skill`, `list_skills`, `delete_skill` |
 
 ### Domain Tools (loaded on demand)
 
@@ -316,6 +317,19 @@ Each step object:
 | `read_memory` | `assistant` | No | Read stored memory entries grouped by tier. The system prompt already injects memories, but this tool lets the LLM check raw keys before updating or deleting. |
 | `write_memory` | `assistant` | Yes | Store or update a memory entry. Requires `tier`, `key`, `value`. Enforces key format, size limits, and secret detection. |
 | `delete_memory` | `assistant` | Yes | Delete a memory entry by tier and key. |
+
+### Skills Domain (`assistant`)
+
+All four tools are `core=True` — always available without calling `load_tools`.
+
+| Tool | Permission | Core | Mutates | Description |
+|---|---|---|---|---|
+| `find_skill` | `assistant` | Yes | No | Search for a skill by keywords. Returns matching skills with full step definitions for replay. |
+| `save_skill` | `assistant` | Yes | Yes | Create or update a skill with name, description, trigger phrases, and ordered steps. Upserts on name within the same scope. |
+| `list_skills` | `assistant` | Yes | No | List all accessible skills grouped by tier. Returns summaries (no step details). |
+| `delete_skill` | `assistant` | Yes | Yes | Delete a skill by ID. Owner or admin only. |
+
+See [skills.md](skills.md) for the full model reference, service API, step format, and settings.
 
 ## Incident Event Reporting
 

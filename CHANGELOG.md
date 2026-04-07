@@ -1,5 +1,18 @@
 ## v1.1.0 - (current)
 
+## v1.1.15 - April 07, 2026
+
+Assistant learned skills — reusable multi-step procedures.
+
+### Added
+- **`Skill` model** — database-backed reusable procedures scoped by tier (`global`, `user`, `group`). Each skill has a name, description, trigger phrases, and an ordered list of tool steps. A unique constraint prevents duplicate names within the same scope.
+- **Skills service** (`mojo/apps/assistant/services/skills.py`) — `find_skills`, `save_skill`, `list_skills`, `delete_skill`. Permission model mirrors memory: global/user tiers require `assistant` permission; group tier requires group membership (write requires `assistant` on the `Member` record).
+- **Four core assistant tools** — `find_skill`, `save_skill`, `list_skills`, `delete_skill`. All are `core=True` (always active, no `load_tools` call needed) and require `assistant` permission.
+- **`skills` domain description** added to `DOMAIN_DESCRIPTIONS` in `mojo/apps/assistant/__init__.py`.
+- **Skills settings** — `LLM_ADMIN_SKILLS_ENABLED` (default `True`), `LLM_ADMIN_SKILLS_MAX_PER_USER` (20), `LLM_ADMIN_SKILLS_MAX_PER_GROUP` (30), `LLM_ADMIN_SKILLS_MAX_GLOBAL` (20), `LLM_ADMIN_SKILLS_MAX_STEPS` (10).
+- **System prompt updated** — the LLM is instructed to call `find_skill` when a request sounds like a stored procedure, confirm before executing steps when `auto_execute` is false, and evaluate step conditions against the previous step's result.
+- **REST endpoint** — `GET/DELETE /api/assistant/skill` and `GET /api/assistant/skill/<id>?graph=detail` via RestMeta. `VIEW_PERMS = ["view_admin", "assistant", "owner"]`; `SAVE_PERMS = ["view_admin"]`.
+
 ## v1.1.13 - April 06, 2026
 
 huge changes in our AI Agent, ability to spawn agents, build tasks and plans, and much more
