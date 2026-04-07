@@ -189,8 +189,8 @@ class UserDevice(models.Model, MojoModel):
                     device.user_agent_hash = ua_hash
                     device.device_info = rhelper.parse_user_agent(user_agent_str)
                     update_fields.extend(['user_agent_hash', 'device_info'])
-            # Always update muid if we have one and the device doesn't yet
-            if muid and device.muid != muid:
+            # Set muid once when the device doesn't have one yet
+            if muid and not device.muid:
                 device.muid = muid
                 update_fields.append('muid')
             if update_fields:

@@ -10,6 +10,7 @@ import ujson
 
 GEOLOCATION_ALLOW_SUBNET_LOOKUP = settings.get_static('GEOLOCATION_ALLOW_SUBNET_LOOKUP', False, kind='bool')
 GEOLOCATION_CACHE_DURATION_DAYS = settings.get_static('GEOLOCATION_CACHE_DURATION_DAYS', 90, kind='int')
+GEOLOCATION_LAST_SEEN_AGE = settings.get_static('GEOLOCATION_DEVICE_LOCATION_AGE', 300)
 
 
 class GeoLocatedIP(models.Model, MojoModel):
@@ -524,9 +525,11 @@ class GeoLocatedIP(models.Model, MojoModel):
         if not geo_ip:
             geo_ip = cls.objects.create(ip_address=ip_address, subnet=subnet)
         else:
-            # Touch last_seen to track when this IP was last encountered
-            geo_ip.last_seen = dates.utcnow()
-            geo_ip.save(update_fields=['last_seen'])
+            # Touch last_seen only when stale to avoid unnecessary writes
+            age_seconds = (dates.utcnow() - geo_ip.last_seen).total_seconds()
+            if age_seconds > GEOLOCATION_LAST_SEEN_AGE:
+                geo_ip.last_seen = dates.utcnow()
+                geo_ip.save(update_fields=['last_seen'])
 
         if auto_refresh and geo_ip.is_expired:
             geo_ip.refresh()

@@ -282,8 +282,9 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         if self.last_activity is None or dates.has_time_elsapsed(self.last_activity, seconds=USER_LAST_ACTIVITY_FREQ):
             if self.last_activity and not dates.is_today(self.last_activity, METRICS_TIMEZONE):
                 metrics.record("user_activity_day", category="user", min_granularity="days")
-            self.last_activity = dates.utcnow()
-            self.atomic_save()
+            now = dates.utcnow()
+            User.objects.filter(pk=self.pk).update(last_activity=now)
+            self.last_activity = now
         if METRICS_TRACK_USER_ACTIVITY:
             metrics.record(f"user_activity:{self.pk}", category="user", min_granularity="minutes")
 
@@ -1316,5 +1317,5 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         if isinstance(jwt_data.get("allowed_ips"), list):
             if request and request.ip not in jwt_data.allowed_ips:
                 return user, "Not allowed from location"
-        user.track()
+        user.touch()
         return user, None

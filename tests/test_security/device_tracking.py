@@ -121,8 +121,11 @@ def test_second_login_updates_device(opts):
 
 
 @th.django_unit_test()
-def test_fresh_browser_updates_muid(opts):
-    """Clearing cookies and logging in from the same UA updates muid on the existing device.
+def test_fresh_browser_keeps_muid(opts):
+    """Clearing cookies and logging in from the same UA keeps the original muid.
+
+    muid is set once on the device and never overwritten — a new cookie does not
+    replace an established device identity.
 
     Requires DEBUG=True — _muid cookie is Secure when DEBUG=False.
     """
@@ -139,7 +142,7 @@ def test_fresh_browser_updates_muid(opts):
 
     device = UserDevice.objects.get(pk=opts.device_id)
     assert_true(device.muid, "expected muid set after fresh login")
-    assert_true(device.muid != old_muid, "expected new muid after cookie clear")
+    assert_eq(device.muid, old_muid, "expected muid to be stable after cookie clear")
 
 
 @th.django_unit_test()
