@@ -29,7 +29,7 @@ class Conversation(models.Model, MojoModel):
             },
             "detail": {
                 "fields": ["id", "title", "created", "modified", "messages"],
-                "graphs": {"messages": "default"},
+                "graphs": {"messages": "default", "user": "basic"},
             },
         }
 

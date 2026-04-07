@@ -37,6 +37,7 @@ DOMAIN_DESCRIPTIONS = {
     "files": "Query, view, and analyze uploaded files",
     "planning": "Create and track multi-step execution plans",
     "comms": "Send notifications via SMS, email, push, and in-app channels",
+    "skills": "Save, find, and manage learned multi-step procedures",
 }
 
 
