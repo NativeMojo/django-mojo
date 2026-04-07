@@ -449,3 +449,116 @@ def _tool_retry_job(params, user):
     from mojo.apps.jobs.services import JobActionsService
     result = JobActionsService.retry_job(job, delay=params.get("delay"))
     return result
+
+
+@tool(
+    name="run_job",
+    domain="jobs",
+    permission="manage_jobs",
+    description=(
+        "Publish a new job. Two modes: "
+        "(1) Fresh run — provide func (dotted path) and optional payload. "
+        "(2) Rerun from template — provide job_id of an existing job to clone it. "
+        "Exactly one of func or job_id is required. "
+        "IMPORTANT: Confirm with the user before executing."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "func": {"type": "string", "description": "Dotted path to the job function (e.g. 'myapp.tasks.send_report')"},
+            "payload": {"type": "object", "description": "Data to pass to the job (optional)"},
+            "channel": {"type": "string", "description": "Job channel (default 'default')"},
+            "delay": {"type": "integer", "description": "Delay in seconds before running (optional)"},
+            "job_id": {"type": "string", "description": "ID of an existing job to rerun as a template"},
+        },
+    },
+    mutates=True,
+)
+def _tool_run_job(params, user):
+    func = params.get("func")
+    job_id = params.get("job_id")
+
+    if func and job_id:
+        return {"ok": False, "error": "Provide either func or job_id, not both"}
+    if not func and not job_id:
+        return {"ok": False, "error": "Provide either func (fresh run) or job_id (rerun from template)"}
+
+    if func:
+        # Validate the function is importable
+        from mojo.apps.jobs.job_engine import load_job_function
+        try:
+            load_job_function(func)
+        except (ImportError, Exception) as e:
+            return {"ok": False, "error": f"Invalid job function: {e}"}
+
+        from mojo.apps import jobs
+        try:
+            new_id = jobs.publish(
+                func=func,
+                payload=params.get("payload", {}),
+                channel=params.get("channel", "default"),
+                delay=params.get("delay"),
+            )
+            return {"ok": True, "job_id": new_id, "message": f"Job published: {func}"}
+        except (ValueError, RuntimeError) as e:
+            return {"ok": False, "error": str(e)}
+
+    # Rerun from template
+    from mojo.apps.jobs.models import Job
+    try:
+        job = Job.objects.get(id=job_id)
+    except Job.DoesNotExist:
+        return {"ok": False, "error": "Template job not found"}
+
+    overrides = {}
+    if params.get("payload"):
+        overrides["payload"] = params["payload"]
+    if params.get("channel"):
+        overrides["channel"] = params["channel"]
+    if params.get("delay"):
+        overrides["delay"] = params["delay"]
+
+    from mojo.apps.jobs.services import JobActionsService
+    return JobActionsService.publish_job_from_template(job, overrides)
+
+
+@tool(
+    name="run_scheduled_task_now",
+    domain="jobs",
+    permission="manage_jobs",
+    description=(
+        "Immediately execute a scheduled task, regardless of its schedule or enabled state. "
+        "Publishes a job that runs the task right now. "
+        "IMPORTANT: Confirm with the user before executing."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "task_id": {"type": "string", "description": "The scheduled task ID to run"},
+        },
+        "required": ["task_id"],
+    },
+    mutates=True,
+)
+def _tool_run_scheduled_task_now(params, user):
+    from mojo.apps.jobs.models import ScheduledTask
+
+    task_id = params["task_id"]
+    try:
+        task = ScheduledTask.objects.get(id=task_id, user=user)
+    except ScheduledTask.DoesNotExist:
+        return {"ok": False, "error": "Scheduled task not found"}
+
+    from mojo.apps import jobs
+    try:
+        job_id = jobs.publish(
+            func="mojo.apps.jobs.asyncjobs.run_scheduled_task",
+            payload={"task_id": task.id, "force": True},
+        )
+        return {
+            "ok": True,
+            "job_id": job_id,
+            "message": f"Scheduled task '{task.name}' published for immediate execution",
+        }
+    except (ValueError, RuntimeError) as e:
+        return {"ok": False, "error": str(e)}

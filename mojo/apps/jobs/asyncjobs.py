@@ -33,8 +33,8 @@ def run_scheduled_task(job):
         logit.error("run_scheduled_task: task %s not found", task_id)
         return
 
-    # Check task is still enabled
-    if not task.enabled:
+    # Check task is still enabled (force flag bypasses for on-demand runs)
+    if not task.enabled and not job.payload.get("force"):
         logit.info("run_scheduled_task: task %s is disabled, skipping", task_id)
         return
 
