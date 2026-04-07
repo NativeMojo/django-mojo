@@ -257,10 +257,13 @@ TOOLS = [
                     "items": {
                         "type": "object",
                         "properties": {
-                            "field": {"type": "string"},
-                            "operator": {"type": "string", "enum": ["eq", "ne", "gt", "lt", "gte", "lte", "contains", "startswith"]},
-                            "value": {"type": "string"},
+                            "name": {"type": "string", "description": "Short description of this condition"},
+                            "field": {"type": "string", "description": "Event field or metadata key to match"},
+                            "comparator": {"type": "string", "enum": ["==", ">", ">=", "<", "<=", "contains", "regex"], "description": "Comparison operator"},
+                            "value": {"type": "string", "description": "Value to compare against"},
+                            "value_type": {"type": "string", "enum": ["int", "float", "str", "bool"], "description": "Type to convert value to. Default: str", "default": "str"},
                         },
+                        "required": ["field", "comparator", "value"],
                     },
                 },
                 "min_count": {"type": "integer", "description": "Minimum events before triggering (threshold)"},
