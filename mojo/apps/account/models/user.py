@@ -285,8 +285,19 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             now = dates.utcnow()
             User.objects.filter(pk=self.pk).update(last_activity=now)
             self.last_activity = now
+            self._check_location_drift()
         if METRICS_TRACK_USER_ACTIVITY:
             metrics.record(f"user_activity:{self.pk}", category="user", min_granularity="minutes")
+
+    def _check_location_drift(self):
+        """Track new IP locations between logins without updating the device record."""
+        req = self.active_request
+        if not req:
+            return
+        from mojo.apps.account.models.device import UserDeviceLocation
+        device = UserDevice.objects.filter(user=self).order_by('-last_seen').first()
+        if device and device.last_ip != req.ip:
+            UserDeviceLocation.track(device, req.ip)
 
     def track(self):
         self.touch()

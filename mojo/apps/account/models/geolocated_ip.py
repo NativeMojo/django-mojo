@@ -10,7 +10,7 @@ import ujson
 
 GEOLOCATION_ALLOW_SUBNET_LOOKUP = settings.get_static('GEOLOCATION_ALLOW_SUBNET_LOOKUP', False, kind='bool')
 GEOLOCATION_CACHE_DURATION_DAYS = settings.get_static('GEOLOCATION_CACHE_DURATION_DAYS', 90, kind='int')
-GEOLOCATION_LAST_SEEN_AGE = settings.get_static('GEOLOCATION_DEVICE_LOCATION_AGE', 300)
+GEOLOCATION_LAST_SEEN_AGE = settings.get_static('GEOLOCATION_IP_LAST_SEEN_AGE', 300)
 
 
 class GeoLocatedIP(models.Model, MojoModel):
