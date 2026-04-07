@@ -2,14 +2,20 @@
 REST endpoints for the admin assistant.
 
 Endpoints:
-    POST /api/assistant              — Send message, get LLM response
-    GET  /api/assistant/conversation — List user's conversations
-    GET  /api/assistant/conversation/<pk> — Conversation detail (use ?graph=detail for messages)
+    POST /api/assistant                    — Send message, get LLM response
+    POST /api/assistant/context            — Create conversation with model context
+    GET  /api/assistant/conversation       — List user's conversations
+    GET  /api/assistant/conversation/<pk>  — Conversation detail (?graph=detail for messages)
     DELETE /api/assistant/conversation/<pk> — Delete conversation (owner or admin)
+    GET  /api/assistant/skill              — List user's skills
+    GET  /api/assistant/skill/<pk>         — Skill detail (?graph=detail for steps/triggers)
+    DELETE /api/assistant/skill/<pk>       — Delete skill (owner or admin)
+    GET  /api/assistant/memory             — Read memories (?tier=global|user|group)
+    DELETE /api/assistant/memory           — Delete a memory entry (tier + key required)
 """
 from mojo import decorators as md
 from mojo.helpers.response import JsonResponse
-from mojo.apps.assistant.models import Conversation, Message
+from mojo.apps.assistant.models import Conversation, Message, Skill
 
 
 @md.POST('/api/assistant')
@@ -111,3 +117,39 @@ def on_assistant_context(request):
 @md.uses_model_security(Conversation)
 def on_conversation(request, pk=None):
     return Conversation.on_rest_request(request, pk)
+
+
+@md.URL('skill')
+@md.URL('skill/<int:pk>')
+@md.uses_model_security(Skill)
+def on_skill(request, pk=None):
+    return Skill.on_rest_request(request, pk)
+
+
+@md.GET('/api/assistant/memory')
+@md.requires_perms('view_admin', 'assistant')
+def on_memory_read(request):
+    """Read assistant memories for the current user, grouped by tier."""
+    from mojo.apps.assistant.services.memory import read_memories
+
+    tier = request.DATA.get("tier")
+    group = getattr(request, "group", None)
+    result = read_memories(request.user, group=group, tier=tier)
+    return {"status": True, "data": result}
+
+
+@md.DELETE('/api/assistant/memory')
+@md.requires_perms('view_admin', 'assistant')
+@md.requires_params('tier', 'key')
+def on_memory_delete(request):
+    """Delete a single memory entry."""
+    from mojo.apps.assistant.services.memory import delete_memory
+
+    tier = request.DATA.tier
+    key = request.DATA.key
+    group = getattr(request, "group", None)
+    result = delete_memory(request.user, tier=tier, key=key, group=group)
+
+    if "error" in result:
+        return JsonResponse({"status": False, "error": result["error"]}, status=400)
+    return {"status": True, "data": result}
