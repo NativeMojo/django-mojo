@@ -195,8 +195,23 @@ API keys are long-lived JWTs restricted to specific IPs.
 
 ```python
 user.touch()   # updates last_activity (rate-limited by USER_LAST_ACTIVITY_FREQ)
-user.track()   # touch() + track device from active request
+user.track()   # touch() + create/update UserDevice from active request
 ```
+
+`touch()` is called automatically by `validate_jwt()` on every authenticated request — it updates `last_activity` via a targeted `UPDATE` (no full-model save, no row lock).
+
+`track()` is **login-only**. Call it once at login time (via `jwt_login`) to create or update the `UserDevice` record for the current browser. Do not call it on every request — it performs a SELECT + conditional UPDATE on `account_userdevice` and will cause lock contention at scale.
+
+```python
+# Correct — called once at login
+return jwt_login(request, user)   # jwt_login calls user.track() internally
+
+# Incorrect — per-request device tracking causes lock contention
+def on_my_endpoint(request):
+    request.user.track()   # do NOT do this
+```
+
+**Device identity (`muid`) is write-once.** When a `UserDevice` record already has a `muid`, it is never overwritten by a new `_muid` cookie value. This preserves device identity across cookie resets.
 
 ## Group Membership
 

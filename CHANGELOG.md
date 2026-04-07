@@ -1,5 +1,15 @@
 ## v1.1.0 - (current)
 
+## v1.1.16 - April 07, 2026
+
+Critical performance fix: eliminated per-request Aurora lock contention on `account_userdevice`.
+
+### Fixed
+- **`UserDevice.track()` is now login-only** — `validate_jwt()` no longer calls `user.track()` on every authenticated request. It calls `user.touch()` instead, which issues a single targeted `UPDATE` on `account_user` with no device table involvement.
+- **`muid` comparison bug** — the muid field on `UserDevice` was being updated whenever the incoming `_muid` cookie differed from the stored value (including on every request for devices that already had a muid). The condition now only sets `muid` when the device has no muid yet, making device identity write-once and stable across cookie resets.
+- **`GeoLocatedIP.last_seen` staleness guard** — `GeoLocatedIP.get_or_create()` no longer writes `last_seen` on every call. It checks `GEOLOCATION_DEVICE_LOCATION_AGE` (default 300 seconds) and skips the update if the record was seen recently, eliminating redundant row writes on high-traffic deployments.
+- **`user.touch()` uses `UPDATE` not `atomic_save()`** — `last_activity` updates are now issued as `User.objects.filter(pk=...).update(last_activity=now)`, avoiding a full-model save and the associated row lock.
+
 ## v1.1.15 - April 07, 2026
 
 Assistant learned skills — reusable multi-step procedures.
