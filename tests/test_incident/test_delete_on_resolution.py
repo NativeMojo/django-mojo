@@ -252,6 +252,46 @@ def test_llm_create_rule_with_delete_on_resolution(opts):
 
 
 @th.django_unit_test()
+def test_llm_create_rule_with_conditions(opts):
+    """_tool_create_rule creates child Rule objects with correct field names."""
+    from mojo.apps.incident.models import RuleSet, Rule
+    from mojo.apps.incident.handlers.llm_agent import _tool_create_rule
+
+    RuleSet.objects.filter(name="Test LLM Rule With Conditions").delete()
+
+    result = _tool_create_rule({
+        "name": "Test LLM Rule With Conditions",
+        "category": f"{CATEGORY}_llm_cond",
+        "handler": "ignore://",
+        "reasoning": "Test rule with child conditions",
+        "rules": [
+            {"name": "Level check", "field": "level", "comparator": ">=", "value": "8", "value_type": "int"},
+            {"field": "source_ip", "comparator": "==", "value": "10.0.0.1"},
+        ],
+    })
+
+    assert result.get("ok") is True, f"create_rule should succeed, got {result}"
+    ruleset = RuleSet.objects.get(pk=result["ruleset_id"])
+    rules = list(ruleset.rules.order_by("index"))
+    assert len(rules) == 2, f"Should create 2 child rules, got {len(rules)}"
+
+    assert rules[0].parent_id == ruleset.pk, f"Rule parent should be ruleset, got {rules[0].parent_id}"
+    assert rules[0].field_name == "level", f"First rule field_name should be 'level', got {rules[0].field_name}"
+    assert rules[0].comparator == ">=", f"First rule comparator should be '>=', got {rules[0].comparator}"
+    assert rules[0].value == "8", f"First rule value should be '8', got {rules[0].value}"
+    assert rules[0].value_type == "int", f"First rule value_type should be 'int', got {rules[0].value_type}"
+    assert rules[0].index == 0, f"First rule index should be 0, got {rules[0].index}"
+    assert rules[0].name == "Level check", f"First rule name should be 'Level check', got {rules[0].name}"
+
+    assert rules[1].field_name == "source_ip", f"Second rule field_name should be 'source_ip', got {rules[1].field_name}"
+    assert rules[1].comparator == "==", f"Second rule comparator should be '==', got {rules[1].comparator}"
+    assert rules[1].index == 1, f"Second rule index should be 1, got {rules[1].index}"
+    assert rules[1].value_type == "str", f"Default value_type should be 'str', got {rules[1].value_type}"
+
+    ruleset.delete()
+
+
+@th.django_unit_test()
 def test_cascade_deletes_events_and_history(opts):
     """When incident is deleted, its events and history are cascade-deleted."""
     from mojo.apps.incident.models import Incident, Event, IncidentHistory

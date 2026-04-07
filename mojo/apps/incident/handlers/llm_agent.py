@@ -658,12 +658,15 @@ def _tool_create_rule(params):
         metadata=metadata,
     )
 
-    for rule_data in (params.get("rules") or []):
+    for i, rule_data in enumerate(params.get("rules") or []):
         Rule.objects.create(
-            rule_set=ruleset,
+            parent=ruleset,
+            name=rule_data.get("name", ""),
+            index=i,
             field_name=rule_data.get("field", ""),
-            operator=rule_data.get("operator", "eq"),
+            comparator=rule_data.get("comparator", "=="),
             value=rule_data.get("value", ""),
+            value_type=rule_data.get("value_type", "str"),
         )
 
     # Create a ticket for human approval
