@@ -451,6 +451,49 @@ def _tool_retry_job(params, user):
     return result
 
 
+def _validate_job_func(func):
+    """
+    Validate that a job function path points to an installed Django app
+    and is importable. Returns an error string or None if valid.
+    """
+    from django.apps import apps
+    from mojo.apps.jobs.job_engine import load_job_function
+
+    # Block internal framework functions that have dedicated tools
+    if func == "mojo.apps.jobs.asyncjobs.run_scheduled_task":
+        return "Use run_scheduled_task_now to trigger scheduled tasks"
+
+    # Must have at least module.function
+    if "." not in func:
+        return f"Invalid function path: {func}"
+
+    # Check that the function's root package is an installed Django app
+    module_path = func.rsplit(".", 1)[0]
+    installed = {cfg.name for cfg in apps.get_app_configs()}
+
+    # Walk up the module path to find a matching installed app
+    # e.g. "mojo.apps.incident.asyncjobs" checks:
+    #   mojo.apps.incident.asyncjobs, mojo.apps.incident, mojo.apps, mojo
+    parts = module_path.split(".")
+    found = False
+    for i in range(len(parts), 0, -1):
+        candidate = ".".join(parts[:i])
+        if candidate in installed:
+            found = True
+            break
+
+    if not found:
+        return f"Function must be inside an installed Django app, got: {func}"
+
+    # Validate it actually imports
+    try:
+        load_job_function(func)
+    except (ImportError, Exception) as e:
+        return f"Invalid job function: {e}"
+
+    return None
+
+
 @tool(
     name="run_job",
     domain="jobs",
@@ -484,22 +527,10 @@ def _tool_run_job(params, user):
         return {"ok": False, "error": "Provide either func (fresh run) or job_id (rerun from template)"}
 
     if func:
-        # Security: restrict func to allowed module prefixes (blocks stdlib, builtins, etc.)
-        from mojo.helpers.settings import settings
-        allowed = settings.get("JOBS_FUNC_ALLOWED_PREFIXES", ["mojo."])
-        if not any(func.startswith(prefix) for prefix in allowed):
-            return {"ok": False, "error": f"Function must start with one of: {', '.join(allowed)}"}
-
-        # Block internal framework functions that have dedicated tools
-        if func == "mojo.apps.jobs.asyncjobs.run_scheduled_task":
-            return {"ok": False, "error": "Use run_scheduled_task_now to trigger scheduled tasks"}
-
-        # Validate the function is importable
-        from mojo.apps.jobs.job_engine import load_job_function
-        try:
-            load_job_function(func)
-        except (ImportError, Exception) as e:
-            return {"ok": False, "error": f"Invalid job function: {e}"}
+        # Security: func must be inside an installed Django app
+        err = _validate_job_func(func)
+        if err:
+            return {"ok": False, "error": err}
 
         from mojo.apps import jobs
         try:

@@ -442,9 +442,6 @@ class JobActionsService:
                 params['expires_in'] = overrides['expires_in']
             elif 'expires_at' in overrides:
                 params['expires_at'] = overrides['expires_at']
-            elif job.expires_at:
-                params['expires_at'] = job.expires_at
-
             # Publish the new job
             new_job_id = publish(**params)
 

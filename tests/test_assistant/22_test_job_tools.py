@@ -124,7 +124,8 @@ def test_run_job_invalid_func(opts):
         "func": "mojo.apps.totally_bogus.nonexistent_function",
     }, opts.admin)
     assert result["ok"] is False, f"Should fail for invalid func: {result}"
-    assert "Invalid job function" in result["error"], f"Error should mention invalid function: {result['error']}"
+    assert "installed" in result["error"].lower(), \
+        f"Error should mention installed app requirement: {result['error']}"
 
 
 # ---------------------------------------------------------------------------
@@ -163,8 +164,8 @@ def test_run_job_blocked_stdlib_func(opts):
     """Security: stdlib functions like os.system must be rejected."""
     result = _run_job({"func": "os.system"}, opts.admin)
     assert result["ok"] is False, f"Should block stdlib func: {result}"
-    assert "must start with" in result["error"].lower(), \
-        f"Error should mention allowed prefixes: {result['error']}"
+    assert "installed" in result["error"].lower(), \
+        f"Error should mention installed app requirement: {result['error']}"
 
 
 @th.django_unit_test()
