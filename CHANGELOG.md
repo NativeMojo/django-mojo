@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## v1.1.14 - April 07, 2026
+
+new AI skills, imrpoved tools, and much more see changelog
+
+
 ## v1.1.16 - April 07, 2026
 
 Critical performance fix: eliminated per-request Aurora lock contention on `account_userdevice`.
