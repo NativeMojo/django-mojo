@@ -1,7 +1,7 @@
 # LLM Agent create_rule uses wrong field names for Rule model
 
 **Type**: bug
-**Status**: open
+**Status**: resolved
 **Date**: 2026-04-07
 **Severity**: high
 
@@ -63,3 +63,22 @@ Rule.objects.create(
 ```
 
 (with `for i, rule_data in enumerate(...)` to get the index)
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-04-07
+
+### What Was Built
+Fixed three wrong/missing field names in `_tool_create_rule` and added missing fields (`name`, `index`, `value_type`).
+
+### Files Changed
+- `mojo/apps/incident/handlers/llm_agent.py` — Fixed `rule_set`→`parent`, `operator`→`comparator`, added `name`, `index`, `value_type`
+- `tests/test_incident/test_delete_on_resolution.py` — Added `test_llm_create_rule_with_conditions`
+
+### Tests
+- `tests/test_incident/test_delete_on_resolution.py` — Tests rule creation with child conditions, verifies all field names
+- Run: `bin/run_tests -t test_incident.test_delete_on_resolution`
+
+### Follow-up
+- None
