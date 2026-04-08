@@ -26,6 +26,7 @@ class Conversation(models.Model, MojoModel):
         GRAPHS = {
             "default": {
                 "fields": ["id", "title", "created", "modified"],
+                "graphs": {"user": "basic"},
             },
             "detail": {
                 "fields": ["id", "title", "created", "modified", "messages"],

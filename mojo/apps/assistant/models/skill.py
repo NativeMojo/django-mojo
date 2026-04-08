@@ -47,6 +47,7 @@ class Skill(models.Model, MojoModel):
                     "id", "tier", "name", "description", "auto_execute",
                     "is_active", "created", "modified",
                 ],
+                "graphs": {"user": "basic"}
             },
             "detail": {
                 "fields": [

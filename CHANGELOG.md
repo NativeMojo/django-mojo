@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## v1.1.17 - April 08, 2026
+
+missing expose user from conversation
+
+
 ## v1.1.16 - April 07, 2026
 
 
