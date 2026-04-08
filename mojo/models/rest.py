@@ -1292,6 +1292,10 @@ class MojoModel:
         )
 
     def log(self, log="", kind="model_log", level="info", **kwargs):
+        if "gid" not in kwargs:
+            group_id = getattr(self, "group_id", None)
+            if group_id:
+                kwargs["gid"] = group_id
         return self.class_logit(ACTIVE_REQUEST.get(), log, kind, self.id, level, **kwargs)
 
     def model_logit(self, request, log, kind="model_log", level="info", **kwargs):

@@ -16,6 +16,7 @@ class Log(dm.Model, MojoModel):
     ip = dm.CharField(max_length=32, default=None, null=True)
     duid = dm.TextField(default=None, null=True)
     uid = dm.IntegerField(default=0)
+    gid = dm.IntegerField(default=0)
     username = dm.TextField(default=None, null=True)
     user_agent = dm.TextField(default=None, null=True)
     log = dm.TextField(default=None, null=True)
@@ -31,6 +32,8 @@ class Log(dm.Model, MojoModel):
             dm.Index(fields=['path']),
             dm.Index(fields=['ip']),
             dm.Index(fields=['uid']),
+            dm.Index(fields=['gid']),
+            dm.Index(fields=['gid', 'kind']),
             dm.Index(fields=['model_name', 'model_id']),  # composite index for fields searched together
             dm.Index(fields=['created', 'kind']),  # composite index for common search/order combination
         ]
@@ -45,13 +48,13 @@ class Log(dm.Model, MojoModel):
             "basic": {
                 "fields": [
                     "id", "created", "level", "kind", "method", "path",
-                    "ip", "uid", "username", "model_name", "model_id"
+                    "ip", "uid", "gid", "username", "model_name", "model_id"
                 ],
             },
             "default": {
                 "fields": [
                     "id", "created", "level", "kind", "method", "path", "payload",
-                    "ip", "duid", "uid", "username", "user_agent", "log",
+                    "ip", "duid", "uid", "gid", "username", "user_agent", "log",
                     "model_name", "model_id"
                 ],
             },
@@ -106,6 +109,12 @@ class Log(dm.Model, MojoModel):
         method = kwargs.get("method", method)
         duid = kwargs.get("duid", duid)
 
+        gid = kwargs.get("gid", 0)
+        if not gid and request:
+            group = getattr(request, "group", None)
+            if group is not None:
+                gid = getattr(group, "id", 0) or 0
+
         return cls.objects.create(
             level=level,
             kind=kind,
@@ -114,6 +123,7 @@ class Log(dm.Model, MojoModel):
             payload=kwargs.get("payload", None),
             ip=ip_address,
             uid=uid,
+            gid=gid,
             duid=duid,
             username=username,
             log=log,
