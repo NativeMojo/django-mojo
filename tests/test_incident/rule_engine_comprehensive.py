@@ -1530,6 +1530,49 @@ def test_metadata_preservation(opts):
     assert incident.metadata["action"] == "failed_login", "Custom metadata should be preserved"
 
 
+@th.django_unit_test()
+def test_rule_strips_metadata_prefix(opts):
+    """Rules with field_name prefixed with 'metadata.' should still match.
+
+    The LLM agent (or humans) may create rules with field_name='metadata.http_url'
+    instead of just 'http_url'. The rule engine should handle this gracefully.
+    """
+    from mojo.apps.incident.models import RuleSet, Rule
+    from objict import objict
+
+    RuleSet.objects.filter(category="metadata_prefix_test").delete()
+
+    ruleset = RuleSet.objects.create(
+        name="Metadata Prefix Test",
+        category="metadata_prefix_test",
+        priority=1,
+        match_by=0,
+    )
+
+    # Rule with metadata. prefix — should still match
+    Rule.objects.create(
+        parent=ruleset,
+        field_name="metadata.http_url",
+        comparator="contains",
+        value=".php",
+        value_type="str",
+    )
+
+    # Event with bare key in metadata
+    event = objict()
+    event.metadata = {"http_url": "/admin/login.php"}
+    assert ruleset.check_rules(event) is True, (
+        "Rule with 'metadata.http_url' should match event metadata key 'http_url'"
+    )
+
+    # Non-matching event
+    event2 = objict()
+    event2.metadata = {"http_url": "/api/health"}
+    assert ruleset.check_rules(event2) is False, (
+        "Rule should not match when value doesn't contain '.php'"
+    )
+
+
 if __name__ == "__main__":
     # Run these tests with: testit tests/test_incident/rule_engine_comprehensive.py
     pass

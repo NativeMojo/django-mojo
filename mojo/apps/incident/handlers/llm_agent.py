@@ -658,15 +658,19 @@ def _tool_create_rule(params):
         handler=params["handler"],
         bundle_by=params.get("bundle_by", 4),
         bundle_minutes=params.get("bundle_minutes", 30),
+        priority=params.get("priority", 50),
         metadata=metadata,
     )
 
     for i, rule_data in enumerate(params.get("rules") or []):
+        field_name = rule_data.get("field", "")
+        if field_name.startswith("metadata."):
+            field_name = field_name[9:]
         Rule.objects.create(
             parent=ruleset,
             name=rule_data.get("name", ""),
             index=i,
-            field_name=rule_data.get("field", ""),
+            field_name=field_name,
             comparator=rule_data.get("comparator", "=="),
             value=rule_data.get("value", ""),
             value_type=rule_data.get("value_type", "str"),

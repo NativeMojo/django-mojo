@@ -722,9 +722,12 @@ class Rule(models.Model, MojoModel):
         Returns:
             bool: True if the event field matches the criteria, False otherwise.
         """
-        field_value = event.metadata.get(self.field_name, None)
+        field_name = self.field_name
+        if field_name.startswith("metadata."):
+            field_name = field_name[9:]
+        field_value = event.metadata.get(field_name, None)
         if field_value is None:
-            field_value = getattr(event, self.field_name, None)
+            field_value = getattr(event, field_name, None)
         if field_value is None:
             return False
 
