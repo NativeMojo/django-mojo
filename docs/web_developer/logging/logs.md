@@ -35,6 +35,7 @@ GET /api/logs?level=error&sort=-created&size=50
       "kind": "order:payment:failed",
       "log": "Payment declined for order 42",
       "uid": 5,
+      "gid": 12,
       "username": "alice@example.com",
       "model_name": "orders.Order",
       "model_id": 42,
@@ -54,6 +55,7 @@ GET /api/logs?level=error&sort=-created&size=50
 | `kind` | `?kind=order:payment:failed` | Exact kind match |
 | `kind__startswith` | Filter by kind prefix | Prefix match |
 | `uid` | `?uid=42` | Filter by user ID |
+| `gid` | `?gid=12` | Filter by group ID |
 | `model_name` | `?model_name=orders.Order` | Filter by model |
 | `model_id` | `?model_id=42` | Filter by record ID |
 | `search` | `?search=payment` | Full text in log message |
@@ -68,5 +70,5 @@ GET /api/logs?dr_start=2024-01-01&dr_end=2024-01-31&level=error
 
 | Graph | Fields |
 |---|---|
-| `basic` | id, created, level, kind, log, uid, username |
+| `basic` | id, created, level, kind, log, uid, gid, username |
 | `default` | basic + model_name, model_id, path, method, ip |

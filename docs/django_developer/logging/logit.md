@@ -15,11 +15,22 @@ The `logit` app provides a database-backed structured logging model that complem
 | `ip` | CharField | Client IP from active request |
 | `duid` | CharField | Device unique ID |
 | `uid` | IntegerField | User ID |
+| `gid` | IntegerField | Group ID (auto-populated from model or request context) |
 | `username` | CharField | Username |
 | `user_agent` | TextField | User agent string |
 | `log` | TextField | Human-readable message |
 | `model_name` | CharField | `app_label.ModelName` |
 | `model_id` | IntegerField | PK of the related model instance |
+
+## Group ID Auto-Population
+
+`gid` is automatically resolved — you rarely need to pass it manually:
+
+- When calling `self.log()` on a model instance, `gid` is set from `self.group_id` if the model has a `group` FK.
+- When calling `Log.logit(request, ...)` directly, `gid` is set from `request.group.id` if the active request has a group context.
+- You can always override by passing `gid=<value>` explicitly.
+
+Both `gid` and `(gid, kind)` are indexed for efficient per-group queries.
 
 ## Writing Logs
 
@@ -76,6 +87,10 @@ logs = Log.objects.filter(kind__startswith="order:")
 # By user
 logs = Log.objects.filter(uid=42, level="error")
 
+# By group (uses composite index)
+logs = Log.objects.filter(gid=7)
+logs = Log.objects.filter(gid=7, kind__startswith="order:")
+
 # Recent errors
 from mojo.helpers import dates
 logs = Log.objects.filter(
@@ -90,8 +105,8 @@ logs = Log.objects.filter(
 class RestMeta:
     VIEW_PERMS = ["view_logs", "manage_users"]
     GRAPHS = {
-        "basic": {"fields": ["id", "created", "level", "kind", "log", "uid", "username"]},
-        "default": {"fields": ["id", "created", "level", "kind", "log", "uid", "username",
+        "basic": {"fields": ["id", "created", "level", "kind", "log", "uid", "gid", "username"]},
+        "default": {"fields": ["id", "created", "level", "kind", "log", "uid", "gid", "username",
                                "model_name", "model_id", "path", "method", "ip"]},
     }
 ```

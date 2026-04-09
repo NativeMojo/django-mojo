@@ -344,7 +344,7 @@ The rule engine evaluates each event against configured RuleSets. It is the mech
 A RuleSet defines:
 
 - **`category`** — Which event category it applies to (matched by `scope` first, then `category`)
-- **`priority`** — Evaluation order (lower = higher priority). First matching RuleSet wins.
+- **`priority`** — Evaluation order (lower = higher priority). First matching RuleSet wins. Hand-crafted defaults use 1–50; the LLM agent defaults new rulesets to priority 50, leaving room below for rules that must match first.
 - **`match_by`** — `ALL` (all rules must match) or `ANY` (any rule can match)
 - **`bundle_by`** — How to group events into one incident (see bundling below)
 - **`bundle_minutes`** — Time window for bundling. `0` = disabled, `None` = unlimited, `>0` = window in minutes
@@ -359,13 +359,15 @@ Each Rule checks one field in `event.metadata` against a target value:
 
 | Field | Description |
 |---|---|
-| `field_name` | The metadata key to inspect |
+| `field_name` | The metadata key to inspect. Use bare names like `http_url`, `level`, `risk_score` — do not prefix with `metadata.` |
 | `comparator` | `==`, `>`, `>=`, `<`, `<=`, `contains`, `regex` |
 | `value` | The target value |
 | `value_type` | `str`, `int`, `float`, `bool` |
 | `index` | Evaluation order within the RuleSet |
 
 Rules operate on `event.metadata`. Since `report_event` syncs all standard fields (level, category, source_ip, etc.) into metadata automatically, they are all available for rule matching alongside any custom fields you pass in.
+
+`Rule.check_rule()` looks up the field by first checking `event.metadata[field_name]`, then falling back to `getattr(event, field_name)`. If `field_name` was stored with a `metadata.` prefix (e.g., `"metadata.http_url"`), the prefix is stripped automatically before lookup — so rules created that way still match correctly.
 
 ### Bundling
 
