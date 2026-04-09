@@ -723,8 +723,12 @@ class Rule(models.Model, MojoModel):
             bool: True if the event field matches the criteria, False otherwise.
         """
         field_name = self.field_name
+        if not field_name:
+            return False
         if field_name.startswith("metadata."):
             field_name = field_name[9:]
+        if field_name.startswith("_"):
+            return False
         field_value = event.metadata.get(field_name, None)
         if field_value is None:
             field_value = getattr(event, field_name, None)
