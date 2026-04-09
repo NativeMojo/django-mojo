@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## v1.1.18 - April 09, 2026
+
+test are passing new release with new ai and better group logging
+
+
 ### Fixed
 - **Markdown renderer not rendering tables** — Mistune plugins (table, url, task_lists, footnotes, etc.) were never being loaded because `_discover_plugins()` was commented out and `plugins=[]` was hardcoded. Tables and other plugin-dependent syntax now render correctly.
 
