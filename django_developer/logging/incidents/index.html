@@ -5568,7 +5568,7 @@
 <p>A RuleSet defines:</p>
 <ul>
 <li><strong><code>category</code></strong> — Which event category it applies to (matched by <code>scope</code> first, then <code>category</code>)</li>
-<li><strong><code>priority</code></strong> — Evaluation order (lower = higher priority). First matching RuleSet wins.</li>
+<li><strong><code>priority</code></strong> — Evaluation order (lower = higher priority). First matching RuleSet wins. Hand-crafted defaults use 1–50; the LLM agent defaults new rulesets to priority 50, leaving room below for rules that must match first.</li>
 <li><strong><code>match_by</code></strong> — <code>ALL</code> (all rules must match) or <code>ANY</code> (any rule can match)</li>
 <li><strong><code>bundle_by</code></strong> — How to group events into one incident (see bundling below)</li>
 <li><strong><code>bundle_minutes</code></strong> — Time window for bundling. <code>0</code> = disabled, <code>None</code> = unlimited, <code>&gt;0</code> = window in minutes</li>
@@ -5589,7 +5589,7 @@
 <tbody>
 <tr>
 <td><code>field_name</code></td>
-<td>The metadata key to inspect</td>
+<td>The metadata key to inspect. Use bare names like <code>http_url</code>, <code>level</code>, <code>risk_score</code> — do not prefix with <code>metadata.</code></td>
 </tr>
 <tr>
 <td><code>comparator</code></td>
@@ -5610,6 +5610,7 @@
 </tbody>
 </table>
 <p>Rules operate on <code>event.metadata</code>. Since <code>report_event</code> syncs all standard fields (level, category, source_ip, etc.) into metadata automatically, they are all available for rule matching alongside any custom fields you pass in.</p>
+<p><code>Rule.check_rule()</code> looks up the field by first checking <code>event.metadata[field_name]</code>, then falling back to <code>getattr(event, field_name)</code>. If <code>field_name</code> was stored with a <code>metadata.</code> prefix (e.g., <code>"metadata.http_url"</code>), the prefix is stripped automatically before lookup — so rules created that way still match correctly.</p>
 <h3 id="bundling">Bundling<a class="headerlink" href="#bundling" title="Permanent link">&para;</a></h3>
 <p>Bundling controls how related events are collapsed into a single incident rather than creating a new one for each event.</p>
 <table>
