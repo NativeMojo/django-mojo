@@ -1,8 +1,14 @@
 ## v1.1.0 - (current)
 
+### Fixed
+- **Markdown renderer not rendering tables** — Mistune plugins (table, url, task_lists, footnotes, etc.) were never being loaded because `_discover_plugins()` was commented out and `plugins=[]` was hardcoded. Tables and other plugin-dependent syntax now render correctly.
+
 ## v1.1.17 - April 08, 2026
 
 missing expose user from conversation
+
+### Added
+- **`Log.gid` field** — `logit.Log` now records a `gid` (group ID) on every log entry. Auto-populated from `self.group_id` when using `MojoModel.log()`, or from `request.group.id` when using `Log.logit()` directly. Can be overridden by passing `gid=<value>` explicitly. Indexed on `(gid)` and `(gid, kind)` for efficient per-group audit trail queries. `gid` is included in both `basic` and `default` REST graphs.
 
 
 ## v1.1.16 - April 07, 2026

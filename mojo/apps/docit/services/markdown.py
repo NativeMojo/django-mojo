@@ -30,26 +30,26 @@ class MarkdownRenderer:
             self._initialize_renderer()
 
     def _initialize_renderer(self):
-        # plugins = self._discover_plugins()
+        plugins = self._discover_plugins()
         MarkdownRenderer._renderer = mistune.create_markdown(
             renderer=HighlightRenderer(escape=False),
             escape=False,
             hard_wrap=True,
-            plugins=[]
+            plugins=plugins
         )
         MarkdownRenderer._safe_renderer = mistune.create_markdown(
             renderer=HighlightRenderer(escape=True),
             escape=True,
             hard_wrap=True,
-            plugins=[]
+            plugins=plugins
         )
 
     def _discover_plugins(self):
-        # from mojo.apps.docit.markdown_plugins import syntax_highlight
-        plugins = [
-            'table', 'url', 'task_list',
-            'footnotes', 'abbr', 'mark', 'math']
-        return plugins
+        return [
+            'table', 'url', 'task_lists',
+            'footnotes', 'abbr', 'mark', 'math',
+            'strikethrough', 'spoiler',
+        ]
 
     def render(self, markdown_text):
         return self._renderer(markdown_text)

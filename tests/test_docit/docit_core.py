@@ -614,6 +614,31 @@ def test_markdown_rendering_service(opts):
 
 
 @th.django_unit_test()
+def test_markdown_table_rendering(opts):
+    """Test that markdown tables render as HTML tables, not plain text."""
+    from mojo.apps.docit.services.markdown import MarkdownRenderer
+
+    renderer = MarkdownRenderer()
+    # Use the exact markdown from bug report — table embedded in a larger document
+    markdown_text = (
+        "## Summary\n\n"
+        "| Area | Status |\n"
+        "|------|--------|\n"
+        "| OSSEC rules | \u2705 Healthy \u2014 block+notify rules active |\n"
+        "| File integrity (s1) | \u26a0\ufe0f Needs review \u2014 3rd repeated change |\n"
+        "| Device exceptions | \u26a0\ufe0f 3 merchants with uncaught errors |\n"
+        "| Blocked IPs | \u2705 Clean \u2014 1 permanent block, no new ones |\n"
+        "| Rule #33 (LetsEncrypt) | \u26a0\ufe0f Disabled \u2014 check if intentional |\n\n"
+        "Want me to dig deeper into the file integrity incident?"
+    )
+    html = renderer.render_safe(markdown_text)
+    assert "<table>" in html, f"Tables must render as <table> elements, not plain text. Got:\n{html}"
+    assert "<th>Area</th>" in html, f"Should have table header cells. Got:\n{html}"
+    assert "<td>" in html, f"Should have table data cells. Got:\n{html}"
+    assert "| Area |" not in html, f"Raw pipe syntax must not appear in output. Got:\n{html}"
+
+
+@th.django_unit_test()
 def test_page_html_property(opts):
     """Test the html property on the Page model."""
     from mojo.apps.docit.models import Page
@@ -650,6 +675,25 @@ def test_render_endpoint_valid_markdown(opts):
     assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
     assert "<h1>Hello World</h1>" in resp.response.data.html, \
         f"Expected rendered h1 tag. Got: {resp.response.data.html}"
+
+
+@th.django_unit_test()
+def test_render_endpoint_table(opts):
+    """Test that the render endpoint produces proper HTML tables."""
+    assert opts.client.is_authenticated, "Should still be authenticated"
+
+    markdown = (
+        "## Summary\n\n"
+        "| Area | Status |\n"
+        "|------|--------|\n"
+        "| OSSEC rules | Healthy |\n"
+        "| File integrity | Needs review |\n"
+    )
+    resp = opts.client.post("/api/docit/render", json={"markdown": markdown})
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
+    html = resp.response.data.html
+    assert "<table>" in html, f"Render endpoint must produce <table> elements. Got: {html}"
+    assert "| Area |" not in html, f"Raw pipe syntax must not leak through. Got: {html}"
 
 
 @th.django_unit_test()
