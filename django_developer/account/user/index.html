@@ -1272,6 +1272,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#superuser-only-fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Superuser-Only Fields
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#protected-field-setters" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1338,10 +1349,49 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#password-reset-flow" class="md-nav__link">
+  <a href="#password-change" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Password Reset Flow
+        Password Change
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Password Change">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#self-service" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Self-service
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#admin-password-reset-for-another-user" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Admin password reset (for another user)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#password-reset-flow-forgot-password" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Password Reset Flow (Forgot Password)
       
     </span>
   </a>
@@ -4108,6 +4158,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#superuser-only-fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Superuser-Only Fields
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#protected-field-setters" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4174,10 +4235,49 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#password-reset-flow" class="md-nav__link">
+  <a href="#password-change" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Password Reset Flow
+        Password Change
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Password Change">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#self-service" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Self-service
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#admin-password-reset-for-another-user" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Admin password reset (for another user)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#password-reset-flow-forgot-password" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Password Reset Flow (Forgot Password)
       
     </span>
   </a>
@@ -4331,6 +4431,11 @@
 <td>Phone number verified flag</td>
 </tr>
 <tr>
+<td><code>requires_mfa</code></td>
+<td>BooleanField</td>
+<td>MFA required at login (superuser-only writable)</td>
+</tr>
+<tr>
 <td><code>is_dob_verified</code></td>
 <td>BooleanField</td>
 <td>DOB verified flag (system-only, never REST-writable)</td>
@@ -4385,9 +4490,10 @@
 <a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>    <span class="n">GRAPHS</span> <span class="o">=</span> <span class="p">{</span>
 <a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>        <span class="s2">&quot;basic&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;fields&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;id&quot;</span><span class="p">,</span> <span class="s2">&quot;display_name&quot;</span><span class="p">,</span> <span class="s2">&quot;username&quot;</span><span class="p">,</span> <span class="s2">&quot;last_activity&quot;</span><span class="p">,</span> <span class="s2">&quot;is_active&quot;</span><span class="p">]},</span>
 <a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>        <span class="s2">&quot;default&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;fields&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;id&quot;</span><span class="p">,</span> <span class="s2">&quot;display_name&quot;</span><span class="p">,</span> <span class="s2">&quot;username&quot;</span><span class="p">,</span> <span class="s2">&quot;email&quot;</span><span class="p">,</span> <span class="s2">&quot;phone_number&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>                               <span class="s2">&quot;permissions&quot;</span><span class="p">,</span> <span class="s2">&quot;metadata&quot;</span><span class="p">,</span> <span class="s2">&quot;is_active&quot;</span><span class="p">]},</span>
-<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>        <span class="s2">&quot;full&quot;</span><span class="p">:</span> <span class="p">{}</span>
-<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>    <span class="p">}</span>
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>                               <span class="s2">&quot;permissions&quot;</span><span class="p">,</span> <span class="s2">&quot;metadata&quot;</span><span class="p">,</span> <span class="s2">&quot;is_active&quot;</span><span class="p">,</span> <span class="s2">&quot;requires_mfa&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>                               <span class="s2">&quot;has_passkey&quot;</span><span class="p">]},</span>
+<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>        <span class="s2">&quot;full&quot;</span><span class="p">:</span> <span class="p">{}</span>
+<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a>    <span class="p">}</span>
 </code></pre></div>
 <h2 id="name-helpers">Name Helpers<a class="headerlink" href="#name-helpers" title="Permanent link">&para;</a></h2>
 <h3 id="full_name-property"><code>full_name</code> property<a class="headerlink" href="#full_name-property" title="Permanent link">&para;</a></h3>
@@ -4439,6 +4545,13 @@
 <a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>    <span class="n">PROTECTED_JSON_PERMS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;manage_users&quot;</span><span class="p">]</span>
 </code></pre></div>
 <hr />
+<h2 id="superuser-only-fields">Superuser-Only Fields<a class="headerlink" href="#superuser-only-fields" title="Permanent link">&para;</a></h2>
+<p>These fields can only be written via REST by a superuser:</p>
+<ul>
+<li><code>is_email_verified</code>, <code>is_phone_verified</code>, <code>is_dob_verified</code></li>
+<li><code>requires_mfa</code> — controls whether the user must complete MFA at login</li>
+</ul>
+<p>These fields are readable in the default graph but write-protected.</p>
 <h2 id="protected-field-setters">Protected Field Setters<a class="headerlink" href="#protected-field-setters" title="Permanent link">&para;</a></h2>
 <p>The REST framework calls <code>set_&lt;field&gt;()</code> before saving if the method exists. These setters enforce permission checks:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># Only a superuser can grant superuser or staff status</span>
@@ -4499,7 +4612,20 @@
 <a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="n">groups</span> <span class="o">=</span> <span class="n">user</span><span class="o">.</span><span class="n">get_groups</span><span class="p">(</span><span class="n">include_children</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>  <span class="c1"># direct memberships only</span>
 <a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="n">groups_with_perm</span> <span class="o">=</span> <span class="n">user</span><span class="o">.</span><span class="n">get_groups_with_permission</span><span class="p">([</span><span class="s2">&quot;manage_users&quot;</span><span class="p">])</span>
 </code></pre></div>
-<h2 id="password-reset-flow">Password Reset Flow<a class="headerlink" href="#password-reset-flow" title="Permanent link">&para;</a></h2>
+<h2 id="password-change">Password Change<a class="headerlink" href="#password-change" title="Permanent link">&para;</a></h2>
+<h3 id="self-service">Self-service<a class="headerlink" href="#self-service" title="Permanent link">&para;</a></h3>
+<p>Users change their own password by sending <code>new_password</code> and <code>current_password</code> to their own record:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="n">POST</span> <span class="o">/</span><span class="n">api</span><span class="o">/</span><span class="n">user</span><span class="o">/&lt;</span><span class="n">own_id</span><span class="o">&gt;</span>
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="p">{</span><span class="s2">&quot;new_password&quot;</span><span class="p">:</span> <span class="s2">&quot;NewPass##123&quot;</span><span class="p">,</span> <span class="s2">&quot;current_password&quot;</span><span class="p">:</span> <span class="s2">&quot;OldPass##456&quot;</span><span class="p">}</span>
+</code></pre></div>
+<p><code>current_password</code> is required for self-service changes.</p>
+<h3 id="admin-password-reset-for-another-user">Admin password reset (for another user)<a class="headerlink" href="#admin-password-reset-for-another-user" title="Permanent link">&para;</a></h3>
+<p>Admins with <code>manage_users</code> can set any user's password without knowing the current one:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="n">POST</span> <span class="o">/</span><span class="n">api</span><span class="o">/</span><span class="n">user</span><span class="o">/&lt;</span><span class="n">target_id</span><span class="o">&gt;</span>
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="p">{</span><span class="s2">&quot;new_password&quot;</span><span class="p">:</span> <span class="s2">&quot;NewPass##123&quot;</span><span class="p">}</span>
+</code></pre></div>
+<p>No <code>current_password</code> needed. The <code>can_change_password()</code> method allows this for superusers and users with <code>manage_users</code>. Password strength validation still applies.</p>
+<h2 id="password-reset-flow-forgot-password">Password Reset Flow (Forgot Password)<a class="headerlink" href="#password-reset-flow-forgot-password" title="Permanent link">&para;</a></h2>
 <ol>
 <li>Call <code>POST /api/auth/forgot</code> with <code>email</code> and <code>method=code</code> or <code>method=link</code></li>
 <li>For <code>method=code</code>: a 6-digit code is stored in secrets and emailed</li>
@@ -4507,16 +4633,16 @@
 <li>Reset via <code>POST /api/auth/password/reset/code</code> or <code>POST /api/auth/password/reset/token</code></li>
 </ol>
 <h2 id="email-verification-flow">Email Verification Flow<a class="headerlink" href="#email-verification-flow" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>POST /api/auth/verify/email/send     → sends email_verify template to user&#39;s address
-<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>GET  /api/auth/verify/email/confirm  → public, token in query string (click-through link)
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>POST /api/auth/verify/email/send     → sends email_verify template to user&#39;s address
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>GET  /api/auth/verify/email/confirm  → public, token in query string (click-through link)
 </code></pre></div>
 <p><code>is_email_verified</code> is set to <code>True</code> on confirm. Both endpoints require the user to be authenticated except the confirm link which is public so it works directly from an email client.</p>
 <h3 id="auto-verify-via-invite">Auto-Verify via Invite<a class="headerlink" href="#auto-verify-via-invite" title="Permanent link">&para;</a></h3>
 <p>When a user accepts an invite link (<code>POST /api/auth/password/reset/token</code>) and <code>last_login is None</code> (i.e. they have never logged in — this is their first access), <code>is_email_verified</code> is set automatically. The act of receiving and clicking the invite link is sufficient proof of email ownership.</p>
 <p>Magic login (<code>POST /api/auth/magic/login</code>) also auto-verifies email on use, since the magic link itself proves inbox access.</p>
 <h2 id="phone-verification-flow">Phone Verification Flow<a class="headerlink" href="#phone-verification-flow" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>POST /api/auth/verify/phone/send     → sends 6-digit SMS code via phonehub
-<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>POST /api/auth/verify/phone/confirm  → user submits code, sets is_phone_verified=True
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>POST /api/auth/verify/phone/send     → sends 6-digit SMS code via phonehub
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>POST /api/auth/verify/phone/confirm  → user submits code, sets is_phone_verified=True
 </code></pre></div>
 <p>The phone number is normalized via <code>phonehub.normalize()</code> before the SMS is sent. An invalid or un-normalizable number returns a <code>ValueException</code> before any Twilio call is made.</p>
 <p>Code TTL is configurable via <code>PHONE_VERIFY_CODE_TTL</code> (default 600 seconds). Codes are single-use and consumed on successful verification.</p>

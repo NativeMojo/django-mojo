@@ -2945,6 +2945,28 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#user-mfa-status" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        User MFA Status
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#admin-password-reset" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Admin Password Reset
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#example-permission-aware-frontend" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4110,6 +4132,28 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#user-mfa-status" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        User MFA Status
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#admin-password-reset" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Admin Password Reset
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#example-permission-aware-frontend" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4517,26 +4561,50 @@
 <h3 id="listing-with-search">Listing with search<a class="headerlink" href="#listing-with-search" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="err">GET /api/settings?search=WEBAPP&amp;sort=key</span>
 </code></pre></div>
+<h2 id="user-mfa-status">User MFA Status<a class="headerlink" href="#user-mfa-status" title="Permanent link">&para;</a></h2>
+<p>The user default graph includes <code>requires_mfa</code> and <code>has_passkey</code>, so admin portals can display MFA status per user (and per group member, since member lists nest the user object):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="p">{</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">  </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">42</span><span class="p">,</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">  </span><span class="nt">&quot;username&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;alice@example.com&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="w">  </span><span class="nt">&quot;requires_mfa&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="w">  </span><span class="nt">&quot;has_passkey&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="p">}</span>
+</code></pre></div>
+<ul>
+<li><code>requires_mfa</code> — whether this user must complete MFA at login (superuser-only writable)</li>
+<li><code>has_passkey</code> — whether this user has at least one registered passkey</li>
+</ul>
+<p>To enable MFA for a user (superuser only):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>POST /api/user/&lt;id&gt;
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>{&quot;requires_mfa&quot;: true}
+</code></pre></div>
+<h2 id="admin-password-reset">Admin Password Reset<a class="headerlink" href="#admin-password-reset" title="Permanent link">&para;</a></h2>
+<p>Admins with <code>manage_users</code> can reset any user's password without knowing the current one:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>POST /api/user/&lt;target_id&gt;
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>{&quot;new_password&quot;: &quot;NewPass##123&quot;}
+</code></pre></div>
+<p>No forgot-password email is sent — the password is changed immediately. Password strength validation still applies.</p>
+<hr />
 <h2 id="example-permission-aware-frontend">Example: Permission-Aware Frontend<a class="headerlink" href="#example-permission-aware-frontend" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="kd">const</span><span class="w"> </span><span class="nx">headers</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">Authorization</span><span class="o">:</span><span class="w"> </span><span class="sb">`Bearer </span><span class="si">${</span><span class="nx">token</span><span class="si">}</span><span class="sb">`</span><span class="w"> </span><span class="p">};</span>
-<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>
-<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="c1">// Fetch current user to check their permissions</span>
-<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="kd">const</span><span class="w"> </span><span class="nx">me</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">fetch</span><span class="p">(</span><span class="s1">&#39;/api/user/me&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">headers</span><span class="w"> </span><span class="p">}).</span><span class="nx">then</span><span class="p">(</span><span class="nx">r</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">json</span><span class="p">());</span>
-<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="kd">const</span><span class="w"> </span><span class="nx">perms</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">me</span><span class="p">.</span><span class="nx">data</span><span class="p">.</span><span class="nx">permissions</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="p">{};</span>
-<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>
-<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="c1">// Show/hide admin sections based on category permissions</span>
-<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">perms</span><span class="p">.</span><span class="nx">users</span><span class="p">)</span><span class="w">    </span><span class="nx">showSection</span><span class="p">(</span><span class="s1">&#39;user-admin&#39;</span><span class="p">);</span>
-<a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">perms</span><span class="p">.</span><span class="nx">groups</span><span class="p">)</span><span class="w">   </span><span class="nx">showSection</span><span class="p">(</span><span class="s1">&#39;group-admin&#39;</span><span class="p">);</span>
-<a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">perms</span><span class="p">.</span><span class="nx">security</span><span class="p">)</span><span class="w"> </span><span class="nx">showSection</span><span class="p">(</span><span class="s1">&#39;security-dashboard&#39;</span><span class="p">);</span>
-<a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">perms</span><span class="p">.</span><span class="nx">comms</span><span class="p">)</span><span class="w">    </span><span class="nx">showSection</span><span class="p">(</span><span class="s1">&#39;communications&#39;</span><span class="p">);</span>
-<a id="__codelineno-11-12" name="__codelineno-11-12" href="#__codelineno-11-12"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">perms</span><span class="p">.</span><span class="nx">jobs</span><span class="p">)</span><span class="w">     </span><span class="nx">showSection</span><span class="p">(</span><span class="s1">&#39;job-system&#39;</span><span class="p">);</span>
-<a id="__codelineno-11-13" name="__codelineno-11-13" href="#__codelineno-11-13"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">perms</span><span class="p">.</span><span class="nx">metrics</span><span class="p">)</span><span class="w">  </span><span class="nx">showSection</span><span class="p">(</span><span class="s1">&#39;metrics-dashboard&#39;</span><span class="p">);</span>
-<a id="__codelineno-11-14" name="__codelineno-11-14" href="#__codelineno-11-14"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">perms</span><span class="p">.</span><span class="nx">files</span><span class="p">)</span><span class="w">    </span><span class="nx">showSection</span><span class="p">(</span><span class="s1">&#39;file-manager&#39;</span><span class="p">);</span>
-<a id="__codelineno-11-15" name="__codelineno-11-15" href="#__codelineno-11-15"></a>
-<a id="__codelineno-11-16" name="__codelineno-11-16" href="#__codelineno-11-16"></a><span class="c1">// API calls — the server enforces permissions regardless of UI state</span>
-<a id="__codelineno-11-17" name="__codelineno-11-17" href="#__codelineno-11-17"></a><span class="k">await</span><span class="w"> </span><span class="nx">fetch</span><span class="p">(</span><span class="s1">&#39;/api/user?size=20&amp;sort=-created&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">headers</span><span class="w"> </span><span class="p">});</span>
-<a id="__codelineno-11-18" name="__codelineno-11-18" href="#__codelineno-11-18"></a><span class="k">await</span><span class="w"> </span><span class="nx">fetch</span><span class="p">(</span><span class="s1">&#39;/api/group?size=50&amp;sort=name&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">headers</span><span class="w"> </span><span class="p">});</span>
-<a id="__codelineno-11-19" name="__codelineno-11-19" href="#__codelineno-11-19"></a><span class="k">await</span><span class="w"> </span><span class="nx">fetch</span><span class="p">(</span><span class="s1">&#39;/api/settings?size=100&amp;sort=key&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">headers</span><span class="w"> </span><span class="p">});</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="kd">const</span><span class="w"> </span><span class="nx">headers</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">Authorization</span><span class="o">:</span><span class="w"> </span><span class="sb">`Bearer </span><span class="si">${</span><span class="nx">token</span><span class="si">}</span><span class="sb">`</span><span class="w"> </span><span class="p">};</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="c1">// Fetch current user to check their permissions</span>
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="kd">const</span><span class="w"> </span><span class="nx">me</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">fetch</span><span class="p">(</span><span class="s1">&#39;/api/user/me&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">headers</span><span class="w"> </span><span class="p">}).</span><span class="nx">then</span><span class="p">(</span><span class="nx">r</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">json</span><span class="p">());</span>
+<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="kd">const</span><span class="w"> </span><span class="nx">perms</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">me</span><span class="p">.</span><span class="nx">data</span><span class="p">.</span><span class="nx">permissions</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="p">{};</span>
+<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a>
+<a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a><span class="c1">// Show/hide admin sections based on category permissions</span>
+<a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">perms</span><span class="p">.</span><span class="nx">users</span><span class="p">)</span><span class="w">    </span><span class="nx">showSection</span><span class="p">(</span><span class="s1">&#39;user-admin&#39;</span><span class="p">);</span>
+<a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">perms</span><span class="p">.</span><span class="nx">groups</span><span class="p">)</span><span class="w">   </span><span class="nx">showSection</span><span class="p">(</span><span class="s1">&#39;group-admin&#39;</span><span class="p">);</span>
+<a id="__codelineno-14-10" name="__codelineno-14-10" href="#__codelineno-14-10"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">perms</span><span class="p">.</span><span class="nx">security</span><span class="p">)</span><span class="w"> </span><span class="nx">showSection</span><span class="p">(</span><span class="s1">&#39;security-dashboard&#39;</span><span class="p">);</span>
+<a id="__codelineno-14-11" name="__codelineno-14-11" href="#__codelineno-14-11"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">perms</span><span class="p">.</span><span class="nx">comms</span><span class="p">)</span><span class="w">    </span><span class="nx">showSection</span><span class="p">(</span><span class="s1">&#39;communications&#39;</span><span class="p">);</span>
+<a id="__codelineno-14-12" name="__codelineno-14-12" href="#__codelineno-14-12"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">perms</span><span class="p">.</span><span class="nx">jobs</span><span class="p">)</span><span class="w">     </span><span class="nx">showSection</span><span class="p">(</span><span class="s1">&#39;job-system&#39;</span><span class="p">);</span>
+<a id="__codelineno-14-13" name="__codelineno-14-13" href="#__codelineno-14-13"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">perms</span><span class="p">.</span><span class="nx">metrics</span><span class="p">)</span><span class="w">  </span><span class="nx">showSection</span><span class="p">(</span><span class="s1">&#39;metrics-dashboard&#39;</span><span class="p">);</span>
+<a id="__codelineno-14-14" name="__codelineno-14-14" href="#__codelineno-14-14"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">perms</span><span class="p">.</span><span class="nx">files</span><span class="p">)</span><span class="w">    </span><span class="nx">showSection</span><span class="p">(</span><span class="s1">&#39;file-manager&#39;</span><span class="p">);</span>
+<a id="__codelineno-14-15" name="__codelineno-14-15" href="#__codelineno-14-15"></a>
+<a id="__codelineno-14-16" name="__codelineno-14-16" href="#__codelineno-14-16"></a><span class="c1">// API calls — the server enforces permissions regardless of UI state</span>
+<a id="__codelineno-14-17" name="__codelineno-14-17" href="#__codelineno-14-17"></a><span class="k">await</span><span class="w"> </span><span class="nx">fetch</span><span class="p">(</span><span class="s1">&#39;/api/user?size=20&amp;sort=-created&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">headers</span><span class="w"> </span><span class="p">});</span>
+<a id="__codelineno-14-18" name="__codelineno-14-18" href="#__codelineno-14-18"></a><span class="k">await</span><span class="w"> </span><span class="nx">fetch</span><span class="p">(</span><span class="s1">&#39;/api/group?size=50&amp;sort=name&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">headers</span><span class="w"> </span><span class="p">});</span>
+<a id="__codelineno-14-19" name="__codelineno-14-19" href="#__codelineno-14-19"></a><span class="k">await</span><span class="w"> </span><span class="nx">fetch</span><span class="p">(</span><span class="s1">&#39;/api/settings?size=100&amp;sort=key&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">headers</span><span class="w"> </span><span class="p">});</span>
 </code></pre></div>
 <h2 id="error-handling-contract">Error Handling Contract<a class="headerlink" href="#error-handling-contract" title="Permanent link">&para;</a></h2>
 <p>Use <code>status</code>, <code>code</code>, and <code>error</code> from the response envelope:</p>
