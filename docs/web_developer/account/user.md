@@ -41,6 +41,8 @@ curl -H "Authorization: Bearer <token>" https://api.example.com/api/user/me
     "phone_number": "+15551234567",
     "is_email_verified": true,
     "is_phone_verified": false,
+    "requires_mfa": false,
+    "has_passkey": false,
     "permissions": {"manage_reports": true},
     "metadata": {},
     "is_active": true,
@@ -83,6 +85,9 @@ Users can update their own record (owner permission). Admins with `manage_users`
 |---|---|
 | `is_superuser` | Superusers only |
 | `is_staff` | Superusers only |
+| `requires_mfa` | Superusers only |
+| `is_email_verified` | Superusers only |
+| `is_phone_verified` | Superusers only |
 | `permissions` | Users with `manage_users` (or matching `USER_PERMS_PROTECTION` rules) |
 
 Attempts to set these fields without the required permission return `403`.
@@ -129,7 +134,7 @@ GET /api/user?search=alice&is_active=true&sort=-created&start=0&size=20
 | Graph | Fields |
 |---|---|
 | `basic` | id, display_name, username, last_activity, is_active, avatar |
-| `default` | id, display_name, username, email, phone_number, permissions, metadata, is_active, avatar, org |
+| `default` | id, display_name, username, email, phone_number, permissions, metadata, is_active, requires_mfa, has_passkey, avatar, org |
 | `full` | All fields |
 
 ```
@@ -256,6 +261,31 @@ curl -X POST \
 
 - Codes are 6 digits, single-use, and expire after 10 minutes (configurable via `PHONE_VERIFY_CODE_TTL`).
 - On success, `is_phone_verified` is set to `true` on the user's account.
+
+---
+
+## Admin Password Reset (for another user)
+
+Admins with `manage_users` can reset any user's password without knowing the current one:
+
+**POST** `/api/user/<target_id>`
+
+```json
+{
+  "new_password": "NewPass##123"
+}
+```
+
+No `current_password` field needed. Password strength validation still applies.
+
+For self-service password change, the user must include `current_password`:
+
+```json
+{
+  "new_password": "NewPass##123",
+  "current_password": "OldPass##456"
+}
+```
 
 ---
 

@@ -159,7 +159,9 @@ Returns the profile of the authenticated user.
     "email": "alice@example.com",
     "display_name": "Alice",
     "permissions": {"manage_reports": true},
-    "is_active": true
+    "is_active": true,
+    "requires_mfa": false,
+    "has_passkey": false
   }
 }
 ```
@@ -220,6 +222,24 @@ A reset link with a signed token is emailed.
 ```
 
 Returns a JWT on success.
+
+## Admin Password Reset (for another user)
+
+Admins with `manage_users` can set any user's password directly:
+
+**POST** `/api/user/<target_id>`
+
+```json
+{
+  "new_password": "NewPass##123"
+}
+```
+
+No `current_password` needed. No forgot-password email is sent — the password is changed immediately. Password strength validation still applies.
+
+See also [User API — Admin Password Reset](user.md#admin-password-reset-for-another-user).
+
+---
 
 ## Login with MFA Enabled
 

@@ -22,6 +22,7 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
 | `is_superuser` | BooleanField | Superuser flag |
 | `is_email_verified` | BooleanField | Email address verified flag |
 | `is_phone_verified` | BooleanField | Phone number verified flag |
+| `requires_mfa` | BooleanField | MFA required at login (superuser-only writable) |
 | `is_dob_verified` | BooleanField | DOB verified flag (system-only, never REST-writable) |
 | `dob` | DateField (nullable) | Date of birth — PII, cleared by `pii_anonymize()` |
 | `permissions` | JSONField | Key-based permission dict |
@@ -46,7 +47,8 @@ class RestMeta:
     GRAPHS = {
         "basic": {"fields": ["id", "display_name", "username", "last_activity", "is_active"]},
         "default": {"fields": ["id", "display_name", "username", "email", "phone_number",
-                               "permissions", "metadata", "is_active"]},
+                               "permissions", "metadata", "is_active", "requires_mfa",
+                               "has_passkey"]},
         "full": {}
     }
 ```
@@ -130,6 +132,15 @@ class RestMeta:
 ```
 
 ---
+
+## Superuser-Only Fields
+
+These fields can only be written via REST by a superuser:
+
+- `is_email_verified`, `is_phone_verified`, `is_dob_verified`
+- `requires_mfa` — controls whether the user must complete MFA at login
+
+These fields are readable in the default graph but write-protected.
 
 ## Protected Field Setters
 
@@ -221,7 +232,31 @@ groups = user.get_groups(include_children=False)  # direct memberships only
 groups_with_perm = user.get_groups_with_permission(["manage_users"])
 ```
 
-## Password Reset Flow
+## Password Change
+
+### Self-service
+
+Users change their own password by sending `new_password` and `current_password` to their own record:
+
+```python
+POST /api/user/<own_id>
+{"new_password": "NewPass##123", "current_password": "OldPass##456"}
+```
+
+`current_password` is required for self-service changes.
+
+### Admin password reset (for another user)
+
+Admins with `manage_users` can set any user's password without knowing the current one:
+
+```python
+POST /api/user/<target_id>
+{"new_password": "NewPass##123"}
+```
+
+No `current_password` needed. The `can_change_password()` method allows this for superusers and users with `manage_users`. Password strength validation still applies.
+
+## Password Reset Flow (Forgot Password)
 
 1. Call `POST /api/auth/forgot` with `email` and `method=code` or `method=link`
 2. For `method=code`: a 6-digit code is stored in secrets and emailed

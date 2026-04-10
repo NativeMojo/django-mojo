@@ -201,6 +201,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
                     "is_phone_verified",
                     "is_dob_verified",
                     "dob",
+                    "requires_mfa",
                     "has_passkey"
                 ],
                 "graphs": {

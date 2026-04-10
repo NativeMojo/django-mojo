@@ -221,6 +221,42 @@ When `is_secret=true`, API responses include masked `display_value` (`"******"`)
 GET /api/settings?search=WEBAPP&sort=key
 ```
 
+## User MFA Status
+
+The user default graph includes `requires_mfa` and `has_passkey`, so admin portals can display MFA status per user (and per group member, since member lists nest the user object):
+
+```json
+{
+  "id": 42,
+  "username": "alice@example.com",
+  "requires_mfa": true,
+  "has_passkey": true
+}
+```
+
+- `requires_mfa` — whether this user must complete MFA at login (superuser-only writable)
+- `has_passkey` — whether this user has at least one registered passkey
+
+To enable MFA for a user (superuser only):
+
+```
+POST /api/user/<id>
+{"requires_mfa": true}
+```
+
+## Admin Password Reset
+
+Admins with `manage_users` can reset any user's password without knowing the current one:
+
+```
+POST /api/user/<target_id>
+{"new_password": "NewPass##123"}
+```
+
+No forgot-password email is sent — the password is changed immediately. Password strength validation still applies.
+
+---
+
 ## Example: Permission-Aware Frontend
 
 ```js
