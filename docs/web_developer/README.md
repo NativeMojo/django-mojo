@@ -21,7 +21,9 @@ Companion track for framework developers: [docs/django_developer/README.md](../d
 | [email/](email/README.md) | Email templates, mailboxes, sent messages |
 | [jobs/](jobs/README.md) | Job status and management |
 | [metrics/](metrics/README.md) | Time-series metrics |
-| [realtime/](realtime/README.md) | WebSocket protocol |
+| [chat/](chat/README.md) | Real-time chat rooms, messages, WebSocket protocol |
+| [realtime/](realtime/README.md) | WebSocket pub/sub protocol |
+| [security/](security/README.md) | Security operations — incidents, events, firewall, bouncer, logs |
 | [phonehub/](phonehub/README.md) | Phone and device management |
 | [shortlink/](shortlink/README.md) | Short URL creation, redirect behavior, OG previews |
 | [aws/cloudwatch](aws/cloudwatch.md) | Live AWS infrastructure metrics (EC2, RDS, ElastiCache) |
