@@ -68,6 +68,8 @@
         // reference _mat and _matConfig even if MojoAuth fails to load.
         var $ = function (id) { return document.getElementById(id); };
 
+        var GROUP_UUID = "{{ group_uuid|default:'' }}";
+
         window._matConfig = {
             apiBase: API_BASE,
             redirectTo: redirectTo,
@@ -76,6 +78,7 @@
             enableGoogle: ENABLE_GOOGLE,
             enableApple: ENABLE_APPLE,
             enablePasskeys: ENABLE_PASSKEYS,
+            groupUuid: GROUP_UUID,
             params: params,
         };
 

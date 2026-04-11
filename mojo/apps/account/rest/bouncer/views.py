@@ -27,6 +27,40 @@ from mojo.apps.account.rest.bouncer.assess import (
 logger = logit.get_logger('bouncer', 'bouncer.log')
 
 DISABLE_LOGIN = settings.get_static('DISABLE_LOGIN', False)
+
+_DEFAULT_CHALLENGE_LOGO = 'https://REDACTED.com/logo.svg'
+_DEFAULT_CHALLENGE_BRAND = 'MOJO VERIFY'
+
+
+def _resolve_group(request):
+    """Detect the operator group from the request for white-label branding.
+
+    Detection order:
+    1. Hostname → Group.auth_domain lookup (trusted signal, cached in Redis)
+    2. ?group=<uuid> query param (fallback for platforms without custom domains)
+
+    Returns Group instance or None.
+    """
+    from mojo.apps.account.models import Group
+
+    # 1. Hostname lookup
+    try:
+        hostname = request.get_host().split(':')[0]  # strip port
+        group = Group.resolve_by_auth_domain(hostname)
+        if group:
+            return group
+    except Exception:
+        pass
+
+    # 2. Query param fallback
+    group_uuid = request.GET.get('group', '')
+    if group_uuid:
+        try:
+            return Group.objects.filter(uuid=group_uuid, is_active=True).first()
+        except Exception:
+            pass
+
+    return None
 _LOGIN_PATH = settings.get_static('BOUNCER_LOGIN_PATH', 'auth')
 # Absolute path (leading /) so it registers at the root, not under /api/
 _ABS_LOGIN_PATH = f'/{_LOGIN_PATH}'
@@ -52,6 +86,7 @@ def on_login_page(request):
         from django.http import Http404
         raise Http404("Page not found")
 
+    group = _resolve_group(request)
     ua = request.user_agent
     fingerprint_id = request.DATA.get('fp', '')
 
@@ -70,7 +105,7 @@ def on_login_page(request):
     if pass_cookie:
         cookie_muid = verify_pass_cookie(pass_cookie, request.ip)
         if cookie_muid:
-            return _serve_login(request)
+            return _serve_login(request, group=group)
 
     # 3. Server-side pre-screen (headers + geo)
     geo_ip = _geolocate(request.ip)
@@ -106,7 +141,7 @@ def on_login_page(request):
         challenge_tier = 2
     else:
         challenge_tier = 1
-    return _serve_challenge(request, challenge_tier, page_type='login')
+    return _serve_challenge(request, challenge_tier, page_type='login', group=group)
 
 
 # ---------------------------------------------------------------------------
@@ -129,6 +164,7 @@ def on_register_page(request):
         from django.http import Http404
         raise Http404("Page not found")
 
+    group = _resolve_group(request)
     ua = request.user_agent
     fingerprint_id = request.DATA.get('fp', '')
 
@@ -145,7 +181,7 @@ def on_register_page(request):
     if pass_cookie:
         cookie_muid = verify_pass_cookie(pass_cookie, request.ip)
         if cookie_muid:
-            return _serve_login(request, page_mode='register')
+            return _serve_login(request, page_mode='register', group=group)
 
     geo_ip = _geolocate(request.ip)
     server_signals = EnvironmentService.analyze_request(request, geo_ip)
@@ -172,41 +208,46 @@ def on_register_page(request):
         challenge_tier = 2
     else:
         challenge_tier = 1
-    return _serve_challenge(request, challenge_tier, page_type='registration')
+    return _serve_challenge(request, challenge_tier, page_type='registration', group=group)
 
 
-def _auth_context(request):
+def _auth_context(request, group=None):
     """Build the shared template context for auth pages from settings.
 
-    Uses settings.get() (DB-backed with file fallback) so all values are
-    configurable at runtime via the Setting model / admin portal.
+    When group is provided, settings resolve per-group with parent chain
+    fallback → global fallback. Single-tenant deployments (group=None)
+    behave identically to before.
     """
     login_path = settings.get_static('BOUNCER_LOGIN_PATH', 'auth')
     register_path = settings.get_static('BOUNCER_REGISTER_PATH', 'register')
+    group_uuid = group.uuid if group else ''
+    # Preserve ?group= param in auth/register URLs so branding survives navigation
+    group_qs = f'?group={group_uuid}' if group_uuid else ''
     return {
-        'api_base': settings.get('AUTH_API_BASE', ''),
-        'success_redirect': settings.get('AUTH_SUCCESS_REDIRECT', '/'),
-        'logo_url': settings.get('AUTH_LOGO_URL', 'https://REDACTED.s3.amazonaws.com/signatures/14e7aab75c2749cb846f7d57298691ac/mojo_logo_f97e2d0a.png'),
-        'favicon_url': settings.get('AUTH_FAVICON_URL', ''),
-        'brand_name': settings.get('AUTH_APP_TITLE', 'DJANGO MOJO'),
-        'hero_image_url': settings.get('AUTH_HERO_IMAGE_URL', 'https://REDACTED.s3.amazonaws.com/signatures/14e7aab75c2749cb846f7d57298691ac/purple_dunes_lake_2_bd730023.png'),
-        'hero_headline': settings.get('AUTH_HERO_HEADLINE', 'Welcome back'),
-        'hero_subheadline': settings.get('AUTH_HERO_SUBHEADLINE', 'Admin Portal'),
-        'back_to_website_url': settings.get('AUTH_BACK_TO_WEBSITE_URL', ''),
-        'enable_google': settings.get('AUTH_ENABLE_GOOGLE', False, kind='bool'),
-        'enable_apple': settings.get('AUTH_ENABLE_APPLE', False, kind='bool'),
-        'enable_passkeys': settings.get('AUTH_ENABLE_PASSKEYS', False, kind='bool'),
-        'auth_url': f'/{login_path}',
-        'register_url': f'/{register_path}',
-        'auth_layout': settings.get('AUTH_LAYOUT', 'card'),
-        'terms_url': settings.get('AUTH_TERMS_URL', ''),
-        'custom_css_url': settings.get('AUTH_CUSTOM_CSS_URL', ''),
-        'custom_css': settings.get('AUTH_CUSTOM_CSS', ''),
+        'api_base': settings.get('AUTH_API_BASE', '', group=group),
+        'success_redirect': settings.get('AUTH_SUCCESS_REDIRECT', '/', group=group),
+        'logo_url': settings.get('AUTH_LOGO_URL', 'https://REDACTED.s3.amazonaws.com/signatures/14e7aab75c2749cb846f7d57298691ac/mojo_logo_f97e2d0a.png', group=group),
+        'favicon_url': settings.get('AUTH_FAVICON_URL', '', group=group),
+        'brand_name': settings.get('AUTH_APP_TITLE', 'DJANGO MOJO', group=group),
+        'hero_image_url': settings.get('AUTH_HERO_IMAGE_URL', 'https://REDACTED.s3.amazonaws.com/signatures/14e7aab75c2749cb846f7d57298691ac/purple_dunes_lake_2_bd730023.png', group=group),
+        'hero_headline': settings.get('AUTH_HERO_HEADLINE', 'Welcome back', group=group),
+        'hero_subheadline': settings.get('AUTH_HERO_SUBHEADLINE', 'Admin Portal', group=group),
+        'back_to_website_url': settings.get('AUTH_BACK_TO_WEBSITE_URL', '', group=group),
+        'enable_google': settings.get('AUTH_ENABLE_GOOGLE', False, group=group, kind='bool'),
+        'enable_apple': settings.get('AUTH_ENABLE_APPLE', False, group=group, kind='bool'),
+        'enable_passkeys': settings.get('AUTH_ENABLE_PASSKEYS', False, group=group, kind='bool'),
+        'auth_url': f'/{login_path}{group_qs}',
+        'register_url': f'/{register_path}{group_qs}',
+        'auth_layout': settings.get('AUTH_LAYOUT', 'card', group=group),
+        'terms_url': settings.get('AUTH_TERMS_URL', '', group=group),
+        'custom_css_url': settings.get('AUTH_CUSTOM_CSS_URL', '', group=group),
+        'custom_css': settings.get('AUTH_CUSTOM_CSS', '', group=group),
+        'group_uuid': group_uuid,
     }
 
 
-def _serve_login(request, page_mode='login'):
-    ctx = _auth_context(request)
+def _serve_login(request, page_mode='login', group=None):
+    ctx = _auth_context(request, group=group)
     ctx['page_mode'] = page_mode
     if page_mode == 'register':
         ctx['page_title'] = 'Create Account'
@@ -217,7 +258,7 @@ def _serve_login(request, page_mode='login'):
     return render(request, 'account/login.html', ctx)
 
 
-def _serve_challenge(request, challenge_tier=1, page_type='login'):
+def _serve_challenge(request, challenge_tier=1, page_type='login', group=None):
     render_ctx = {
         'css_nonce': secrets.token_hex(6),
         'hp_field': secrets.token_hex(6),
@@ -230,12 +271,20 @@ def _serve_challenge(request, challenge_tier=1, page_type='login'):
         redirect_path = settings.get_static('BOUNCER_REGISTER_PATH', 'register')
     else:
         redirect_path = settings.get_static('BOUNCER_LOGIN_PATH', 'auth')
+    # Preserve group param through the challenge redirect
+    group_uuid = group.uuid if group else ''
+    group_qs = f'?group={group_uuid}' if group_uuid else ''
+    # Challenge page: REDACTED branding by default, opt-in override per group
+    logo_url = settings.get('BOUNCER_CHALLENGE_LOGO_URL', _DEFAULT_CHALLENGE_LOGO, group=group)
+    brand_name = settings.get('BOUNCER_CHALLENGE_BRAND', _DEFAULT_CHALLENGE_BRAND, group=group)
     return render(request, 'account/bouncer_challenge.html', {
         'render_ctx': render_ctx,
         'api_base': api_base,
-        'login_url': f'/{redirect_path}',
+        'login_url': f'/{redirect_path}{group_qs}',
         'page_type': page_type,
-        'logo_url': 'https://REDACTED.com/logo.svg',
+        'logo_url': logo_url,
+        'brand_name': brand_name,
+        'group_uuid': group_uuid,
     })
 
 

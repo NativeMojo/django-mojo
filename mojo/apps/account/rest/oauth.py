@@ -167,10 +167,16 @@ def on_oauth_begin(request, provider):
     origin = _get_origin(request)
     callback_uri = f"{origin}/api/auth/oauth/{provider}/callback"
 
-    state = svc.create_state(extra={
+    state_extra = {
         "redirect_uri": callback_uri,
         "frontend_uri": frontend_uri,
-    })
+    }
+    # Preserve group context through the OAuth round-trip for white-label branding
+    group_uuid = request.DATA.get("group_uuid", "") or request.GET.get("group", "")
+    if group_uuid:
+        state_extra["group_uuid"] = group_uuid
+
+    state = svc.create_state(extra=state_extra)
     auth_url = svc.get_auth_url(state=state, redirect_uri=callback_uri)
 
     return JsonResponse({
@@ -221,7 +227,13 @@ def on_oauth_callback(request, provider):
     if not frontend_uri:
         raise merrors.ValueException("No frontend_uri in OAuth state")
 
-    params = urlencode({"code": code, "state": state}, quote_via=quote)
+    redirect_params = {"code": code, "state": state}
+    # Preserve group context so branding survives the OAuth round-trip
+    group_uuid = state_data.get("group_uuid", "")
+    if group_uuid:
+        redirect_params["group"] = group_uuid
+
+    params = urlencode(redirect_params, quote_via=quote)
     return HttpResponseRedirect(f"{frontend_uri}?{params}")
 
 

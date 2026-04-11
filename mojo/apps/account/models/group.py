@@ -27,6 +27,10 @@ class Group(MojoSecrets, MojoModel):
     parent = models.ForeignKey("account.Group", null=True, related_name="groups",
         default=None, on_delete=models.CASCADE)
 
+    # Custom domain for white-label auth pages (e.g. auth.clubaxo.com)
+    auth_domain = models.CharField(max_length=255, null=True, default=None,
+        unique=True, db_index=True, blank=True)
+
     # JSON-based metadata field
     metadata = models.JSONField(default=dict, blank=True)
 
@@ -81,6 +85,7 @@ class Group(MojoSecrets, MojoModel):
                     'is_active',
                     'kind',
                     'parent',
+                    'auth_domain',
                     'metadata'
                 ],
                 "graphs": {
@@ -509,6 +514,71 @@ class Group(MojoSecrets, MojoModel):
     def on_rest_saved(self, changed_fields, created):
         if "is_active" in changed_fields:
             metrics.set_value("total_groups", Group.objects.filter(is_active=True).count(), account="global")
+        if "auth_domain" in changed_fields or "is_active" in changed_fields:
+            self._invalidate_auth_domain_cache(changed_fields)
+
+    # ------------------------------------------------------------------
+    # Auth domain cache (white-label auth pages)
+    # ------------------------------------------------------------------
+
+    AUTH_DOMAIN_CACHE_PREFIX = "auth_domain:"
+
+    def _invalidate_auth_domain_cache(self, changed_fields):
+        """Clear stale auth_domain→group_id cache entries on save."""
+        try:
+            from mojo.helpers.redis import get_connection
+            r = get_connection()
+            if not r:
+                return
+            # If auth_domain changed, clear the old hostname entry
+            if "auth_domain" in changed_fields:
+                # Try to find old value — tracker may not have it, so clear broadly
+                # by scanning for any cache entry pointing to this group
+                for key in r.scan_iter(f"{self.AUTH_DOMAIN_CACHE_PREFIX}*"):
+                    cached = r.get(key)
+                    if cached and int(cached) == self.pk:
+                        r.delete(key)
+            # Set the new entry if group is active and has auth_domain
+            if self.is_active and self.auth_domain:
+                r.set(f"{self.AUTH_DOMAIN_CACHE_PREFIX}{self.auth_domain}", self.pk, ex=86400)
+            elif self.auth_domain:
+                # Group deactivated — clear the cache entry
+                r.delete(f"{self.AUTH_DOMAIN_CACHE_PREFIX}{self.auth_domain}")
+        except Exception:
+            pass
+
+    @classmethod
+    def resolve_by_auth_domain(cls, hostname):
+        """Look up active group by auth_domain. Cached in Redis."""
+        if not hostname:
+            return None
+        try:
+            from mojo.helpers.redis import get_connection
+            r = get_connection()
+            if r:
+                cached = r.get(f"{cls.AUTH_DOMAIN_CACHE_PREFIX}{hostname}")
+                if cached:
+                    group_id = int(cached)
+                    return cls.objects.filter(pk=group_id, is_active=True).first()
+                # Check for negative cache (hostname not mapped)
+                if cached == b'0':
+                    return None
+        except Exception:
+            pass
+        # DB lookup
+        group = cls.objects.filter(auth_domain=hostname, is_active=True).first()
+        try:
+            from mojo.helpers.redis import get_connection
+            r = get_connection()
+            if r:
+                if group:
+                    r.set(f"{cls.AUTH_DOMAIN_CACHE_PREFIX}{hostname}", group.pk, ex=86400)
+                else:
+                    # Negative cache — avoid repeated DB misses for unknown hostnames
+                    r.set(f"{cls.AUTH_DOMAIN_CACHE_PREFIX}{hostname}", 0, ex=3600)
+        except Exception:
+            pass
+        return group
 
     @classmethod
     def on_rest_handle_list(cls, request):
