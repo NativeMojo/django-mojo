@@ -557,12 +557,11 @@ class Group(MojoSecrets, MojoModel):
             r = get_connection()
             if r:
                 cached = r.get(f"{cls.AUTH_DOMAIN_CACHE_PREFIX}{hostname}")
-                if cached:
+                if cached is not None:
+                    if cached == b'0':
+                        return None  # negative cache — hostname not mapped
                     group_id = int(cached)
                     return cls.objects.filter(pk=group_id, is_active=True).first()
-                # Check for negative cache (hostname not mapped)
-                if cached == b'0':
-                    return None
         except Exception:
             pass
         # DB lookup

@@ -68,7 +68,7 @@
         // reference _mat and _matConfig even if MojoAuth fails to load.
         var $ = function (id) { return document.getElementById(id); };
 
-        var GROUP_UUID = "{{ group_uuid|default:'' }}";
+        var GROUP_UUID = "{{ group_uuid|default:''|escapejs }}";
 
         window._matConfig = {
             apiBase: API_BASE,
