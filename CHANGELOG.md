@@ -2,6 +2,11 @@
 
 ## v1.1.19 - April 11, 2026
 
+new oauth brand support
+
+
+## v1.1.19 - April 11, 2026
+
 ### Added
 - **Per-group white-label auth pages** — `Group.auth_domain` field maps a custom hostname to a group. The bouncer resolves the group from the request hostname (Redis-cached) or `?group=<uuid>` query param and applies that group's `AUTH_*` settings (logo, brand, OAuth, success redirect) to the login and registration pages.
 - **`Group.resolve_by_auth_domain(hostname)`** — class method for hostname→group lookup with Redis caching (24h hits, 1h misses). Cache is invalidated automatically on `auth_domain` or `is_active` changes.
