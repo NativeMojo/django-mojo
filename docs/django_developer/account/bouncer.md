@@ -282,10 +282,92 @@ The Redis cache is also rebuilt by the scheduled `refresh_bouncer_sig_cache` job
 
 ---
 
+## Per-Group Branding (White-Label Auth)
+
+The bouncer supports white-label auth pages per group. When a request arrives
+on a custom auth domain — or includes a `?group=<uuid>` query param — the
+bouncer resolves the group and applies its scoped `AUTH_*` settings.
+
+### Group detection order
+
+1. **Hostname** — `Group.resolve_by_auth_domain(hostname)` looks up the active
+   group whose `auth_domain` matches the request host. Result is Redis-cached
+   (24h for hits, 1h for misses).
+2. **`?group=<uuid>` query param** — fallback for platforms that share a domain.
+   The group UUID is preserved through the challenge redirect and OAuth round-trip.
+
+### Configuring a white-label group
+
+```python
+from mojo.helpers import settings
+from mojo.apps.account.models import Group
+
+group = Group.objects.get(uuid='...')
+
+# Assign the custom auth hostname
+group.auth_domain = 'auth.clientbrand.com'
+group.save()
+
+# Set group-scoped auth settings
+settings.set('AUTH_APP_TITLE', 'Client Brand', group=group)
+settings.set('AUTH_LOGO_URL', 'https://cdn.client.com/logo.svg', group=group)
+settings.set('AUTH_SUCCESS_REDIRECT', '/client-dashboard/', group=group)
+settings.set('AUTH_ENABLE_GOOGLE', True, group=group)
+```
+
+All `AUTH_*` settings resolve per-group using the parent-chain fallback:
+group → parent group → global.
+
+### Challenge page branding
+
+The bouncer challenge page uses REDACTED branding by default. To override it
+for a specific group (opt-in only):
+
+```python
+settings.set('BOUNCER_CHALLENGE_LOGO_URL', 'https://cdn.client.com/logo.svg', group=group)
+settings.set('BOUNCER_CHALLENGE_BRAND', 'CLIENT BRAND', group=group)
+```
+
+`BOUNCER_CHALLENGE_LOGO_URL` and `BOUNCER_CHALLENGE_BRAND` only take effect
+when a group is resolved. Requests with no group always use REDACTED branding.
+
+### OAuth round-trip
+
+`group_uuid` is embedded in the OAuth state so branding survives the
+provider redirect. The callback reconstructs `?group=<uuid>` and appends it
+to the frontend redirect URI before handing back to the auth page.
+
+### Nginx setup for custom auth domains
+
+Each white-label domain needs its own nginx server block pointing at the same
+Django backend. Pass the real hostname so the bouncer can resolve the group:
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name auth.clientbrand.com;
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;          # must be the real hostname
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+Do not rewrite `Host` to your main domain — the bouncer reads `request.get_host()`
+to identify the group.
+
+See [group.md](group.md) for the full `auth_domain` field and `resolve_by_auth_domain()` reference.
+
+---
+
 ## Templates
 
 - `account/login.html` — full mojo-auth webapp. Override in your project's templates dir.
-- `account/bouncer_challenge.html` — REDACTED-branded challenge page (fixed branding).
+- `account/bouncer_challenge.html` — REDACTED-branded challenge page by default; override logo/brand via `BOUNCER_CHALLENGE_LOGO_URL` / `BOUNCER_CHALLENGE_BRAND` per group.
 - `account/bouncer_decoy.html` — honeypot login at `/login`, `/signin`.
 
 Static assets in `account/static/account/`:

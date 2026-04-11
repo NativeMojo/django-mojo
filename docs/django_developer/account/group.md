@@ -22,6 +22,65 @@ class Group(MojoSecrets, MojoModel):
 | `metadata` | JSONField | Arbitrary group metadata (includes `timezone`, `short_name`) |
 | `avatar` | FK → fileman.File | Group image |
 | `last_activity` | DateTimeField | Last group activity |
+| `auth_domain` | CharField (nullable, unique) | Custom hostname for white-label auth pages (e.g. `auth.yourproject.com`) |
+
+## White-Label Auth Domain
+
+`auth_domain` enables per-group white-label auth pages. When set, the bouncer
+resolves the group from the request hostname and applies that group's
+`AUTH_*` settings (logo, branding, OAuth state, success redirect, etc.).
+
+```python
+# Assign a white-label auth domain to a group
+group.auth_domain = 'auth.clientbrand.com'
+group.save()
+```
+
+The mapping is cached in Redis (`auth_domain:<hostname>` key, 24h TTL). The
+cache is automatically invalidated when `auth_domain` or `is_active` changes.
+
+### Resolving a group by hostname
+
+```python
+group = Group.resolve_by_auth_domain('auth.clientbrand.com')
+# Returns the active Group with that auth_domain, or None.
+# Result is Redis-cached (24h for hits, 1h for misses).
+```
+
+The bouncer calls this automatically on every page request — no setup beyond
+setting `auth_domain` is required.
+
+### Per-group AUTH_* settings
+
+All `AUTH_*` settings resolve per-group when a group is detected. Set them
+via the `Setting` model with the `group` argument:
+
+```python
+from mojo.helpers import settings
+from mojo.apps.account.models import Group
+
+group = Group.objects.get(uuid='...')
+
+settings.set('AUTH_APP_TITLE', 'Client Brand', group=group)
+settings.set('AUTH_LOGO_URL', 'https://cdn.client.com/logo.svg', group=group)
+settings.set('AUTH_SUCCESS_REDIRECT', '/client-dashboard/', group=group)
+settings.set('AUTH_ENABLE_GOOGLE', True, group=group)
+```
+
+Settings resolve with parent-chain fallback: group → parent group → global.
+
+### Challenge page branding (opt-in)
+
+By default, the bouncer challenge page always uses REDACTED branding. To
+override it for a specific group:
+
+```python
+settings.set('BOUNCER_CHALLENGE_LOGO_URL', 'https://cdn.client.com/logo.svg', group=group)
+settings.set('BOUNCER_CHALLENGE_BRAND', 'CLIENT BRAND', group=group)
+```
+
+These settings are intentionally not global — they only take effect when a
+group is detected. This preserves REDACTED branding for the default flow.
 
 ## RestMeta
 

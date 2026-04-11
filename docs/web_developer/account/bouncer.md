@@ -281,6 +281,36 @@ login attempt. Calling it multiple times per session is rate-limited.
 
 ---
 
+## Per-Group Branding (Custom Domain Deployments)
+
+When the platform hosts multiple groups on separate custom domains — or uses
+`?group=<uuid>` to identify a group on a shared domain — the bouncer
+automatically applies that group's branding and settings to the auth pages.
+
+### How group detection works
+
+1. **Custom auth domain** — if `auth.clientbrand.com` maps to a group, visiting
+   that hostname shows the group's logo, brand name, OAuth buttons, and success
+   redirect without any extra URL params.
+2. **`?group=<uuid>`** — for deployments where all groups share a domain, pass
+   the group UUID as a query param. The bouncer applies the group's settings.
+
+### OAuth round-trip
+
+The `group_uuid` is embedded in OAuth state so branding survives the Google/
+Apple redirect. After the provider callback, the page receives
+`?code=...&state=...&group=<uuid>`, which `mojo-auth.js` picks up automatically
+via `window._matConfig.groupUuid`.
+
+### Custom auth domain — client-side behavior
+
+When operating on a custom auth domain, no special client-side code is required.
+The server resolves the group from the hostname. The `?group=` param is
+preserved in all navigation links (login → register → back) so branding stays
+consistent across page transitions even when the hostname is shared.
+
+---
+
 ## Bouncer Token Error Codes
 
 When `BOUNCER_REQUIRE_TOKEN=True` and token validation fails:

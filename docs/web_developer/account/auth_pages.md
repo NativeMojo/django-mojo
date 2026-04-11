@@ -42,6 +42,7 @@ Supports all auth flows:
 | `?title=My+App` | Override brand title (URL param overrides settings) |
 | `?subtitle=Welcome` | Override subtitle text |
 | `?logo=/logo.png` | Override logo URL |
+| `?group=<uuid>` | Load per-group branding (logo, brand name, OAuth settings, success redirect). Used when multiple groups share one auth domain. |
 
 ### After Login
 
@@ -115,6 +116,29 @@ All branding is configurable from the admin portal using the `Setting` model:
 | `AUTH_HERO_SUBHEADLINE` | Supporting text below headline |
 | `AUTH_BACK_TO_WEBSITE_URL` | "Back to website" link in hero panel |
 | `AUTH_TERMS_URL` | Terms & Conditions link on register page |
+
+### Per-Group Branding
+
+When the platform hosts multiple groups with different branding, the auth pages
+can resolve a group automatically and apply its settings.
+
+**Custom auth domain** — point `auth.clientbrand.com` at the same Django
+backend. The server detects the hostname, resolves the group, and serves that
+group's logo, brand name, features, and success redirect. No URL params needed.
+
+**`?group=<uuid>` param** — for shared-domain deployments, append
+`?group=<uuid>` to the auth page URL. The group's branding is applied and the
+param is preserved through navigation (login ↔ register) and the OAuth
+round-trip (Google/Apple callback includes `?group=` in the return URL).
+
+```html
+<!-- Link to the auth page with group-scoped branding -->
+<a href="/auth?group=abc123-uuid">Sign In to Client Brand</a>
+```
+
+Per-group settings that take effect: all `AUTH_*` settings (logo, title, hero,
+OAuth buttons, success redirect, layout, CSS). Each setting resolves with a
+parent-chain fallback: group → parent group → global.
 
 ### Features — enable/disable per provider
 

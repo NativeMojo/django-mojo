@@ -1,5 +1,14 @@
 ## v1.1.0 - (current)
 
+## v1.1.19 - April 11, 2026
+
+### Added
+- **Per-group white-label auth pages** — `Group.auth_domain` field maps a custom hostname to a group. The bouncer resolves the group from the request hostname (Redis-cached) or `?group=<uuid>` query param and applies that group's `AUTH_*` settings (logo, brand, OAuth, success redirect) to the login and registration pages.
+- **`Group.resolve_by_auth_domain(hostname)`** — class method for hostname→group lookup with Redis caching (24h hits, 1h misses). Cache is invalidated automatically on `auth_domain` or `is_active` changes.
+- **Per-group challenge branding** — `BOUNCER_CHALLENGE_LOGO_URL` and `BOUNCER_CHALLENGE_BRAND` settings resolve per-group. The challenge page uses REDACTED branding by default; set these settings on a group to override.
+- **OAuth `group_uuid` round-trip** — `group_uuid` is embedded in OAuth state so branding survives the Google/Apple provider redirect. The callback appends `?group=<uuid>` to the frontend redirect URI.
+- **`groupUuid` in `window._matConfig`** — `auth_base.html` now passes `groupUuid` into `window._matConfig` so `mojo-auth.js` can include it in auth API calls.
+
 ## v1.1.18 - April 09, 2026
 
 test are passing new release with new ai and better group logging
