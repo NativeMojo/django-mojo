@@ -2594,6 +2594,24 @@
         
       
       
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
       <a href="./" class="md-nav__link md-nav__link--active">
         
   
@@ -2610,6 +2628,75 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#common-flows" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Common Flows
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Common Flows">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#user-registration-onboarding" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        User Registration &amp; Onboarding
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#securing-the-login-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Securing the Login Flow
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#api-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        API Reference
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
       
     </li>
   
@@ -3657,6 +3744,64 @@
     
   
   
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#common-flows" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Common Flows
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Common Flows">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#user-registration-onboarding" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        User Registration &amp; Onboarding
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#securing-the-login-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Securing the Login Flow
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#api-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        API Reference
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
 </nav>
                   </div>
                 </div>
@@ -3676,8 +3821,24 @@
 
 
 <h1 id="account-authentication-rest-api-reference">Account &amp; Authentication — REST API Reference<a class="headerlink" href="#account-authentication-rest-api-reference" title="Permanent link">&para;</a></h1>
+<h2 id="common-flows">Common Flows<a class="headerlink" href="#common-flows" title="Permanent link">&para;</a></h2>
+<h3 id="user-registration-onboarding">User Registration &amp; Onboarding<a class="headerlink" href="#user-registration-onboarding" title="Permanent link">&para;</a></h3>
+<ol>
+<li><a href="auth_pages/">Auth Pages</a> — built-in bouncer-gated <code>/register</code> page (or build your own)</li>
+<li><a href="authentication/#registration">Authentication § Registration</a> — <code>POST /api/auth/register</code> endpoint</li>
+<li><a href="email_verification/">Email Verification</a> — verification gate, send/confirm flow, invite links</li>
+<li><a href="authentication/#login">Authentication § Login</a> — first login after verification</li>
+</ol>
+<h3 id="securing-the-login-flow">Securing the Login Flow<a class="headerlink" href="#securing-the-login-flow" title="Permanent link">&para;</a></h3>
+<ol>
+<li><a href="bouncer/">Bouncer</a> — bot detection gate, challenge page, assess endpoint, token lifecycle</li>
+<li><a href="authentication/">Authentication</a> — login, MFA challenge, token refresh</li>
+<li><a href="passkeys/">Passkeys</a> / <a href="magic_login/">Magic Login</a> — passwordless alternatives</li>
+</ol>
+<hr />
+<h2 id="api-reference">API Reference<a class="headerlink" href="#api-reference" title="Permanent link">&para;</a></h2>
 <ul>
-<li><a href="authentication/">Authentication</a> — Login, token refresh, password reset</li>
+<li><a href="authentication/">Authentication</a> — Login, registration, token refresh, password reset</li>
 <li><a href="passkeys/">Passkeys</a> — Passwordless login with WebAuthn/FIDO2</li>
 <li><a href="mfa_totp/">TOTP / Authenticator App</a> — 2FA and standalone login with Google Authenticator etc.</li>
 <li><a href="mfa_sms/">SMS OTP</a> — 2FA and standalone login via SMS code</li>
