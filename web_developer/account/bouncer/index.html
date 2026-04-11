@@ -3793,6 +3793,56 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#per-group-branding-custom-domain-deployments" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Per-Group Branding (Custom Domain Deployments)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Per-Group Branding (Custom Domain Deployments)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#how-group-detection-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How group detection works
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#oauth-round-trip" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OAuth round-trip
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#custom-auth-domain-client-side-behavior" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Custom auth domain — client-side behavior
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#bouncer-token-error-codes" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4500,6 +4550,29 @@ login attempt. Calling it multiple times per session is rate-limited.</p>
 </tr>
 </tbody>
 </table>
+<hr />
+<h2 id="per-group-branding-custom-domain-deployments">Per-Group Branding (Custom Domain Deployments)<a class="headerlink" href="#per-group-branding-custom-domain-deployments" title="Permanent link">&para;</a></h2>
+<p>When the platform hosts multiple groups on separate custom domains — or uses
+<code>?group=&lt;uuid&gt;</code> to identify a group on a shared domain — the bouncer
+automatically applies that group's branding and settings to the auth pages.</p>
+<h3 id="how-group-detection-works">How group detection works<a class="headerlink" href="#how-group-detection-works" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>Custom auth domain</strong> — if <code>auth.clientbrand.com</code> maps to a group, visiting
+   that hostname shows the group's logo, brand name, OAuth buttons, and success
+   redirect without any extra URL params.</li>
+<li><strong><code>?group=&lt;uuid&gt;</code></strong> — for deployments where all groups share a domain, pass
+   the group UUID as a query param. The bouncer applies the group's settings.</li>
+</ol>
+<h3 id="oauth-round-trip">OAuth round-trip<a class="headerlink" href="#oauth-round-trip" title="Permanent link">&para;</a></h3>
+<p>The <code>group_uuid</code> is embedded in OAuth state so branding survives the Google/
+Apple redirect. After the provider callback, the page receives
+<code>?code=...&amp;state=...&amp;group=&lt;uuid&gt;</code>, which <code>mojo-auth.js</code> picks up automatically
+via <code>window._matConfig.groupUuid</code>.</p>
+<h3 id="custom-auth-domain-client-side-behavior">Custom auth domain — client-side behavior<a class="headerlink" href="#custom-auth-domain-client-side-behavior" title="Permanent link">&para;</a></h3>
+<p>When operating on a custom auth domain, no special client-side code is required.
+The server resolves the group from the hostname. The <code>?group=</code> param is
+preserved in all navigation links (login → register → back) so branding stays
+consistent across page transitions even when the hostname is shared.</p>
 <hr />
 <h2 id="bouncer-token-error-codes">Bouncer Token Error Codes<a class="headerlink" href="#bouncer-token-error-codes" title="Permanent link">&para;</a></h2>
 <p>When <code>BOUNCER_REQUIRE_TOKEN=True</code> and token validation fails:</p>

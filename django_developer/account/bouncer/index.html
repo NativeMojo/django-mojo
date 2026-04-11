@@ -3782,6 +3782,78 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#per-group-branding-white-label-auth" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Per-Group Branding (White-Label Auth)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Per-Group Branding (White-Label Auth)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#group-detection-order" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Group detection order
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#configuring-a-white-label-group" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configuring a white-label group
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#challenge-page-branding" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Challenge page branding
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#oauth-round-trip" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OAuth round-trip
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nginx-setup-for-custom-auth-domains" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Nginx setup for custom auth domains
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#templates" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4057,10 +4129,72 @@ high-confidence blocks. Fully manageable via the operator portal.</p>
 </ol>
 <p>The Redis cache is also rebuilt by the scheduled <code>refresh_bouncer_sig_cache</code> job.</p>
 <hr />
+<h2 id="per-group-branding-white-label-auth">Per-Group Branding (White-Label Auth)<a class="headerlink" href="#per-group-branding-white-label-auth" title="Permanent link">&para;</a></h2>
+<p>The bouncer supports white-label auth pages per group. When a request arrives
+on a custom auth domain — or includes a <code>?group=&lt;uuid&gt;</code> query param — the
+bouncer resolves the group and applies its scoped <code>AUTH_*</code> settings.</p>
+<h3 id="group-detection-order">Group detection order<a class="headerlink" href="#group-detection-order" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>Hostname</strong> — <code>Group.resolve_by_auth_domain(hostname)</code> looks up the active
+   group whose <code>auth_domain</code> matches the request host. Result is Redis-cached
+   (24h for hits, 1h for misses).</li>
+<li><strong><code>?group=&lt;uuid&gt;</code> query param</strong> — fallback for platforms that share a domain.
+   The group UUID is preserved through the challenge redirect and OAuth round-trip.</li>
+</ol>
+<h3 id="configuring-a-white-label-group">Configuring a white-label group<a class="headerlink" href="#configuring-a-white-label-group" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="n">settings</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">Group</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="n">group</span> <span class="o">=</span> <span class="n">Group</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">uuid</span><span class="o">=</span><span class="s1">&#39;...&#39;</span><span class="p">)</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="c1"># Assign the custom auth hostname</span>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="n">group</span><span class="o">.</span><span class="n">auth_domain</span> <span class="o">=</span> <span class="s1">&#39;auth.clientbrand.com&#39;</span>
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="n">group</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>
+<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="c1"># Set group-scoped auth settings</span>
+<a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="n">settings</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="s1">&#39;AUTH_APP_TITLE&#39;</span><span class="p">,</span> <span class="s1">&#39;Client Brand&#39;</span><span class="p">,</span> <span class="n">group</span><span class="o">=</span><span class="n">group</span><span class="p">)</span>
+<a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a><span class="n">settings</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="s1">&#39;AUTH_LOGO_URL&#39;</span><span class="p">,</span> <span class="s1">&#39;https://cdn.client.com/logo.svg&#39;</span><span class="p">,</span> <span class="n">group</span><span class="o">=</span><span class="n">group</span><span class="p">)</span>
+<a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a><span class="n">settings</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="s1">&#39;AUTH_SUCCESS_REDIRECT&#39;</span><span class="p">,</span> <span class="s1">&#39;/client-dashboard/&#39;</span><span class="p">,</span> <span class="n">group</span><span class="o">=</span><span class="n">group</span><span class="p">)</span>
+<a id="__codelineno-8-14" name="__codelineno-8-14" href="#__codelineno-8-14"></a><span class="n">settings</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="s1">&#39;AUTH_ENABLE_GOOGLE&#39;</span><span class="p">,</span> <span class="kc">True</span><span class="p">,</span> <span class="n">group</span><span class="o">=</span><span class="n">group</span><span class="p">)</span>
+</code></pre></div>
+<p>All <code>AUTH_*</code> settings resolve per-group using the parent-chain fallback:
+group → parent group → global.</p>
+<h3 id="challenge-page-branding">Challenge page branding<a class="headerlink" href="#challenge-page-branding" title="Permanent link">&para;</a></h3>
+<p>The bouncer challenge page uses MojoVerify branding by default. To override it
+for a specific group (opt-in only):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="n">settings</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="s1">&#39;BOUNCER_CHALLENGE_LOGO_URL&#39;</span><span class="p">,</span> <span class="s1">&#39;https://cdn.client.com/logo.svg&#39;</span><span class="p">,</span> <span class="n">group</span><span class="o">=</span><span class="n">group</span><span class="p">)</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="n">settings</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="s1">&#39;BOUNCER_CHALLENGE_BRAND&#39;</span><span class="p">,</span> <span class="s1">&#39;CLIENT BRAND&#39;</span><span class="p">,</span> <span class="n">group</span><span class="o">=</span><span class="n">group</span><span class="p">)</span>
+</code></pre></div>
+<p><code>BOUNCER_CHALLENGE_LOGO_URL</code> and <code>BOUNCER_CHALLENGE_BRAND</code> only take effect
+when a group is resolved. Requests with no group always use MojoVerify branding.</p>
+<h3 id="oauth-round-trip">OAuth round-trip<a class="headerlink" href="#oauth-round-trip" title="Permanent link">&para;</a></h3>
+<p><code>group_uuid</code> is embedded in the OAuth state so branding survives the
+provider redirect. The callback reconstructs <code>?group=&lt;uuid&gt;</code> and appends it
+to the frontend redirect URI before handing back to the auth page.</p>
+<h3 id="nginx-setup-for-custom-auth-domains">Nginx setup for custom auth domains<a class="headerlink" href="#nginx-setup-for-custom-auth-domains" title="Permanent link">&para;</a></h3>
+<p>Each white-label domain needs its own nginx server block pointing at the same
+Django backend. Pass the real hostname so the bouncer can resolve the group:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="k">server</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">    </span><span class="kn">listen</span><span class="w"> </span><span class="mi">443</span><span class="w"> </span><span class="s">ssl</span><span class="p">;</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">    </span><span class="kn">server_name</span><span class="w"> </span><span class="s">auth.clientbrand.com</span><span class="p">;</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="w">    </span><span class="kn">location</span><span class="w"> </span><span class="s">/</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="w">        </span><span class="kn">proxy_pass</span><span class="w"> </span><span class="s">http://127.0.0.1:8000</span><span class="p">;</span>
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="w">        </span><span class="kn">proxy_set_header</span><span class="w"> </span><span class="s">Host</span><span class="w"> </span><span class="nv">$host</span><span class="p">;</span><span class="w">          </span><span class="c1"># must be the real hostname</span>
+<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="w">        </span><span class="kn">proxy_set_header</span><span class="w"> </span><span class="s">X-Real-IP</span><span class="w"> </span><span class="nv">$remote_addr</span><span class="p">;</span>
+<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="w">        </span><span class="kn">proxy_set_header</span><span class="w"> </span><span class="s">X-Forwarded-For</span><span class="w"> </span><span class="nv">$proxy_add_x_forwarded_for</span><span class="p">;</span>
+<a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a><span class="w">        </span><span class="kn">proxy_set_header</span><span class="w"> </span><span class="s">X-Forwarded-Proto</span><span class="w"> </span><span class="nv">$scheme</span><span class="p">;</span>
+<a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a><span class="p">}</span>
+</code></pre></div>
+<p>Do not rewrite <code>Host</code> to your main domain — the bouncer reads <code>request.get_host()</code>
+to identify the group.</p>
+<p>See <a href="../group/">group.md</a> for the full <code>auth_domain</code> field and <code>resolve_by_auth_domain()</code> reference.</p>
+<hr />
 <h2 id="templates">Templates<a class="headerlink" href="#templates" title="Permanent link">&para;</a></h2>
 <ul>
 <li><code>account/login.html</code> — full mojo-auth webapp. Override in your project's templates dir.</li>
-<li><code>account/bouncer_challenge.html</code> — MojoVerify-branded challenge page (fixed branding).</li>
+<li><code>account/bouncer_challenge.html</code> — MojoVerify-branded challenge page by default; override logo/brand via <code>BOUNCER_CHALLENGE_LOGO_URL</code> / <code>BOUNCER_CHALLENGE_BRAND</code> per group.</li>
 <li><code>account/bouncer_decoy.html</code> — honeypot login at <code>/login</code>, <code>/signin</code>.</li>
 </ul>
 <p>Static assets in <code>account/static/account/</code>:
@@ -4069,12 +4203,12 @@ high-confidence blocks. Fully manageable via the operator portal.</p>
 <hr />
 <h2 id="refreshing-the-signature-cache">Refreshing the Signature Cache<a class="headerlink" href="#refreshing-the-signature-cache" title="Permanent link">&para;</a></h2>
 <p>After manually adding/editing <code>BotSignature</code> records:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.services.bouncer.learner</span><span class="w"> </span><span class="kn">import</span> <span class="n">refresh_sig_cache</span>
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="n">refresh_sig_cache</span><span class="p">()</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.services.bouncer.learner</span><span class="w"> </span><span class="kn">import</span> <span class="n">refresh_sig_cache</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="n">refresh_sig_cache</span><span class="p">()</span>
 </code></pre></div>
 <p>Or publish the scheduled job:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps</span><span class="w"> </span><span class="kn">import</span> <span class="n">jobs</span>
-<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="n">jobs</span><span class="o">.</span><span class="n">publish</span><span class="p">(</span><span class="s1">&#39;mojo.apps.account.asyncjobs.refresh_bouncer_sig_cache&#39;</span><span class="p">,</span> <span class="p">{})</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps</span><span class="w"> </span><span class="kn">import</span> <span class="n">jobs</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="n">jobs</span><span class="o">.</span><span class="n">publish</span><span class="p">(</span><span class="s1">&#39;mojo.apps.account.asyncjobs.refresh_bouncer_sig_cache&#39;</span><span class="p">,</span> <span class="p">{})</span>
 </code></pre></div>
 
 

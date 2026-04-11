@@ -3727,6 +3727,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#per-group-branding" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Per-Group Branding
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#features-enabledisable-per-provider" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3893,6 +3904,10 @@ HttpOnly pass cookie that skips the challenge on subsequent visits.</p>
 <td><code>?logo=/logo.png</code></td>
 <td>Override logo URL</td>
 </tr>
+<tr>
+<td><code>?group=&lt;uuid&gt;</code></td>
+<td>Load per-group branding (logo, brand name, OAuth settings, success redirect). Used when multiple groups share one auth domain.</td>
+</tr>
 </tbody>
 </table>
 <h3 id="after-login">After Login<a class="headerlink" href="#after-login" title="Permanent link">&para;</a></h3>
@@ -3981,6 +3996,22 @@ login page (not the bouncer challenge) after the OAuth redirect.</p>
 </tr>
 </tbody>
 </table>
+<h3 id="per-group-branding">Per-Group Branding<a class="headerlink" href="#per-group-branding" title="Permanent link">&para;</a></h3>
+<p>When the platform hosts multiple groups with different branding, the auth pages
+can resolve a group automatically and apply its settings.</p>
+<p><strong>Custom auth domain</strong> — point <code>auth.clientbrand.com</code> at the same Django
+backend. The server detects the hostname, resolves the group, and serves that
+group's logo, brand name, features, and success redirect. No URL params needed.</p>
+<p><strong><code>?group=&lt;uuid&gt;</code> param</strong> — for shared-domain deployments, append
+<code>?group=&lt;uuid&gt;</code> to the auth page URL. The group's branding is applied and the
+param is preserved through navigation (login ↔ register) and the OAuth
+round-trip (Google/Apple callback includes <code>?group=</code> in the return URL).</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="cm">&lt;!-- Link to the auth page with group-scoped branding --&gt;</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="p">&lt;</span><span class="nt">a</span> <span class="na">href</span><span class="o">=</span><span class="s">&quot;/auth?group=abc123-uuid&quot;</span><span class="p">&gt;</span>Sign In to Client Brand<span class="p">&lt;/</span><span class="nt">a</span><span class="p">&gt;</span>
+</code></pre></div>
+<p>Per-group settings that take effect: all <code>AUTH_*</code> settings (logo, title, hero,
+OAuth buttons, success redirect, layout, CSS). Each setting resolves with a
+parent-chain fallback: group → parent group → global.</p>
 <h3 id="features-enabledisable-per-provider">Features — enable/disable per provider<a class="headerlink" href="#features-enabledisable-per-provider" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
@@ -4034,22 +4065,22 @@ row are excluded from the page entirely.</p>
 </table>
 <h3 id="theme-colors">Theme colors<a class="headerlink" href="#theme-colors" title="Permanent link">&para;</a></h3>
 <p>The CSS uses custom properties. Override in your project's CSS:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">:</span><span class="nd">root</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">    </span><span class="nv">--mat-page-bg</span><span class="p">:</span><span class="w"> </span><span class="mh">#686278</span><span class="p">;</span>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">    </span><span class="nv">--mat-card-bg</span><span class="p">:</span><span class="w"> </span><span class="mh">#2c2638</span><span class="p">;</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">    </span><span class="nv">--mat-accent</span><span class="p">:</span><span class="w"> </span><span class="mh">#7c5cbf</span><span class="p">;</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">    </span><span class="nv">--mat-accent-hover</span><span class="p">:</span><span class="w"> </span><span class="mh">#6b4eae</span><span class="p">;</span>
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">    </span><span class="nv">--mat-input-bg</span><span class="p">:</span><span class="w"> </span><span class="mh">#353042</span><span class="p">;</span>
-<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">    </span><span class="nv">--mat-border</span><span class="p">:</span><span class="w"> </span><span class="mh">#433d52</span><span class="p">;</span>
-<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">    </span><span class="nv">--mat-text</span><span class="p">:</span><span class="w"> </span><span class="mh">#f2eff7</span><span class="p">;</span>
-<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">    </span><span class="nv">--mat-muted</span><span class="p">:</span><span class="w"> </span><span class="mh">#9e96ad</span><span class="p">;</span>
-<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">:</span><span class="nd">root</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span><span class="nv">--mat-page-bg</span><span class="p">:</span><span class="w"> </span><span class="mh">#686278</span><span class="p">;</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="nv">--mat-card-bg</span><span class="p">:</span><span class="w"> </span><span class="mh">#2c2638</span><span class="p">;</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span><span class="nv">--mat-accent</span><span class="p">:</span><span class="w"> </span><span class="mh">#7c5cbf</span><span class="p">;</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span><span class="nv">--mat-accent-hover</span><span class="p">:</span><span class="w"> </span><span class="mh">#6b4eae</span><span class="p">;</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">    </span><span class="nv">--mat-input-bg</span><span class="p">:</span><span class="w"> </span><span class="mh">#353042</span><span class="p">;</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">    </span><span class="nv">--mat-border</span><span class="p">:</span><span class="w"> </span><span class="mh">#433d52</span><span class="p">;</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">    </span><span class="nv">--mat-text</span><span class="p">:</span><span class="w"> </span><span class="mh">#f2eff7</span><span class="p">;</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">    </span><span class="nv">--mat-muted</span><span class="p">:</span><span class="w"> </span><span class="mh">#9e96ad</span><span class="p">;</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="p">}</span>
 </code></pre></div>
 <hr />
 <h2 id="static-assets">Static Assets<a class="headerlink" href="#static-assets" title="Permanent link">&para;</a></h2>
 <p>The auth pages load CSS and JS from these API endpoints:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>GET /api/account/static/mojo-auth-theme.css   → dark premium theme
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>GET /api/account/static/mojo-auth.js          → MojoAuth library
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>GET /api/account/static/mojo-auth-theme.css   → dark premium theme
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>GET /api/account/static/mojo-auth.js          → MojoAuth library
 </code></pre></div>
 <p>These are served by Django with browser caching headers (<code>Cache-Control:
 public, max-age=86400</code> in production, <code>no-store</code> in debug mode).</p>
