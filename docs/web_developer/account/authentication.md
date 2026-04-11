@@ -262,6 +262,94 @@ If the account has TOTP or SMS MFA enabled, the login response is different — 
 - TOTP (authenticator app) → see [TOTP / Authenticator App](mfa_totp.md)
 - SMS OTP → see [SMS OTP](mfa_sms.md)
 
+## Registration
+
+**POST** `/api/auth/register`
+
+Creates a new user account. No authentication required. Rate-limited to 5 requests per IP per 5 minutes.
+
+**Prerequisite:** The server setting `ALLOW_USER_REGISTRATION` must be `True` (default is `False`). If disabled, this endpoint returns 403.
+
+### Request
+
+```json
+{
+  "email": "alice@example.com",
+  "password": "mysecretpassword",
+  "first_name": "Alice",
+  "last_name": "Smith",
+  "bouncer_token": "<token-from-assess>",
+  "duid": "browser-generated-device-uuid"
+}
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `email` | yes | Must be unique across all accounts |
+| `password` | yes | Must meet password strength requirements |
+| `first_name` | no | User's first name |
+| `last_name` | no | User's last name |
+| `bouncer_token` | conditional | Required when bouncer is active. Must be a token issued with `page_type: "registration"` — a login-scoped token will be rejected |
+| `duid` | conditional | Device UUID, required when bouncer is active |
+
+### Response — Auto-Login (default)
+
+When `REQUIRE_VERIFIED_EMAIL` is `False` (default), the user is logged in immediately. A verification email is still sent as a nudge.
+
+```json
+{
+  "status": true,
+  "data": {
+    "access_token": "eyJhbGci...",
+    "refresh_token": "eyJhbGci...",
+    "expires_in": 21600,
+    "user": {
+      "id": 43,
+      "username": "alice@example.com",
+      "display_name": "Alice"
+    }
+  }
+}
+```
+
+### Response — Verification Required
+
+When `REQUIRE_VERIFIED_EMAIL` is `True`, no JWT is issued. The user must verify their email before they can log in.
+
+```json
+{
+  "status": true,
+  "requires_verification": true,
+  "message": "Account created. Please check your email to verify your account before logging in."
+}
+```
+
+Show a "check your email" screen — **not** a logged-in state. After the user clicks the verification link, they must go through the normal [login flow](#login).
+
+If your frontend handles the verification token (SPA flow), `POST /api/auth/email/verify` both verifies the email and returns a JWT in one step. See [Email Verification § Link Flow — Option B](email_verification.md#confirm--link-flow).
+
+### Error Responses
+
+| Status | `error` | Cause |
+|--------|---------|-------|
+| 403 | `Permission denied` | `ALLOW_USER_REGISTRATION` is `False` |
+| 400 | `An account with this email already exists` | Duplicate email |
+| 400 | (password error) | Password fails strength validation |
+| 403 | `bouncer_token_*` | Invalid, expired, or wrong-scope bouncer token (see [Bouncer § Token Error Codes](bouncer.md#bouncer-token-error-codes)) |
+| 429 | `Too many requests` | Rate limit exceeded |
+
+### Bouncer Integration
+
+When the bouncer is active, the registration page at `/register` is gated by the same challenge flow as login. The bouncer token must use `page_type: "registration"`:
+
+1. User visits `/register` → bouncer challenge (or skip if pass cookie exists)
+2. `POST /api/account/bouncer/assess` with `page_type: "registration"` → token
+3. `POST /api/auth/register` with `bouncer_token` and `duid`
+
+See [Bouncer](bouncer.md) for the full challenge flow and [Auth Pages](auth_pages.md) for the built-in registration page.
+
+---
+
 ## Error Responses
 
 **Invalid credentials:**

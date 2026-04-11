@@ -125,7 +125,7 @@ class MojoModel:
             if request.method == 'GET':
                 return cls.on_rest_handle_get(request, instance)
 
-            elif request.method in ['POST', 'PUT']:
+            elif request.method in ['POST', 'PUT', 'PATCH']:
                 return cls.on_rest_handle_save(request, instance)
 
             elif request.method == 'DELETE':
@@ -433,7 +433,7 @@ class MojoModel:
         """
         if request.method == 'GET':
             return cls.on_rest_handle_list(request)
-        elif request.method in ['POST', 'PUT']:
+        elif request.method in ['POST', 'PUT', 'PATCH']:
             # Batch save mode: if 'batched' list is present and model allows batching
             batched = request.DATA.get("batched")
             if batched and isinstance(batched, list) and cls.get_rest_meta_prop("CAN_BATCH", False):

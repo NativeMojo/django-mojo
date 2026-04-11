@@ -1,6 +1,25 @@
 # Account & Authentication — REST API Reference
 
-- [Authentication](authentication.md) — Login, token refresh, password reset
+## Common Flows
+
+### User Registration & Onboarding
+
+1. [Auth Pages](auth_pages.md) — built-in bouncer-gated `/register` page (or build your own)
+2. [Authentication § Registration](authentication.md#registration) — `POST /api/auth/register` endpoint
+3. [Email Verification](email_verification.md) — verification gate, send/confirm flow, invite links
+4. [Authentication § Login](authentication.md#login) — first login after verification
+
+### Securing the Login Flow
+
+1. [Bouncer](bouncer.md) — bot detection gate, challenge page, assess endpoint, token lifecycle
+2. [Authentication](authentication.md) — login, MFA challenge, token refresh
+3. [Passkeys](passkeys.md) / [Magic Login](magic_login.md) — passwordless alternatives
+
+---
+
+## API Reference
+
+- [Authentication](authentication.md) — Login, registration, token refresh, password reset
 - [Passkeys](passkeys.md) — Passwordless login with WebAuthn/FIDO2
 - [TOTP / Authenticator App](mfa_totp.md) — 2FA and standalone login with Google Authenticator etc.
 - [SMS OTP](mfa_sms.md) — 2FA and standalone login via SMS code

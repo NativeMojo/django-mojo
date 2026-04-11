@@ -4,6 +4,14 @@ Web developer documentation for integrating with django-mojo REST APIs.
 
 Companion track for framework developers: [docs/django_developer/README.md](../django_developer/README.md).
 
+## Getting Started
+
+| Flow | Guide |
+|---|---|
+| User registration & onboarding | [account/ § Common Flows](account/README.md#common-flows) — register → verify email → first login |
+| Securing the login page | [account/ § Securing the Login Flow](account/README.md#securing-the-login-flow) — bouncer gate, MFA, passkeys |
+| Frontend integration | [frontend_starter.md](frontend_starter.md) — JWT storage, reload checks, refresh flow |
+
 ## Core Concepts
 
 | Section | Description |
