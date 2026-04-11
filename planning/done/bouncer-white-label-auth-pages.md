@@ -190,9 +190,38 @@ Make bouncer auth pages (login, register, challenge) resolve branding settings p
 - `docs/web_developer/account/bouncer.md` — Add note about per-group branding for custom domain deployments
 - `docs/web_developer/account/auth_pages.md` — Document `?group=<uuid>` query param for branding, note that branding settings can be per-group
 
-<!-- Fill in when resolved -->
 ## Resolution
-**Status**:
-**Files changed**:
-**Tests run**:
-**Validation**:
+
+**Status**: resolved
+**Date**: 2026-04-11
+
+### What Was Built
+Per-group branding for bouncer auth pages. Group detection via hostname (`auth_domain` field) or `?group=<uuid>` query param. All AUTH_* settings resolve per-group with parent chain fallback. Challenge page defaults to REDACTED branding with opt-in override. OAuth state preserves group context through round-trip.
+
+### Files Changed
+- `mojo/apps/account/models/group.py` — `auth_domain` field, `resolve_by_auth_domain()`, Redis cache + invalidation
+- `mojo/apps/account/migrations/0039_group_auth_domain.py` — migration
+- `mojo/apps/account/rest/bouncer/views.py` — `_resolve_group()`, per-group `_auth_context()`, challenge branding
+- `mojo/apps/account/rest/oauth.py` — `group_uuid` in OAuth state + callback redirect
+- `mojo/apps/account/templates/account/auth_base.html` — `groupUuid` in `window._matConfig`
+
+### Tests
+- `tests/test_whitelabel/whitelabel.py` — 17 tests covering group detection, branding resolution, parent fallback, challenge branding, OAuth state, REST API
+- Run: `bin/run_tests -t test_whitelabel`
+- Full suite: 1,561 tests, 0 failures
+
+### Docs Updated
+- `docs/django_developer/account/group.md` — auth_domain field docs
+- `docs/django_developer/account/bouncer.md` — Per-Group Branding section
+- `docs/web_developer/account/bouncer.md` — Custom domain deployments
+- `docs/web_developer/account/auth_pages.md` — ?group= param, per-group branding
+- `CHANGELOG.md` — v1.1.19 entry
+
+### Security Review
+- Fixed negative cache bug (b'0' is truthy in Python)
+- Added |escapejs filter on group_uuid template var
+- scan_iter in cache invalidation is O(N) but only on admin saves — acceptable
+- ?group= spoofing is cosmetic-only by design
+
+### Follow-up
+- None
