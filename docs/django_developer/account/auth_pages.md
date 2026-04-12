@@ -44,7 +44,7 @@ AUTH_FAVICON_URL = ''                # favicon URL (served by nginx, see below)
 AUTH_HERO_IMAGE_URL = ''             # left panel background image
 AUTH_HERO_HEADLINE = 'Welcome back'  # text over the hero image
 AUTH_HERO_SUBHEADLINE = ''           # optional supporting text
-AUTH_BACK_TO_WEBSITE_URL = ''        # "Back to website" pill link in hero panel
+AUTH_BACK_TO_WEBSITE_URL = ''        # "Back to website" pill link in hero panel (overridable via ?back= URL param)
 AUTH_TERMS_URL = ''                  # Terms & Conditions link on register page
 
 # ---- Auth features ----
@@ -54,7 +54,7 @@ AUTH_ENABLE_PASSKEYS = False         # show Passkey button (also requires browse
 
 # ---- Routing ----
 AUTH_API_BASE = ''                   # API host (empty = same origin, which is correct for most projects)
-AUTH_SUCCESS_REDIRECT = '/'          # where to redirect after login
+AUTH_SUCCESS_REDIRECT = '/'          # where to redirect after login (relative or absolute; overridable via ?redirect= URL param)
 
 # ---- Layout ----
 AUTH_LAYOUT = 'card'                 # 'card' (centered card) or 'fullscreen' (edge-to-edge)
@@ -300,7 +300,7 @@ not hidden by JS).
 | `AUTH_HERO_IMAGE_URL` | `''` | Left panel background image |
 | `AUTH_HERO_HEADLINE` | `'Welcome back'` | Text over hero image |
 | `AUTH_HERO_SUBHEADLINE` | `''` | Supporting text below headline |
-| `AUTH_BACK_TO_WEBSITE_URL` | `''` | "Back to website" link in hero |
+| `AUTH_BACK_TO_WEBSITE_URL` | `''` | "Back to website" link in hero (overridable per-request via `?back=<url>`) |
 | `AUTH_TERMS_URL` | `''` | Terms link on register page |
 | `AUTH_CUSTOM_CSS` | `''` | Inline CSS block injected after the theme stylesheet |
 | `AUTH_CUSTOM_CSS_URL` | `''` | URL to an external CSS file loaded after the theme |

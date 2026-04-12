@@ -27,6 +27,7 @@ When `BOUNCER_LOGIN_PATH` is configured (e.g. `access`), the login flow has thre
       User clicks the moving target button
       POST /api/account/bouncer/assess → decision + bouncer_token
       JS stores token in localStorage, redirects to /{BOUNCER_LOGIN_PATH}
+      redirect, next, returnTo, and back params are forwarded through this redirect
 
 3. Full login page (after passing challenge or on valid pass cookie)
       mojo-auth.js webapp loads — login form, OAuth, passkeys, magic link
@@ -308,6 +309,17 @@ When operating on a custom auth domain, no special client-side code is required.
 The server resolves the group from the hostname. The `?group=` param is
 preserved in all navigation links (login → register → back) so branding stays
 consistent across page transitions even when the hostname is shared.
+
+### Query params preserved through the challenge
+
+When the bouncer serves the challenge page, the following query params from the
+original request are forwarded to the post-challenge login redirect:
+
+| Param | Purpose |
+|-------|---------|
+| `redirect` / `next` / `returnTo` | Post-login redirect URL (relative or absolute) |
+| `back` | Override for the "Back to website" hero link |
+| `group` | Group UUID for per-group branding |
 
 ---
 

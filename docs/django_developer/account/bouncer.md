@@ -32,6 +32,7 @@ Request → GET BOUNCER_LOGIN_PATH (default: /auth)
         block         → no token, BotLearner job queued
               ↓
      JS stores token, redirects to login URL
+     (redirect, next, returnTo, and back params forwarded through)
               ↓
      GET BOUNCER_LOGIN_PATH again — pass cookie present
               ↓
@@ -295,6 +296,13 @@ bouncer resolves the group and applies its scoped `AUTH_*` settings.
    (24h for hits, 1h for misses).
 2. **`?group=<uuid>` query param** — fallback for platforms that share a domain.
    The group UUID is preserved through the challenge redirect and OAuth round-trip.
+
+### Query params forwarded through the challenge
+
+`_serve_challenge()` preserves these params when building the post-challenge
+login redirect URL: `group`, `redirect` (and aliases `next`, `returnTo`), and
+`back`. Any param missing from the original request is omitted from the
+forwarded query string.
 
 ### Configuring a white-label group
 

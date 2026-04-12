@@ -1,5 +1,14 @@
 ## v1.1.0 - (current)
 
+## v1.1.19 - April 12, 2026
+
+### Fixed
+- **Bouncer redirect URL dropped for absolute URLs** — `auth_base.html` previously rejected any `?redirect=` value that did not start with `/`. Absolute URLs (e.g. `http://myapp.example.com/portal/`) are now accepted and used as-is.
+- **Redirect param lost through bouncer challenge** — `_serve_challenge()` now forwards `redirect` (and aliases `next`, `returnTo`) and `back` params to the post-challenge login redirect URL so they survive the challenge → login page transition.
+
+### Added
+- **`?back=<url>` query param** — overrides the "Back to website" hero link on a per-request basis. Falls back to the `AUTH_BACK_TO_WEBSITE_URL` setting when not provided. Preserved through the bouncer challenge redirect.
+
 ## v1.1.19 - April 11, 2026
 
 new oauth brand support
