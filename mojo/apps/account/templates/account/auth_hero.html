@@ -20,9 +20,7 @@ Variables from the view context (populated from settings):
         {% else %}
         <span></span>
         {% endif %}
-        {% if back_to_website_url %}
-        <a class="mat-hero-back" href="{{ back_to_website_url }}">Back to website &rarr;</a>
-        {% endif %}
+        <a class="mat-hero-back" id="mat-hero-back" href="{{ back_to_website_url }}"{% if not back_to_website_url %} style="display:none"{% endif %}>Back to website &rarr;</a>
     </div>
     <div class="mat-hero-bottom">
         {% if hero_headline %}

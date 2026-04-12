@@ -12,6 +12,7 @@ Decoy pages (common bot paths: /login, /signin):
   POSTs to a dead endpoint that logs and returns a plausible error.
 """
 import secrets
+from urllib.parse import urlencode
 
 from django.shortcuts import render
 
@@ -271,9 +272,18 @@ def _serve_challenge(request, challenge_tier=1, page_type='login', group=None):
         redirect_path = settings.get_static('BOUNCER_REGISTER_PATH', 'register')
     else:
         redirect_path = settings.get_static('BOUNCER_LOGIN_PATH', 'auth')
-    # Preserve group param through the challenge redirect
+    # Preserve group, redirect, and back params through the challenge redirect
     group_uuid = group.uuid if group else ''
-    group_qs = f'?group={group_uuid}' if group_uuid else ''
+    fwd_params = {}
+    if group_uuid:
+        fwd_params['group'] = group_uuid
+    redirect_val = request.DATA.get('redirect') or request.DATA.get('next') or request.DATA.get('returnTo') or ''
+    if redirect_val:
+        fwd_params['redirect'] = redirect_val
+    back_val = request.DATA.get('back') or ''
+    if back_val:
+        fwd_params['back'] = back_val
+    group_qs = f'?{urlencode(fwd_params)}' if fwd_params else ''
     # Challenge page: REDACTED branding by default, opt-in override per group
     logo_url = settings.get('BOUNCER_CHALLENGE_LOGO_URL', _DEFAULT_CHALLENGE_LOGO, group=group)
     brand_name = settings.get('BOUNCER_CHALLENGE_BRAND', _DEFAULT_CHALLENGE_BRAND, group=group)

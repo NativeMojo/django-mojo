@@ -62,7 +62,8 @@
 
         var params = new URLSearchParams(location.search);
         var paramRedirect = params.get("redirect") || params.get("next") || params.get("returnTo") || "";
-        var redirectTo = paramRedirect && paramRedirect.charAt(0) === "/" ? paramRedirect : ON_SUCCESS;
+        var redirectTo = paramRedirect || ON_SUCCESS;
+        var paramBack = params.get("back") || "";
 
         // Set up helpers BEFORE MojoAuth.init so page scripts can
         // reference _mat and _matConfig even if MojoAuth fails to load.
@@ -79,6 +80,7 @@
             enableApple: ENABLE_APPLE,
             enablePasskeys: ENABLE_PASSKEYS,
             groupUuid: GROUP_UUID,
+            backUrl: paramBack,
             params: params,
         };
 
@@ -112,6 +114,12 @@
                 setTimeout(window._mat.redirect, 800);
             },
         };
+
+        // Override "Back to website" link when ?back= param is present
+        if (paramBack) {
+            var backEl = $("mat-hero-back");
+            if (backEl) { backEl.href = paramBack; backEl.style.display = ""; }
+        }
 
         // Init MojoAuth — API_BASE defaults to current origin (same-server API)
         MojoAuth.init({ baseURL: API_BASE });

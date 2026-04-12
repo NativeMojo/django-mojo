@@ -38,7 +38,8 @@ Supports all auth flows:
 | `?token=ml:...` | Magic login token — auto-consumed on page load |
 | `?token=pr:...` | Password reset token — opens "Set New Password" view |
 | `?code=...&state=...` | OAuth callback — auto-completes the OAuth flow |
-| `?redirect=/path` | Custom redirect after login (also `?next=` or `?returnTo=`) |
+| `?redirect=<url>` | Custom redirect after login — relative or absolute URL (also `?next=` or `?returnTo=`). Preserved through bouncer challenge. |
+| `?back=<url>` | Override the "Back to website" hero link. Falls back to `AUTH_BACK_TO_WEBSITE_URL` setting if not provided. |
 | `?title=My+App` | Override brand title (URL param overrides settings) |
 | `?subtitle=Welcome` | Override subtitle text |
 | `?logo=/logo.png` | Override logo URL |
@@ -93,6 +94,12 @@ From your application, link to the login and registration pages:
 
 <!-- With redirect back to current page -->
 <a href="/auth?redirect=/dashboard">Sign In</a>
+
+<!-- With absolute redirect (cross-origin app) -->
+<a href="/auth?redirect=http://myapp.example.com/portal/">Sign In</a>
+
+<!-- With back-to-website override -->
+<a href="/auth?redirect=/portal&back=https://www.example.com">Sign In</a>
 
 <!-- With custom branding via URL params -->
 <a href="/auth?title=Acme+Corp&logo=/acme-logo.png">Sign In to Acme</a>
