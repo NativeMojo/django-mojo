@@ -1,7 +1,7 @@
 # Generic Model Delete Tool + Delete Rule from RuleSet
 
 **Type**: request
-**Status**: planned
+**Status**: resolved
 **Date**: 2026-04-13
 **Priority**: medium
 
@@ -84,7 +84,7 @@ More broadly, delete is one of the few CRUD operations missing from the generic 
 
 ## Plan
 
-**Status**: planned
+**Status**: resolved
 **Planned**: 2026-04-13
 
 ### Objective
@@ -129,3 +129,40 @@ Add a `delete_rule` tool for removing individual rules from rulesets, and a gene
 
 - `docs/django_developer/assistant/README.md` — add `delete_rule` and `delete_model_instance` to the tools listing
 - `docs/web_developer/` — no changes (internal assistant tools, not REST endpoints)
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-04-13
+
+### What Was Built
+
+Two new assistant tools: `delete_rule` (targeted deletion of individual rule conditions from rulesets) and `delete_model_instance` (generic delete for any MojoModel with CAN_DELETE=True, mirroring the REST permission chain). Both require explicit user confirmation via `mutates=True`.
+
+### Files Changed
+
+- `mojo/apps/assistant/services/tools/security/rules.py` — added `delete_rule` tool
+- `mojo/apps/assistant/services/tools/models.py` — added `delete_model_instance` tool, updated `_build_request()` with `method`/`path` kwargs
+- `docs/django_developer/assistant/README.md` — added both tools to tool tables
+- `docs/web_developer/assistant/README.md` — added `delete_model_instance` section and updated permission table
+- `CHANGELOG.md` — added entries for both new tools
+
+### Tests
+
+- `tests/test_assistant/23_test_delete_tools.py` — 13 tests covering happy paths, permission denied, CAN_DELETE gate, NO_REST rejection, bad model, missing params, security event reporting, owner-scoped deletion
+- Run: `bin/run_tests -t test_assistant.23_test_delete_tools`
+
+### Docs Updated
+
+- `docs/django_developer/assistant/README.md` — core tools table + models domain table + security domain table
+- `docs/web_developer/assistant/README.md` — models domain section + permission mapping table
+
+### Security Review
+
+No critical findings. Two warnings addressed:
+1. Error messages from `on_rest_delete` are now sanitized (logged server-side, generic message returned to LLM)
+2. `delete_rule` uses coarse tool-level permission gate rather than instance-level `rest_check_permission` — acceptable for Rule (system-scoped, no owner/group) but inconsistent with `delete_model_instance`. Noted for future hardening if Rule ever gains scoping.
+
+### Follow-up
+
+- Consider adding instance-level `rest_check_permission` to `delete_rule` for consistency if Rule model ever gains owner/group scoping
