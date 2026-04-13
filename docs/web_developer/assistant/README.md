@@ -487,7 +487,7 @@ The assistant checks the user's permissions before executing each tool. The tool
 | `manage_security` | All `view_security` tools + update incident, block IP, create ticket |
 | `view_jobs` | Query jobs, job events, job logs, job stats, queue health, list scheduled tasks |
 | `manage_jobs` | All `view_jobs` tools + cancel job, retry job, create/update/delete scheduled tasks, run job, run scheduled task now |
-| `view_admin` | Query users, user detail, user activity, rate limits, permission summary, fetch metrics, system health, list tools, list metric categories/slugs, list permissions, browse web URLs, describe and query any MojoModel, load domain tools |
+| `view_admin` | Query users, user detail, user activity, rate limits, permission summary, fetch metrics, system health, list tools, list metric categories/slugs, list permissions, browse web URLs, describe, query, and delete any MojoModel (subject to model-level delete permissions), load domain tools |
 | `view_groups` | Query groups, group detail, group members, group activity |
 | `view_logs` | Query the audit log trail (logit.Log) — request history, model changes, API errors, custom events |
 | `assistant` | Read, write, and delete memory entries and skills across all tiers (subject to per-tier access rules) |
@@ -565,6 +565,25 @@ Filtering on sensitive fields is blocked and logged as a security event.
 {
     "model": "incident.Incident",
     "count": 47
+}
+```
+
+### `delete_model_instance`
+
+Delete a single MojoModel instance by primary key. The model must have deletion enabled (`CAN_DELETE = True` in its `RestMeta`), and the user must hold the model's full delete permission chain — identical to what the REST API enforces.
+
+**Required permission**: `view_admin` plus the model's `DELETE_PERMS` / `SAVE_PERMS` / `VIEW_PERMS` chain (e.g. `manage_security` to delete a RuleSet).
+
+The assistant will always confirm the exact instance (model, pk, name/title) with the user before executing. Deletion is permanent. A security event is recorded on any permission denial.
+
+**Example response shape**:
+
+```json
+{
+    "ok": true,
+    "model": "incident.RuleSet",
+    "pk": 42,
+    "status": "deleted"
 }
 ```
 

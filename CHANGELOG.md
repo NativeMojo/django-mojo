@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## v1.1.20 - April 13, 2026
+
+new github auth and app support
+
+
 ## v1.1.19 - April 13, 2026
 
 ### Added
