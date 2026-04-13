@@ -658,6 +658,9 @@ def _tool_aggregate_model(params, user):
     if not aggregations:
         return {"error": "At least one aggregation is required"}
 
+    import re
+    _ALIAS_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
+
     agg_map = {
         "count": lambda f: Count(f),
         "count_distinct": lambda f: Count(f, distinct=True),
@@ -675,6 +678,9 @@ def _tool_aggregate_model(params, user):
 
         if not field or func not in AGGREGATE_FUNCS:
             return {"error": f"Invalid aggregation: field='{field}', func='{func}'"}
+
+        if not _ALIAS_RE.match(alias):
+            return {"error": f"Invalid alias '{alias}' — use letters, digits, underscores only"}
 
         if _is_sensitive_field(field):
             return {"error": f"Aggregation on '{field}' is not allowed"}
@@ -713,6 +719,14 @@ def _tool_aggregate_model(params, user):
     if group_by:
         limit = min(params.get("limit", DEFAULT_GROUP_LIMIT), MAX_GROUP_ROWS)
         ordering = params.get("ordering", "").strip()
+
+        # Validate ordering
+        if ordering:
+            order_field = ordering.lstrip("-")
+            if "__" in order_field:
+                return {"error": "Relational ordering is not supported"}
+            if _is_sensitive_field(order_field):
+                return {"error": f"Ordering on '{order_field}' is not allowed"}
 
         qs = queryset.values(*group_by).annotate(**aggs)
         if ordering:
@@ -915,6 +929,10 @@ def _tool_export_data(params, user):
 
     # Generate CSV
     custom_fields = params.get("fields")
+    if custom_fields:
+        for f in custom_fields:
+            if _is_sensitive_field(f):
+                return {"error": f"Field '{f}' is not allowed in exports"}
     try:
         if custom_fields:
             # Use CsvFormatter directly with custom fields

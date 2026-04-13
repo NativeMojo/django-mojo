@@ -1,6 +1,20 @@
+from datetime import datetime
 from mojo.helpers import logit
 
 logger = logit.get_logger("fileman", "fileman.log")
+
+
+def _parse_expires_at(value):
+    """Parse an ISO 8601 expires_at value into a datetime. Returns None on failure."""
+    if not value or not isinstance(value, str):
+        return None
+    try:
+        # Handle both +00:00 and Z suffixes
+        if value.endswith("Z"):
+            value = value[:-1] + "+00:00"
+        return datetime.fromisoformat(value)
+    except (ValueError, TypeError):
+        return None
 
 
 def cleanup_expired_files(job):
@@ -13,11 +27,10 @@ def cleanup_expired_files(job):
     from mojo.apps.fileman.models import File
 
     now = timezone.now()
-    now_iso = now.isoformat()
 
     # Find files that have an expires_at key in metadata.
-    # We filter for files that have the key, then compare in Python
-    # because JSON string comparison across DB backends is unreliable.
+    # We filter for the key in the DB, then parse and compare in Python
+    # to handle format variations (Z vs +00:00, etc.) safely.
     candidates = File.objects.filter(
         metadata__has_key="expires_at",
         is_active=True,
@@ -25,11 +38,15 @@ def cleanup_expired_files(job):
 
     deleted = 0
     for f in candidates.iterator():
-        expires_at = f.metadata.get("expires_at", "") if isinstance(f.metadata, dict) else ""
-        if not expires_at:
+        raw = f.metadata.get("expires_at", "") if isinstance(f.metadata, dict) else ""
+        expires_at = _parse_expires_at(raw)
+        if expires_at is None:
             continue
-        # ISO string comparison — both are ISO 8601 format
-        if expires_at < now_iso:
+        # Make naive datetimes UTC-aware for comparison
+        if expires_at.tzinfo is None:
+            from django.utils.timezone import utc
+            expires_at = expires_at.replace(tzinfo=utc)
+        if expires_at < now:
             source = f.metadata.get("source", "unknown") if isinstance(f.metadata, dict) else "unknown"
             try:
                 f.on_rest_pre_delete()
