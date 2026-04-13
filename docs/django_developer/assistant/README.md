@@ -47,7 +47,7 @@ Core tools are sent to the LLM on every turn regardless of domain. They handle u
 |---|---|
 | `discovery` | `load_tools` |
 | `memory` | `read_memory`, `write_memory`, `delete_memory` |
-| `models` | `describe_model`, `query_model`, `delete_model_instance` |
+| `models` | `describe_model`, `query_model`, `aggregate_model`, `export_data`, `delete_model_instance` |
 | `docs` | `read_docs` |
 | `web` | `browse_url` |
 | `logs` | `query_logs` |
@@ -88,6 +88,19 @@ Loaded domains persist in `conversation.metadata["active_domains"]`. Resumed con
 
 Old conversations (pre-two-tier) that have `tool_use` blocks in their message history fall back to receiving all tools. This keeps existing conversations working without any migration.
 
+## Data Strategy
+
+The system prompt instructs the LLM on which tool to use for data operations:
+
+| Task | Tool |
+|---|---|
+| Count, sum, average, min/max, grouped breakdown | `aggregate_model` |
+| Export rows as a file | `export_data` |
+| Inspect specific records (small result set) | `query_model` |
+| Never | Return raw CSV inline — all CSV exports use `export_data` |
+
+`export_data` writes data directly to file storage and returns a download URL. The LLM presents this URL in a `file` structured block so the frontend can render a download card. The file is owned by the requesting user/group and expires after `FILEMAN_EXPORT_EXPIRES_DAYS` days.
+
 ## Enabling
 
 The assistant is disabled by default. Add to your Django settings:
@@ -113,6 +126,7 @@ Add `"mojo.apps.assistant"` to `INSTALLED_APPS` and run migrations.
 | `LLM_BROWSE_MAX_LENGTH` | `20000` | Max character length of content returned by `browse_url` and `read_docs` |
 | `LLM_BROWSE_TIMEOUT` | `10` | HTTP request timeout in seconds for `browse_url` |
 | `LLM_DOCS_BASE_URL` | `https://raw.githubusercontent.com/NativeMojo/django-mojo/refs/heads/main/docs/` | Base URL for fetching framework docs via `read_docs` |
+| `FILEMAN_EXPORT_EXPIRES_DAYS` | `14` | Days until assistant `export_data` files expire and are deleted by the cleanup job |
 
 ## Built-in Tools
 
@@ -213,7 +227,9 @@ Add `"mojo.apps.assistant"` to `INSTALLED_APPS` and run migrations.
 | Tool | Permission | Mutates | Description |
 |---|---|---|---|
 | `describe_model` | `view_admin` | No | Describe a MojoModel's fields, graphs, permissions, and search fields. Use this to discover what data is available before querying. Requires `app_name` and `model_name`. Sensitive fields (`password`, `auth_key`, `onetime_code`, `secret`, `token_secret`) are excluded from output. Only works on MojoModels with a `RestMeta` definition and without `NO_REST = True`. |
-| `query_model` | `view_admin` | No | Query any MojoModel with filters, search, ordering, and output format options. Respects the model's `RestMeta` permissions and owner/group filtering — the same rules as the REST API. Supports JSON and CSV output, count-only mode, and configurable limits (default 50, max 200). Sensitive fields are blocked as filter keys. |
+| `query_model` | `view_admin` | No | Query any MojoModel and return results inline as JSON. Best for small result sets (detail lookups, spot-checking). Respects `RestMeta` permissions and owner/group filtering. Max 200 rows. For exports use `export_data`; for counts/sums use `aggregate_model`. |
+| `aggregate_model` | `view_admin` | No | Run aggregate queries (count, sum, avg, min, max, count_distinct) on any MojoModel, with optional `group_by`. Use for summaries — never pull rows just to count or sum them. |
+| `export_data` | `view_admin` | Yes | Export query results to a CSV file in file storage (S3). Data is written directly to a `fileman.File` record — not returned inline. Returns a download URL. Use for any export request, especially large result sets. |
 | `delete_model_instance` | `view_admin` | Yes | Delete a single model instance by primary key. The model must have `CAN_DELETE = True` in its `RestMeta`, and the user must pass the model's full delete permission chain (`DELETE_PERMS` → `SAVE_PERMS` → `VIEW_PERMS`), including owner and group checks — identical to the REST layer's `on_rest_handle_delete`. Calls `on_rest_pre_delete()` and deletes inside `transaction.atomic()`. Reports a security event on permission denial. |
 
 `query_model` parameters:
@@ -227,10 +243,36 @@ Add `"mojo.apps.assistant"` to `INSTALLED_APPS` and run migrations.
 | `ordering` | string | `-pk` | Order by field, prefix with `-` for descending (e.g. `-created`) |
 | `limit` | integer | `50` | Max results to return (max 200) |
 | `graph` | string | `default` | Serialization graph name |
-| `format` | string | `json` | Output format: `json` or `csv` |
 | `count_only` | boolean | `false` | If true, return only the total count with no row data |
 
-The tool enforces the same permission and owner/group scoping as the REST layer via `rest_check_permission` and `_apply_owner_group_filter`. Attempts to filter on sensitive fields are blocked and reported as security events.
+`aggregate_model` parameters:
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `app_name` | string | required | Django app label |
+| `model_name` | string | required | Model class name |
+| `aggregations` | array | required | List of `{field, func, alias?}` objects. `func` is one of `count`, `sum`, `avg`, `min`, `max`, `count_distinct`. `alias` defaults to `{func}_{field}`. Use `id` as the field for row counts. |
+| `filters` | object | `{}` | ORM filter dict |
+| `group_by` | array | — | Fields to group by (e.g. `["status"]` or `["status", "category"]`) |
+| `ordering` | string | — | Order grouped results (e.g. `-total` or `status`) |
+| `limit` | integer | `50` | Max grouped rows to return (max 200) |
+
+`export_data` parameters:
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `app_name` | string | required | Django app label |
+| `model_name` | string | required | Model class name |
+| `filters` | object | `{}` | ORM filter dict |
+| `search` | string | — | Free-text search using the model's `SEARCH_FIELDS` |
+| `ordering` | string | `-pk` | Order by field |
+| `limit` | integer | `5000` | Max rows to export (max 50000) |
+| `fields` | array | — | Specific fields to include. Defaults to the model's graph config. |
+| `graph` | string | `default` | Serialization graph name |
+
+`export_data` requires `fileman` to be installed and a `FileManager` configured for the user/group. Files are stored with `metadata.expires_at` set to `FILEMAN_EXPORT_EXPIRES_DAYS` days from creation (default 14). If `mojo.apps.shortlink` is installed, the returned URL is a shortlink. The assistant should present the URL using a `file` block (see structured block types in the system prompt).
+
+All three tools enforce the same permission and owner/group scoping as the REST layer via `rest_check_permission` and `_apply_owner_group_filter`. Attempts to filter or aggregate on sensitive fields are blocked and reported as security events.
 
 ### Logs Domain (`view_logs`)
 

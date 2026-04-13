@@ -1,5 +1,16 @@
 ## v1.1.0 - (current)
 
+## v1.1.21 - April 13, 2026
+
+### Added
+- **`aggregate_model` assistant tool** — Run Django ORM aggregate queries (count, sum, avg, min, max, count_distinct) with optional `group_by` on any MojoModel. Enforces the same permission and owner/group scoping as `query_model`. Sensitive fields are blocked as aggregation or group-by targets. Use this for all summary questions — never pull rows just to count them. Requires `view_admin`.
+- **`export_data` assistant tool** — Export query results to a downloadable CSV file stored in `fileman.File` (S3 or local). Data is written directly to file storage — not returned inline. Returns a download URL (shortlink if `mojo.apps.shortlink` is installed). The assistant presents the result using the new `file` structured block. Requires `view_admin` + a configured `FileManager` for the user/group. Row limit: default 5,000, max 50,000. Setting: `FILEMAN_EXPORT_EXPIRES_DAYS` (default 14).
+- **`file` structured block type** — New block type for downloadable files. Schema: `{"type": "file", "filename", "url", "size", "format", "row_count", "expires_in"}`. Frontend should render as a download card with filename, size, format icon, and download button.
+- **`metadata.expires_at` cleanup job** — `mojo/apps/fileman/cronjobs.py` registers a daily cron at 04:00 UTC that publishes `cleanup_expired_files` to the `cleanup` job channel. The async job deletes all active `fileman.File` records whose `metadata.expires_at` has passed, removing both the database record and the storage backend file. Works for any file with `expires_at` in metadata — not just assistant exports.
+
+### Changed
+- **`query_model` CSV removed** — The `format` parameter and inline CSV output have been removed from `query_model`. Use `export_data` for all CSV exports. `query_model` is now JSON-only and intended for small result sets (detail lookups, spot-checking).
+
 ## v1.1.20 - April 13, 2026
 
 new github auth and app support

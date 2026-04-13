@@ -159,6 +159,37 @@ file_instance.set_metadata("width", 1920)
 file_instance.save()
 ```
 
+### `expires_at` — automatic expiry
+
+Set `metadata["expires_at"]` to an ISO 8601 timestamp to mark a file for automatic deletion by the cleanup job:
+
+```python
+from django.utils import timezone
+from datetime import timedelta
+
+file_instance.metadata = {
+    "source": "my_export",
+    "expires_at": (timezone.now() + timedelta(days=14)).isoformat(),
+}
+file_instance.save()
+```
+
+The cleanup job (`mojo.apps.fileman.asyncjobs.cleanup_expired_files`) runs daily at 04:00 UTC. It finds all active files with an `expires_at` key and deletes any whose timestamp has passed. Deletion calls `on_rest_pre_delete()` before removing the record — which cleans up the storage backend file.
+
+This pattern is used by the assistant `export_data` tool. You can use it for any time-limited generated file.
+
+## Cleanup Job
+
+`mojo/apps/fileman/cronjobs.py` registers a cron job that runs daily:
+
+```python
+@schedule(minutes="0", hours="4")
+def cleanup_expired_files():
+    jobs.publish(func="mojo.apps.fileman.asyncjobs.cleanup_expired_files", channel="cleanup", payload={})
+```
+
+The job is registered automatically when `mojo.apps.fileman` is in `INSTALLED_APPS`. No additional configuration is needed. It only deletes files with `metadata.expires_at` set — files without this key are never touched.
+
 ## Access Control
 
 ```python

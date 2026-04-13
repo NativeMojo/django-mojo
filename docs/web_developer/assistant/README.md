@@ -276,7 +276,7 @@ Get a conversation. Use `?graph=detail` to include the full message history. Wit
 | `role` | `user`, `assistant`, `tool_use`, or `tool_result` |
 | `content` | Text content. For assistant messages, block fences are already stripped. |
 | `tool_calls` | Raw tool_use/tool_result data. `null` for non-tool messages. |
-| `blocks` | Pre-parsed structured data blocks (table/chart/stat). `null` when not present. Stored at write time — never re-parsed on read. |
+| `blocks` | Pre-parsed structured data blocks (table/chart/stat/file/etc.). `null` when not present. Stored at write time — never re-parsed on read. |
 | `created` | ISO timestamp |
 
 **Response** (not found or not owner — HTTP 404):
@@ -487,7 +487,7 @@ The assistant checks the user's permissions before executing each tool. The tool
 | `manage_security` | All `view_security` tools + update incident, block IP, create ticket |
 | `view_jobs` | Query jobs, job events, job logs, job stats, queue health, list scheduled tasks |
 | `manage_jobs` | All `view_jobs` tools + cancel job, retry job, create/update/delete scheduled tasks, run job, run scheduled task now |
-| `view_admin` | Query users, user detail, user activity, rate limits, permission summary, fetch metrics, system health, list tools, list metric categories/slugs, list permissions, browse web URLs, describe, query, and delete any MojoModel (subject to model-level delete permissions), load domain tools |
+| `view_admin` | Query users, user detail, user activity, rate limits, permission summary, fetch metrics, system health, list tools, list metric categories/slugs, list permissions, browse web URLs, describe, query, aggregate, export, and delete any MojoModel (subject to model-level delete permissions), load domain tools |
 | `view_groups` | Query groups, group detail, group members, group activity |
 | `view_logs` | Query the audit log trail (logit.Log) — request history, model changes, API errors, custom events |
 | `assistant` | Read, write, and delete memory entries and skills across all tiers (subject to per-tier access rules) |
@@ -532,21 +532,13 @@ Sensitive fields (`password`, `auth_key`, `onetime_code`, `secret`, `token_secre
 
 ### `query_model`
 
-Query a MojoModel with filters, search, ordering, and format options. Respects the same `RestMeta` permissions and owner/group scoping as the REST API — a user can only see records they are normally allowed to see.
+Query a MojoModel and return results inline as JSON. Best for small result sets (detail lookups, spot-checking records). Respects the same `RestMeta` permissions and owner/group scoping as the REST API.
 
 **Required permission**: `view_admin` plus any permissions the model's `RestMeta` `VIEW_PERMS` requires.
 
-**Supports**:
-- ORM filter expressions (e.g. `{"status": "active", "created__gte": "2026-01-01"}`)
-- Free-text search via the model's `SEARCH_FIELDS`
-- Ordering (prefix field with `-` for descending)
-- JSON output (default) or CSV export
-- Count-only mode — returns total without row data
-- Configurable limit (default 50, max 200)
+Filtering on sensitive fields is blocked and logged as a security event. Max 200 rows.
 
-Filtering on sensitive fields is blocked and logged as a security event.
-
-**Example response shape (JSON)**:
+**Example response shape**:
 
 ```json
 {
@@ -567,6 +559,50 @@ Filtering on sensitive fields is blocked and logged as a security event.
     "count": 47
 }
 ```
+
+### `aggregate_model`
+
+Run aggregate queries (count, sum, avg, min, max, count_distinct) on any MojoModel. Supports `group_by` for grouped breakdowns. The assistant uses this for summary questions — never fetching rows just to count them.
+
+**Required permission**: `view_admin` plus model `VIEW_PERMS`.
+
+**Example response shape (grouped)**:
+
+```json
+{
+    "model": "incident.Incident",
+    "group_by": ["status"],
+    "results": [
+        {"status": "open", "count_id": 42},
+        {"status": "resolved", "count_id": 198}
+    ],
+    "count": 2
+}
+```
+
+**Example response shape (flat)**:
+
+```json
+{
+    "model": "incident.Incident",
+    "results": {"count_id": 240, "avg_priority": 6.4}
+}
+```
+
+### `export_data`
+
+Export query results to a downloadable CSV file stored in file storage. Data is written directly to storage — not returned inline. The assistant responds with a `file` block containing the download URL.
+
+**Required permission**: `view_admin` plus model `VIEW_PERMS`. Requires `fileman` with a configured `FileManager` for the user/group.
+
+**Example queries that trigger this tool**:
+
+```
+"Export all active users to CSV"
+"Download a list of open incidents from this week"
+```
+
+The assistant will respond with a `file` block. See [File Block](#file) for the schema and rendering guidance.
 
 ### `delete_model_instance`
 
@@ -1003,6 +1039,33 @@ For single-record key/value summaries. Prefer this over a one-row table for user
 
 **Rendering guidance**: Render as a definition list or two-column card — label in muted text, value in regular weight.
 
+#### `file`
+
+For downloadable files generated by the assistant (CSV exports, reports). Render as a download card with filename, size, format icon, and download button.
+
+```json
+{
+    "type": "file",
+    "filename": "export_users_2026-04-13.csv",
+    "url": "https://example.com/s/Xk9mR2p",
+    "size": 45230,
+    "format": "csv",
+    "row_count": 1250,
+    "expires_in": "14 days"
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `filename` | string | Suggested filename for download |
+| `url` | string | Download URL (direct or shortlink) |
+| `size` | integer | File size in bytes |
+| `format` | string | File format (e.g. `csv`) |
+| `row_count` | integer | Number of data rows in the file |
+| `expires_in` | string | Human-readable expiry window (e.g. `"14 days"`) |
+
+**Rendering guidance**: Show a card with a file-type icon, the filename, row count, and a prominent Download button linking to `url`. Display the size formatted (e.g. `44 KB`) and a note that the link expires. The URL is a pre-signed or shortlink — no auth header needed.
+
 #### `alert`
 
 For permission denials, important warnings, error conditions, and success confirmations that need visual distinction from narrative text. Used sparingly — only for genuinely important information.
@@ -1047,6 +1110,9 @@ function renderBlocks(blocks) {
                 break;
             case 'alert':
                 renderAlert(block.level, block.title, block.message);
+                break;
+            case 'file':
+                renderFileCard(block.filename, block.url, block.size, block.row_count, block.expires_in);
                 break;
         }
     }
