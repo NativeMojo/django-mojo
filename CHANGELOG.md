@@ -2,6 +2,11 @@
 
 ## v1.1.21 - April 13, 2026
 
+new ai assistant file support
+
+
+## v1.1.21 - April 13, 2026
+
 ### Added
 - **`aggregate_model` assistant tool** — Run Django ORM aggregate queries (count, sum, avg, min, max, count_distinct) with optional `group_by` on any MojoModel. Enforces the same permission and owner/group scoping as `query_model`. Sensitive fields are blocked as aggregation or group-by targets. Use this for all summary questions — never pull rows just to count them. Requires `view_admin`.
 - **`export_data` assistant tool** — Export query results to a downloadable CSV file stored in `fileman.File` (S3 or local). Data is written directly to file storage — not returned inline. Returns a download URL (shortlink if `mojo.apps.shortlink` is installed). The assistant presents the result using the new `file` structured block. Requires `view_admin` + a configured `FileManager` for the user/group. Row limit: default 5,000, max 50,000. Setting: `FILEMAN_EXPORT_EXPIRES_DAYS` (default 14).
