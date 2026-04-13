@@ -33,6 +33,7 @@ class GitHubInstall(MojoSecrets, MojoModel):
     class RestMeta:
         VIEW_PERMS = ["github", "view_github", "manage_github"]
         SAVE_PERMS = ["github", "manage_github"]
+        DELETE_PERMS = ["github", "manage_github"]
         CAN_DELETE = True
         NO_SHOW_FIELDS = ["mojo_secrets"]
         GRAPHS = {

@@ -50,7 +50,7 @@ class GitHubOAuthProvider(OAuthProvider):
         }, headers={"Accept": "application/json"}, timeout=10)
 
         if not resp.ok:
-            logit.error("oauth.github", f"Token exchange failed: {resp.status_code} {resp.text}")
+            logit.error("oauth.github", f"Token exchange failed: {resp.status_code}")
             raise ValueError("Failed to exchange authorization code with GitHub")
 
         return resp.json()
@@ -65,7 +65,7 @@ class GitHubOAuthProvider(OAuthProvider):
         # Fetch user profile
         resp = requests.get(GITHUB_USER_URL, headers=headers, timeout=10)
         if not resp.ok:
-            logit.error("oauth.github", f"Profile fetch failed: {resp.status_code} {resp.text}")
+            logit.error("oauth.github", f"Profile fetch failed: {resp.status_code}")
             raise ValueError("Failed to fetch profile from GitHub")
 
         data = resp.json()
@@ -89,7 +89,7 @@ class GitHubOAuthProvider(OAuthProvider):
         """Fetch the primary verified email from GET /user/emails."""
         resp = requests.get(GITHUB_EMAILS_URL, headers=headers, timeout=10)
         if not resp.ok:
-            logit.error("oauth.github", f"Email fetch failed: {resp.status_code} {resp.text}")
+            logit.error("oauth.github", f"Email fetch failed: {resp.status_code}")
             return None
 
         for entry in resp.json():

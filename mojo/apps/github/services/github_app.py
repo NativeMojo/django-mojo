@@ -42,8 +42,8 @@ def _get_private_key():
     try:
         with open(key_path, "r") as f:
             return f.read()
-    except FileNotFoundError:
-        logger.error(f"GitHub App private key not found at {key_path}")
+    except OSError:
+        logger.error(f"GitHub App private key could not be read at {key_path}")
         return None
 
 
