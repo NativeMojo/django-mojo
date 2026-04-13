@@ -197,16 +197,17 @@ def test_query_count_only(opts):
 
 
 @th.django_unit_test()
-def test_query_csv_format(opts):
+def test_query_no_longer_accepts_csv_format(opts):
+    """CSV format was removed from query_model — exports use export_data tool instead."""
     result = _query({
         "app_name": "incident", "model_name": "Event",
         "filters": {"title__startswith": "modeltest_"},
         "format": "csv",
     }, opts.admin)
-    assert "error" not in result, f"Should succeed: {result.get('error')}"
-    assert result["format"] == "csv", f"Format should be csv, got: {result.get('format')}"
-    assert "content" in result, "CSV result should have content"
-    assert result["count"] == 5, f"Count should be 5, got: {result['count']}"
+    # format param is now ignored — should return JSON results
+    assert "error" not in result, f"Should succeed (format param ignored): {result.get('error')}"
+    assert "results" in result, "Should return JSON results, not CSV content"
+    assert "content" not in result, "Should NOT have CSV content"
 
 
 @th.django_unit_test()

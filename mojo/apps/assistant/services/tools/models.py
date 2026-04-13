@@ -287,9 +287,11 @@ def _tool_describe_model(params, user):
     permission="view_admin",
     core=True,
     description=(
-        "Query any MojoModel with filters, search, ordering, and format options. "
-        "Respects RestMeta permissions and owner/group filtering. "
-        "Supports JSON and CSV output, count-only mode, and configurable limits (max 200). "
+        "Query any MojoModel and return results inline as JSON. "
+        "Best for small result sets (detail lookups, spot-checking records). "
+        "Respects RestMeta permissions and owner/group filtering. Max 200 rows. "
+        "For CSV/file exports use export_data instead. "
+        "For counts, sums, averages use aggregate_model instead. "
         "Use describe_model first to discover available fields and graphs. "
         "Example: query_model(app_name='account', model_name='User', "
         "filters={'is_active': true}, ordering='-created', limit=10)"
@@ -324,11 +326,6 @@ def _tool_describe_model(params, user):
             "graph": {
                 "type": "string",
                 "description": "Serialization graph name (default 'default')",
-            },
-            "format": {
-                "type": "string",
-                "enum": ["json", "csv"],
-                "description": "Output format (default 'json')",
             },
             "count_only": {
                 "type": "boolean",
@@ -424,25 +421,8 @@ def _tool_query_model(params, user):
         logger.info("query_model", model_label, f"count_only={count}", f"user={user.id}")
         return {"model": model_label, "count": count}
 
-    # Format
-    fmt = params.get("format", "json").strip().lower()
+    # Serialization
     graph = params.get("graph", "default").strip()
-
-    if fmt == "csv":
-        try:
-            csv_data = model.to_csv(queryset[:limit], format="csv")
-            logger.info("query_model", model_label, f"csv rows={limit}", f"user={user.id}")
-            return {
-                "model": model_label,
-                "format": "csv",
-                "content": csv_data,
-                "count": queryset.count(),
-            }
-        except Exception as e:
-            logger.warning("query_model csv error", model_label, str(e))
-            return {"error": "CSV export failed"}
-
-    # JSON (default)
     results = model.queryset_to_dict(queryset[:limit], graph=graph)
     total = queryset.count()
 
@@ -546,3 +526,479 @@ def _tool_delete_model_instance(params, user):
 
     logger.info("delete_model_instance", model_label, f"pk={pk}", f"user={user.id}")
     return {"ok": True, "model": model_label, "pk": pk, "status": result.get("status", "deleted")}
+
+
+# ---------------------------------------------------------------------------
+# Aggregate functions map
+# ---------------------------------------------------------------------------
+
+AGGREGATE_FUNCS = {"count", "sum", "avg", "min", "max", "count_distinct"}
+
+# Django field types that support sum/avg
+NUMERIC_FIELD_TYPES = {
+    "IntegerField", "BigIntegerField", "SmallIntegerField",
+    "PositiveIntegerField", "PositiveSmallIntegerField", "PositiveBigIntegerField",
+    "FloatField", "DecimalField", "AutoField", "BigAutoField", "SmallAutoField",
+    "DurationField",
+}
+
+MAX_GROUP_ROWS = 200
+DEFAULT_GROUP_LIMIT = 50
+
+
+def _get_field_type(model, field_name):
+    """Return the internal type string for a model field, or None if not found."""
+    try:
+        field = model._meta.get_field(field_name)
+        return getattr(field, "get_internal_type", lambda: None)()
+    except Exception:
+        return None
+
+
+@tool(
+    name="aggregate_model",
+    domain="models",
+    permission="view_admin",
+    core=True,
+    description=(
+        "Run aggregate queries (count, sum, avg, min, max) on any MojoModel. "
+        "Supports group_by for grouped results (e.g. count by status). "
+        "Use this for summaries — never pull rows just to count or sum them. "
+        "For row-level data use query_model; for file exports use export_data."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "app_name": {
+                "type": "string",
+                "description": "Django app label (e.g. 'account', 'incident', 'jobs')",
+            },
+            "model_name": {
+                "type": "string",
+                "description": "Model class name (e.g. 'User', 'Incident', 'Job')",
+            },
+            "filters": {
+                "type": "object",
+                "description": "ORM filter dict (e.g. {'status': 'active', 'created__gte': '2026-01-01'})",
+            },
+            "aggregations": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "field": {
+                            "type": "string",
+                            "description": "Field to aggregate (use 'id' for counting rows)",
+                        },
+                        "func": {
+                            "type": "string",
+                            "enum": ["count", "sum", "avg", "min", "max", "count_distinct"],
+                            "description": "Aggregate function",
+                        },
+                        "alias": {
+                            "type": "string",
+                            "description": "Result key name (optional, auto-generated as func_field)",
+                        },
+                    },
+                    "required": ["field", "func"],
+                },
+                "description": "List of aggregations to compute",
+            },
+            "group_by": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Fields to group by (e.g. ['status'] or ['status', 'category'])",
+            },
+            "ordering": {
+                "type": "string",
+                "description": "Order grouped results (e.g. '-total' or 'status')",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Max grouped rows to return (default 50, max 200)",
+            },
+        },
+        "required": ["app_name", "model_name", "aggregations"],
+    },
+)
+def _tool_aggregate_model(params, user):
+    """Run aggregate queries on a model."""
+    from django.db.models import Count, Sum, Avg, Min, Max
+
+    app_name = params.get("app_name", "").strip()
+    model_name = params.get("model_name", "").strip()
+
+    if not app_name or not model_name:
+        return {"error": "Both 'app_name' and 'model_name' are required"}
+
+    model, err = _resolve_model(app_name, model_name)
+    if err:
+        return err
+
+    model_label = f"{app_name}.{model_name}"
+
+    # Permission check
+    filters = params.get("filters") or {}
+    request = _build_request(user, filters)
+    if not model.rest_check_permission(request, "VIEW_PERMS"):
+        details = f"Permission denied: aggregate_model on {model_label} by user {user.id}"
+        logger.warning(details)
+        _report_security_event("assistant_permission_denied", 5, details, user, model_name=model_label)
+        return {"error": f"Permission denied for {model_label}"}
+
+    # Validate filters
+    valid_fields = _get_valid_field_names(model)
+    if filters:
+        filter_err = _validate_filter_keys(filters, valid_fields, user, model_label)
+        if filter_err:
+            return filter_err
+
+    # Validate aggregations
+    aggregations = params.get("aggregations") or []
+    if not aggregations:
+        return {"error": "At least one aggregation is required"}
+
+    agg_map = {
+        "count": lambda f: Count(f),
+        "count_distinct": lambda f: Count(f, distinct=True),
+        "sum": lambda f: Sum(f),
+        "avg": lambda f: Avg(f),
+        "min": lambda f: Min(f),
+        "max": lambda f: Max(f),
+    }
+
+    aggs = {}
+    for agg in aggregations:
+        field = agg.get("field", "").strip()
+        func = agg.get("func", "").strip().lower()
+        alias = agg.get("alias", "").strip() or f"{func}_{field}"
+
+        if not field or func not in AGGREGATE_FUNCS:
+            return {"error": f"Invalid aggregation: field='{field}', func='{func}'"}
+
+        if _is_sensitive_field(field):
+            return {"error": f"Aggregation on '{field}' is not allowed"}
+
+        if field not in valid_fields:
+            return {"error": f"Unknown field '{field}' on {model_label}"}
+
+        # Validate numeric requirement for sum/avg
+        if func in ("sum", "avg"):
+            field_type = _get_field_type(model, field)
+            if field_type and field_type not in NUMERIC_FIELD_TYPES:
+                return {"error": f"Cannot compute {func} on non-numeric field '{field}'"}
+
+        aggs[alias] = agg_map[func](field)
+
+    # Validate group_by
+    group_by = params.get("group_by") or []
+    for gb_field in group_by:
+        if _is_sensitive_field(gb_field):
+            return {"error": f"Cannot group by sensitive field '{gb_field}'"}
+        if gb_field not in valid_fields:
+            return {"error": f"Unknown group_by field '{gb_field}' on {model_label}"}
+
+    # Build queryset
+    queryset = model.objects.all()
+    queryset = _apply_owner_group_filter(model, request, queryset)
+
+    if filters:
+        try:
+            queryset = queryset.filter(**filters)
+        except Exception as e:
+            logger.warning("aggregate_model filter error", model_label, str(e))
+            return {"error": "Invalid filter parameters"}
+
+    # Execute
+    if group_by:
+        limit = min(params.get("limit", DEFAULT_GROUP_LIMIT), MAX_GROUP_ROWS)
+        ordering = params.get("ordering", "").strip()
+
+        qs = queryset.values(*group_by).annotate(**aggs)
+        if ordering:
+            qs = qs.order_by(ordering)
+
+        rows = list(qs[:limit])
+        total_groups = qs.count()
+        truncated = total_groups > limit
+
+        # Convert any non-serializable values
+        for row in rows:
+            for key, val in row.items():
+                if hasattr(val, "total_seconds"):
+                    row[key] = val.total_seconds()
+                elif val is not None and not isinstance(val, (str, int, float, bool)):
+                    row[key] = str(val)
+
+        logger.info("aggregate_model", model_label, f"group_by={group_by}",
+                     f"groups={len(rows)}", f"user={user.id}")
+        result = {
+            "model": model_label,
+            "group_by": group_by,
+            "results": rows,
+            "count": len(rows),
+        }
+        if truncated:
+            result["truncated"] = True
+            result["total_groups"] = total_groups
+        return result
+    else:
+        # Flat aggregate — single result dict
+        result = queryset.aggregate(**aggs)
+
+        # Convert non-serializable values
+        for key, val in result.items():
+            if hasattr(val, "total_seconds"):
+                result[key] = val.total_seconds()
+            elif val is not None and not isinstance(val, (str, int, float, bool)):
+                result[key] = str(val)
+
+        logger.info("aggregate_model", model_label, f"flat aggs={list(result.keys())}",
+                     f"user={user.id}")
+        return {
+            "model": model_label,
+            "results": result,
+        }
+
+
+# ---------------------------------------------------------------------------
+# Export data tool — CSV to file storage
+# ---------------------------------------------------------------------------
+
+DEFAULT_EXPORT_LIMIT = 5000
+MAX_EXPORT_LIMIT = 50000
+
+
+@tool(
+    name="export_data",
+    domain="models",
+    permission="view_admin",
+    core=True,
+    description=(
+        "Export query results to a downloadable CSV file stored in file storage (S3). "
+        "Data is written directly to a file — NOT returned inline. "
+        "Returns a download URL for the user. Use for any export request. "
+        "For summaries (counts, sums, averages) use aggregate_model instead."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "app_name": {
+                "type": "string",
+                "description": "Django app label (e.g. 'account', 'incident', 'jobs')",
+            },
+            "model_name": {
+                "type": "string",
+                "description": "Model class name (e.g. 'User', 'Incident', 'Job')",
+            },
+            "filters": {
+                "type": "object",
+                "description": "ORM filter dict (e.g. {'status': 'active', 'created__gte': '2026-01-01'})",
+            },
+            "search": {
+                "type": "string",
+                "description": "Free-text search (uses model's SEARCH_FIELDS)",
+            },
+            "ordering": {
+                "type": "string",
+                "description": "Order by field, prefix with - for descending (e.g. '-created')",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Max rows to export (default 5000, max 50000)",
+            },
+            "fields": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Specific fields to include (optional, defaults to model's graph config)",
+            },
+            "graph": {
+                "type": "string",
+                "description": "Serialization graph name for field config (default 'default')",
+            },
+        },
+        "required": ["app_name", "model_name"],
+    },
+    mutates=True,
+)
+def _tool_export_data(params, user):
+    """Export query results to a CSV file in storage, return download URL."""
+    import io
+    from datetime import timedelta
+    from django.utils import timezone
+    from mojo.helpers.settings import settings
+
+    app_name = params.get("app_name", "").strip()
+    model_name = params.get("model_name", "").strip()
+
+    if not app_name or not model_name:
+        return {"error": "Both 'app_name' and 'model_name' are required"}
+
+    model, err = _resolve_model(app_name, model_name)
+    if err:
+        return err
+
+    model_label = f"{app_name}.{model_name}"
+
+    # Permission check
+    filters = params.get("filters") or {}
+    request = _build_request(user, filters)
+    if not model.rest_check_permission(request, "VIEW_PERMS"):
+        details = f"Permission denied: export_data on {model_label} by user {user.id}"
+        logger.warning(details)
+        _report_security_event("assistant_permission_denied", 5, details, user, model_name=model_label)
+        return {"error": f"Permission denied for {model_label}"}
+
+    # Validate filters
+    valid_fields = _get_valid_field_names(model)
+    if filters:
+        filter_err = _validate_filter_keys(filters, valid_fields, user, model_label)
+        if filter_err:
+            return filter_err
+
+    # Validate ordering
+    ordering = params.get("ordering", "").strip()
+    if ordering:
+        order_field = ordering.lstrip("-")
+        if "__" in order_field:
+            return {"error": "Relational ordering is not supported"}
+        if _is_sensitive_field(order_field):
+            return {"error": f"Ordering on '{order_field}' is not allowed"}
+        if order_field not in valid_fields:
+            return {"error": f"Unknown ordering field '{order_field}' on {model_label}"}
+
+    # Build queryset
+    queryset = model.objects.all()
+    queryset = _apply_owner_group_filter(model, request, queryset)
+
+    # Search
+    search = params.get("search", "").strip()
+    if search:
+        request.DATA["search"] = search
+        queryset = model.on_rest_list_search(request, queryset)
+
+    # Filters
+    if filters:
+        try:
+            queryset = queryset.filter(**filters)
+        except Exception as e:
+            logger.warning("export_data filter error", model_label, str(e))
+            return {"error": "Invalid filter parameters"}
+
+    # Ordering
+    if ordering:
+        queryset = queryset.order_by(ordering)
+    elif hasattr(model._meta, "ordering") and model._meta.ordering:
+        pass
+    else:
+        queryset = queryset.order_by("-pk")
+
+    # Limit
+    limit = min(params.get("limit", DEFAULT_EXPORT_LIMIT), MAX_EXPORT_LIMIT)
+    export_qs = queryset[:limit]
+
+    # Resolve FileManager
+    from mojo.apps.fileman.models import FileManager
+    group = getattr(user, "group", None)
+    if not group:
+        membership = getattr(user, "membership", None)
+        if membership:
+            group = getattr(membership, "group", None)
+
+    try:
+        fm = FileManager.get_for_user_group(user=user, group=group)
+    except Exception:
+        fm = None
+
+    if not fm:
+        return {"error": "No file storage configured. Contact your administrator."}
+
+    # Generate CSV
+    custom_fields = params.get("fields")
+    try:
+        if custom_fields:
+            # Use CsvFormatter directly with custom fields
+            from mojo.serializers.core.manager import get_serializer_manager
+            manager = get_serializer_manager()
+            serializer = manager.get_format_serializer("csv")
+            csv_data = serializer.serialize_queryset(
+                export_qs, fields=custom_fields, raw_data=True,
+            )
+        else:
+            csv_data = model.to_csv(export_qs, format="csv")
+    except Exception as e:
+        logger.warning("export_data csv error", model_label, str(e))
+        return {"error": "CSV generation failed"}
+
+    # Count rows (header line excluded)
+    row_count = csv_data.count("\n") - 1 if csv_data.strip() else 0
+    if row_count < 0:
+        row_count = 0
+
+    # Build file-like object
+    date_str = timezone.now().strftime("%Y-%m-%d")
+    filename = f"export_{app_name}_{model_name}_{date_str}.csv"
+    csv_bytes = csv_data.encode("utf-8")
+
+    file_obj = io.BytesIO(csv_bytes)
+    file_obj.name = filename
+    file_obj.size = len(csv_bytes)
+    file_obj.content_type = "text/csv"
+
+    # Create File record
+    from mojo.apps.fileman.models import File
+    try:
+        file_instance = File.create_from_file(
+            file_obj, filename, user=user, group=group, file_manager=fm,
+        )
+    except Exception as e:
+        logger.error("export_data file creation error", model_label, str(e))
+        return {"error": "Failed to save export file"}
+
+    # Set metadata with expiration
+    expire_days = settings.get("FILEMAN_EXPORT_EXPIRES_DAYS", 14)
+    expires_at = timezone.now() + timedelta(days=expire_days)
+    file_instance.metadata = {
+        "source": "assistant_export",
+        "model": model_label,
+        "row_count": row_count,
+        "expires_at": expires_at.isoformat(),
+    }
+    file_instance.save()
+
+    # Generate download URL — use shortlink if available
+    url = _get_export_url(file_instance, user, group, expire_days)
+
+    logger.info("export_data", model_label, f"rows={row_count}", f"size={len(csv_bytes)}",
+                f"file_id={file_instance.pk}", f"user={user.id}")
+
+    return {
+        "url": url,
+        "filename": filename,
+        "size": len(csv_bytes),
+        "row_count": row_count,
+        "model": model_label,
+        "expires_in": f"{expire_days} days",
+    }
+
+
+def _get_export_url(file_instance, user, group, expire_days):
+    """Generate a download URL, wrapping in a shortlink if available."""
+    from django.apps import apps
+
+    if apps.is_installed("mojo.apps.shortlink"):
+        try:
+            from mojo.apps.shortlink import shorten
+            return shorten(
+                file=file_instance,
+                source="assistant_export",
+                expire_days=expire_days,
+                resolve_file=True,
+                user=user,
+                group=group,
+                bot_passthrough=True,
+            )
+        except Exception as e:
+            logger.warning("export_data shortlink error, falling back to direct URL", str(e))
+
+    return file_instance.generate_download_url()
