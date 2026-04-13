@@ -4,7 +4,7 @@
 
 OAuth2 social login is built into the framework. The full flow — CSRF state management, provider token exchange, user resolution, and JWT issuance — is handled by the framework. Your project only needs to configure credentials and (optionally) register additional providers.
 
-**Current providers:** `google`, `apple`
+**Current providers:** `google`, `apple`, `github`
 
 ---
 
@@ -30,6 +30,7 @@ Key files:
 | `mojo/apps/account/services/oauth/base.py` | `OAuthProvider` base class |
 | `mojo/apps/account/services/oauth/google.py` | Google implementation |
 | `mojo/apps/account/services/oauth/apple.py` | Apple implementation |
+| `mojo/apps/account/services/oauth/github.py` | GitHub implementation |
 | `mojo/apps/account/services/oauth/__init__.py` | Provider registry |
 
 ---
@@ -59,6 +60,21 @@ APPLE_PRIVATE_KEY  = "-----BEGIN PRIVATE KEY-----\n..."  # Full PEM content of t
 Apple does not use a static client secret. The framework generates a short-lived ES256 JWT from these four values on every token exchange. The `.p8` private key content should be stored as a multiline string (or loaded from an environment variable) — never committed to source control.
 
 If `OAUTH_REDIRECT_URI` is not set, the server builds it from the request `Origin` header as `<origin>/auth/oauth/<provider>/complete`. This works for single-origin SPAs but is less reliable for server-rendered or multi-origin setups — prefer the explicit setting in production.
+
+### GitHub Settings
+
+```python
+GITHUB_CLIENT_ID     = "your-github-oauth-app-client-id"
+GITHUB_CLIENT_SECRET = "your-github-oauth-app-client-secret"
+```
+
+GitHub does not always return an email on the `/user` endpoint — if the user has marked their email as private, the provider falls back to `GET /user/emails` and picks the primary verified address. No extra configuration is needed; the default scope `read:user user:email` covers both cases.
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `GITHUB_CLIENT_ID` | — | OAuth App client ID from GitHub Developer Settings |
+| `GITHUB_CLIENT_SECRET` | — | OAuth App client secret |
+| `GITHUB_SCOPES` | `"read:user user:email"` | OAuth scopes requested from GitHub |
 
 ### Optional Settings
 
@@ -186,77 +202,88 @@ Requiring an *additional* TOTP or SMS step after a successful OAuth assertion wo
 1. Create `mojo/apps/account/services/oauth/<provider>.py` subclassing `OAuthProvider`:
 
 ```python
-# services/oauth/github.py
+# services/oauth/myprovider.py
 import requests
-from .base import OAuthProvider
+from urllib.parse import urlencode, quote
+
+from mojo.helpers import logit
 from mojo.helpers.settings import settings
+from .base import OAuthProvider
 
-GITHUB_AUTH_URL  = "https://github.com/login/oauth/authorize"
-GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token"
-GITHUB_USER_URL  = "https://api.github.com/user"
+AUTH_URL  = "https://provider.example.com/oauth/authorize"
+TOKEN_URL = "https://provider.example.com/oauth/token"
+USER_URL  = "https://api.provider.example.com/user"
 
 
-class GitHubOAuthProvider(OAuthProvider):
+class MyOAuthProvider(OAuthProvider):
 
-    name = "github"
+    name = "myprovider"
 
     def get_auth_url(self, state, redirect_uri):
-        client_id = settings.get("GITHUB_CLIENT_ID")
-        return (
-            f"{GITHUB_AUTH_URL}"
-            f"?client_id={client_id}"
-            f"&redirect_uri={requests.utils.quote(redirect_uri)}"
-            f"&state={state}"
-            f"&scope=user:email"
-        )
+        params = {
+            "client_id": settings.get("MYPROVIDER_CLIENT_ID"),
+            "redirect_uri": redirect_uri,
+            "state": state,
+            "scope": "user email",
+        }
+        return f"{AUTH_URL}?{urlencode(params, quote_via=quote)}"
 
     def exchange_code(self, code, redirect_uri):
-        resp = requests.post(GITHUB_TOKEN_URL, json={
-            "client_id": settings.get("GITHUB_CLIENT_ID"),
-            "client_secret": settings.get("GITHUB_CLIENT_SECRET"),
+        resp = requests.post(TOKEN_URL, json={
+            "client_id": settings.get("MYPROVIDER_CLIENT_ID"),
+            "client_secret": settings.get("MYPROVIDER_CLIENT_SECRET"),
             "code": code,
         }, headers={"Accept": "application/json"}, timeout=10)
         if not resp.ok:
-            raise ValueError("Failed to exchange code with GitHub")
+            logit.error("oauth.myprovider", f"Token exchange failed: {resp.status_code}")
+            raise ValueError("Failed to exchange code")
         return resp.json()
 
     def get_profile(self, tokens):
-        resp = requests.get(GITHUB_USER_URL, headers={
-            "Authorization": f"token {tokens['access_token']}",
+        resp = requests.get(USER_URL, headers={
+            "Authorization": f"Bearer {tokens['access_token']}",
             "Accept": "application/json",
         }, timeout=10)
         if not resp.ok:
-            raise ValueError("Failed to fetch GitHub profile")
+            logit.error("oauth.myprovider", f"Profile fetch failed: {resp.status_code}")
+            raise ValueError("Failed to fetch profile")
         data = resp.json()
         email = (data.get("email") or "").lower().strip()
+        # Some providers don't return email directly — add a fallback here if needed
+        if not email:
+            raise ValueError("Could not retrieve verified email from provider")
         return {
             "uid": str(data["id"]),
             "email": email,
-            "display_name": data.get("name") or data.get("login"),
+            "display_name": data.get("name"),
         }
 ```
+
+> **Note on the `/user/emails` fallback:** GitHub may not return an email on the `/user` endpoint when the user's email is set to private. The built-in `GitHubOAuthProvider` handles this by falling back to `GET /user/emails` and picking the entry where `primary=True` and `verified=True`. If your provider has a similar pattern, add an equivalent fallback in `get_profile()` before raising.
 
 2. Register it in `services/oauth/__init__.py`:
 
 ```python
-from .github import GitHubOAuthProvider
+from .myprovider import MyOAuthProvider
 
 PROVIDERS = {
     "google": GoogleOAuthProvider,
+    "apple": AppleOAuthProvider,
     "github": GitHubOAuthProvider,
+    "myprovider": MyOAuthProvider,
 }
 ```
 
 3. Add settings:
 
 ```python
-GITHUB_CLIENT_ID     = "your-github-app-client-id"
-GITHUB_CLIENT_SECRET = "your-github-app-client-secret"
+MYPROVIDER_CLIENT_ID     = "your-client-id"
+MYPROVIDER_CLIENT_SECRET = "your-client-secret"
 ```
 
 The new provider is immediately available at:
-- `GET /api/auth/oauth/github/begin`
-- `POST /api/oauth/github/complete`
+- `GET /api/auth/oauth/myprovider/begin`
+- `POST /api/auth/oauth/myprovider/complete`
 
 No URL registration or model changes are required.
 

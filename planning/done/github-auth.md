@@ -1,7 +1,7 @@
 # GitHub Authentication — OAuth Login + App Service
 
 **Type**: request
-**Status**: planned
+**Status**: resolved
 **Date**: 2026-04-13
 **Priority**: high
 
@@ -124,7 +124,7 @@ Two complementary GitHub auth capabilities:
 
 ## Plan
 
-**Status**: planned
+**Status**: resolved
 **Planned**: 2026-04-13
 
 ### Objective

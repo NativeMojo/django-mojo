@@ -2,7 +2,7 @@
 
 OAuth allows users to log in with a third-party provider (Google, etc.) without a password. The server handles the token exchange — your frontend only needs to redirect the user and handle the callback.
 
-**Supported providers:** `google`, `apple`
+**Supported providers:** `google`, `apple`, `github`
 
 > **Trusted second factor.** OAuth is treated as a strong, trusted authentication event. Completing an OAuth login automatically confirms the user's email address and bypasses any local MFA requirement — see [Security Behaviour](#security-behaviour) below.
 
@@ -232,6 +232,17 @@ APPLE_PRIVATE_KEY = "-----BEGIN PRIVATE KEY-----\n..."  # .p8 file contents
 Apple Sign In uses the same flow as Google. Replace `google` with `apple` in all endpoint URLs.
 
 > **Note:** Apple only provides the user's name on the very first Sign In. The framework does not rely on the name field, so this has no impact on account creation.
+
+### GitHub Settings
+
+```python
+GITHUB_CLIENT_ID     = "your-github-oauth-app-client-id"
+GITHUB_CLIENT_SECRET = "your-github-oauth-app-client-secret"
+```
+
+GitHub Sign In uses the standard redirect flow — identical to Google. Replace `google` with `github` in all endpoint URLs.
+
+> **Note:** If a GitHub user has set their email to private, the server automatically falls back to the GitHub emails API to retrieve their primary verified address. No extra configuration or frontend changes are needed.
 
 ### Optional Settings
 

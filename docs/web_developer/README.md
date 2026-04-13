@@ -37,6 +37,7 @@ Companion track for framework developers: [docs/django_developer/README.md](../d
 | [aws/cloudwatch](aws/cloudwatch.md) | Live AWS infrastructure metrics (EC2, RDS, ElastiCache) |
 | [filevault/](filevault/README.md) | Encrypted file vault |
 | [assistant/](assistant/README.md) | LLM admin assistant — natural language queries, conversations |
+| [github/](github/README.md) | GitHub App installations — list, create, update, delete |
 | [docit/](docit/README.md) | Documentation system |
 
 ## Quick Reference

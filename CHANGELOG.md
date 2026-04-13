@@ -1,5 +1,14 @@
 ## v1.1.0 - (current)
 
+## v1.1.19 - April 13, 2026
+
+### Added
+- **GitHub OAuth provider** — Users can now sign in with their GitHub account via the standard OAuth flow (`GET /api/auth/oauth/github/begin`, `POST /api/auth/oauth/github/complete`). Handles private email addresses by falling back to `GET /user/emails`. Settings: `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `GITHUB_SCOPES`.
+- **`mojo.apps.github` app** — New built-in app providing the `GitHubInstall` model for tracking GitHub App installations, a service layer for JWT generation and installation token management (`get_install_token`, `generate_jwt`, `verify_webhook_signature`), and a REST CRUD endpoint at `/api/github/github_install`. Permissions: `view_github`, `manage_github`.
+- **`@md.requires_github_webhook()` decorator** — Validates the `X-Hub-Signature-256` HMAC-SHA256 signature on incoming GitHub webhook requests. Returns `403` on invalid or missing signatures.
+- **`delete_model_instance` assistant tool** — Generic delete for any MojoModel with `CAN_DELETE = True`. Enforces the full `DELETE_PERMS` → `SAVE_PERMS` → `VIEW_PERMS` permission chain (owner and group checks included), calls `on_rest_pre_delete()`, and executes inside `transaction.atomic()`. Reports a security event on permission denial. Requires `view_admin` as a baseline; model-level perms gate actual execution.
+- **`delete_rule` assistant tool** — Delete a single rule condition from a ruleset by rule ID, without removing the entire ruleset. Requires `manage_security`. Returns the remaining rule count on success.
+
 ## v1.1.19 - April 12, 2026
 
 ### Fixed
