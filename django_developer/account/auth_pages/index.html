@@ -3935,7 +3935,7 @@ model in the admin portal.</p>
 <a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="n">AUTH_HERO_IMAGE_URL</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span>             <span class="c1"># left panel background image</span>
 <a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="n">AUTH_HERO_HEADLINE</span> <span class="o">=</span> <span class="s1">&#39;Welcome back&#39;</span>  <span class="c1"># text over the hero image</span>
 <a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="n">AUTH_HERO_SUBHEADLINE</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span>           <span class="c1"># optional supporting text</span>
-<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="n">AUTH_BACK_TO_WEBSITE_URL</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span>        <span class="c1"># &quot;Back to website&quot; pill link in hero panel</span>
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="n">AUTH_BACK_TO_WEBSITE_URL</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span>        <span class="c1"># &quot;Back to website&quot; pill link in hero panel (overridable via ?back= URL param)</span>
 <a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="n">AUTH_TERMS_URL</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span>                  <span class="c1"># Terms &amp; Conditions link on register page</span>
 <a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a>
 <a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a><span class="c1"># ---- Auth features ----</span>
@@ -3945,7 +3945,7 @@ model in the admin portal.</p>
 <a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a>
 <a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a><span class="c1"># ---- Routing ----</span>
 <a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a><span class="n">AUTH_API_BASE</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span>                   <span class="c1"># API host (empty = same origin, which is correct for most projects)</span>
-<a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a><span class="n">AUTH_SUCCESS_REDIRECT</span> <span class="o">=</span> <span class="s1">&#39;/&#39;</span>          <span class="c1"># where to redirect after login</span>
+<a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a><span class="n">AUTH_SUCCESS_REDIRECT</span> <span class="o">=</span> <span class="s1">&#39;/&#39;</span>          <span class="c1"># where to redirect after login (relative or absolute; overridable via ?redirect= URL param)</span>
 <a id="__codelineno-1-25" name="__codelineno-1-25" href="#__codelineno-1-25"></a>
 <a id="__codelineno-1-26" name="__codelineno-1-26" href="#__codelineno-1-26"></a><span class="c1"># ---- Layout ----</span>
 <a id="__codelineno-1-27" name="__codelineno-1-27" href="#__codelineno-1-27"></a><span class="n">AUTH_LAYOUT</span> <span class="o">=</span> <span class="s1">&#39;card&#39;</span>                 <span class="c1"># &#39;card&#39; (centered card) or &#39;fullscreen&#39; (edge-to-edge)</span>
@@ -4306,7 +4306,7 @@ not hidden by JS).</p>
 <tr>
 <td><code>AUTH_BACK_TO_WEBSITE_URL</code></td>
 <td><code>''</code></td>
-<td>"Back to website" link in hero</td>
+<td>"Back to website" link in hero (overridable per-request via <code>?back=&lt;url&gt;</code>)</td>
 </tr>
 <tr>
 <td><code>AUTH_TERMS_URL</code></td>

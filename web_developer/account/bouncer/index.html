@@ -3837,6 +3837,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#query-params-preserved-through-the-challenge" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Query params preserved through the challenge
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -4300,11 +4311,12 @@ OAuth setup, branding settings, and URL parameters.</p>
 <a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>      User clicks the moving target button
 <a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>      POST /api/account/bouncer/assess → decision + bouncer_token
 <a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>      JS stores token in localStorage, redirects to /{BOUNCER_LOGIN_PATH}
-<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>
-<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>3. Full login page (after passing challenge or on valid pass cookie)
-<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>      mojo-auth.js webapp loads — login form, OAuth, passkeys, magic link
-<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>      Every auth API call includes bouncer_token in the request body
-<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>      Server validates token before processing credentials
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>      redirect, next, returnTo, and back params are forwarded through this redirect
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>3. Full login page (after passing challenge or on valid pass cookie)
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>      mojo-auth.js webapp loads — login form, OAuth, passkeys, magic link
+<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>      Every auth API call includes bouncer_token in the request body
+<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>      Server validates token before processing credentials
 </code></pre></div>
 <h3 id="decoy-paths">Decoy Paths<a class="headerlink" href="#decoy-paths" title="Permanent link">&para;</a></h3>
 <p>Requests to <code>/login</code>, <code>/signin</code>, and any configured <code>BOUNCER_DECOY_PATHS</code> receive a
@@ -4573,6 +4585,31 @@ via <code>window._matConfig.groupUuid</code>.</p>
 The server resolves the group from the hostname. The <code>?group=</code> param is
 preserved in all navigation links (login → register → back) so branding stays
 consistent across page transitions even when the hostname is shared.</p>
+<h3 id="query-params-preserved-through-the-challenge">Query params preserved through the challenge<a class="headerlink" href="#query-params-preserved-through-the-challenge" title="Permanent link">&para;</a></h3>
+<p>When the bouncer serves the challenge page, the following query params from the
+original request are forwarded to the post-challenge login redirect:</p>
+<table>
+<thead>
+<tr>
+<th>Param</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>redirect</code> / <code>next</code> / <code>returnTo</code></td>
+<td>Post-login redirect URL (relative or absolute)</td>
+</tr>
+<tr>
+<td><code>back</code></td>
+<td>Override for the "Back to website" hero link</td>
+</tr>
+<tr>
+<td><code>group</code></td>
+<td>Group UUID for per-group branding</td>
+</tr>
+</tbody>
+</table>
 <hr />
 <h2 id="bouncer-token-error-codes">Bouncer Token Error Codes<a class="headerlink" href="#bouncer-token-error-codes" title="Permanent link">&para;</a></h2>
 <p>When <code>BOUNCER_REQUIRE_TOKEN=True</code> and token validation fails:</p>

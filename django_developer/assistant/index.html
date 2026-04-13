@@ -4724,7 +4724,7 @@
 </tr>
 <tr>
 <td><code>models</code></td>
-<td><code>describe_model</code>, <code>query_model</code></td>
+<td><code>describe_model</code>, <code>query_model</code>, <code>delete_model_instance</code></td>
 </tr>
 <tr>
 <td><code>docs</code></td>
@@ -4998,6 +4998,12 @@
 <td><code>manage_security</code></td>
 <td>Yes</td>
 <td>Delete a rule set and cascade-delete child rules</td>
+</tr>
+<tr>
+<td><code>delete_rule</code></td>
+<td><code>manage_security</code></td>
+<td>Yes</td>
+<td>Delete a single rule condition from a rule set</td>
 </tr>
 <tr>
 <td><code>block_ip</code></td>
@@ -5308,6 +5314,12 @@
 <td><code>view_admin</code></td>
 <td>No</td>
 <td>Query any MojoModel with filters, search, ordering, and output format options. Respects the model's <code>RestMeta</code> permissions and owner/group filtering — the same rules as the REST API. Supports JSON and CSV output, count-only mode, and configurable limits (default 50, max 200). Sensitive fields are blocked as filter keys.</td>
+</tr>
+<tr>
+<td><code>delete_model_instance</code></td>
+<td><code>view_admin</code></td>
+<td>Yes</td>
+<td>Delete a single model instance by primary key. The model must have <code>CAN_DELETE = True</code> in its <code>RestMeta</code>, and the user must pass the model's full delete permission chain (<code>DELETE_PERMS</code> → <code>SAVE_PERMS</code> → <code>VIEW_PERMS</code>), including owner and group checks — identical to the REST layer's <code>on_rest_handle_delete</code>. Calls <code>on_rest_pre_delete()</code> and deletes inside <code>transaction.atomic()</code>. Reports a security event on permission denial.</td>
 </tr>
 </tbody>
 </table>

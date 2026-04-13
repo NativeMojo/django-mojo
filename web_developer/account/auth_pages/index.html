@@ -3889,8 +3889,12 @@ HttpOnly pass cookie that skips the challenge on subsequent visits.</p>
 <td>OAuth callback — auto-completes the OAuth flow</td>
 </tr>
 <tr>
-<td><code>?redirect=/path</code></td>
-<td>Custom redirect after login (also <code>?next=</code> or <code>?returnTo=</code>)</td>
+<td><code>?redirect=&lt;url&gt;</code></td>
+<td>Custom redirect after login — relative or absolute URL (also <code>?next=</code> or <code>?returnTo=</code>). Preserved through bouncer challenge.</td>
+</tr>
+<tr>
+<td><code>?back=&lt;url&gt;</code></td>
+<td>Override the "Back to website" hero link. Falls back to <code>AUTH_BACK_TO_WEBSITE_URL</code> setting if not provided.</td>
 </tr>
 <tr>
 <td><code>?title=My+App</code></td>
@@ -3947,8 +3951,14 @@ login page (not the bouncer challenge) after the OAuth redirect.</p>
 <a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="cm">&lt;!-- With redirect back to current page --&gt;</span>
 <a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="p">&lt;</span><span class="nt">a</span> <span class="na">href</span><span class="o">=</span><span class="s">&quot;/auth?redirect=/dashboard&quot;</span><span class="p">&gt;</span>Sign In<span class="p">&lt;/</span><span class="nt">a</span><span class="p">&gt;</span>
 <a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="cm">&lt;!-- With custom branding via URL params --&gt;</span>
-<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="p">&lt;</span><span class="nt">a</span> <span class="na">href</span><span class="o">=</span><span class="s">&quot;/auth?title=Acme+Corp&amp;logo=/acme-logo.png&quot;</span><span class="p">&gt;</span>Sign In to Acme<span class="p">&lt;/</span><span class="nt">a</span><span class="p">&gt;</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="cm">&lt;!-- With absolute redirect (cross-origin app) --&gt;</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="p">&lt;</span><span class="nt">a</span> <span class="na">href</span><span class="o">=</span><span class="s">&quot;/auth?redirect=http://myapp.example.com/portal/&quot;</span><span class="p">&gt;</span>Sign In<span class="p">&lt;/</span><span class="nt">a</span><span class="p">&gt;</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="cm">&lt;!-- With back-to-website override --&gt;</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="p">&lt;</span><span class="nt">a</span> <span class="na">href</span><span class="o">=</span><span class="s">&quot;/auth?redirect=/portal&amp;back=https://www.example.com&quot;</span><span class="p">&gt;</span>Sign In<span class="p">&lt;/</span><span class="nt">a</span><span class="p">&gt;</span>
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="cm">&lt;!-- With custom branding via URL params --&gt;</span>
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="p">&lt;</span><span class="nt">a</span> <span class="na">href</span><span class="o">=</span><span class="s">&quot;/auth?title=Acme+Corp&amp;logo=/acme-logo.png&quot;</span><span class="p">&gt;</span>Sign In to Acme<span class="p">&lt;/</span><span class="nt">a</span><span class="p">&gt;</span>
 </code></pre></div>
 <hr />
 <h2 id="customization">Customization<a class="headerlink" href="#customization" title="Permanent link">&para;</a></h2>

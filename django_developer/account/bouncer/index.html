@@ -3805,6 +3805,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#query-params-forwarded-through-the-challenge" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Query params forwarded through the challenge
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#configuring-a-white-label-group" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3923,14 +3934,15 @@ branding, OAuth configuration, and nginx setup.</p>
 <a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>        block         → no token, BotLearner job queued
 <a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>              ↓
 <a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>     JS stores token, redirects to login URL
-<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>              ↓
-<a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>     GET BOUNCER_LOGIN_PATH again — pass cookie present
-<a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a>              ↓
-<a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a>     Serve full login page (mojo-auth.js webapp)
-<a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a>              ↓
-<a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a>     mojo-auth.js attaches bouncer_token to every auth API call
-<a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a>              ↓
-<a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a>     @md.requires_bouncer_token(&#39;login&#39;) on login endpoint validates token
+<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>     (redirect, next, returnTo, and back params forwarded through)
+<a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>              ↓
+<a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a>     GET BOUNCER_LOGIN_PATH again — pass cookie present
+<a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a>              ↓
+<a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a>     Serve full login page (mojo-auth.js webapp)
+<a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a>              ↓
+<a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a>     mojo-auth.js attaches bouncer_token to every auth API call
+<a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a>              ↓
+<a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a>     @md.requires_bouncer_token(&#39;login&#39;) on login endpoint validates token
 </code></pre></div>
 <hr />
 <h2 id="opt-in-setup">Opt-In Setup<a class="headerlink" href="#opt-in-setup" title="Permanent link">&para;</a></h2>
@@ -4141,6 +4153,11 @@ bouncer resolves the group and applies its scoped <code>AUTH_*</code> settings.<
 <li><strong><code>?group=&lt;uuid&gt;</code> query param</strong> — fallback for platforms that share a domain.
    The group UUID is preserved through the challenge redirect and OAuth round-trip.</li>
 </ol>
+<h3 id="query-params-forwarded-through-the-challenge">Query params forwarded through the challenge<a class="headerlink" href="#query-params-forwarded-through-the-challenge" title="Permanent link">&para;</a></h3>
+<p><code>_serve_challenge()</code> preserves these params when building the post-challenge
+login redirect URL: <code>group</code>, <code>redirect</code> (and aliases <code>next</code>, <code>returnTo</code>), and
+<code>back</code>. Any param missing from the original request is omitted from the
+forwarded query string.</p>
 <h3 id="configuring-a-white-label-group">Configuring a white-label group<a class="headerlink" href="#configuring-a-white-label-group" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="n">settings</span>
 <a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">Group</span>
