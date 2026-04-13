@@ -47,7 +47,7 @@ Core tools are sent to the LLM on every turn regardless of domain. They handle u
 |---|---|
 | `discovery` | `load_tools` |
 | `memory` | `read_memory`, `write_memory`, `delete_memory` |
-| `models` | `describe_model`, `query_model` |
+| `models` | `describe_model`, `query_model`, `delete_model_instance` |
 | `docs` | `read_docs` |
 | `web` | `browse_url` |
 | `logs` | `query_logs` |
@@ -140,6 +140,7 @@ Add `"mojo.apps.assistant"` to `INSTALLED_APPS` and run migrations.
 | `add_rule_condition` | `manage_security` | Yes | Add a field-level rule to an existing rule set |
 | `update_ruleset` | `manage_security` | Yes | Edit rule set fields (handler, bundle, trigger, is_active, etc.) |
 | `delete_ruleset` | `manage_security` | Yes | Delete a rule set and cascade-delete child rules |
+| `delete_rule` | `manage_security` | Yes | Delete a single rule condition from a rule set |
 | `block_ip` | `manage_security` | Yes | Block an IP fleet-wide with TTL |
 | `unblock_ip` | `manage_security` | Yes | Unblock a blocked IP fleet-wide |
 | `whitelist_ip` | `manage_security` | Yes | Add IP to whitelist (prevents future auto-blocks, unblocks if blocked) |
@@ -213,6 +214,7 @@ Add `"mojo.apps.assistant"` to `INSTALLED_APPS` and run migrations.
 |---|---|---|---|
 | `describe_model` | `view_admin` | No | Describe a MojoModel's fields, graphs, permissions, and search fields. Use this to discover what data is available before querying. Requires `app_name` and `model_name`. Sensitive fields (`password`, `auth_key`, `onetime_code`, `secret`, `token_secret`) are excluded from output. Only works on MojoModels with a `RestMeta` definition and without `NO_REST = True`. |
 | `query_model` | `view_admin` | No | Query any MojoModel with filters, search, ordering, and output format options. Respects the model's `RestMeta` permissions and owner/group filtering — the same rules as the REST API. Supports JSON and CSV output, count-only mode, and configurable limits (default 50, max 200). Sensitive fields are blocked as filter keys. |
+| `delete_model_instance` | `view_admin` | Yes | Delete a single model instance by primary key. The model must have `CAN_DELETE = True` in its `RestMeta`, and the user must pass the model's full delete permission chain (`DELETE_PERMS` → `SAVE_PERMS` → `VIEW_PERMS`), including owner and group checks — identical to the REST layer's `on_rest_handle_delete`. Calls `on_rest_pre_delete()` and deletes inside `transaction.atomic()`. Reports a security event on permission denial. |
 
 `query_model` parameters:
 

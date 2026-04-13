@@ -266,7 +266,7 @@ def _tool_update_ruleset(params, user):
     name="delete_ruleset",
     domain="security",
     permission="manage_security",
-    description="Delete a rule set and all its child rules. IMPORTANT: Confirm with the user before executing.",
+    description="Delete a rule set and all its child rules. IMPORTANT: Always confirm with the user before executing — this is irreversible.",
     input_schema={
         "type": "object",
         "properties": {
@@ -288,3 +288,42 @@ def _tool_delete_ruleset(params, user):
     rs_id = rs.pk
     rs.delete()
     return {"ok": True, "ruleset_id": rs_id, "rules_deleted": rule_count}
+
+
+@tool(
+    name="delete_rule",
+    domain="security",
+    permission="manage_security",
+    description=(
+        "Delete a single rule condition from a rule set by rule ID. "
+        "Use get_ruleset first to see the rules and their IDs. "
+        "IMPORTANT: Always confirm with the user before executing — this is irreversible."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "rule_id": {"type": "integer", "description": "The rule (condition) ID to delete"},
+        },
+        "required": ["rule_id"],
+    },
+    mutates=True,
+)
+def _tool_delete_rule(params, user):
+    from mojo.apps.incident.models import Rule
+
+    try:
+        rule = Rule.objects.select_related("parent").get(pk=params["rule_id"])
+    except Rule.DoesNotExist:
+        return {"error": f"Rule {params['rule_id']} not found"}
+
+    ruleset_id = rule.parent_id
+    rule_id = rule.pk
+    rule.delete()
+
+    remaining = Rule.objects.filter(parent_id=ruleset_id).count()
+    return {
+        "ok": True,
+        "rule_id": rule_id,
+        "ruleset_id": ruleset_id,
+        "remaining_rules": remaining,
+    }

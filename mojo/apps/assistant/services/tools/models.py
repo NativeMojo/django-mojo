@@ -92,17 +92,17 @@ def _report_security_event(category, level, details, user, model_name=None, **ex
     )
 
 
-def _build_request(user, filters=None):
+def _build_request(user, filters=None, method="GET", path="/assistant/query_model"):
     """Build a synthetic request object for permission checking."""
     req = objict.objict()
     req.user = user
     req.DATA = objict.objict(filters or {})
     req.QUERY_PARAMS = objict.objict(filters or {})
-    req.method = "GET"
+    req.method = method
     req.group = None
     req.bearer = None
     req.ip = "assistant"
-    req.path = "/assistant/query_model"
+    req.path = path
     req.META = {}
     if hasattr(user, "api_key"):
         req.api_key = user.api_key
@@ -454,3 +454,93 @@ def _tool_query_model(params, user):
         "count": len(results),
         "total": total,
     }
+
+
+@tool(
+    name="delete_model_instance",
+    domain="models",
+    permission="view_admin",
+    description=(
+        "Delete a single model instance by primary key. "
+        "Respects RestMeta permissions: the model must have CAN_DELETE=True and "
+        "the user must pass the model's DELETE_PERMS/SAVE_PERMS/VIEW_PERMS chain. "
+        "Use query_model or describe_model first to find the instance. "
+        "IMPORTANT: Deletion is permanent and irreversible. Always confirm the "
+        "exact instance (model, pk, name/title) with the user before executing. "
+        "Never delete without explicit user approval."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "app_name": {
+                "type": "string",
+                "description": "Django app label (e.g. 'account', 'incident', 'jobs')",
+            },
+            "model_name": {
+                "type": "string",
+                "description": "Model class name (e.g. 'Skill', 'RuleSet', 'Conversation')",
+            },
+            "pk": {
+                "type": "integer",
+                "description": "Primary key of the instance to delete",
+            },
+        },
+        "required": ["app_name", "model_name", "pk"],
+    },
+    mutates=True,
+)
+def _tool_delete_model_instance(params, user):
+    """Delete a model instance with full RestMeta permission checking."""
+    import json
+
+    app_name = params.get("app_name", "").strip()
+    model_name = params.get("model_name", "").strip()
+    pk = params.get("pk")
+
+    if not app_name or not model_name or pk is None:
+        return {"error": "'app_name', 'model_name', and 'pk' are all required"}
+
+    model, err = _resolve_model(app_name, model_name)
+    if err:
+        return err
+
+    model_label = f"{app_name}.{model_name}"
+
+    # Gate 1: CAN_DELETE must be True
+    if not model.get_rest_meta_prop("CAN_DELETE", False):
+        return {"error": f"Deletion is not allowed on {model_label}"}
+
+    # Look up instance
+    instance = model.objects.filter(pk=pk).first()
+    if instance is None:
+        return {"error": f"{model_label} with pk={pk} not found"}
+
+    # Gate 2: full REST permission chain (DELETE_PERMS > SAVE_PERMS > VIEW_PERMS)
+    request = _build_request(user, method="DELETE", path=f"/assistant/delete_model/{model_label}/{pk}")
+    if not model.rest_check_permission(request, ["DELETE_PERMS", "SAVE_PERMS", "VIEW_PERMS"], instance):
+        details = f"Permission denied: delete_model_instance on {model_label} pk={pk} by user {user.id}"
+        logger.warning(details)
+        _report_security_event(
+            "assistant_permission_denied",
+            6,
+            details,
+            user,
+            model_name=model_label,
+        )
+        return {"error": f"Permission denied to delete {model_label} pk={pk}"}
+
+    # Gate 3: execute deletion via the model's own on_rest_delete (honors pre_delete hooks, atomic)
+    response = instance.on_rest_delete(request)
+
+    # Parse the JsonResponse into a dict
+    try:
+        result = json.loads(response.content)
+    except Exception:
+        result = {"status": "unknown"}
+
+    if response.status_code >= 400:
+        logger.warning("delete_model_instance error", model_label, f"pk={pk}", f"status={response.status_code}")
+        return {"error": result.get("error", f"Delete failed for {model_label} pk={pk}")}
+
+    logger.info("delete_model_instance", model_label, f"pk={pk}", f"user={user.id}")
+    return {"ok": True, "model": model_label, "pk": pk, "status": result.get("status", "deleted")}
