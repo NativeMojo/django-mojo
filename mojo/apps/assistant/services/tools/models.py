@@ -539,8 +539,10 @@ def _tool_delete_model_instance(params, user):
         result = {"status": "unknown"}
 
     if response.status_code >= 400:
-        logger.warning("delete_model_instance error", model_label, f"pk={pk}", f"status={response.status_code}")
-        return {"error": result.get("error", f"Delete failed for {model_label} pk={pk}")}
+        # Log the full error server-side but return a sanitized message to the LLM
+        logger.warning("delete_model_instance error", model_label, f"pk={pk}",
+                        f"status={response.status_code}", result.get("error", ""))
+        return {"error": f"Delete failed for {model_label} pk={pk}"}
 
     logger.info("delete_model_instance", model_label, f"pk={pk}", f"user={user.id}")
     return {"ok": True, "model": model_label, "pk": pk, "status": result.get("status", "deleted")}

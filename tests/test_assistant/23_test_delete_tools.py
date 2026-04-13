@@ -268,3 +268,26 @@ def test_delete_model_instance_missing_params(opts):
 
     result = _tool_delete_model_instance({"app_name": "incident", "model_name": "RuleSet"}, opts.admin)
     assert "error" in result, "Should return error when pk is missing"
+
+
+# ---------------------------------------------------------------------------
+# delete_model_instance — owner-scoped deletion
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test()
+def test_delete_model_instance_owner_can_delete_own(opts):
+    """Owner should be able to delete their own instance on an owner-scoped model."""
+    from mojo.apps.assistant.services.tools.models import _tool_delete_model_instance
+    from mojo.apps.assistant.models.conversation import Conversation
+
+    # admin has view_admin + assistant-equivalent perms via view_admin
+    conv = Conversation.objects.create(user=opts.admin, title="deltest_owner_mine")
+    conv_pk = conv.pk
+
+    result = _tool_delete_model_instance({
+        "app_name": "assistant", "model_name": "Conversation", "pk": conv_pk,
+    }, opts.admin)
+    assert result.get("ok") is True, f"Owner should be able to delete own conversation, got {result}"
+    assert not Conversation.objects.filter(pk=conv_pk).exists(), "Conversation should be deleted"
+
+
