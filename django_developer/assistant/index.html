@@ -3693,6 +3693,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#data-strategy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Data Strategy
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#enabling" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4724,7 +4735,7 @@
 </tr>
 <tr>
 <td><code>models</code></td>
-<td><code>describe_model</code>, <code>query_model</code>, <code>delete_model_instance</code></td>
+<td><code>describe_model</code>, <code>query_model</code>, <code>aggregate_model</code>, <code>export_data</code>, <code>delete_model_instance</code></td>
 </tr>
 <tr>
 <td><code>docs</code></td>
@@ -4799,6 +4810,35 @@
 - Once a domain is loaded, dedicated domain tools are preferred over <code>query_model</code></p>
 <h3 id="backward-compatibility">Backward Compatibility<a class="headerlink" href="#backward-compatibility" title="Permanent link">&para;</a></h3>
 <p>Old conversations (pre-two-tier) that have <code>tool_use</code> blocks in their message history fall back to receiving all tools. This keeps existing conversations working without any migration.</p>
+<h2 id="data-strategy">Data Strategy<a class="headerlink" href="#data-strategy" title="Permanent link">&para;</a></h2>
+<p>The system prompt instructs the LLM on which tool to use for data operations:</p>
+<table>
+<thead>
+<tr>
+<th>Task</th>
+<th>Tool</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Count, sum, average, min/max, grouped breakdown</td>
+<td><code>aggregate_model</code></td>
+</tr>
+<tr>
+<td>Export rows as a file</td>
+<td><code>export_data</code></td>
+</tr>
+<tr>
+<td>Inspect specific records (small result set)</td>
+<td><code>query_model</code></td>
+</tr>
+<tr>
+<td>Never</td>
+<td>Return raw CSV inline — all CSV exports use <code>export_data</code></td>
+</tr>
+</tbody>
+</table>
+<p><code>export_data</code> writes data directly to file storage and returns a download URL. The LLM presents this URL in a <code>file</code> structured block so the frontend can render a download card. The file is owned by the requesting user/group and expires after <code>FILEMAN_EXPORT_EXPIRES_DAYS</code> days.</p>
 <h2 id="enabling">Enabling<a class="headerlink" href="#enabling" title="Permanent link">&para;</a></h2>
 <p>The assistant is disabled by default. Add to your Django settings:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">LLM_ADMIN_ENABLED</span> <span class="o">=</span> <span class="kc">True</span>
@@ -4864,6 +4904,11 @@
 <td><code>LLM_DOCS_BASE_URL</code></td>
 <td><code>https://raw.githubusercontent.com/NativeMojo/django-mojo/refs/heads/main/docs/</code></td>
 <td>Base URL for fetching framework docs via <code>read_docs</code></td>
+</tr>
+<tr>
+<td><code>FILEMAN_EXPORT_EXPIRES_DAYS</code></td>
+<td><code>14</code></td>
+<td>Days until assistant <code>export_data</code> files expire and are deleted by the cleanup job</td>
 </tr>
 </tbody>
 </table>
@@ -5313,7 +5358,19 @@
 <td><code>query_model</code></td>
 <td><code>view_admin</code></td>
 <td>No</td>
-<td>Query any MojoModel with filters, search, ordering, and output format options. Respects the model's <code>RestMeta</code> permissions and owner/group filtering — the same rules as the REST API. Supports JSON and CSV output, count-only mode, and configurable limits (default 50, max 200). Sensitive fields are blocked as filter keys.</td>
+<td>Query any MojoModel and return results inline as JSON. Best for small result sets (detail lookups, spot-checking). Respects <code>RestMeta</code> permissions and owner/group filtering. Max 200 rows. For exports use <code>export_data</code>; for counts/sums use <code>aggregate_model</code>.</td>
+</tr>
+<tr>
+<td><code>aggregate_model</code></td>
+<td><code>view_admin</code></td>
+<td>No</td>
+<td>Run aggregate queries (count, sum, avg, min, max, count_distinct) on any MojoModel, with optional <code>group_by</code>. Use for summaries — never pull rows just to count or sum them.</td>
+</tr>
+<tr>
+<td><code>export_data</code></td>
+<td><code>view_admin</code></td>
+<td>Yes</td>
+<td>Export query results to a CSV file in file storage (S3). Data is written directly to a <code>fileman.File</code> record — not returned inline. Returns a download URL. Use for any export request, especially large result sets.</td>
 </tr>
 <tr>
 <td><code>delete_model_instance</code></td>
@@ -5377,12 +5434,6 @@
 <td>Serialization graph name</td>
 </tr>
 <tr>
-<td><code>format</code></td>
-<td>string</td>
-<td><code>json</code></td>
-<td>Output format: <code>json</code> or <code>csv</code></td>
-</tr>
-<tr>
 <td><code>count_only</code></td>
 <td>boolean</td>
 <td><code>false</code></td>
@@ -5390,7 +5441,124 @@
 </tr>
 </tbody>
 </table>
-<p>The tool enforces the same permission and owner/group scoping as the REST layer via <code>rest_check_permission</code> and <code>_apply_owner_group_filter</code>. Attempts to filter on sensitive fields are blocked and reported as security events.</p>
+<p><code>aggregate_model</code> parameters:</p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>app_name</code></td>
+<td>string</td>
+<td>required</td>
+<td>Django app label</td>
+</tr>
+<tr>
+<td><code>model_name</code></td>
+<td>string</td>
+<td>required</td>
+<td>Model class name</td>
+</tr>
+<tr>
+<td><code>aggregations</code></td>
+<td>array</td>
+<td>required</td>
+<td>List of <code>{field, func, alias?}</code> objects. <code>func</code> is one of <code>count</code>, <code>sum</code>, <code>avg</code>, <code>min</code>, <code>max</code>, <code>count_distinct</code>. <code>alias</code> defaults to <code>{func}_{field}</code>. Use <code>id</code> as the field for row counts.</td>
+</tr>
+<tr>
+<td><code>filters</code></td>
+<td>object</td>
+<td><code>{}</code></td>
+<td>ORM filter dict</td>
+</tr>
+<tr>
+<td><code>group_by</code></td>
+<td>array</td>
+<td>—</td>
+<td>Fields to group by (e.g. <code>["status"]</code> or <code>["status", "category"]</code>)</td>
+</tr>
+<tr>
+<td><code>ordering</code></td>
+<td>string</td>
+<td>—</td>
+<td>Order grouped results (e.g. <code>-total</code> or <code>status</code>)</td>
+</tr>
+<tr>
+<td><code>limit</code></td>
+<td>integer</td>
+<td><code>50</code></td>
+<td>Max grouped rows to return (max 200)</td>
+</tr>
+</tbody>
+</table>
+<p><code>export_data</code> parameters:</p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>app_name</code></td>
+<td>string</td>
+<td>required</td>
+<td>Django app label</td>
+</tr>
+<tr>
+<td><code>model_name</code></td>
+<td>string</td>
+<td>required</td>
+<td>Model class name</td>
+</tr>
+<tr>
+<td><code>filters</code></td>
+<td>object</td>
+<td><code>{}</code></td>
+<td>ORM filter dict</td>
+</tr>
+<tr>
+<td><code>search</code></td>
+<td>string</td>
+<td>—</td>
+<td>Free-text search using the model's <code>SEARCH_FIELDS</code></td>
+</tr>
+<tr>
+<td><code>ordering</code></td>
+<td>string</td>
+<td><code>-pk</code></td>
+<td>Order by field</td>
+</tr>
+<tr>
+<td><code>limit</code></td>
+<td>integer</td>
+<td><code>5000</code></td>
+<td>Max rows to export (max 50000)</td>
+</tr>
+<tr>
+<td><code>fields</code></td>
+<td>array</td>
+<td>—</td>
+<td>Specific fields to include. Defaults to the model's graph config.</td>
+</tr>
+<tr>
+<td><code>graph</code></td>
+<td>string</td>
+<td><code>default</code></td>
+<td>Serialization graph name</td>
+</tr>
+</tbody>
+</table>
+<p><code>export_data</code> requires <code>fileman</code> to be installed and a <code>FileManager</code> configured for the user/group. Files are stored with <code>metadata.expires_at</code> set to <code>FILEMAN_EXPORT_EXPIRES_DAYS</code> days from creation (default 14). If <code>mojo.apps.shortlink</code> is installed, the returned URL is a shortlink. The assistant should present the URL using a <code>file</code> block (see structured block types in the system prompt).</p>
+<p>All three tools enforce the same permission and owner/group scoping as the REST layer via <code>rest_check_permission</code> and <code>_apply_owner_group_filter</code>. Attempts to filter or aggregate on sensitive fields are blocked and reported as security events.</p>
 <h3 id="logs-domain-view_logs">Logs Domain (<code>view_logs</code>)<a class="headerlink" href="#logs-domain-view_logs" title="Permanent link">&para;</a></h3>
 <table>
 <thead>

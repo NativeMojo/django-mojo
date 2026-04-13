@@ -1622,6 +1622,34 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Metadata">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#expires_at-automatic-expiry" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        expires_at — automatic expiry
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cleanup-job" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cleanup Job
+      
+    </span>
+  </a>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4032,6 +4060,34 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Metadata">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#expires_at-automatic-expiry" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        expires_at — automatic expiry
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cleanup-job" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cleanup Job
+      
+    </span>
+  </a>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4255,8 +4311,28 @@
 <a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="n">file_instance</span><span class="o">.</span><span class="n">set_metadata</span><span class="p">(</span><span class="s2">&quot;width&quot;</span><span class="p">,</span> <span class="mi">1920</span><span class="p">)</span>
 <a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="n">file_instance</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
 </code></pre></div>
+<h3 id="expires_at-automatic-expiry"><code>expires_at</code> — automatic expiry<a class="headerlink" href="#expires_at-automatic-expiry" title="Permanent link">&para;</a></h3>
+<p>Set <code>metadata["expires_at"]</code> to an ISO 8601 timestamp to mark a file for automatic deletion by the cleanup job:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django.utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">timezone</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">datetime</span><span class="w"> </span><span class="kn">import</span> <span class="n">timedelta</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="n">file_instance</span><span class="o">.</span><span class="n">metadata</span> <span class="o">=</span> <span class="p">{</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>    <span class="s2">&quot;source&quot;</span><span class="p">:</span> <span class="s2">&quot;my_export&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>    <span class="s2">&quot;expires_at&quot;</span><span class="p">:</span> <span class="p">(</span><span class="n">timezone</span><span class="o">.</span><span class="n">now</span><span class="p">()</span> <span class="o">+</span> <span class="n">timedelta</span><span class="p">(</span><span class="n">days</span><span class="o">=</span><span class="mi">14</span><span class="p">))</span><span class="o">.</span><span class="n">isoformat</span><span class="p">(),</span>
+<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="p">}</span>
+<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a><span class="n">file_instance</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
+</code></pre></div>
+<p>The cleanup job (<code>mojo.apps.fileman.asyncjobs.cleanup_expired_files</code>) runs daily at 04:00 UTC. It finds all active files with an <code>expires_at</code> key and deletes any whose timestamp has passed. Deletion calls <code>on_rest_pre_delete()</code> before removing the record — which cleans up the storage backend file.</p>
+<p>This pattern is used by the assistant <code>export_data</code> tool. You can use it for any time-limited generated file.</p>
+<h2 id="cleanup-job">Cleanup Job<a class="headerlink" href="#cleanup-job" title="Permanent link">&para;</a></h2>
+<p><code>mojo/apps/fileman/cronjobs.py</code> registers a cron job that runs daily:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="nd">@schedule</span><span class="p">(</span><span class="n">minutes</span><span class="o">=</span><span class="s2">&quot;0&quot;</span><span class="p">,</span> <span class="n">hours</span><span class="o">=</span><span class="s2">&quot;4&quot;</span><span class="p">)</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">cleanup_expired_files</span><span class="p">():</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>    <span class="n">jobs</span><span class="o">.</span><span class="n">publish</span><span class="p">(</span><span class="n">func</span><span class="o">=</span><span class="s2">&quot;mojo.apps.fileman.asyncjobs.cleanup_expired_files&quot;</span><span class="p">,</span> <span class="n">channel</span><span class="o">=</span><span class="s2">&quot;cleanup&quot;</span><span class="p">,</span> <span class="n">payload</span><span class="o">=</span><span class="p">{})</span>
+</code></pre></div>
+<p>The job is registered automatically when <code>mojo.apps.fileman</code> is in <code>INSTALLED_APPS</code>. No additional configuration is needed. It only deletes files with <code>metadata.expires_at</code> set — files without this key are never touched.</p>
 <h2 id="access-control">Access Control<a class="headerlink" href="#access-control" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="n">can_access</span> <span class="o">=</span> <span class="n">file_instance</span><span class="o">.</span><span class="n">can_be_accessed_by</span><span class="p">(</span><span class="n">user</span><span class="o">=</span><span class="n">request</span><span class="o">.</span><span class="n">user</span><span class="p">,</span> <span class="n">group</span><span class="o">=</span><span class="n">request</span><span class="o">.</span><span class="n">group</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="n">can_access</span> <span class="o">=</span> <span class="n">file_instance</span><span class="o">.</span><span class="n">can_be_accessed_by</span><span class="p">(</span><span class="n">user</span><span class="o">=</span><span class="n">request</span><span class="o">.</span><span class="n">user</span><span class="p">,</span> <span class="n">group</span><span class="o">=</span><span class="n">request</span><span class="o">.</span><span class="n">group</span><span class="p">)</span>
 </code></pre></div>
 
 
