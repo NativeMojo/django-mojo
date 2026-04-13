@@ -1,7 +1,7 @@
 # Assistant File Export Tool
 
 **Type**: request
-**Status**: planned
+**Status**: resolved
 **Date**: 2026-04-13
 **Priority**: high
 
@@ -105,7 +105,7 @@ The assistant should generate the file, store it via fileman, and respond with a
 
 ## Plan
 
-**Status**: planned
+**Status**: resolved
 **Planned**: 2026-04-13
 
 ### Objective
