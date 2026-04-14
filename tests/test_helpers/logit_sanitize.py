@@ -83,6 +83,42 @@ def test_sanitize_login_payload(opts):
         f"Username should be preserved, got {result['username']}"
 
 
+@th.unit_test("sanitize_dict handles list of dicts")
+def test_sanitize_list_of_dicts(opts):
+    from mojo.helpers.logit import sanitize_dict
+    data = {"records": [{"username": "alice", "password": "secret1"}, {"username": "bob", "token": "abc"}]}
+    result = sanitize_dict(data)
+    assert result["records"][0]["password"] == "*****", \
+        f"Password in list item should be redacted, got {result['records'][0]['password']}"
+    assert result["records"][0]["username"] == "alice", \
+        f"Username in list item should be preserved, got {result['records'][0]['username']}"
+    assert result["records"][1]["token"] == "*****", \
+        f"Token in list item should be redacted, got {result['records'][1]['token']}"
+
+
+@th.unit_test("sanitize_dict handles bare list input")
+def test_sanitize_bare_list(opts):
+    from mojo.helpers.logit import sanitize_dict
+    data = [{"password": "secret"}, {"name": "safe"}]
+    result = sanitize_dict(data)
+    assert result[0]["password"] == "*****", \
+        f"Password in bare list should be redacted, got {result[0]['password']}"
+    assert result[1]["name"] == "safe", \
+        f"Safe field in bare list should be preserved, got {result[1]['name']}"
+
+
+@th.unit_test("sanitize_dict covers MFA and OAuth keys")
+def test_sanitize_mfa_oauth_keys(opts):
+    from mojo.helpers.logit import sanitize_dict
+    data = {"otp": "123456", "mfa_code": "654321", "refresh_token": "rt_abc", "id_token": "id_xyz", "username": "alice"}
+    result = sanitize_dict(data)
+    assert result["otp"] == "*****", f"otp should be redacted, got {result['otp']}"
+    assert result["mfa_code"] == "*****", f"mfa_code should be redacted, got {result['mfa_code']}"
+    assert result["refresh_token"] == "*****", f"refresh_token should be redacted, got {result['refresh_token']}"
+    assert result["id_token"] == "*****", f"id_token should be redacted, got {result['id_token']}"
+    assert result["username"] == "alice", f"username should be preserved, got {result['username']}"
+
+
 @th.unit_test("incident _create_event_dict sanitizes request_data")
 def test_incident_reporter_sanitizes(opts):
     from mojo.apps.incident.reporter import _create_event_dict

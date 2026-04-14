@@ -116,8 +116,11 @@ class Log(dm.Model, MojoModel):
                 gid = getattr(group, "id", 0) or 0
 
         payload = kwargs.get("payload", None)
-        if payload and isinstance(payload, str):
-            payload = logit.mask_sensitive_data(payload)
+        if payload:
+            if isinstance(payload, str):
+                payload = logit.mask_sensitive_data(payload)
+            elif isinstance(payload, dict):
+                payload = logit.sanitize_dict(payload)
 
         return cls.objects.create(
             level=level,

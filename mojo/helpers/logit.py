@@ -114,23 +114,28 @@ def mask_sensitive_data(text):
 
 SENSITIVE_KEYS = frozenset({
     "password", "pwd", "new_password", "current_password",
-    "secret", "token", "access_token", "api_key", "authorization",
+    "secret", "token", "access_token", "refresh_token", "id_token",
+    "api_key", "auth_token", "bearer_token", "authorization",
+    "private_key", "otp", "mfa_code",
     "ssn", "credit_card", "card_number", "pin", "cvv",
 })
 
 def sanitize_dict(data):
-    """Strip sensitive keys from a dict/objict, returning a plain dict copy.
+    """Strip sensitive keys from a dict/objict/list, returning a sanitized copy.
 
     Replaces values of known sensitive keys with '*****' and recurses
-    into nested dicts.  Returns the original value unchanged for non-dict types.
+    into nested dicts and lists.  Returns the original value unchanged
+    for non-dict/non-list types.
     """
+    if isinstance(data, list):
+        return [sanitize_dict(item) if isinstance(item, (dict, list)) else item for item in data]
     if not isinstance(data, dict):
         return data
     cleaned = {}
     for key, value in data.items():
         if isinstance(key, str) and key.lower() in SENSITIVE_KEYS:
             cleaned[key] = "*****"
-        elif isinstance(value, dict):
+        elif isinstance(value, (dict, list)):
             cleaned[key] = sanitize_dict(value)
         else:
             cleaned[key] = value
