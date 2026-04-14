@@ -1,7 +1,7 @@
 # Plaintext Passwords Logged in REST Error Handler
 
 **Type**: bug
-**Status**: open
+**Status**: resolved
 **Date**: 2026-04-14
 **Severity**: critical
 
@@ -77,3 +77,41 @@ Add a `sanitize_dict(data, sensitive_keys=SENSITIVE_KEYS)` function in `mojo/hel
 ### Risks
 - `mask_sensitive_data` regex is greedy — could mask legitimate values that happen to contain `token=` in a string. The key-stripping approach for dicts avoids this.
 - Must handle `objict` (which behaves like dict) — verify `.items()` works on request.DATA
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-04-14
+
+### What Was Built
+Chokepoint-level sanitization that strips sensitive fields from all data flowing into incident events and logit Log records. No caller-side changes needed — all existing and future callers are protected.
+
+### Files Changed
+- `mojo/helpers/logit.py` — Added `SENSITIVE_KEYS` frozenset and `sanitize_dict()` function (handles dicts, lists, nested structures, case-insensitive)
+- `mojo/apps/incident/reporter.py` — Apply `sanitize_dict()` to dict-type kwargs in `_create_event_dict()` before storing to event metadata
+- `mojo/apps/logit/models/log.py` — Apply `mask_sensitive_data()` to string payloads and `sanitize_dict()` to dict payloads before storage
+- `docs/django_developer/helpers/logit.md` — Documented `sanitize_dict()` 
+- `docs/django_developer/logging/logit.md` — Noted payload auto-sanitization
+- `docs/django_developer/logging/incidents.md` — Noted dict kwargs are sanitized
+- `CHANGELOG.md` — Added v1.1.21 Fixed entry
+
+### Tests
+- `tests/test_helpers/logit_sanitize.py` — 11 tests covering flat dicts, all sensitive keys, nested dicts, case-insensitivity, non-dict passthrough, no-mutation, login payloads, list-of-dicts, bare lists, MFA/OAuth keys, and incident reporter integration
+- Run: `bin/run_tests --agent -t test_helpers.logit_sanitize`
+
+### Docs Updated
+- `docs/django_developer/helpers/logit.md`
+- `docs/django_developer/logging/logit.md`
+- `docs/django_developer/logging/incidents.md`
+- `CHANGELOG.md`
+
+### Security Review
+- Fixed: list-of-dicts bypass (sanitize_dict now recurses into lists)
+- Fixed: dict payload bypass in Log.logit
+- Fixed: expanded SENSITIVE_KEYS with MFA/OAuth fields (otp, mfa_code, refresh_token, id_token, private_key, auth_token, bearer_token)
+- Pre-existing: mask_sensitive_data regex narrower than SENSITIVE_KEYS — worth aligning in follow-up
+- Pre-existing: bearer token stored raw in event metadata — consider masking
+
+### Follow-up
+- Align `mask_sensitive_data()` regex patterns with `SENSITIVE_KEYS` for consistency
+- Consider masking bearer tokens in incident event metadata (store last 8 chars only)
