@@ -41,12 +41,29 @@ logit.info("User action", user, action, extra_data)
 
 ## Sensitive Data Masking
 
-Keys matching patterns like `password`, `token`, `secret`, `key` are automatically masked in log output:
+### String-based masking — `mask_sensitive_data(text)`
+
+Regex-based masker for log strings. Keys matching patterns like `password`, `token`, `api_key`, `secret` are automatically masked:
 
 ```python
 logit.info("Auth attempt", {"username": "alice", "password": "secret"})
-# Logs: {"username": "alice", "password": "***"}
+# Logs: {"username": "alice", "password": "*****"}
 ```
+
+### Dict-based sanitization — `sanitize_dict(data)`
+
+Strips sensitive keys from a dict or nested dict, returning a sanitized copy. Use this before storing or logging any structured dict that may contain user-supplied fields:
+
+```python
+from mojo.helpers.logit import sanitize_dict
+
+safe = sanitize_dict({"username": "alice", "password": "secret", "token": "abc123"})
+# Returns: {"username": "alice", "password": "*****", "token": "*****"}
+```
+
+Sanitized keys include: `password`, `pwd`, `new_password`, `current_password`, `secret`, `token`, `access_token`, `api_key`, `authorization`, `ssn`, `credit_card`, `card_number`, `pin`, `cvv`. Matching is case-insensitive and the function recurses into nested dicts.
+
+Both the incident system (`report_event` kwargs) and the `Log` model (`payload` field) automatically apply sanitization — you do not need to call `sanitize_dict` manually when using those APIs.
 
 ## Named Loggers
 

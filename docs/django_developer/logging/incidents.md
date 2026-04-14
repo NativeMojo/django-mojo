@@ -311,6 +311,8 @@ incident.report_event(
 
 All three custom fields end up in `event.metadata` alongside the standard ones. A Rule with `field_name="attempt_count"` and `comparator=">="` and `value="5"` would match this event.
 
+Any kwarg value that is a dict is automatically sanitized before being stored — sensitive keys (`password`, `token`, `api_key`, `secret`, `authorization`, etc.) are replaced with `*****`. This means passing `request_data=request.DATA` is safe even when the request contains a password field.
+
 When a `request` is passed, metadata is also automatically enriched with:
 
 ```

@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## v1.1.21 - April 14, 2026
+
+### Fixed
+- **Plaintext passwords no longer leak into logs** — `sanitize_dict()` added to `mojo/helpers/logit.py` strips known sensitive keys (`password`, `token`, `api_key`, `secret`, `authorization`, `ssn`, `cvv`, etc.) from any dict before it is persisted. Applied automatically in two chokepoints: `incident/reporter.py` sanitizes all dict kwargs passed to `report_event` (including `request_data`), and `logit/models/log.py` sanitizes the `payload` field before DB write. No call-site changes required — all callers are protected.
+
 ## v1.1.21 - April 13, 2026
 
 new ai assistant file support

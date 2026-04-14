@@ -118,3 +118,4 @@ class RestMeta:
 - Use `self.log()` on models; use `logit.info()` for service/helper layer messages
 - `LOG_CHANGES = True` provides automatic audit trails with no extra code
 - Sensitive fields (`password`, `key`, `secret`, `token`) are automatically masked in change diffs
+- The `payload` field is automatically sanitized before storage — sensitive keys (e.g. `password`, `token`, `api_key`) are replaced with `*****` so plaintext credentials are never written to the Log table
