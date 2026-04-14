@@ -111,6 +111,31 @@ def mask_sensitive_data(text):
         text = re.sub(pattern, r'\1*****', text, flags=re.IGNORECASE)
     return text
 
+
+SENSITIVE_KEYS = frozenset({
+    "password", "pwd", "new_password", "current_password",
+    "secret", "token", "access_token", "api_key", "authorization",
+    "ssn", "credit_card", "card_number", "pin", "cvv",
+})
+
+def sanitize_dict(data):
+    """Strip sensitive keys from a dict/objict, returning a plain dict copy.
+
+    Replaces values of known sensitive keys with '*****' and recurses
+    into nested dicts.  Returns the original value unchanged for non-dict types.
+    """
+    if not isinstance(data, dict):
+        return data
+    cleaned = {}
+    for key, value in data.items():
+        if isinstance(key, str) and key.lower() in SENSITIVE_KEYS:
+            cleaned[key] = "*****"
+        elif isinstance(value, dict):
+            cleaned[key] = sanitize_dict(value)
+        else:
+            cleaned[key] = value
+    return cleaned
+
 # Utility: Thread-safe lock handler
 class ThreadSafeLock:
     def __init__(self):

@@ -115,12 +115,16 @@ class Log(dm.Model, MojoModel):
             if group is not None:
                 gid = getattr(group, "id", 0) or 0
 
+        payload = kwargs.get("payload", None)
+        if payload and isinstance(payload, str):
+            payload = logit.mask_sensitive_data(payload)
+
         return cls.objects.create(
             level=level,
             kind=kind,
             method=method,
             path=path,
-            payload=kwargs.get("payload", None),
+            payload=payload,
             ip=ip_address,
             uid=uid,
             gid=gid,

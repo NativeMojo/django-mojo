@@ -49,10 +49,14 @@ def _create_event_dict(details, title=None, category="api_error", level=1, reque
             event_metadata["user_name"] = request.user.display_name
             event_metadata["user_email"] = request.user.email
 
+    from mojo.helpers.logit import sanitize_dict
+
     processed_kwargs = {}
     for k, v in kwargs.items():
         if k not in event_data:
-            if is_json_serializable(v):
+            if isinstance(v, dict):
+                processed_kwargs[k] = sanitize_dict(v)
+            elif is_json_serializable(v):
                 processed_kwargs[k] = v
             elif hasattr(v, 'id'):
                 processed_kwargs[k] = v.id
