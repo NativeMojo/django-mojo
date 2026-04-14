@@ -5517,6 +5517,7 @@
 <a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="p">)</span>
 </code></pre></div>
 <p>All three custom fields end up in <code>event.metadata</code> alongside the standard ones. A Rule with <code>field_name="attempt_count"</code> and <code>comparator="&gt;="</code> and <code>value="5"</code> would match this event.</p>
+<p>Any kwarg value that is a dict is automatically sanitized before being stored — sensitive keys (<code>password</code>, <code>token</code>, <code>api_key</code>, <code>secret</code>, <code>authorization</code>, etc.) are replaced with <code>*****</code>. This means passing <code>request_data=request.DATA</code> is safe even when the request contains a password field.</p>
 <p>When a <code>request</code> is passed, metadata is also automatically enriched with:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>request_ip, http_path, http_protocol, http_method,
 <a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>http_query_string, http_user_agent, http_host,

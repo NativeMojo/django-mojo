@@ -4138,6 +4138,7 @@
 <li>Use <code>self.log()</code> on models; use <code>logit.info()</code> for service/helper layer messages</li>
 <li><code>LOG_CHANGES = True</code> provides automatic audit trails with no extra code</li>
 <li>Sensitive fields (<code>password</code>, <code>key</code>, <code>secret</code>, <code>token</code>) are automatically masked in change diffs</li>
+<li>The <code>payload</code> field is automatically sanitized before storage — sensitive keys (e.g. <code>password</code>, <code>token</code>, <code>api_key</code>) are replaced with <code>*****</code> so plaintext credentials are never written to the Log table</li>
 </ul>
 
 
