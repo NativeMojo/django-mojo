@@ -26,10 +26,16 @@ This module provides a stateless, scalable WebSocket system that:
 # Import the manager
 from mojo.apps import realtime
 
-# Send message to specific user
+# Send message to specific user (wrapped in {"type": "message", "data": ...})
 realtime.send_to_user("user", user_id, {
     "title": "New Message",
     "body": "You have a notification"
+})
+
+# Send event directly to user (payload sent as-is, no wrapping)
+realtime.send_event_to_user("user", user_id, {
+    "type": "status_update",
+    "status": "active"
 })
 
 # Broadcast to all connected users
@@ -40,10 +46,8 @@ realtime.broadcast({
 
 # Check if user is online
 if realtime.is_online("user", user_id):
-    # Send realtime notification
-    realtime.send_to_user("user", user_id, data)
+    realtime.send_event_to_user("user", user_id, data)
 else:
-    # Send email instead
     send_email_notification(user_id, data)
 
 # Publish to topic subscribers
@@ -52,6 +56,18 @@ realtime.publish_topic("chat:room1", {
     "user": "john",
     "text": "Hello everyone!"
 })
+
+# Request-response: send a message and wait for client reply
+response = realtime.request("user", user_id, {
+    "type": "confirm_action",
+    "action": "delete_account"
+}, timeout=30)
+
+# Wait for a specific event from a user
+event = realtime.wait_for_event("user", user_id, 
+    match={"type": "device_state", "state": "ready"},
+    timeout=60
+)
 
 # Get statistics
 online_users = realtime.get_auth_count("user")
@@ -111,36 +127,81 @@ from mojo.apps.realtime.routing import create_application, ProtocolTypeRouter
 from mojo.apps import realtime
 ```
 
-## User Model Integration
+## Model Integration
 
-Add these optional methods to your User model:
+### Connection Hook
+
+The primary hook for connection lifecycle. Receives connection metadata and can return an initial response and/or request topic subscriptions:
 
 ```python
-class User(AbstractUser):
-    def on_realtime_connected(self):
-        """Called when user connects via WebSocket"""
-        # Update last seen, set online flag, etc.
-        pass
+class Device(MojoModel):
+    def on_realtime_connection(self, connection_data):
+        """
+        Called after successful WebSocket authentication.
         
+        connection_data contains:
+            - connection_id: unique connection UUID
+            - remote_ip: client IP address
+            - user_agent: client User-Agent string
+        
+        Return dict with optional keys:
+            - "response": sent directly to client over WebSocket
+            - "subscriptions": list of topics to subscribe to
+        """
+        self.touch()
+        
+        return {
+            "response": {
+                "type": "connected",
+                "status": self.status,
+                "config": self.get_config(),
+            },
+            "subscriptions": [
+                "general_announcements",
+            ],
+        }
+    
     def on_realtime_disconnected(self):
-        """Called when user disconnects"""
-        # Update last seen, clear online flag, etc.
+        """Called when the WebSocket connection closes."""
         pass
-        
+    
     def on_realtime_message(self, data):
-        """Handle custom messages from client"""
-        message_type = data.get('message_type')
-        
-        if message_type == 'echo':
-            return {
-                "type": "echo",
-                "user_id": self.id,
-                "payload": data.get('payload')
-            }
-        
-        # Return dict to send response to client, or None
+        """
+        Handle custom messages from client.
+        Return dict with "response" key to reply, or None.
+        """
+        if data.get("type") == "heartbeat":
+            return {"response": {"type": "ack"}}
         return None
+    
+    def on_realtime_can_subscribe(self, topic):
+        """Gate topic subscriptions. Return True to allow, False to deny."""
+        return topic == "general_announcements"
 ```
+
+### Legacy Connection Hook
+
+If `on_realtime_connection` is not defined, the framework falls back to:
+
+```python
+def on_realtime_connected(self):
+    """Called after auth — no connection_data, same response contract."""
+    pass
+```
+
+### Hook Response Contract
+
+All hooks share the same response processing:
+
+| Return value | Behavior |
+|---|---|
+| `{"response": {...}}` | Dict sent directly to client via WebSocket |
+| `{"subscriptions": ["topic1", ...]}` | Subscribe client to topics |
+| `{"response": {...}, "subscriptions": [...]}` | Both |
+| Plain dict (no `response` key) | Sent directly to client (backward compat) |
+| `None` | No action |
+
+The `response` is delivered directly over the WebSocket connection — not through Redis pub/sub. This makes it reliable for initial state delivery on connect.
 
 ## Client-Side JavaScript
 
@@ -160,16 +221,23 @@ ws.onmessage = (event) => {
     
     switch(data.type) {
         case 'auth_success':
-            // Subscribe to topics
-            ws.send(JSON.stringify({
-                type: 'subscribe',
-                topic: `user:${data.user_id}`
-            }));
+            // Authenticated — hook response (if any) arrives before this
+            console.log('Authenticated as', data.user_type, data.user_id);
+            break;
+            
+        case 'connected':
+            // Hook response from on_realtime_connection
+            console.log('Initial state:', data);
             break;
             
         case 'message':
-            // Handle incoming message
+            // Wrapped message from send_to_user()
             console.log('Message:', data.data);
+            break;
+            
+        default:
+            // Direct events from send_event_to_user() or hook responses
+            console.log('Event:', data.type, data);
             break;
     }
 };
@@ -177,12 +245,19 @@ ws.onmessage = (event) => {
 
 ## Manager API Reference
 
-### Core Functions
+### Sending Messages
 
+- `send_to_user(user_type, user_id, message_data)` - Send to user, wrapped in `{"type": "message", "data": ...}`
+- `send_event_to_user(user_type, user_id, event_data)` - Send to user directly, no wrapping (payload as-is)
+- `send_to_connection(connection_id, message_data)` - Send to connection (wrapped)
+- `send_event_to_connection(connection_id, event_data)` - Send to connection (direct, no wrapping)
 - `broadcast(message_data)` - Send to all connected clients
-- `publish_topic(topic, message_data)` - Send to topic subscribers  
-- `send_to_user(user_type, user_id, message_data)` - Send to specific user
-- `send_to_connection(connection_id, message_data)` - Send to specific connection
+- `publish_topic(topic, message_data)` - Send to topic subscribers
+
+### Request-Response
+
+- `request(user_type, user_id, data, timeout=30)` - Send message and block until client responds
+- `wait_for_event(user_type, user_id, match, timeout=30)` - Block until client sends a message matching all key:value pairs in `match`
 
 ### Status Functions
 
@@ -194,41 +269,49 @@ ws.onmessage = (event) => {
 
 ### Info Functions
 
-- `get_connection_info(connection_id)` - Get connection details
+- `get_redis_info(connection_id)` - Get connection details
 - `get_topic_subscribers(topic)` - Get subscribers for topic
 
 ## Redis Data Structure
 
 The system uses these Redis key patterns:
 
-- `realtime:connections:{connection_id}` - Connection metadata
-- `realtime:online:{user_type}:{user_id}` - User online status
-- `realtime:topic:{topic_name}` - Topic subscribers (SET)
-- `realtime:messages:{connection_id}` - Direct message channel
-- `realtime:broadcast` - Global broadcast channel
-- `realtime:topic:{topic_name}` - Topic message channel
+- `realtime:connections:{connection_id}` - Connection metadata (STRING, JSON)
+- `realtime:online:{user_type}:{user_id}` - User's active connection IDs (SET)
+- `realtime:topic:{topic_name}` - Topic subscriber connection IDs (SET)
+- `realtime:messages:{connection_id}` - Direct message channel (PUB/SUB)
+- `realtime:broadcast` - Global broadcast channel (PUB/SUB)
+- `realtime:response:{request_id}` - Request-response results (LIST, blocking pop)
+- `realtime:waiters:{user_type}:{user_id}` - Active event waiters (SET)
+- `realtime:waiter:{waiter_id}` - Waiter match criteria (STRING, JSON)
 
 All keys have automatic TTL for cleanup.
 
 ## Message Protocol
 
-### Client → Server
+### Client -> Server
 ```json
 {"type": "authenticate", "token": "...", "prefix": "bearer"}
 {"type": "subscribe", "topic": "user:123"}
 {"type": "unsubscribe", "topic": "user:123"}  
 {"type": "ping"}
-{"type": "custom", "message_type": "echo", "payload": {...}}
+{"type": "response", "request_id": "...", "data": {...}}
 ```
 
-### Server → Client
+Any other `type` is routed to `REALTIME_MESSAGE_HANDLERS` or the instance's `on_realtime_message` hook.
+
+### Server -> Client
 ```json
 {"type": "auth_required", "timeout": 30}
 {"type": "auth_success", "user_type": "user", "user_id": 123}
+{"type": "subscribed", "topic": "user:123"}
+{"type": "unsubscribed", "topic": "user:123"}
 {"type": "message", "data": {...}, "topic": "user:123"}
-{"type": "error", "message": "..."}
 {"type": "pong", "user_type": "user", "user_id": 123}
+{"type": "error", "message": "..."}
 ```
+
+Hook responses and `send_event_to_user` payloads arrive with their own `type` field (e.g., `{"type": "connected", ...}`).
 
 ## Requirements
 
@@ -245,17 +328,17 @@ All keys have automatic TTL for cleanup.
 
 ## Features
 
-- ✅ Stateless workers (all state in Redis)
-- ✅ Horizontal scaling via Redis pub/sub
-- ✅ Authentication via existing mojo auth system
-- ✅ Topic-based subscriptions
-- ✅ Direct user messaging
-- ✅ Broadcast messaging
-- ✅ Online status tracking
-- ✅ Connection statistics
-- ✅ Automatic cleanup (TTL-based)
-- ✅ User model hooks for custom behavior
-- ✅ Thread-safe manager API
-- ✅ Minimal dependencies
-
-This implementation is designed to be simple, reliable, and scalable for production use.
+- Stateless workers (all state in Redis)
+- Horizontal scaling via Redis pub/sub
+- Authentication via existing mojo auth system
+- Topic-based subscriptions with authorization gates
+- Direct user messaging (wrapped and unwrapped)
+- Request-response pattern (blocking server-side)
+- Event waiting (match incoming client messages)
+- Broadcast messaging
+- Online status tracking
+- Connection statistics
+- Automatic cleanup (TTL-based)
+- Model hooks for connection lifecycle and message handling
+- Thread-safe manager API
+- Minimal dependencies

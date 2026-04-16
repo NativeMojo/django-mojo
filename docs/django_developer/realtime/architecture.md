@@ -2,74 +2,88 @@
 
 ## Overview
 
-The realtime system provides a single generic WebSocket endpoint (`ws/realtime/`) using Django Channels. It shares the same bearer authentication as HTTP middleware.
+The realtime system provides a generic WebSocket endpoint (`ws/realtime/`) using raw ASGI + Redis. It shares the same bearer authentication as HTTP middleware.
 
 **Key concepts:**
 - One endpoint for all apps
-- Message-based authentication (same JWT as HTTP)
+- Message-based authentication (same JWT/bearer tokens as HTTP)
 - Topic-based pub/sub (`user:123`, `general_announcements`)
 - Auto-subscription to own topic after auth
 - Pluggable message handlers via settings or model hooks
+- All state stored in Redis (stateless workers)
 
 ## Requirements
 
-```
-channels>=4.0
-channels_redis>=4.0
-```
+- Redis server (uses existing mojo Redis client)
+- ASGI-compatible server (uvicorn, daphne, gunicorn+uvicorn)
+- Python 3.8+
+
+No additional dependencies required — no Django Channels, no channels_redis.
 
 ## Setup
 
-### 1. Install the App
+### 1. ASGI Configuration
 
-```python
-INSTALLED_APPS = [
-    ...
-    "channels",
-    "mojo.apps.realtime",
-]
-```
-
-### 2. ASGI Configuration
-
+**Simplest setup:**
 ```python
 # asgi.py
-import os
-from django.core.asgi import get_asgi_application
-from channels.routing import ProtocolTypeRouter, URLRouter
-from mojo.apps.realtime.routing import websocket_urlpatterns
+from mojo.apps.realtime.routing import create_application
 
-os.environ.setdefault("DJANGO_SETTINGS_MODULE", "myproject.settings")
+application = create_application()
+```
+
+**With explicit routing:**
+```python
+# asgi.py
+from django.core.asgi import get_asgi_application
+from mojo.apps.realtime.routing import ProtocolTypeRouter, WebSocketRouter, path
+from mojo.apps.realtime.asgi import get_asgi_application as get_realtime_asgi
 
 application = ProtocolTypeRouter({
     "http": get_asgi_application(),
-    "websocket": URLRouter(websocket_urlpatterns),
+    "websocket": WebSocketRouter([
+        path("ws/realtime/", get_realtime_asgi()),
+    ]),
 })
 ```
 
-### 3. Channel Layers (Redis)
+### 2. Bearer Authentication
+
+The system reuses `AUTH_BEARER_HANDLERS` from HTTP middleware — no separate config:
 
 ```python
-# settings.py
-CHANNEL_LAYERS = {
-    "default": {
-        "BACKEND": "channels_redis.core.RedisChannelLayer",
-        "CONFIG": {
-            "hosts": [("localhost", 6379)],
-        },
-    },
+# settings/middleware.py
+AUTH_BEARER_HANDLERS = {
+    "bearer": "myapp.models.User.validate_auth_token",
+    "vendterm": "devices.models.Device.validate_auth_token",
 }
+
+# Maps bearer prefix to user_type for realtime
+AUTH_BEARER_NAME_MAP = {
+    "bearer": "user",
+    "vendterm": "terminal",
+}
+```
+
+### 3. Run with ASGI Server
+
+```bash
+uvicorn project.asgi:application --host 0.0.0.0 --port 8000
 ```
 
 ## Authentication Flow
 
 1. Client connects to `ws://host/ws/realtime/`
-2. Server sends: `{"type": "auth_required", "timeout_seconds": 30}`
+2. Server sends: `{"type": "auth_required", "timeout": 30}`
 3. Client sends: `{"type": "authenticate", "token": "<jwt>", "prefix": "bearer"}`
-4. On success: `{"type": "auth_success", "instance_kind": "user", "instance_id": 42, "available_topics": [...]}`
-5. Client is auto-subscribed to `user:42`
+4. Server validates token via `AUTH_BEARER_HANDLERS`
+5. Registers connection and user online status in Redis
+6. Auto-subscribes to `<user_type>:<id>` topic
+7. Calls `on_realtime_connection(connection_data)` hook (if defined)
+8. Processes hook response (sends response, subscribes to topics)
+9. Sends: `{"type": "auth_success", "user_type": "user", "user_id": 42}`
 
-The auth system reuses `AUTH_BEARER_HANDLERS` from HTTP middleware — no separate config.
+If no `authenticate` message arrives within 30 seconds, the connection is closed.
 
 ## Message Handlers
 
@@ -83,26 +97,42 @@ REALTIME_MESSAGE_HANDLERS = {
 }
 ```
 
-Handler signature:
-
-```python
-def refresh_dashboard_handler(consumer, instance, instance_kind, data):
-    # instance = the authenticated User (or other model)
-    # data = the message payload dict
-    # Return a dict to send back to the client (optional)
-    return {"type": "dashboard_refreshed", "data": get_dashboard(instance)}
-```
+Messages not matched by a handler are routed to the instance's `on_realtime_message(data)` hook.
 
 ## Topics
 
-- External topic names: `user:123`, `group:7`, `general_announcements`
-- Internally normalized to Channels-safe names (`user_123`)
-- Authorization: each consumer's `get_available_topics()` determines allowed subscriptions
-- Default available topics: `general_announcements`, `admin_alerts` (staff only), own `instance_kind:id`
+- Topic names: `user:123`, `group:7`, `general_announcements`
+- Auto-subscription: every authenticated connection subscribes to `<user_type>:<id>`
+- Authorization: if the model defines `on_realtime_can_subscribe(topic)`, it is called on each subscribe request
+- Topic membership is stored in Redis SETs with automatic TTL
 
-## Settings
+## Activity Timeout
 
-| Setting | Description |
-|---|---|
-| `REALTIME_MESSAGE_HANDLERS` | Dict mapping message_type → handler path |
-| `CHANNEL_LAYERS` | Django Channels Redis config |
+Connections are monitored for activity. If no client message (including `ping`) arrives within 30 seconds, the connection is closed. Clients should send periodic pings to stay alive:
+
+```json
+{"type": "ping"}
+```
+
+## Redis Architecture
+
+All connection state lives in Redis, making workers stateless and horizontally scalable:
+
+| Key Pattern | Type | Purpose |
+|---|---|---|
+| `realtime:connections:{id}` | STRING (JSON) | Connection metadata |
+| `realtime:online:{user_type}:{user_id}` | SET | Active connection IDs for a user |
+| `realtime:topic:{name}` | SET | Connection IDs subscribed to topic |
+| `realtime:messages:{id}` | PUB/SUB | Direct messages to a connection |
+| `realtime:broadcast` | PUB/SUB | Global broadcast channel |
+| `realtime:response:{request_id}` | LIST | Request-response results |
+| `realtime:waiters:{user_type}:{user_id}` | SET | Active event waiter IDs |
+
+All keys have automatic TTL (default 300 seconds, refreshed on activity).
+
+## Scaling
+
+- Workers are stateless — add more processes behind a load balancer
+- Redis pub/sub ensures messages reach the correct worker
+- Each connection subscribes to its own Redis channel plus topic channels
+- Online status uses Redis SETs supporting multiple connections per user

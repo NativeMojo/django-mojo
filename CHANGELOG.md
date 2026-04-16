@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## v1.1.23 - April 16, 2026
+
+better docs, better logging
+
+
 ## v1.1.22 - April 15, 2026
 
 BUGFIX: collision when saving related field with same pk

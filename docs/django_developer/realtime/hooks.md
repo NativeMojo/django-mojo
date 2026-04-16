@@ -6,60 +6,161 @@ Any model that authenticates via WebSocket can implement optional hook methods. 
 
 ## Hook Methods
 
-Add these methods to your `User` model (or any model used as a WebSocket identity):
+Add these methods to your model (User, Device, or any model used as a WebSocket identity):
+
+### on_realtime_connection(connection_data)
+
+Primary connection hook. Called after successful authentication, before `auth_success` is sent. Receives connection metadata and can return a response to send to the client and/or request topic subscriptions.
 
 ```python
-class User(MojoSecrets, AbstractBaseUser, MojoModel):
+def on_realtime_connection(self, connection_data):
+    """
+    Called after WebSocket authentication succeeds.
 
-    def on_realtime_connected(self):
-        """Called after successful WebSocket authentication."""
-        self.metadata["realtime_connected"] = True
-        self.atomic_save()
+    Args:
+        connection_data: dict with keys:
+            - connection_id: unique connection UUID
+            - remote_ip: client IP address
+            - user_agent: client User-Agent string
 
-    def on_realtime_disconnected(self):
-        """Called when the WebSocket connection closes."""
-        self.metadata["realtime_connected"] = False
-        self.atomic_save()
+    Returns:
+        dict with optional keys:
+            - "response": dict sent directly to the client via WebSocket
+            - "subscriptions": list of topic strings to subscribe to
+        Or None for no action.
+    """
+    self.last_seen = timezone.now()
+    self.save(update_fields=["last_seen"])
 
-    def on_realtime_message(self, data):
-        """
-        Called for unhandled messages (not matched by REALTIME_MESSAGE_HANDLERS).
-        data: dict of the message payload
-        Return a dict to send back to the client, or None.
-        """
-        message_type = data.get("message_type")
-
-        if message_type == "echo":
-            return {"type": "echo", "payload": data.get("payload")}
-
-        if message_type == "ping_user":
-            return {"type": "pong_user", "user_id": self.id}
-
-        return None
+    return {
+        "response": {
+            "type": "connected",
+            "status": "active",
+        },
+        "subscriptions": [
+            "general_announcements",
+        ],
+    }
 ```
+
+### on_realtime_connected()
+
+Legacy connection hook. Called only if `on_realtime_connection` is not defined. Takes no arguments. Return value is processed the same way (see Hook Response Contract below).
+
+```python
+def on_realtime_connected(self):
+    """Called after successful WebSocket authentication (legacy)."""
+    self.metadata["realtime_connected"] = True
+    self.atomic_save()
+```
+
+### on_realtime_disconnected()
+
+Called when the WebSocket connection closes.
+
+```python
+def on_realtime_disconnected(self):
+    """Called when the WebSocket connection closes."""
+    self.metadata["realtime_connected"] = False
+    self.atomic_save()
+```
+
+### on_realtime_message(data)
+
+Called for incoming client messages not matched by `REALTIME_MESSAGE_HANDLERS` or a built-in type. Return value is processed the same way as connection hooks.
+
+```python
+def on_realtime_message(self, data):
+    """
+    Handle custom messages from the client.
+
+    Args:
+        data: dict of the full message payload
+
+    Returns:
+        dict with optional "response" and/or "subscriptions" keys,
+        or a plain dict (sent directly as a response for backward compat),
+        or None for no reply.
+    """
+    message_type = data.get("type") or data.get("message_type")
+
+    if message_type == "echo":
+        return {"response": {"type": "echo", "payload": data.get("payload")}}
+
+    if message_type == "ping_user":
+        return {"response": {"type": "pong_user", "user_id": self.id}}
+
+    return None
+```
+
+### on_realtime_can_subscribe(topic)
+
+Called when the client requests a topic subscription. Return `True` to allow, `False` to deny. If not defined, all subscriptions are allowed (the auto-subscription to `<user_type>:<id>` bypasses this check).
+
+```python
+def on_realtime_can_subscribe(self, topic):
+    """
+    Gate topic subscriptions.
+
+    Args:
+        topic: the topic string the client wants to subscribe to
+
+    Returns:
+        bool: True to allow, False to deny
+    """
+    allowed = {"general_announcements"}
+    return topic in allowed
+```
+
+## Hook Response Contract
+
+All hooks (`on_realtime_connection`, `on_realtime_connected`, `on_realtime_message`) share the same response processing via `_process_hook_response`:
+
+| Return value | Behavior |
+|---|---|
+| `{"response": {...}}` | Dict is sent directly to the client over the WebSocket |
+| `{"subscriptions": ["topic1", ...]}` | Client is subscribed to each topic |
+| `{"response": {...}, "subscriptions": [...]}` | Both actions |
+| Plain dict (no `response` key) | Sent directly to client (backward compatibility) |
+| `None` | No action |
+
+The `response` dict is delivered **directly over the WebSocket** — not through Redis pub/sub. This makes it reliable for initial state delivery on connect (no race conditions).
 
 ## Hook Execution Order
 
-1. Client connects
-2. Server sends `auth_required`
-3. Client sends `authenticate`
-4. Server validates token → sets `instance`
-5. **`on_realtime_connected()`** called
-6. Auto-subscribe to `<instance_kind>:<id>`
-7. Server sends `auth_success`
+### Authentication
 
-On disconnect:
+1. Client connects -> server sends `auth_required`
+2. Client sends `authenticate` with token
+3. Server validates token -> sets `instance` and `user_type`
+4. Update connection auth in Redis
+5. Register user online in Redis
+6. Auto-subscribe to `<user_type>:<id>` topic
+7. **`on_realtime_connection(connection_data)`** called (or `on_realtime_connected()` fallback)
+8. Process hook response -> deliver `response`, process `subscriptions`
+9. Server sends `auth_success`
+
+### Disconnect
+
 1. WebSocket closes
-2. **`on_realtime_disconnected()`** called
+2. Redis cleanup (connection record, topic memberships, online status)
+3. **`on_realtime_disconnected()`** called
 
-On message:
-1. Message arrives
-2. Check `REALTIME_MESSAGE_HANDLERS` dict
-3. If not found → call **`on_realtime_message(data)`**
-4. Return value sent to client if provided
+### Message
+
+1. Message arrives from client
+2. Activity timeout is reset
+3. Built-in types handled: `authenticate`, `subscribe`, `unsubscribe`, `ping`, `response`
+4. Otherwise: check `REALTIME_MESSAGE_HANDLERS` setting
+5. If not matched -> **`on_realtime_message(data)`** called
+6. Hook response processed and delivered
 
 ## Reserved Message Types
 
-Do not use these as `message_type` values in `on_realtime_message`:
-- `authenticate`, `auth_required`, `auth_success`, `auth_timeout`
-- `error`, `notification`, `subscribed`, `unsubscribed`, `pong`
+Do not use these as client message types — they are handled by the framework:
+- `authenticate`, `subscribe`, `unsubscribe`, `ping`, `response`
+
+These server -> client types are framework-controlled:
+- `auth_required`, `auth_success`, `auth_timeout`
+- `error`, `subscribed`, `unsubscribed`, `pong`
+- `message` (wraps `send_to_user` payloads)

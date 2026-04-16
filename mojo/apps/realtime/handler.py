@@ -55,6 +55,8 @@ class WebSocketHandler:
     def _log(self, message):
         try:
             rip = self.remote_ip
+            if self.user and self.user_type:
+                rip = f"{self.user_type}:{self.user.id} -> {rip}"
         except Exception:
             rip = None
         logger.info(f"[{self.connection_id} -> {rip}]: {message}")
@@ -215,6 +217,7 @@ class WebSocketHandler:
 
     async def update_connection_auth(self):
         """Update connection with authentication info"""
+        self._log("authenticated")
         connection_data = {
             "connection_id": self.connection_id,
             "user_id": self.user.id if self.user else None,
