@@ -703,8 +703,8 @@ class MojoModel:
                     value = None
                 target_dict[key] = cls.normalize_rest_value(request, field_name, value)
 
-        logger.info("filters", filters)
-        logger.info("excludes", excludes)
+        # logger.info("filters", filters)
+        # logger.info("excludes", excludes)
 
         queryset = cls.on_rest_list_search(request, queryset)
         queryset = queryset.filter(**filters)
@@ -1094,7 +1094,7 @@ class MojoModel:
                 setattr(self, field.name, None)
                 return
             field_value = int(field_value)
-            if (self.pk == field_value):
+            if field.related_model == type(self) and self.pk == field_value:
                 self.debug("Skipping self-reference")
                 return
             related_instance = field.related_model.objects.get(pk=field_value)
