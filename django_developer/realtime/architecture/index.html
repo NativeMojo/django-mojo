@@ -2151,10 +2151,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#1-install-the-app" class="md-nav__link">
+  <a href="#1-asgi-configuration" class="md-nav__link">
     <span class="md-ellipsis">
       
-        1. Install the App
+        1. ASGI Configuration
       
     </span>
   </a>
@@ -2162,10 +2162,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#2-asgi-configuration" class="md-nav__link">
+  <a href="#2-bearer-authentication" class="md-nav__link">
     <span class="md-ellipsis">
       
-        2. ASGI Configuration
+        2. Bearer Authentication
       
     </span>
   </a>
@@ -2173,10 +2173,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#3-channel-layers-redis" class="md-nav__link">
+  <a href="#3-run-with-asgi-server" class="md-nav__link">
     <span class="md-ellipsis">
       
-        3. Channel Layers (Redis)
+        3. Run with ASGI Server
       
     </span>
   </a>
@@ -2222,10 +2222,32 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#settings" class="md-nav__link">
+  <a href="#activity-timeout" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Settings
+        Activity Timeout
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#redis-architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Redis Architecture
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scaling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scaling
       
     </span>
   </a>
@@ -3854,10 +3876,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#1-install-the-app" class="md-nav__link">
+  <a href="#1-asgi-configuration" class="md-nav__link">
     <span class="md-ellipsis">
       
-        1. Install the App
+        1. ASGI Configuration
       
     </span>
   </a>
@@ -3865,10 +3887,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#2-asgi-configuration" class="md-nav__link">
+  <a href="#2-bearer-authentication" class="md-nav__link">
     <span class="md-ellipsis">
       
-        2. ASGI Configuration
+        2. Bearer Authentication
       
     </span>
   </a>
@@ -3876,10 +3898,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#3-channel-layers-redis" class="md-nav__link">
+  <a href="#3-run-with-asgi-server" class="md-nav__link">
     <span class="md-ellipsis">
       
-        3. Channel Layers (Redis)
+        3. Run with ASGI Server
       
     </span>
   </a>
@@ -3925,10 +3947,32 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#settings" class="md-nav__link">
+  <a href="#activity-timeout" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Settings
+        Activity Timeout
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#redis-architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Redis Architecture
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scaling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scaling
       
     </span>
   </a>
@@ -3957,59 +4001,72 @@
 
 <h1 id="realtime-architecture-setup-django-developer-reference">Realtime Architecture &amp; Setup — Django Developer Reference<a class="headerlink" href="#realtime-architecture-setup-django-developer-reference" title="Permanent link">&para;</a></h1>
 <h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
-<p>The realtime system provides a single generic WebSocket endpoint (<code>ws/realtime/</code>) using Django Channels. It shares the same bearer authentication as HTTP middleware.</p>
+<p>The realtime system provides a generic WebSocket endpoint (<code>ws/realtime/</code>) using raw ASGI + Redis. It shares the same bearer authentication as HTTP middleware.</p>
 <p><strong>Key concepts:</strong>
 - One endpoint for all apps
-- Message-based authentication (same JWT as HTTP)
+- Message-based authentication (same JWT/bearer tokens as HTTP)
 - Topic-based pub/sub (<code>user:123</code>, <code>general_announcements</code>)
 - Auto-subscription to own topic after auth
-- Pluggable message handlers via settings or model hooks</p>
+- Pluggable message handlers via settings or model hooks
+- All state stored in Redis (stateless workers)</p>
 <h2 id="requirements">Requirements<a class="headerlink" href="#requirements" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>channels&gt;=4.0
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>channels_redis&gt;=4.0
-</code></pre></div>
+<ul>
+<li>Redis server (uses existing mojo Redis client)</li>
+<li>ASGI-compatible server (uvicorn, daphne, gunicorn+uvicorn)</li>
+<li>Python 3.8+</li>
+</ul>
+<p>No additional dependencies required — no Django Channels, no channels_redis.</p>
 <h2 id="setup">Setup<a class="headerlink" href="#setup" title="Permanent link">&para;</a></h2>
-<h3 id="1-install-the-app">1. Install the App<a class="headerlink" href="#1-install-the-app" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">INSTALLED_APPS</span> <span class="o">=</span> <span class="p">[</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>    <span class="o">...</span>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    <span class="s2">&quot;channels&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    <span class="s2">&quot;mojo.apps.realtime&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="p">]</span>
-</code></pre></div>
-<h3 id="2-asgi-configuration">2. ASGI Configuration<a class="headerlink" href="#2-asgi-configuration" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># asgi.py</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django.core.asgi</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_asgi_application</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="kn">from</span><span class="w"> </span><span class="nn">channels.routing</span><span class="w"> </span><span class="kn">import</span> <span class="n">ProtocolTypeRouter</span><span class="p">,</span> <span class="n">URLRouter</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.realtime.routing</span><span class="w"> </span><span class="kn">import</span> <span class="n">websocket_urlpatterns</span>
+<h3 id="1-asgi-configuration">1. ASGI Configuration<a class="headerlink" href="#1-asgi-configuration" title="Permanent link">&para;</a></h3>
+<p><strong>Simplest setup:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># asgi.py</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.realtime.routing</span><span class="w"> </span><span class="kn">import</span> <span class="n">create_application</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="n">application</span> <span class="o">=</span> <span class="n">create_application</span><span class="p">()</span>
+</code></pre></div></p>
+<p><strong>With explicit routing:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># asgi.py</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django.core.asgi</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_asgi_application</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.realtime.routing</span><span class="w"> </span><span class="kn">import</span> <span class="n">ProtocolTypeRouter</span><span class="p">,</span> <span class="n">WebSocketRouter</span><span class="p">,</span> <span class="n">path</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.realtime.asgi</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_asgi_application</span> <span class="k">as</span> <span class="n">get_realtime_asgi</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="n">application</span> <span class="o">=</span> <span class="n">ProtocolTypeRouter</span><span class="p">({</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>    <span class="s2">&quot;http&quot;</span><span class="p">:</span> <span class="n">get_asgi_application</span><span class="p">(),</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>    <span class="s2">&quot;websocket&quot;</span><span class="p">:</span> <span class="n">WebSocketRouter</span><span class="p">([</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>        <span class="n">path</span><span class="p">(</span><span class="s2">&quot;ws/realtime/&quot;</span><span class="p">,</span> <span class="n">get_realtime_asgi</span><span class="p">()),</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>    <span class="p">]),</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="p">})</span>
+</code></pre></div></p>
+<h3 id="2-bearer-authentication">2. Bearer Authentication<a class="headerlink" href="#2-bearer-authentication" title="Permanent link">&para;</a></h3>
+<p>The system reuses <code>AUTH_BEARER_HANDLERS</code> from HTTP middleware — no separate config:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># settings/middleware.py</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">AUTH_BEARER_HANDLERS</span> <span class="o">=</span> <span class="p">{</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    <span class="s2">&quot;bearer&quot;</span><span class="p">:</span> <span class="s2">&quot;myapp.models.User.validate_auth_token&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>    <span class="s2">&quot;vendterm&quot;</span><span class="p">:</span> <span class="s2">&quot;devices.models.Device.validate_auth_token&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="p">}</span>
 <a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">setdefault</span><span class="p">(</span><span class="s2">&quot;DJANGO_SETTINGS_MODULE&quot;</span><span class="p">,</span> <span class="s2">&quot;myproject.settings&quot;</span><span class="p">)</span>
-<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>
-<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="n">application</span> <span class="o">=</span> <span class="n">ProtocolTypeRouter</span><span class="p">({</span>
-<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>    <span class="s2">&quot;http&quot;</span><span class="p">:</span> <span class="n">get_asgi_application</span><span class="p">(),</span>
-<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>    <span class="s2">&quot;websocket&quot;</span><span class="p">:</span> <span class="n">URLRouter</span><span class="p">(</span><span class="n">websocket_urlpatterns</span><span class="p">),</span>
-<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="p">})</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="c1"># Maps bearer prefix to user_type for realtime</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="n">AUTH_BEARER_NAME_MAP</span> <span class="o">=</span> <span class="p">{</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>    <span class="s2">&quot;bearer&quot;</span><span class="p">:</span> <span class="s2">&quot;user&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>    <span class="s2">&quot;vendterm&quot;</span><span class="p">:</span> <span class="s2">&quot;terminal&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="p">}</span>
 </code></pre></div>
-<h3 id="3-channel-layers-redis">3. Channel Layers (Redis)<a class="headerlink" href="#3-channel-layers-redis" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># settings.py</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">CHANNEL_LAYERS</span> <span class="o">=</span> <span class="p">{</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>    <span class="s2">&quot;default&quot;</span><span class="p">:</span> <span class="p">{</span>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>        <span class="s2">&quot;BACKEND&quot;</span><span class="p">:</span> <span class="s2">&quot;channels_redis.core.RedisChannelLayer&quot;</span><span class="p">,</span>
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>        <span class="s2">&quot;CONFIG&quot;</span><span class="p">:</span> <span class="p">{</span>
-<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>            <span class="s2">&quot;hosts&quot;</span><span class="p">:</span> <span class="p">[(</span><span class="s2">&quot;localhost&quot;</span><span class="p">,</span> <span class="mi">6379</span><span class="p">)],</span>
-<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>        <span class="p">},</span>
-<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>    <span class="p">},</span>
-<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="p">}</span>
+<h3 id="3-run-with-asgi-server">3. Run with ASGI Server<a class="headerlink" href="#3-run-with-asgi-server" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>uvicorn<span class="w"> </span>project.asgi:application<span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span>
 </code></pre></div>
 <h2 id="authentication-flow">Authentication Flow<a class="headerlink" href="#authentication-flow" title="Permanent link">&para;</a></h2>
 <ol>
 <li>Client connects to <code>ws://host/ws/realtime/</code></li>
-<li>Server sends: <code>{"type": "auth_required", "timeout_seconds": 30}</code></li>
+<li>Server sends: <code>{"type": "auth_required", "timeout": 30}</code></li>
 <li>Client sends: <code>{"type": "authenticate", "token": "&lt;jwt&gt;", "prefix": "bearer"}</code></li>
-<li>On success: <code>{"type": "auth_success", "instance_kind": "user", "instance_id": 42, "available_topics": [...]}</code></li>
-<li>Client is auto-subscribed to <code>user:42</code></li>
+<li>Server validates token via <code>AUTH_BEARER_HANDLERS</code></li>
+<li>Registers connection and user online status in Redis</li>
+<li>Auto-subscribes to <code>&lt;user_type&gt;:&lt;id&gt;</code> topic</li>
+<li>Calls <code>on_realtime_connection(connection_data)</code> hook (if defined)</li>
+<li>Processes hook response (sends response, subscribes to topics)</li>
+<li>Sends: <code>{"type": "auth_success", "user_type": "user", "user_id": 42}</code></li>
 </ol>
-<p>The auth system reuses <code>AUTH_BEARER_HANDLERS</code> from HTTP middleware — no separate config.</p>
+<p>If no <code>authenticate</code> message arrives within 30 seconds, the connection is closed.</p>
 <h2 id="message-handlers">Message Handlers<a class="headerlink" href="#message-handlers" title="Permanent link">&para;</a></h2>
 <p>Register custom message types in settings:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># settings.py</span>
@@ -4018,39 +4075,74 @@
 <a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>    <span class="s2">&quot;send_team_message&quot;</span><span class="p">:</span> <span class="s2">&quot;myapp.realtime.send_team_message_handler&quot;</span><span class="p">,</span>
 <a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="p">}</span>
 </code></pre></div>
-<p>Handler signature:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">refresh_dashboard_handler</span><span class="p">(</span><span class="n">consumer</span><span class="p">,</span> <span class="n">instance</span><span class="p">,</span> <span class="n">instance_kind</span><span class="p">,</span> <span class="n">data</span><span class="p">):</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>    <span class="c1"># instance = the authenticated User (or other model)</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>    <span class="c1"># data = the message payload dict</span>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>    <span class="c1"># Return a dict to send back to the client (optional)</span>
-<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>    <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;dashboard_refreshed&quot;</span><span class="p">,</span> <span class="s2">&quot;data&quot;</span><span class="p">:</span> <span class="n">get_dashboard</span><span class="p">(</span><span class="n">instance</span><span class="p">)}</span>
-</code></pre></div>
+<p>Messages not matched by a handler are routed to the instance's <code>on_realtime_message(data)</code> hook.</p>
 <h2 id="topics">Topics<a class="headerlink" href="#topics" title="Permanent link">&para;</a></h2>
 <ul>
-<li>External topic names: <code>user:123</code>, <code>group:7</code>, <code>general_announcements</code></li>
-<li>Internally normalized to Channels-safe names (<code>user_123</code>)</li>
-<li>Authorization: each consumer's <code>get_available_topics()</code> determines allowed subscriptions</li>
-<li>Default available topics: <code>general_announcements</code>, <code>admin_alerts</code> (staff only), own <code>instance_kind:id</code></li>
+<li>Topic names: <code>user:123</code>, <code>group:7</code>, <code>general_announcements</code></li>
+<li>Auto-subscription: every authenticated connection subscribes to <code>&lt;user_type&gt;:&lt;id&gt;</code></li>
+<li>Authorization: if the model defines <code>on_realtime_can_subscribe(topic)</code>, it is called on each subscribe request</li>
+<li>Topic membership is stored in Redis SETs with automatic TTL</li>
 </ul>
-<h2 id="settings">Settings<a class="headerlink" href="#settings" title="Permanent link">&para;</a></h2>
+<h2 id="activity-timeout">Activity Timeout<a class="headerlink" href="#activity-timeout" title="Permanent link">&para;</a></h2>
+<p>Connections are monitored for activity. If no client message (including <code>ping</code>) arrives within 30 seconds, the connection is closed. Clients should send periodic pings to stay alive:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ping&quot;</span><span class="p">}</span>
+</code></pre></div>
+<h2 id="redis-architecture">Redis Architecture<a class="headerlink" href="#redis-architecture" title="Permanent link">&para;</a></h2>
+<p>All connection state lives in Redis, making workers stateless and horizontally scalable:</p>
 <table>
 <thead>
 <tr>
-<th>Setting</th>
-<th>Description</th>
+<th>Key Pattern</th>
+<th>Type</th>
+<th>Purpose</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>REALTIME_MESSAGE_HANDLERS</code></td>
-<td>Dict mapping message_type → handler path</td>
+<td><code>realtime:connections:{id}</code></td>
+<td>STRING (JSON)</td>
+<td>Connection metadata</td>
 </tr>
 <tr>
-<td><code>CHANNEL_LAYERS</code></td>
-<td>Django Channels Redis config</td>
+<td><code>realtime:online:{user_type}:{user_id}</code></td>
+<td>SET</td>
+<td>Active connection IDs for a user</td>
+</tr>
+<tr>
+<td><code>realtime:topic:{name}</code></td>
+<td>SET</td>
+<td>Connection IDs subscribed to topic</td>
+</tr>
+<tr>
+<td><code>realtime:messages:{id}</code></td>
+<td>PUB/SUB</td>
+<td>Direct messages to a connection</td>
+</tr>
+<tr>
+<td><code>realtime:broadcast</code></td>
+<td>PUB/SUB</td>
+<td>Global broadcast channel</td>
+</tr>
+<tr>
+<td><code>realtime:response:{request_id}</code></td>
+<td>LIST</td>
+<td>Request-response results</td>
+</tr>
+<tr>
+<td><code>realtime:waiters:{user_type}:{user_id}</code></td>
+<td>SET</td>
+<td>Active event waiter IDs</td>
 </tr>
 </tbody>
 </table>
+<p>All keys have automatic TTL (default 300 seconds, refreshed on activity).</p>
+<h2 id="scaling">Scaling<a class="headerlink" href="#scaling" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Workers are stateless — add more processes behind a load balancer</li>
+<li>Redis pub/sub ensures messages reach the correct worker</li>
+<li>Each connection subscribes to its own Redis channel plus topic channels</li>
+<li>Online status uses Redis SETs supporting multiple connections per user</li>
+</ul>
 
 
 

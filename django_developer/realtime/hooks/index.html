@@ -2192,6 +2192,78 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Hook Methods">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#on_realtime_connectionconnection_data" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        on_realtime_connection(connection_data)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#on_realtime_connected" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        on_realtime_connected()
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#on_realtime_disconnected" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        on_realtime_disconnected()
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#on_realtime_messagedata" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        on_realtime_message(data)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#on_realtime_can_subscribetopic" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        on_realtime_can_subscribe(topic)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#hook-response-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hook Response Contract
+      
+    </span>
+  </a>
+  
 </li>
       
         <li class="md-nav__item">
@@ -2202,6 +2274,45 @@
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Hook Execution Order">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#authentication" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Authentication
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#disconnect" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Disconnect
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#message" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Message
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -3767,6 +3878,78 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Hook Methods">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#on_realtime_connectionconnection_data" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        on_realtime_connection(connection_data)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#on_realtime_connected" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        on_realtime_connected()
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#on_realtime_disconnected" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        on_realtime_disconnected()
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#on_realtime_messagedata" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        on_realtime_message(data)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#on_realtime_can_subscribetopic" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        on_realtime_can_subscribe(topic)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#hook-response-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hook Response Contract
+      
+    </span>
+  </a>
+  
 </li>
       
         <li class="md-nav__item">
@@ -3777,6 +3960,45 @@
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Hook Execution Order">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#authentication" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Authentication
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#disconnect" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Disconnect
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#message" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Message
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -3815,57 +4037,159 @@
 <h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
 <p>Any model that authenticates via WebSocket can implement optional hook methods. The framework calls them automatically at connection lifecycle events.</p>
 <h2 id="hook-methods">Hook Methods<a class="headerlink" href="#hook-methods" title="Permanent link">&para;</a></h2>
-<p>Add these methods to your <code>User</code> model (or any model used as a WebSocket identity):</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">User</span><span class="p">(</span><span class="n">MojoSecrets</span><span class="p">,</span> <span class="n">AbstractBaseUser</span><span class="p">,</span> <span class="n">MojoModel</span><span class="p">):</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">on_realtime_connected</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Called after successful WebSocket authentication.&quot;&quot;&quot;</span>
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;realtime_connected&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">atomic_save</span><span class="p">()</span>
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>
-<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">on_realtime_disconnected</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Called when the WebSocket connection closes.&quot;&quot;&quot;</span>
-<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;realtime_connected&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span>
-<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">atomic_save</span><span class="p">()</span>
-<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>
-<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">on_realtime_message</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">):</span>
-<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
-<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="sd">        Called for unhandled messages (not matched by REALTIME_MESSAGE_HANDLERS).</span>
-<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="sd">        data: dict of the message payload</span>
-<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="sd">        Return a dict to send back to the client, or None.</span>
-<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="sd">        &quot;&quot;&quot;</span>
-<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>        <span class="n">message_type</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;message_type&quot;</span><span class="p">)</span>
-<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>
-<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>        <span class="k">if</span> <span class="n">message_type</span> <span class="o">==</span> <span class="s2">&quot;echo&quot;</span><span class="p">:</span>
-<a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>            <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;echo&quot;</span><span class="p">,</span> <span class="s2">&quot;payload&quot;</span><span class="p">:</span> <span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;payload&quot;</span><span class="p">)}</span>
-<a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a>
-<a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a>        <span class="k">if</span> <span class="n">message_type</span> <span class="o">==</span> <span class="s2">&quot;ping_user&quot;</span><span class="p">:</span>
-<a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a>            <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;pong_user&quot;</span><span class="p">,</span> <span class="s2">&quot;user_id&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">id</span><span class="p">}</span>
-<a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a>
-<a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a>        <span class="k">return</span> <span class="kc">None</span>
+<p>Add these methods to your model (User, Device, or any model used as a WebSocket identity):</p>
+<h3 id="on_realtime_connectionconnection_data">on_realtime_connection(connection_data)<a class="headerlink" href="#on_realtime_connectionconnection_data" title="Permanent link">&para;</a></h3>
+<p>Primary connection hook. Called after successful authentication, before <code>auth_success</code> is sent. Receives connection metadata and can return a response to send to the client and/or request topic subscriptions.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_realtime_connection</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">connection_data</span><span class="p">):</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="sd">    Called after WebSocket authentication succeeds.</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="sd">    Args:</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="sd">        connection_data: dict with keys:</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="sd">            - connection_id: unique connection UUID</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="sd">            - remote_ip: client IP address</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="sd">            - user_agent: client User-Agent string</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="sd">    Returns:</span>
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="sd">        dict with optional keys:</span>
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="sd">            - &quot;response&quot;: dict sent directly to the client via WebSocket</span>
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="sd">            - &quot;subscriptions&quot;: list of topic strings to subscribe to</span>
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="sd">        Or None for no action.</span>
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="sd">    &quot;&quot;&quot;</span>
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">last_seen</span> <span class="o">=</span> <span class="n">timezone</span><span class="o">.</span><span class="n">now</span><span class="p">()</span>
+<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="n">update_fields</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;last_seen&quot;</span><span class="p">])</span>
+<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>
+<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>    <span class="k">return</span> <span class="p">{</span>
+<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>        <span class="s2">&quot;response&quot;</span><span class="p">:</span> <span class="p">{</span>
+<a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>            <span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;connected&quot;</span><span class="p">,</span>
+<a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a>            <span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="s2">&quot;active&quot;</span><span class="p">,</span>
+<a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a>        <span class="p">},</span>
+<a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a>        <span class="s2">&quot;subscriptions&quot;</span><span class="p">:</span> <span class="p">[</span>
+<a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a>            <span class="s2">&quot;general_announcements&quot;</span><span class="p">,</span>
+<a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a>        <span class="p">],</span>
+<a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a>    <span class="p">}</span>
 </code></pre></div>
+<h3 id="on_realtime_connected">on_realtime_connected()<a class="headerlink" href="#on_realtime_connected" title="Permanent link">&para;</a></h3>
+<p>Legacy connection hook. Called only if <code>on_realtime_connection</code> is not defined. Takes no arguments. Return value is processed the same way (see Hook Response Contract below).</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_realtime_connected</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Called after successful WebSocket authentication (legacy).&quot;&quot;&quot;</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;realtime_connected&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">atomic_save</span><span class="p">()</span>
+</code></pre></div>
+<h3 id="on_realtime_disconnected">on_realtime_disconnected()<a class="headerlink" href="#on_realtime_disconnected" title="Permanent link">&para;</a></h3>
+<p>Called when the WebSocket connection closes.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_realtime_disconnected</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Called when the WebSocket connection closes.&quot;&quot;&quot;</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;realtime_connected&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">atomic_save</span><span class="p">()</span>
+</code></pre></div>
+<h3 id="on_realtime_messagedata">on_realtime_message(data)<a class="headerlink" href="#on_realtime_messagedata" title="Permanent link">&para;</a></h3>
+<p>Called for incoming client messages not matched by <code>REALTIME_MESSAGE_HANDLERS</code> or a built-in type. Return value is processed the same way as connection hooks.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_realtime_message</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">):</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="sd">    Handle custom messages from the client.</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="sd">    Args:</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="sd">        data: dict of the full message payload</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="sd">    Returns:</span>
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="sd">        dict with optional &quot;response&quot; and/or &quot;subscriptions&quot; keys,</span>
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="sd">        or a plain dict (sent directly as a response for backward compat),</span>
+<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="sd">        or None for no reply.</span>
+<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="sd">    &quot;&quot;&quot;</span>
+<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a>    <span class="n">message_type</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;type&quot;</span><span class="p">)</span> <span class="ow">or</span> <span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;message_type&quot;</span><span class="p">)</span>
+<a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a>
+<a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a>    <span class="k">if</span> <span class="n">message_type</span> <span class="o">==</span> <span class="s2">&quot;echo&quot;</span><span class="p">:</span>
+<a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a>        <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;response&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;echo&quot;</span><span class="p">,</span> <span class="s2">&quot;payload&quot;</span><span class="p">:</span> <span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;payload&quot;</span><span class="p">)}}</span>
+<a id="__codelineno-3-17" name="__codelineno-3-17" href="#__codelineno-3-17"></a>
+<a id="__codelineno-3-18" name="__codelineno-3-18" href="#__codelineno-3-18"></a>    <span class="k">if</span> <span class="n">message_type</span> <span class="o">==</span> <span class="s2">&quot;ping_user&quot;</span><span class="p">:</span>
+<a id="__codelineno-3-19" name="__codelineno-3-19" href="#__codelineno-3-19"></a>        <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;response&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;pong_user&quot;</span><span class="p">,</span> <span class="s2">&quot;user_id&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">id</span><span class="p">}}</span>
+<a id="__codelineno-3-20" name="__codelineno-3-20" href="#__codelineno-3-20"></a>
+<a id="__codelineno-3-21" name="__codelineno-3-21" href="#__codelineno-3-21"></a>    <span class="k">return</span> <span class="kc">None</span>
+</code></pre></div>
+<h3 id="on_realtime_can_subscribetopic">on_realtime_can_subscribe(topic)<a class="headerlink" href="#on_realtime_can_subscribetopic" title="Permanent link">&para;</a></h3>
+<p>Called when the client requests a topic subscription. Return <code>True</code> to allow, <code>False</code> to deny. If not defined, all subscriptions are allowed (the auto-subscription to <code>&lt;user_type&gt;:&lt;id&gt;</code> bypasses this check).</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_realtime_can_subscribe</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">topic</span><span class="p">):</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="sd">    Gate topic subscriptions.</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="sd">    Args:</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="sd">        topic: the topic string the client wants to subscribe to</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="sd">    Returns:</span>
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="sd">        bool: True to allow, False to deny</span>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="sd">    &quot;&quot;&quot;</span>
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>    <span class="n">allowed</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;general_announcements&quot;</span><span class="p">}</span>
+<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a>    <span class="k">return</span> <span class="n">topic</span> <span class="ow">in</span> <span class="n">allowed</span>
+</code></pre></div>
+<h2 id="hook-response-contract">Hook Response Contract<a class="headerlink" href="#hook-response-contract" title="Permanent link">&para;</a></h2>
+<p>All hooks (<code>on_realtime_connection</code>, <code>on_realtime_connected</code>, <code>on_realtime_message</code>) share the same response processing via <code>_process_hook_response</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Return value</th>
+<th>Behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>{"response": {...}}</code></td>
+<td>Dict is sent directly to the client over the WebSocket</td>
+</tr>
+<tr>
+<td><code>{"subscriptions": ["topic1", ...]}</code></td>
+<td>Client is subscribed to each topic</td>
+</tr>
+<tr>
+<td><code>{"response": {...}, "subscriptions": [...]}</code></td>
+<td>Both actions</td>
+</tr>
+<tr>
+<td>Plain dict (no <code>response</code> key)</td>
+<td>Sent directly to client (backward compatibility)</td>
+</tr>
+<tr>
+<td><code>None</code></td>
+<td>No action</td>
+</tr>
+</tbody>
+</table>
+<p>The <code>response</code> dict is delivered <strong>directly over the WebSocket</strong> — not through Redis pub/sub. This makes it reliable for initial state delivery on connect (no race conditions).</p>
 <h2 id="hook-execution-order">Hook Execution Order<a class="headerlink" href="#hook-execution-order" title="Permanent link">&para;</a></h2>
+<h3 id="authentication">Authentication<a class="headerlink" href="#authentication" title="Permanent link">&para;</a></h3>
 <ol>
-<li>Client connects</li>
-<li>Server sends <code>auth_required</code></li>
-<li>Client sends <code>authenticate</code></li>
-<li>Server validates token → sets <code>instance</code></li>
-<li><strong><code>on_realtime_connected()</code></strong> called</li>
-<li>Auto-subscribe to <code>&lt;instance_kind&gt;:&lt;id&gt;</code></li>
+<li>Client connects -&gt; server sends <code>auth_required</code></li>
+<li>Client sends <code>authenticate</code> with token</li>
+<li>Server validates token -&gt; sets <code>instance</code> and <code>user_type</code></li>
+<li>Update connection auth in Redis</li>
+<li>Register user online in Redis</li>
+<li>Auto-subscribe to <code>&lt;user_type&gt;:&lt;id&gt;</code> topic</li>
+<li><strong><code>on_realtime_connection(connection_data)</code></strong> called (or <code>on_realtime_connected()</code> fallback)</li>
+<li>Process hook response -&gt; deliver <code>response</code>, process <code>subscriptions</code></li>
 <li>Server sends <code>auth_success</code></li>
 </ol>
-<p>On disconnect:
-1. WebSocket closes
-2. <strong><code>on_realtime_disconnected()</code></strong> called</p>
-<p>On message:
-1. Message arrives
-2. Check <code>REALTIME_MESSAGE_HANDLERS</code> dict
-3. If not found → call <strong><code>on_realtime_message(data)</code></strong>
-4. Return value sent to client if provided</p>
+<h3 id="disconnect">Disconnect<a class="headerlink" href="#disconnect" title="Permanent link">&para;</a></h3>
+<ol>
+<li>WebSocket closes</li>
+<li>Redis cleanup (connection record, topic memberships, online status)</li>
+<li><strong><code>on_realtime_disconnected()</code></strong> called</li>
+</ol>
+<h3 id="message">Message<a class="headerlink" href="#message" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Message arrives from client</li>
+<li>Activity timeout is reset</li>
+<li>Built-in types handled: <code>authenticate</code>, <code>subscribe</code>, <code>unsubscribe</code>, <code>ping</code>, <code>response</code></li>
+<li>Otherwise: check <code>REALTIME_MESSAGE_HANDLERS</code> setting</li>
+<li>If not matched -&gt; <strong><code>on_realtime_message(data)</code></strong> called</li>
+<li>Hook response processed and delivered</li>
+</ol>
 <h2 id="reserved-message-types">Reserved Message Types<a class="headerlink" href="#reserved-message-types" title="Permanent link">&para;</a></h2>
-<p>Do not use these as <code>message_type</code> values in <code>on_realtime_message</code>:
-- <code>authenticate</code>, <code>auth_required</code>, <code>auth_success</code>, <code>auth_timeout</code>
-- <code>error</code>, <code>notification</code>, <code>subscribed</code>, <code>unsubscribed</code>, <code>pong</code></p>
+<p>Do not use these as client message types — they are handled by the framework:
+- <code>authenticate</code>, <code>subscribe</code>, <code>unsubscribe</code>, <code>ping</code>, <code>response</code></p>
+<p>These server -&gt; client types are framework-controlled:
+- <code>auth_required</code>, <code>auth_success</code>, <code>auth_timeout</code>
+- <code>error</code>, <code>subscribed</code>, <code>unsubscribed</code>, <code>pong</code>
+- <code>message</code> (wraps <code>send_to_user</code> payloads)</p>
 
 
 
