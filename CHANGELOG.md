@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## v1.1.24 - April 16, 2026
+
+bugfix when working with s3 buckets in the eu
+
+
 ## v1.1.23 - April 16, 2026
 
 better docs, better logging

@@ -31,7 +31,7 @@ class S3StorageBackend(StorageBackend):
         self.region_name = self.get_setting('aws_region', 'us-east-1')
         self.access_key_id = self.get_setting('aws_key')
         self.secret_access_key = self.get_setting('aws_secret')
-        self.endpoint_url = self.get_setting('endpoint_url')  # For S3-compatible services
+        self.endpoint_url = self.get_setting('endpoint_url') or f"https://s3.{self.region_name}.amazonaws.com"
         self.signature_version = self.get_setting('signature_version', 's3v4')
         self.addressing_style = self.get_setting('addressing_style', 'auto')
 
