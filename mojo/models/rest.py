@@ -1014,7 +1014,12 @@ class MojoModel:
             if created:
                 owner_field = self.get_rest_meta_prop("CREATED_BY_OWNER_FIELD", "user")
                 if request.user.is_authenticated and self.get_model_field(owner_field):
-                    setattr(self, owner_field, request.user)
+                    # Only auto-stamp when the body did not provide a value.
+                    # Mirrors the "group" behavior directly below: body wins.
+                    # Models that want strict self-ownership must opt out with
+                    # CREATED_BY_OWNER_FIELD = None and re-stamp in on_rest_pre_save.
+                    if getattr(self, owner_field, None) is None:
+                        setattr(self, owner_field, request.user)
                 if request.group and self.get_model_field("group"):
                     if getattr(self, "group", None) is None:
                         self.group = request.group

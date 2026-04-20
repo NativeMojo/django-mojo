@@ -32,6 +32,8 @@ on_rest_request(request, pk)
 | `NO_REST` | `False` | Blocks all REST operations. |
 | `OWNER_FIELD` | `"user"` | FK field name pointing to the owning user. Used with `"owner"` perm. |
 | `GROUP_FIELD` | `"group"` | FK field name pointing to the owning group. |
+| `CREATED_BY_OWNER_FIELD` | `"user"` | FK field auto-stamped with `request.user` on create when the body omits it. Set to `None` to disable auto-stamping entirely. See "Create-time owner stamping" below. |
+| `UPDATED_BY_OWNER_FIELD` | `"modified_by"` | FK field set to `request.user` on every update. Unlike `CREATED_BY_OWNER_FIELD`, the update-path stamp always overwrites — "who last modified" is an actor fact, not a body fact. |
 | `DENY_AI` | `False` | Shorthand — denies all assistant model tools on this model regardless of verb. |
 | `DENY_AI_VIEW` | `False` | Blocks the assistant's `describe_model`, `query_model`, `aggregate_model`, and `export_data`. |
 | `DENY_AI_CREATE` | `False` | Blocks the create path of the assistant's `save_model_instance`. |
@@ -54,6 +56,56 @@ On denial the REST layer returns `403` with `error = "UPDATE not allowed: <Model
 ### `CAN_SAVE` is deprecated
 
 Earlier versions referenced `CAN_SAVE` in RestMeta, but `rest.py` never read it — so `CAN_SAVE = False` on models like `LoginEvent` and `ShortLinkClick` did not actually block updates. `CAN_UPDATE` is the real gate. `CAN_SAVE` is now honored as a one-release deprecated alias: the framework prefers `CAN_UPDATE` when both are set, and emits a one-shot `logit.warning` for any class that still uses `CAN_SAVE` alone. Rename your models to `CAN_UPDATE` before the next release.
+
+## Create-time owner stamping
+
+When a row is created, the framework auto-assigns `CREATED_BY_OWNER_FIELD` (default `"user"`) to `request.user` — **but only when the body did not provide a value for that field**. This mirrors the long-standing behavior for `group`: body wins, auto-fill covers the omitted case.
+
+```python
+# Self-signup path (body omits user) — framework stamps request.user.
+POST /api/shortlink/shortlink   body: {code: "abc"}          → user = request.user
+
+# Admin enrols another user (body sets user) — framework respects it.
+POST /api/routes/operator       body: {user: 7, group: 1}    → user = 7
+
+# Explicit null / 0 / "" → coerced to None → auto-stamp still kicks in.
+POST /api/shortlink/shortlink   body: {user: null}           → user = request.user
+```
+
+### Security implications
+
+This default is permissive: **any caller with `SAVE_PERMS` on the model can designate another user as the record's owner by including `user` in the body**, provided they also pass the per-FK `VIEW_PERMS` check on `account.User` (`view_users` / `manage_users` / `users`). The framework does not enforce "admin-only" semantics on the owner field — that is per-model policy.
+
+If you need strict self-ownership for a model (i.e. the framework must guarantee `user == request.user` on create regardless of body), disable the auto-stamp and re-assert in `on_rest_pre_save`:
+
+```python
+class RestMeta:
+    CREATED_BY_OWNER_FIELD = None   # disable framework auto-stamp
+    SAVE_PERMS = ["owner", "manage_foo"]
+
+def on_rest_pre_save(self, changed_fields, created):
+    if created:
+        self.user = self.active_user   # pin to the caller; ignore body
+```
+
+Or — for models like `Operator` where admins legitimately create rows for other users — keep the default and add an explicit gate in `on_rest_pre_save`:
+
+```python
+def on_rest_pre_save(self, changed_fields, created):
+    if created and self.user_id != self.active_user.id:
+        if not self.active_user.has_perm("manage_routes"):
+            raise me.PermissionDeniedException("manage_routes required to create operator for another user")
+        # plus membership / activity checks for the target user
+```
+
+### Opt-out quick reference
+
+| Behavior needed | How |
+|---|---|
+| Default — self-signup works, admin-for-another-user works with proper perms | Do nothing. |
+| Auto-stamp a field other than `user` (e.g. `created_by`) | `CREATED_BY_OWNER_FIELD = "created_by"` |
+| No auto-stamp at all | `CREATED_BY_OWNER_FIELD = None` |
+| Force caller identity on create regardless of body | `CREATED_BY_OWNER_FIELD = None` + re-assign in `on_rest_pre_save` |
 
 ## Assistant Access Flags
 
