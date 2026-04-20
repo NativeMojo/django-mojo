@@ -4672,6 +4672,18 @@
 <td>Field name for group scoping</td>
 </tr>
 <tr>
+<td><code>CREATED_BY_OWNER_FIELD</code></td>
+<td>str or None</td>
+<td><code>"user"</code></td>
+<td>Auto-stamped with <code>request.user</code> on create <strong>only when the body omits it</strong>. <code>None</code> disables. See <a href="../../rest/permissions/#create-time-owner-stamping">REST Permissions — Create-time owner stamping</a>.</td>
+</tr>
+<tr>
+<td><code>UPDATED_BY_OWNER_FIELD</code></td>
+<td>str or None</td>
+<td><code>"modified_by"</code></td>
+<td>Always set to <code>request.user</code> on update (who last modified). See <a href="../../rest/permissions/">REST Permissions</a>.</td>
+</tr>
+<tr>
 <td><code>ALT_PK_FIELD</code></td>
 <td>str</td>
 <td><code>"uuid"</code></td>
