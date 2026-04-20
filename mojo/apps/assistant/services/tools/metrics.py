@@ -40,6 +40,14 @@ MAX_CATEGORY_SLUGS = 200
 DESCRIBE_MAX_HITS = 10
 DESCRIBE_SNIPPET_LEN = 200
 
+# Defense-in-depth: skip files whose names suggest they may contain secrets,
+# so describe_metric_slug snippets never surface adjacent credentials even if
+# someone wrote a metrics.record() call next to one.
+_DESCRIBE_FILENAME_DENY = re.compile(
+    r"(secret|credential|password|private_key|\.env|local_settings)",
+    re.IGNORECASE,
+)
+
 _VALID_ACCOUNT_RE = re.compile(r"^(public|global|group-\d+|user-\d+|[A-Za-z0-9_.:\-]+)$")
 _GROUP_ACCOUNT_RE = re.compile(r"^group-(\d+)$")
 _USER_ACCOUNT_RE = re.compile(r"^user-(\d+)$")
@@ -623,6 +631,10 @@ def _scan_for_slug(roots, slug):
             # Skip common noise
             parts = path.parts
             if "__pycache__" in parts or ".venv" in parts or "node_modules" in parts:
+                continue
+            # Defense-in-depth: skip files whose names hint at secrets,
+            # so adjacent-line snippets cannot surface credentials.
+            if _DESCRIBE_FILENAME_DENY.search(path.name):
                 continue
             try:
                 text = path.read_text(encoding="utf-8", errors="replace")
