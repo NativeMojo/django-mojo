@@ -184,3 +184,55 @@ All additions in `tests/test_helpers/logit_sanitize.py` using the existing `@th.
 - `docs/django_developer/helpers/logit.md` — `mask_token` reference; note on derivation link.
 - `docs/django_developer/logging/incidents.md` — bearer-masking note in the event-metadata section.
 - `CHANGELOG.md` — one entry under `v1.1.0 - (current)` > Added.
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-04-19
+**Commits**: 9a2b8d9 (main implementation) + 97f5e82 (docs follow-up)
+
+### What Was Built
+
+Two consistency fixes to the v1.1.21 sanitization pipeline:
+
+1. **Single source of truth for sensitive keys** — `mask_sensitive_data()` now derives its regex from `SENSITIVE_KEYS` at import time. Adding a key to the frozenset automatically extends both the string masker and `sanitize_dict()`. Previously the regex covered 11 keys while `sanitize_dict` covered 21 — fields like `new_password`, `refresh_token`, `auth_token`, `private_key`, `otp`, `mfa_code` slipped through any stringified log path.
+2. **Bearer token masking in incident events** — `event_metadata["bearer"]` now stores `"****<last4>"` via `mask_token(request.bearer)` instead of the raw replayable credential. Tokens of length ≤ `visible` (default 4) are fully masked with no reveal. Forward-only; existing rows unchanged.
+
+Net performance: strictly **faster** on the hot `Log.logit()` path. One compiled regex at import + one `re.sub` per call, vs. two inline-compiled patterns + two full-text scans before.
+
+### Files Changed
+
+- `mojo/helpers/logit.py` — `SENSITIVE_KEYS` moved above `mask_sensitive_data`; new module-level `_SENSITIVE_KEY_PATTERN` compiled from it; new `mask_token(token, visible=4)` helper.
+- `mojo/apps/incident/reporter.py` — `event_metadata["bearer"]` now wrapped in `mask_token(...)`.
+- `tests/test_helpers/logit_sanitize.py` — 9 new cases: coverage across every `SENSITIVE_KEYS` entry (key=value + JSON forms), derivation-drift guard, case insensitivity, `mask_token` long/short/custom/empty/None, `_create_event_dict` bearer masking with a synthetic authenticated request.
+- `docs/django_developer/helpers/logit.md` — `mask_token` reference, `mask_sensitive_data` derivation note, full `SENSITIVE_KEYS` list.
+- `docs/django_developer/logging/incidents.md` — bearer-masking note in event-metadata section.
+- `docs/django_developer/logging/logit.md` — stale 4-key list replaced with pointer to `SENSITIVE_KEYS` (docs-updater follow-up in 97f5e82).
+- `CHANGELOG.md` — v1.1.0 Added entry.
+
+### Tests
+
+- `tests/test_helpers/logit_sanitize.py` — 20 total (11 existing + 9 new), all pass.
+- Run: `bin/run_tests -t test_helpers.logit_sanitize`
+- Full suite post-commit: 1684 passed, 0 failed (after test-runner also fixed a pre-existing unrelated regression in `test_verification`, committed separately in e1b9d2c).
+
+### Docs Updated
+
+- `docs/django_developer/helpers/logit.md` — `mask_token` section + derivation note + full key list.
+- `docs/django_developer/logging/incidents.md` — bearer-masking behavior documented.
+- `docs/django_developer/logging/logit.md` — stale key list corrected (97f5e82).
+- `CHANGELOG.md` — entry.
+
+### Security Review
+
+Clean. Two INFO notes, both known and by design:
+
+- **INFO** — `authorization: Bearer <token>` under-masks in the raw-string path because `[^",\s]+` stops at the first whitespace, so only `Bearer` is captured and the token that follows it remains visible in the line. Pre-existing gap explicitly noted as out of scope by the request. The concrete incident-metadata concern (raw bearer in the audit log) is fully addressed by `mask_token` in `reporter.py`. Follow-up could add a secondary pattern for the `Bearer <token>` form.
+- **INFO** — `mask_token(None)` / `mask_token("")` pass through unchanged. The only current call site guards with `if request.bearer:` before calling, so this never reaches storage today. Benign as designed.
+
+Other focus areas passed: regex correctness (`\1` backreference valid, `re.IGNORECASE` preserved, no ReDoS on 21-literal alternation), `mask_token` correctness (short fully masked, non-str coerced), no other bearer write path in the incident app, no new code path bypasses sanitization.
+
+### Follow-up
+
+- **`authorization: Bearer <token>` in raw string logs** — the INFO note above. If/when this becomes a real concern (e.g., a deployment starts logging the raw `Authorization` header), add a secondary pattern or strip the header wholesale at the logging middleware layer. Filed mentally; no request written yet.
+- **Retroactive masking of existing incident rows** — explicitly out of scope per the AC. If compliance ever requires it, a one-off migration script could walk existing rows.
