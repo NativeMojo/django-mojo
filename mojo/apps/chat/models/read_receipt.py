@@ -5,6 +5,8 @@ from mojo.models import MojoModel
 class ChatReadReceipt(models.Model, MojoModel):
     class RestMeta:
         VIEW_PERMS = ["comms", "manage_chat"]
+        # user pinned — "who read this" must always be the caller.
+        NO_SAVE_FIELDS = ["user"]
         GRAPHS = {
             "default": {
                 "fields": ["id", "message", "user", "read_at"],

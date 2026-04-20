@@ -5,6 +5,8 @@ from mojo.models import MojoModel
 class ChatReaction(models.Model, MojoModel):
     class RestMeta:
         VIEW_PERMS = ["comms", "manage_chat"]
+        # user pinned — reactions always attribute to the caller.
+        NO_SAVE_FIELDS = ["user"]
         GRAPHS = {
             "default": {
                 "fields": ["id", "message", "user", "emoji"],

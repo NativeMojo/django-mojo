@@ -43,6 +43,10 @@ class RegisteredDevice(models.Model, MojoModel):
     class RestMeta:
         VIEW_PERMS = ["view_devices", "manage_devices", "comms", "owner", "manage_users"]
         SAVE_PERMS = ["manage_devices", "comms", "owner"]
+        # user pinned — a push-device token must bind to the registering
+        # caller. Otherwise an admin could redirect another user's
+        # notifications to an attacker-controlled token.
+        NO_SAVE_FIELDS = ["user"]
         SEARCH_FIELDS = ["device_name", "device_id"]
         LIST_DEFAULT_FILTERS = {"is_active": True}
         GRAPHS = {

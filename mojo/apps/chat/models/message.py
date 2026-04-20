@@ -18,7 +18,8 @@ MODERATION_CHOICES = [
 class ChatMessage(models.Model, MojoModel):
     class RestMeta:
         VIEW_PERMS = ["comms", "manage_chat"]
-        NO_SAVE_FIELDS = ["is_flagged", "flagged_by", "flagged_at", "moderation_decision"]
+        # user pinned so comms admins can't spoof message authorship.
+        NO_SAVE_FIELDS = ["user", "is_flagged", "flagged_by", "flagged_at", "moderation_decision"]
         GRAPHS = {
             "list": {
                 "fields": [

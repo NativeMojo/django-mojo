@@ -25,6 +25,9 @@ class UserTOTP(MojoSecrets, MojoModel):
         VIEW_PERMS = ["owner", "manage_users", "users"]
         SAVE_PERMS = ["owner", "manage_users", "users"]
         OWNER_FIELD = "user"
+        # A TOTP record must always bind to request.user — never body-settable.
+        # Framework auto-stamps user from request via CREATED_BY_OWNER_FIELD.
+        NO_SAVE_FIELDS = ["user"]
         NO_SHOW_FIELDS = ["mojo_secrets"]
         GRAPHS = {
             "default": {

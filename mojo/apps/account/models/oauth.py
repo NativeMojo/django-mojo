@@ -36,6 +36,9 @@ class OAuthConnection(MojoSecrets, MojoModel):
         SAVE_PERMS = ["manage_users", "users"]
         CAN_DELETE = True
         OWNER_FIELD = "user"
+        # OAuth connection ties an external identity to a local user — never
+        # body-settable. Framework auto-stamps user from request.
+        NO_SAVE_FIELDS = ["user"]
         NO_SHOW_FIELDS = ["mojo_secrets"]
         GRAPHS = {
             "default": {
