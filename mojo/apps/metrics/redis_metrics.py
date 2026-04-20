@@ -404,3 +404,75 @@ def fetch_by_category(category, dt_start=None, dt_end=None, granularity="hours",
     return fetch(slugs, dt_start=dt_start, dt_end=dt_end,
                  granularity=granularity, redis_con=redis_con,
                  account=account, with_labels=with_labels)
+
+
+# ================================
+# Data-inferred discovery helpers
+# ================================
+
+def list_accounts_with_data(redis_con=None):
+    """Return the set of accounts that have any recorded metric slugs.
+
+    Complements :func:`list_accounts`, which only returns accounts that have
+    been explicitly registered (via ``add_account`` or a permission setter).
+    An account created implicitly by calling ``metrics.record(account=X)``
+    will not appear in ``list_accounts`` but will appear here.
+
+    The slug-set key is ``mets:<account>:slugs`` (unlike time-series and value
+    keys, it is not hash-tagged — see ``add_metrics_slug``). Scan the bare
+    form and parse out the account segment.
+    """
+    if redis_con is None:
+        redis_con = redis.get_connection()
+    accounts = set()
+    for key in redis_con.scan_iter(match="mets:*:slugs"):
+        key_str = key.decode("utf-8") if isinstance(key, bytes) else key
+        # Format: mets:<account>:slugs (account may contain '-' and digits)
+        if not key_str.startswith("mets:") or not key_str.endswith(":slugs"):
+            continue
+        account = key_str[len("mets:"):-len(":slugs")]
+        if account:
+            accounts.add(account)
+    return accounts
+
+
+def list_gauge_slugs(account, prefix=None, limit=500, redis_con=None):
+    """Return gauge (set_value) slugs on an account, optionally prefix-filtered.
+
+    Scans ``{mets:<account>}:mets:<account>:val:*`` via ``scan_iter`` so it is
+    cluster-safe. Returns the original slug form (colons, not the normalized
+    ``|``).
+
+    Returns a dict: ``{slugs: [...], count: N, total: M, truncated: bool}``.
+    """
+    if redis_con is None:
+        redis_con = redis.get_connection()
+
+    val_prefix_redis_key = tkey(account, utils.generate_value_key("", account))
+    # val_prefix_redis_key looks like "{mets:<acct>}:mets:<acct>:val:"
+    pattern = f"{val_prefix_redis_key}*"
+
+    slugs = []
+    for key in redis_con.scan_iter(match=pattern):
+        key_str = key.decode("utf-8") if isinstance(key, bytes) else key
+        # Extract the bit after ":val:" — that's our normalized slug
+        marker = ":val:"
+        marker_pos = key_str.find(marker)
+        if marker_pos == -1:
+            continue
+        raw = key_str[marker_pos + len(marker):]
+        # Restore colons from the normalized form (see utils.normalize_slug)
+        slug = raw.replace("|", ":")
+        if prefix and not slug.startswith(prefix):
+            continue
+        slugs.append(slug)
+
+    slugs.sort()
+    total = len(slugs)
+    truncated = total > limit
+    return {
+        "slugs": slugs[:limit],
+        "count": min(total, limit),
+        "total": total,
+        "truncated": truncated,
+    }

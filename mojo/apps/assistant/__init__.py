@@ -27,7 +27,7 @@ DOMAIN_DESCRIPTIONS = {
     "jobs": "Query, monitor, cancel, and retry background jobs; run jobs and scheduled tasks on demand",
     "users": "Query and manage users, permissions, rate limits, and activity",
     "groups": "Query and manage groups, members, and group activity",
-    "metrics": "Fetch time-series metrics, system health, and incident trends",
+    "metrics": "Discover, fetch, and explain time-series metrics and gauges across accounts, groups, and users. Covers API traffic, jobs, bouncer, logins, shortlinks, and any slug recorded via metrics.record(). Includes a single write tool for operational gauge toggles (maintenance_mode, feature flags).",
     "discovery": "List all available tools across every domain",
     "memory": "Read, write, and delete persistent assistant memories",
     "models": "Query and describe any Django model in the system",

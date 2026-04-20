@@ -8,8 +8,8 @@ list_tools (non-core) provides a full listing of all tools; available when
 the discovery domain is loaded.
 
 Domain-specific discovery tools (list_job_channels, list_event_categories,
-list_metric_categories, list_metric_slugs, list_permissions) are registered
-under their parent domains so they load alongside related tools.
+list_permissions) are registered under their parent domains so they load
+alongside related tools. Metrics discovery tools live in ``tools/metrics.py``.
 """
 from mojo.apps.assistant import tool
 
@@ -128,76 +128,6 @@ def _tool_list_tools(params, user):
 # ---------------------------------------------------------------------------
 # Domain-specific discovery tools — registered under their parent domains
 # ---------------------------------------------------------------------------
-
-@tool(
-    name="list_metric_categories",
-    domain="metrics",
-    permission="view_admin",
-    description="List all metric categories being tracked. Use this to discover what metrics exist before fetching data.",
-    input_schema={
-        "type": "object",
-        "properties": {
-            "account": {"type": "string", "description": "Account scope (public, global, group-<id>)", "default": "public"},
-        },
-    },
-)
-def _tool_list_metric_categories(params, user):
-    """List all metric categories in a given account scope."""
-    from mojo.apps import metrics
-    import re
-
-    account = params.get("account", "public")
-    if not re.match(r"^(public|global|group-\d+|user-\d+)$", account):
-        return {"error": f"Invalid account scope: {account}"}
-
-    try:
-        categories = sorted(metrics.get_categories(account=account))
-    except Exception:
-        return {"categories": [], "note": "Redis not available or no categories found"}
-
-    return {
-        "account": account,
-        "categories": categories,
-        "count": len(categories),
-    }
-
-
-@tool(
-    name="list_metric_slugs",
-    domain="metrics",
-    permission="view_admin",
-    description="List all metric slugs within a category. Use this to find specific metrics to fetch.",
-    input_schema={
-        "type": "object",
-        "properties": {
-            "category": {"type": "string", "description": "The metric category to list slugs for"},
-            "account": {"type": "string", "description": "Account scope (public, global, group-<id>)", "default": "public"},
-        },
-        "required": ["category"],
-    },
-)
-def _tool_list_metric_slugs(params, user):
-    """List all metric slugs within a category."""
-    from mojo.apps import metrics
-    import re
-
-    category = params["category"]
-    account = params.get("account", "public")
-    if not re.match(r"^(public|global|group-\d+|user-\d+)$", account):
-        return {"error": f"Invalid account scope: {account}"}
-
-    try:
-        slugs = sorted(metrics.get_category_slugs(category, account=account))
-    except Exception:
-        return {"slugs": [], "note": "Redis not available or category not found"}
-
-    return {
-        "category": category,
-        "account": account,
-        "slugs": slugs,
-        "count": len(slugs),
-    }
-
 
 @tool(
     name="list_job_channels",

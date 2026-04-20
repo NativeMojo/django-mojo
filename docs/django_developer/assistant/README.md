@@ -202,13 +202,27 @@ Add `"mojo.apps.assistant"` to `INSTALLED_APPS` and run migrations.
 | `get_group_members` | `view_groups` | No |
 | `get_group_activity` | `view_groups` | No |
 
-### Metrics Domain (`view_admin` / `view_security`)
+### Metrics Domain (`view_metrics` / `write_metrics` / `view_admin` / `view_security`)
 
-| Tool | Permission | Mutates |
-|---|---|---|
-| `fetch_metrics` | `view_admin` | No |
-| `get_system_health` | `view_admin` | No |
-| `get_incident_trends` | `view_security` | No |
+Full reference: [metrics_tools.md](metrics_tools.md).
+
+| Tool | Permission | Mutates | Purpose |
+|---|---|---|---|
+| `list_metric_accounts` | `view_metrics` | No | Discover every account the user can view (unions configured + data-inferred) |
+| `list_metric_categories` | `view_metrics` | No | Categories on a given account |
+| `list_metric_slugs` | `view_metrics` | No | Time-series slugs on an account; supports category and prefix filters |
+| `list_metric_gauges` | `view_metrics` | No | Gauge (non-time-series) slug names on an account |
+| `describe_metric_slug` | `view_metrics` | No | Grep the codebase for `metrics.record()` call sites matching a slug |
+| `resolve_group_account` | `view_metrics` | No | Turn a group name/id into the matching `group-<id>` account string |
+| `fetch_metrics` | `view_metrics` | No | Time-series fetch; auto-granularity and retention notes |
+| `fetch_metric_values` | `view_metrics` | No | Point-in-time snapshot across many slugs |
+| `fetch_metrics_by_category` | `view_metrics` | No | Fetch every slug in a category at once, capped for token budget |
+| `get_metric_gauge` | `view_metrics` | No | Read one or more gauge values |
+| `set_metric_gauge` | `write_metrics` | Yes | Write a gauge (maintenance_mode, feature flags). Mutates — confirm first. |
+| `get_system_health` | `view_admin` | No | Cross-domain roll-up: active users, jobs, incidents, events |
+| `get_incident_trends` | `view_security` | No | Incident/event trends over 1h/6h/24h/7d |
+
+Every read tool calls `mojo.apps.metrics.rest.helpers.check_view_permissions(request, account)`; the write tool calls `check_write_permissions`. This matches the REST layer exactly: per-account gating for `public`, `global`, `group-<id>`, `user-<id>`, and custom accounts. Denials return `{"error": ...}` and fire a level-5 security event.
 
 ### Web Domain (`view_admin`)
 
