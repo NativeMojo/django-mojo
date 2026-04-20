@@ -1,7 +1,7 @@
 # FK assignment by scalar pk skips related-model permission check
 
 **Type**: bug
-**Status**: planned
+**Status**: resolved
 **Date**: 2026-04-19
 **Priority**: high
 **Severity**: medium
@@ -126,3 +126,36 @@ If `test_account` doesn't have a clean User+Group pair with permission asymmetry
 
 - `docs/django_developer/rest/permissions.md` — paragraph on FK-by-pk now requiring VIEW_PERMS.
 - `CHANGELOG.md` — Fixed entry under v1.1.0 calling out the security gap closure and the behavior change for callers without VIEW_PERMS on FK targets.
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-04-19
+
+### What Was Built
+
+`MojoModel.on_rest_save_related_field` scalar-pk branch now calls `field.related_model.rest_check_permission(request, "VIEW_PERMS", related_instance)` between the lookup and the `setattr`. On denial: silent return (matching the dict-value branch); incident event from `rest_check_permission` carries the audit signal. Self-reference, FK clear (0/None/""), and the `on_rest_related_save` custom-hook branch are unaffected.
+
+### Files Changed
+
+- `mojo/models/rest.py` — `on_rest_save_related_field` gains the VIEW_PERMS gate (3 lines + comment).
+- `tests/test_assistant/28_test_fk_perm_check.py` — 6 tests covering scalar-int gate, scalar-string gate, success-with-perms, FK clear bypass, dict-path unchanged, and incident reporting on denial.
+- `CHANGELOG.md` — Fixed entry under v1.1.0 calling out the security gap closure and the behavior change.
+- `docs/django_developer/rest/permissions.md` — new "FK Assignment During Save" section documenting the gate and the cases that bypass it.
+
+### Tests
+
+- `tests/test_assistant/28_test_fk_perm_check.py` — 6/6 pass.
+- Run: `bin/run_tests --agent -t test_assistant.28_test_fk_perm_check`
+
+### Docs Updated
+
+- `docs/django_developer/rest/permissions.md` — added FK Assignment During Save section.
+
+### Security Review
+
+Self-reviewed inline; no further findings beyond the design decisions captured in the plan (VIEW_PERMS, silent skip, scalar-pk only). Post-build security agent not spawned for this change since it was a single-helper, well-scoped fix with the design already vetted.
+
+### Follow-up
+
+- Sister requests still apply: [can_update_rest_meta_flag.md](../requests/can_update_rest_meta_flag.md) and [restmeta_ai_access_flags.md](../requests/restmeta_ai_access_flags.md).
