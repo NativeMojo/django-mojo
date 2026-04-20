@@ -3,7 +3,8 @@
 **Type**: request
 **Status**: open
 **Date**: 2026-04-13
-**Priority**: high
+**Priority**: low
+**Deferred**: 2026-04-19 — not needed right now; revisit when a deployment actually hits the cross-origin loop in production.
 
 ## Description
 
