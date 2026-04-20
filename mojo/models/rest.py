@@ -31,6 +31,22 @@ SYSTEM_REQUEST.user.has_permission = lambda perm: True
 SYSTEM_REQUEST.DATA = objict.objict()
 
 
+# Process-local set of class names that have already emitted the CAN_SAVE
+# deprecation warning. Keeps the log once-per-class-per-process rather than
+# repeating on every request.
+_DEPRECATED_CAN_SAVE_WARNED = set()
+
+
+def _warn_can_save_deprecated(cls_name):
+    if cls_name in _DEPRECATED_CAN_SAVE_WARNED:
+        return
+    _DEPRECATED_CAN_SAVE_WARNED.add(cls_name)
+    logit.warn(
+        f"RestMeta.CAN_SAVE is deprecated on {cls_name}; rename to CAN_UPDATE. "
+        "Both names are honored for one release (CAN_UPDATE wins when both are set)."
+    )
+
+
 class MojoModel:
     """Base model class for REST operations with GraphSerializer integration."""
 
@@ -305,7 +321,12 @@ class MojoModel:
     @classmethod
     def on_rest_handle_save(cls, request, instance):
         """
-        Handle POST and PUT requests with permission checks.
+        Handle POST and PUT requests on an existing instance with permission checks.
+
+        Gated by the ``CAN_UPDATE`` RestMeta flag (default True). ``CAN_SAVE``
+        is accepted as a deprecated alias for one release — a once-per-process
+        warning is emitted if only ``CAN_SAVE`` is set. When both are set,
+        ``CAN_UPDATE`` wins.
 
         Args:
             request: Django HTTP request object.
@@ -314,6 +335,17 @@ class MojoModel:
         Returns:
             JsonResponse representing the result of the save operation.
         """
+        can_update = cls.get_rest_meta_prop("CAN_UPDATE", None)
+        if can_update is None:
+            can_save = cls.get_rest_meta_prop("CAN_SAVE", None)
+            if can_save is not None:
+                _warn_can_save_deprecated(cls.__name__)
+                can_update = can_save
+            else:
+                can_update = True
+        if not can_update:
+            return cls.rest_error_response(request, 403, error=f"UPDATE not allowed: {cls.__name__}")
+
         if cls.rest_check_permission(request, ["SAVE_PERMS", "VIEW_PERMS"], instance):
             return instance.on_rest_save_and_respond(request)
         return cls.rest_error_response(request, 403, error=f"{request.method} permission denied: {cls.__name__}")

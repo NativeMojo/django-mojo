@@ -9,7 +9,6 @@ class VaultFile(models.Model, MojoModel):
     """Encrypted file stored in S3 via FileManager."""
 
     class RestMeta:
-        CAN_SAVE = True
         CAN_CREATE = True
         CAN_DELETE = True
         DEFAULT_SORT = "-created"

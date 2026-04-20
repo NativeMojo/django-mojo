@@ -16,7 +16,7 @@ class FileRendition(models.Model, MojoModel):
     """
 
     class RestMeta:
-        CAN_SAVE = CAN_CREATE = True
+        CAN_CREATE = True
         CAN_DELETE = True
         DEFAULT_SORT = "-created"
         VIEW_PERMS = ["view_fileman", "manage_files", "files"]

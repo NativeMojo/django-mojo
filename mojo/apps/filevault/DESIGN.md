@@ -328,7 +328,6 @@ class VaultFile(models.Model, MojoModel):
     metadata = models.JSONField(default=dict, blank=True)
 
     class RestMeta:
-        CAN_SAVE = True
         CAN_CREATE = True
         CAN_DELETE = True
         VIEW_PERMS = ["view_vault", "manage_vault", "owner"]
@@ -401,7 +400,6 @@ class VaultData(models.Model, MojoModel):
     metadata = models.JSONField(default=dict, blank=True)
 
     class RestMeta:
-        CAN_SAVE = True
         CAN_CREATE = True
         CAN_DELETE = True
         VIEW_PERMS = ["view_vault", "manage_vault", "owner"]

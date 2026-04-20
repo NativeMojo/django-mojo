@@ -9,7 +9,7 @@ class ShortLinkClick(models.Model, MojoModel):
     """
 
     class RestMeta:
-        CAN_SAVE = False
+        CAN_UPDATE = False
         CAN_CREATE = False
         CAN_DELETE = False
         DEFAULT_SORT = "-created"

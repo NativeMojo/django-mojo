@@ -66,7 +66,6 @@ class Contract(models.Model, MojoModel):
     """A contract with an encrypted document attached."""
 
     class RestMeta:
-        CAN_SAVE = True
         CAN_CREATE = True
         GRAPHS = {
             "default": {

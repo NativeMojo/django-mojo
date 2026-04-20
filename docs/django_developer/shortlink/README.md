@@ -132,7 +132,7 @@ Per-click record. Only created when `track_clicks=True`. Located at `mojo/apps/s
 | `is_bot` | BooleanField | Auto-detected from user-agent. |
 | `created` | DateTimeField | Click timestamp. |
 
-Read-only via REST (`CAN_SAVE = CAN_CREATE = False`).
+Read-only via REST (`CAN_UPDATE = CAN_CREATE = CAN_DELETE = False`).
 
 Note: click-history REST access remains admin-scoped (`manage_shortlinks`) rather than owner-scoped.
 

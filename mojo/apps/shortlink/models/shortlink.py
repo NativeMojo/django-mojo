@@ -11,7 +11,7 @@ class ShortLink(models.Model, MojoModel):
     """
 
     class RestMeta:
-        CAN_SAVE = CAN_CREATE = True
+        CAN_CREATE = True
         CAN_DELETE = True
         DEFAULT_SORT = "-created"
         VIEW_PERMS = ["manage_shortlinks", "owner"]

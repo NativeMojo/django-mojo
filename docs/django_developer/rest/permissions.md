@@ -27,6 +27,7 @@ on_rest_request(request, pk)
 | `DELETE_PERMS` | `[]` | Permissions needed to delete. Falls back to SAVE_PERMS → VIEW_PERMS. |
 | `CREATE_PERMS` | `[]` | Permissions needed to create (POST without pk). Falls back to SAVE_PERMS. |
 | `CAN_DELETE` | `False` | Must be `True` for DELETE to work at all. |
+| `CAN_UPDATE` | `True` | Set `False` to block PUT/POST against an existing instance (pair with `CAN_CREATE`/`CAN_DELETE`). Supersedes the deprecated `CAN_SAVE` — see below. |
 | `NO_REST_SAVE` | `False` | Blocks POST/PUT entirely. |
 | `NO_REST` | `False` | Blocks all REST operations. |
 | `OWNER_FIELD` | `"user"` | FK field name pointing to the owning user. Used with `"owner"` perm. |
@@ -36,6 +37,23 @@ on_rest_request(request, pk)
 | `DENY_AI_CREATE` | `False` | Blocks the create path of the assistant's `save_model_instance`. |
 | `DENY_AI_UPDATE` | `False` | Blocks the update path of the assistant's `save_model_instance`. |
 | `DENY_AI_DELETE` | `False` | Blocks the assistant's `delete_model_instance`. |
+
+## `CAN_UPDATE` — block writes to existing instances
+
+`CAN_UPDATE` gates PUT/POST on an existing pk, mirroring how `CAN_CREATE` gates creates and `CAN_DELETE` gates deletes. Default `True` — no existing model changes behavior unless you opt in. Set `False` to make a model append-only:
+
+```python
+class RestMeta:
+    CAN_CREATE = False
+    CAN_UPDATE = False   # blocks PUT to existing rows
+    CAN_DELETE = False
+```
+
+On denial the REST layer returns `403` with `error = "UPDATE not allowed: <ModelName>"` — a distinct message so operators can tell the block is policy, not a permission shortfall.
+
+### `CAN_SAVE` is deprecated
+
+Earlier versions referenced `CAN_SAVE` in RestMeta, but `rest.py` never read it — so `CAN_SAVE = False` on models like `LoginEvent` and `ShortLinkClick` did not actually block updates. `CAN_UPDATE` is the real gate. `CAN_SAVE` is now honored as a one-release deprecated alias: the framework prefers `CAN_UPDATE` when both are set, and emits a one-shot `logit.warning` for any class that still uses `CAN_SAVE` alone. Rename your models to `CAN_UPDATE` before the next release.
 
 ## Assistant Access Flags
 

@@ -12,7 +12,7 @@ class FileManager(MojoSecrets, MojoModel):
     """
 
     class RestMeta:
-        CAN_SAVE = CAN_CREATE = True
+        CAN_CREATE = True
         CAN_DELETE = True
         DEFAULT_SORT = "-id"
         POST_SAVE_ACTIONS = ["test_connection", "fix_cors", "clone", "check_cors"]
