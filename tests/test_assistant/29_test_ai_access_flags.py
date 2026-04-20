@@ -292,6 +292,39 @@ def test_deny_ai_update_blocks_save_update_allows_create(opts):
 # ---------------------------------------------------------------------------
 
 @th.django_unit_test()
+def test_deny_ai_shorthand_overrides_explicit_false(opts):
+    """DENY_AI=True must win even when a per-verb flag is explicitly False."""
+    from mojo.apps.assistant.services.tools.models import _check_ai_access
+    from mojo.apps.incident.models import RuleSet
+    _clear_flags(RuleSet)
+    _set_flag(RuleSet, "DENY_AI", True)
+    _set_flag(RuleSet, "DENY_AI_VIEW", False)
+    try:
+        result = _check_ai_access(RuleSet, "view", opts.admin)
+        assert result is not None, (
+            "DENY_AI=True should block view even when DENY_AI_VIEW=False"
+        )
+        assert "not available to the assistant" in result["error"], (
+            f"Distinct message expected, got: {result['error']}"
+        )
+    finally:
+        _clear_flags(RuleSet)
+
+
+@th.django_unit_test()
+def test_unknown_verb_fails_closed(opts):
+    """Unknown verb string is a handler bug — deny, not allow."""
+    from mojo.apps.assistant.services.tools.models import _check_ai_access
+    from mojo.apps.incident.models import RuleSet
+    _clear_flags(RuleSet)
+    result = _check_ai_access(RuleSet, "bogus_verb", opts.admin)
+    assert result is not None, "Unknown verb must deny (fail-closed)"
+    assert "not available to the assistant" in result["error"], (
+        f"Should return distinct AI-denial message: {result['error']}"
+    )
+
+
+@th.django_unit_test()
 def test_deny_ai_shorthand_blocks_all_verbs(opts):
     from mojo.apps.incident.models import RuleSet
     _clear_flags(RuleSet)

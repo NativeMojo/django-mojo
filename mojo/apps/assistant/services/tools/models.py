@@ -98,20 +98,34 @@ def _check_ai_access(model, verb, user, request=None):
     per-verb flag. Per-verb flags (``DENY_AI_VIEW`` / ``DENY_AI_CREATE`` /
     ``DENY_AI_UPDATE`` / ``DENY_AI_DELETE``) deny that verb specifically.
 
+    Unknown verbs fail closed — they deny. A handler passing the wrong verb
+    string is a bug, not a reason to leak access.
+
     Denials emit a level-4 informational security event — this is expected
     policy, not a permission probe. The error message is intentionally
     distinct from "Permission denied" so users do not chase a perm fix.
     """
+    model_label = f"{model._meta.app_label}.{model.__name__}"
+
     flag = _VERB_TO_FLAG.get(verb)
     if flag is None:
-        return None
+        # Fail-closed: unknown verb is a handler bug. Deny and log.
+        details = (
+            f"AI access denied: unknown verb '{verb}' on {model_label} by user "
+            f"{getattr(user, 'id', 'anon')}"
+        )
+        logger.warning(details)
+        _report_security_event(
+            "assistant_ai_denied", 4, details, user,
+            model_name=model_label, request=request,
+        )
+        return {"error": f"{model_label} is not available to the assistant"}
 
     blanket = model.get_rest_meta_prop("DENY_AI", False)
     specific = model.get_rest_meta_prop(flag, False)
     if not (blanket or specific):
         return None
 
-    model_label = f"{model._meta.app_label}.{model.__name__}"
     reason = "DENY_AI" if blanket else flag
     details = (
         f"AI access denied: {verb} on {model_label} by user "
@@ -123,8 +137,6 @@ def _check_ai_access(model, verb, user, request=None):
         model_name=model_label, request=request,
     )
     return {"error": f"{model_label} is not available to the assistant"}
-
-    return model, None
 
 
 def _audit_user_log(user, kind, action, model_label, pk, request=None,

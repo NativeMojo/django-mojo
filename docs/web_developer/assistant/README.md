@@ -502,6 +502,8 @@ If the LLM tries to call a tool the user doesn't have permission for, the tool r
 
 Users with `view_admin` can ask the assistant to introspect and query any MojoModel directly. Two tools support this:
 
+**Policy blocks**: Model authors can restrict assistant access on a per-verb basis using `DENY_AI_*` flags in `RestMeta`. If a model is blocked, the assistant returns `"<app>.<Model> is not available to the assistant"` — a distinct message that is not a permission error and cannot be resolved by requesting additional permissions.
+
 ### `describe_model`
 
 Returns a model's fields, available graphs, permissions, and search fields. Useful for discovery before querying.
