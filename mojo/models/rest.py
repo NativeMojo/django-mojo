@@ -1103,7 +1103,13 @@ class MojoModel:
             # to records they cannot otherwise see. Mirrors the dict-value
             # branch's perm check above. Silent skip on denial; the existing
             # incident-event reporting in rest_check_permission carries audit.
-            if hasattr(field.related_model, "rest_check_permission"):
+            #
+            # Models can exempt specific FK fields from this check by listing
+            # them in RestMeta.NO_FK_VIEW_CHECK_FIELDS — use this when the
+            # model's own on_rest_pre_save already enforces field-level access
+            # (e.g. User.org is guarded by MANAGE_USERS_ONLY_FIELDS).
+            no_fk_check = self.get_rest_meta_prop("NO_FK_VIEW_CHECK_FIELDS", [])
+            if field.name not in no_fk_check and hasattr(field.related_model, "rest_check_permission"):
                 if not field.related_model.rest_check_permission(
                     request, "VIEW_PERMS", related_instance,
                 ):

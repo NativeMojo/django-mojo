@@ -131,6 +131,10 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         # Superusers who need to rotate auth_key or correct last_activity should
         # do so via direct DB access or a dedicated management command.
         NO_SAVE_FIELDS = ["auth_key", "last_activity", "is_dob_verified"]
+        # org is guarded by MANAGE_USERS_ONLY_FIELDS in on_rest_pre_save;
+        # skip the Group VIEW_PERMS gate so manage_users admins (who may not
+        # have view_groups) can still assign an org to a user.
+        NO_FK_VIEW_CHECK_FIELDS = ["org"]
         SEARCH_FIELDS = ["username", "email", "display_name", "phone_number"]
         VIEW_PERMS = ["view_users", "manage_users", "users", "owner"]
         SAVE_PERMS = ["manage_users", "users", "owner"]
