@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## v1.1.25 - April 19, 2026
+
+release for more advanced ai tools, more security checks
+
+
 ### Added
 - **`CAN_UPDATE` RestMeta flag** — Real gate for PUT/POST on existing instances, mirroring `CAN_CREATE` / `CAN_DELETE`. Defaults `True`, so no existing model changes behavior unless it opts in. Returns `403` with `error = "UPDATE not allowed: <ModelName>"` on denial — a distinct message from permission failures. Previously `CAN_SAVE` was referenced in 8+ RestMetas but **never read by rest.py**, leaving `account.LoginEvent` and `shortlink.Click` silently updateable despite declaring `CAN_SAVE = False`. `CAN_SAVE` is now honored as a one-release deprecated alias (emits a once-per-class `logit.warn` when used alone; `CAN_UPDATE` wins when both are set). 8 existing models migrated: `login_event.py` and `click.py` to `CAN_UPDATE = False`; six others had redundant `CAN_SAVE = True` removed (True is the default). Enforced in two places: `on_rest_handle_save` in `mojo/models/rest.py` (REST path) **and** `_tool_save_model_instance` update branch in `mojo/apps/assistant/services/tools/models.py` (assistant path) — the assistant calls `instance.on_rest_save` directly and would otherwise bypass the gate.
 
