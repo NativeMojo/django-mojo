@@ -726,50 +726,59 @@ def _tool_save_model_instance(params, user, *, request_meta=None, conversation=N
     # here). Partial-failure recovery relies on the same behavior REST sees.
     fields = _changed_field_names(model, data)
 
+    # Bind the synthetic request to ACTIVE_REQUEST so that field-level setters
+    # (e.g. account.User.set_is_superuser, set_permissions) which gate themselves
+    # on ``self.active_user`` see the assistant's user instead of None or a
+    # stale request leaked from another thread in the executor pool.
+    from mojo.models.rest import ACTIVE_REQUEST
+    token = ACTIVE_REQUEST.set(request)
     try:
-        action_resp = instance.on_rest_save(request, data)
-    except Exception as e:
-        logger.exception("save_model_instance error %s pk=%s", model_label, pk)
+        try:
+            action_resp = instance.on_rest_save(request, data)
+        except Exception as e:
+            logger.exception("save_model_instance error %s pk=%s", model_label, pk)
+            _audit_user_log(
+                user, "assistant:model:save_failed",
+                f"Save failed ({type(e).__name__})",
+                model_label, pk if pk is not None else 0,
+                request=request, conversation=conversation, fields=fields,
+            )
+            return {"error": f"Save failed for {model_label}"}
+
+        saved_pk = instance.pk
+        kind = "assistant:model:created" if is_create else "assistant:model:updated"
+        action = "Created" if is_create else "Updated"
         _audit_user_log(
-            user, "assistant:model:save_failed",
-            f"Save failed ({type(e).__name__})",
-            model_label, pk if pk is not None else 0,
+            user, kind, action, model_label, saved_pk,
             request=request, conversation=conversation, fields=fields,
         )
-        return {"error": f"Save failed for {model_label}"}
+        logger.info(
+            "save_model_instance", model_label, f"pk={saved_pk}",
+            f"created={is_create}", f"user={user.id}",
+        )
 
-    saved_pk = instance.pk
-    kind = "assistant:model:created" if is_create else "assistant:model:updated"
-    action = "Created" if is_create else "Updated"
-    _audit_user_log(
-        user, kind, action, model_label, saved_pk,
-        request=request, conversation=conversation, fields=fields,
-    )
-    logger.info(
-        "save_model_instance", model_label, f"pk={saved_pk}",
-        f"created={is_create}", f"user={user.id}",
-    )
+        result = {
+            "ok": True,
+            "model": model_label,
+            "pk": saved_pk,
+            "created": is_create,
+        }
 
-    result = {
-        "ok": True,
-        "model": model_label,
-        "pk": saved_pk,
-        "created": is_create,
-    }
+        # POST_SAVE_ACTIONS may return a JsonResponse — surface its body inline
+        if action_resp is not None:
+            try:
+                import json
+                body = getattr(action_resp, "content", None)
+                if body is not None:
+                    result["action_response"] = json.loads(body)
+                else:
+                    result["action_response"] = action_resp
+            except Exception:
+                result["action_response"] = str(action_resp)
 
-    # POST_SAVE_ACTIONS may return a JsonResponse — surface its body inline
-    if action_resp is not None:
-        try:
-            import json
-            body = getattr(action_resp, "content", None)
-            if body is not None:
-                result["action_response"] = json.loads(body)
-            else:
-                result["action_response"] = action_resp
-        except Exception:
-            result["action_response"] = str(action_resp)
-
-    return result
+        return result
+    finally:
+        ACTIVE_REQUEST.reset(token)
 
 
 # ---------------------------------------------------------------------------

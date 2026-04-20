@@ -1,7 +1,7 @@
 # Assistant tool: create and update model instances
 
 **Type**: request
-**Status**: planned
+**Status**: resolved
 **Date**: 2026-04-19
 **Priority**: medium
 
@@ -205,3 +205,51 @@ Plus `tests/test_assistant/test_agent_dispatch.py` additions:
 - Model-level allowlist / denylist for the assistant (open question, defer).
 - File uploads via the assistant — `on_rest_save_files` requires multipart handling that doesn't fit the tool-call shape.
 - Changes to `delete_model_instance`, `query_model`, `describe_model`, `aggregate_model`, or `export_data`.
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-04-19
+
+### What Was Built
+
+A single `save_model_instance` assistant tool that creates (no `pk`) or updates (`pk` present) any MojoModel instance. Permissions enforced exactly as REST does — `CAN_CREATE` + `CREATE_PERMS`/`SAVE_PERMS`/`VIEW_PERMS` for create; `SAVE_PERMS`/`VIEW_PERMS` for update. Per-mutation audit trail to `logit.Log` (kinds: `assistant:model:created`/`updated`/`deleted`/`save_failed`) carrying field NAMES (never values) and `conversation_id`. `delete_model_instance` retrofitted with the same audit. Tool dispatcher now threads the originating Django request as a slim `request_meta` objict (ip, user_agent, path, method) plus `conversation` to handlers that opt in via keyword-only kwargs; existing handlers unchanged via signature inspection. The synthetic permission-check request is bound to `ACTIVE_REQUEST` for the duration of `on_rest_save` so field-level setter guards (e.g. `set_is_superuser`) see the assistant's user, not a stale thread-pool leak.
+
+### Files Changed
+
+- `mojo/apps/assistant/services/tools/models.py` — new `_tool_save_model_instance`, `_audit_user_log`, `_changed_field_names`; extended `_build_request` with `request_meta`; extended `_report_security_event` with `request`; retrofitted `_tool_delete_model_instance` for audit + request_meta + conversation; ACTIVE_REQUEST binding around `on_rest_save`.
+- `mojo/apps/assistant/services/agent.py` — new `_build_request_meta`, `_call_handler` (signature inspection with cache), threaded `request_meta` through `_execute_tool` / `_execute_tools` / `_execute_parallel_plan_steps`; `run_assistant(...)` accepts `request=None`.
+- `mojo/apps/assistant/rest/assistant.py` — passes `request=request` through to `run_assistant`.
+- `CHANGELOG.md` — entry under v1.1.0.
+- `docs/django_developer/assistant/README.md` — documented save tool, audit kinds, optional handler kwargs.
+
+### Tests
+
+- `tests/test_assistant/27_test_save_model_tool.py` — 15 tests covering registration, create with/without perms, `CAN_CREATE=False`, update with/without perms, not-found, missing params, bad model, `NO_REST` rejection, failed-save audit, `request_meta` IP threading, conversation correlation, dispatcher signature inspection, and the delete tool's new audit entry.
+- Run: `bin/run_tests --agent -t test_assistant.27_test_save_model_tool`
+- Full suite: 1601/1601 pass (test-runner agent confirmed).
+
+### Docs Updated
+
+- `docs/django_developer/assistant/README.md` — save tool entry in core/models tables; param table; new "Audit Trail" subsection with the four kinds; new "Optional Handler Kwargs" subsection documenting `request_meta` and `conversation` opt-in.
+- `docs/web_developer/` — no changes (LLM-invoked tool, not a public REST endpoint).
+
+### Security Review
+
+Five findings from security-review agent. Fixed in this commit:
+
+- **HIGH (fixed)** — ACTIVE_REQUEST not set during `on_rest_save`, allowing a stale thread-pool request to leak its user into setter guards (e.g. `set_is_superuser` for `account.User`). Wrapped the call in `ACTIVE_REQUEST.set(request)` / `reset(token)`.
+
+Filed as separate work:
+
+- **MEDIUM** — FK assignment by scalar pk skips related-model permission check (`mojo/models/rest.py:1086–1103`). Filed as `planning/issues/fk_scalar_pk_skips_perm_check.md`. This is in the underlying REST framework, not the assistant tool — the assistant tool just surfaces a pre-existing gap.
+
+Acknowledged limitations:
+
+- **LOW** — WS path (`run_assistant_ws`) doesn't supply `request_meta`, so audit entries from WS-originated mutations record `ip="assistant"` instead of the connection IP. Documented; can be addressed when the WS handler is taught about its connection IP.
+- **INFORMATIONAL** — Field-name audit injection contained by JSON serialization; sensitive-field input filter omission appropriately delegated to `on_rest_save_field`.
+
+### Follow-up
+
+- File [planning/issues/fk_scalar_pk_skips_perm_check.md](../issues/fk_scalar_pk_skips_perm_check.md) — fix the FK scalar-pk perm-check gap in `rest.py`. Once landed, the assistant tool inherits the fix automatically.
+- The two sister requests still apply — when [can_update_rest_meta_flag.md](can_update_rest_meta_flag.md) and [restmeta_ai_access_flags.md](restmeta_ai_access_flags.md) land, the save tool inherits both gates with no further code changes.

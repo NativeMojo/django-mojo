@@ -47,7 +47,7 @@ Core tools are sent to the LLM on every turn regardless of domain. They handle u
 |---|---|
 | `discovery` | `load_tools` |
 | `memory` | `read_memory`, `write_memory`, `delete_memory` |
-| `models` | `describe_model`, `query_model`, `aggregate_model`, `export_data`, `delete_model_instance` |
+| `models` | `describe_model`, `query_model`, `aggregate_model`, `export_data`, `delete_model_instance`, `save_model_instance` |
 | `docs` | `read_docs` |
 | `web` | `browse_url` |
 | `logs` | `query_logs` |
@@ -230,7 +230,8 @@ Add `"mojo.apps.assistant"` to `INSTALLED_APPS` and run migrations.
 | `query_model` | `view_admin` | No | Query any MojoModel and return results inline as JSON. Best for small result sets (detail lookups, spot-checking). Respects `RestMeta` permissions and owner/group filtering. Max 200 rows. For exports use `export_data`; for counts/sums use `aggregate_model`. |
 | `aggregate_model` | `view_admin` | No | Run aggregate queries (count, sum, avg, min, max, count_distinct) on any MojoModel, with optional `group_by`. Use for summaries — never pull rows just to count or sum them. |
 | `export_data` | `view_admin` | Yes | Export query results to a CSV file in file storage (S3). Data is written directly to a `fileman.File` record — not returned inline. Returns a download URL. Use for any export request, especially large result sets. |
-| `delete_model_instance` | `view_admin` | Yes | Delete a single model instance by primary key. The model must have `CAN_DELETE = True` in its `RestMeta`, and the user must pass the model's full delete permission chain (`DELETE_PERMS` → `SAVE_PERMS` → `VIEW_PERMS`), including owner and group checks — identical to the REST layer's `on_rest_handle_delete`. Calls `on_rest_pre_delete()` and deletes inside `transaction.atomic()`. Reports a security event on permission denial. |
+| `delete_model_instance` | `view_admin` | Yes | Delete a single model instance by primary key. The model must have `CAN_DELETE = True` in its `RestMeta`, and the user must pass the model's full delete permission chain (`DELETE_PERMS` → `SAVE_PERMS` → `VIEW_PERMS`), including owner and group checks — identical to the REST layer's `on_rest_handle_delete`. Calls `on_rest_pre_delete()` and deletes inside `transaction.atomic()`. Reports a security event on permission denial. Writes `assistant:model:deleted` audit log on success. |
+| `save_model_instance` | `view_admin` | Yes | Create or update a single MojoModel instance. Pass `pk` to update an existing row; omit `pk` to create a new one. Creates require `CAN_CREATE=True` plus the `CREATE_PERMS`/`SAVE_PERMS`/`VIEW_PERMS` chain. Updates require `SAVE_PERMS`/`VIEW_PERMS` on the target instance. FK fields can be set by pk in `data`. Runs via `on_rest_save()`. Writes `assistant:model:created` or `assistant:model:updated` audit log on success, `assistant:model:save_failed` on exception. |
 
 `query_model` parameters:
 
@@ -272,7 +273,18 @@ Add `"mojo.apps.assistant"` to `INSTALLED_APPS` and run migrations.
 
 `export_data` requires `fileman` to be installed and a `FileManager` configured for the user/group. Files are stored with `metadata.expires_at` set to `FILEMAN_EXPORT_EXPIRES_DAYS` days from creation (default 14). If `mojo.apps.shortlink` is installed, the returned URL is a shortlink. The assistant should present the URL using a `file` block (see structured block types in the system prompt).
 
-All three tools enforce the same permission and owner/group scoping as the REST layer via `rest_check_permission` and `_apply_owner_group_filter`. Attempts to filter or aggregate on sensitive fields are blocked and reported as security events.
+`save_model_instance` parameters:
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `app_name` | string | required | Django app label |
+| `model_name` | string | required | Model class name |
+| `pk` | integer | — | Primary key of an existing instance to update. Omit to create. |
+| `data` | object | required | Dict of field names to values. FK fields accept the related instance's pk. |
+
+The tool delegates to `instance.on_rest_save(request, data)` so all model-level save hooks, validators, and `POST_SAVE_ACTIONS` fire exactly as they would through the REST API. The `action_response` from `POST_SAVE_ACTIONS` is included in the return dict when present. Setting `CAN_CREATE = False` in `RestMeta` blocks creates; there is no separate flag to block updates (use `SAVE_PERMS` for that).
+
+All five tools enforce the same permission and owner/group scoping as the REST layer via `rest_check_permission` and `_apply_owner_group_filter`. Attempts to filter or aggregate on sensitive fields are blocked and reported as security events.
 
 ### Logs Domain (`view_logs`)
 
@@ -405,6 +417,24 @@ The assistant reports security-relevant actions and errors to the incident syste
 - **Read-only tools = no events.** Too high volume, low signal.
 - **Events supplement, not replace, file logging.** Existing `logger` calls remain for debug.
 - **`_report_event()` never raises** — wrapped in try/except to avoid breaking the assistant if the incident system is down.
+
+### Audit Trail (`logit.Log`)
+
+The model mutation tools (`save_model_instance`, `delete_model_instance`) write per-row audit entries to `logit.Log` via `_audit_user_log()` in addition to the incident events above. These entries are queryable with the `query_logs` assistant tool (filter by `kind`).
+
+| `kind` | When written |
+|---|---|
+| `assistant:model:created` | `save_model_instance` — new row created successfully |
+| `assistant:model:updated` | `save_model_instance` — existing row updated successfully |
+| `assistant:model:deleted` | `delete_model_instance` — row deleted successfully |
+| `assistant:model:save_failed` | `save_model_instance` — `on_rest_save()` raised an exception |
+
+**What is recorded:**
+
+- The `logit.Log` message includes the action, model label (`app.Model`), `pk`, and changed field **names** (never values).
+- The `payload` JSON carries `conversation_id` (when available) so the audit trail ties back to the specific assistant turn.
+- Sensitive field names (`password`, `auth_key`, etc.) are not filtered from the field name list — the field names themselves are considered safe metadata; only values are withheld.
+- Entries are written against the target model (`model_name`, `model_id`) so they surface when querying logs for that model.
 
 ### Suggested RuleSets
 
@@ -712,7 +742,29 @@ register_tool(
 - **Exclude secrets**: Never include passwords, auth keys, tokens, or other sensitive fields.
 - **Return simple types**: Return dicts and lists with JSON-serializable values. Dates as strings.
 - **Handle errors gracefully**: Return `{"error": "message"}` instead of raising exceptions.
-- **Signature**: Always `(params, user)` — even if you don't use `user` today.
+- **Signature**: `(params, user)` is the baseline. Handlers that need HTTP context or the conversation can opt in to additional keyword-only arguments.
+
+### Optional Handler Kwargs
+
+The dispatcher inspects handler signatures at first call (result is cached). Handlers declare the kwargs they need; the dispatcher only passes them when present. Handlers that stick to `(params, user)` are untouched.
+
+| Kwarg | Type | Description |
+|---|---|---|
+| `request_meta` | `objict` or `None` | Slim HTTP context from the originating request: `ip`, `user_agent`, `path`, `method`. `None` when there is no HTTP request (e.g. WS path or programmatic call). |
+| `conversation` | `Conversation` instance | The active Conversation model instance. Use to read metadata or to associate audit records with the conversation. |
+
+Both kwargs are keyword-only (`*` in the signature):
+
+```python
+@tool(name="my_tool", domain="myapp", permission="view_admin", mutates=True,
+      description="...", input_schema={...})
+def _tool_my_tool(params, user, *, request_meta=None, conversation=None):
+    # request_meta.ip is the originating client IP (or None)
+    # conversation.pk links audit records to the turn
+    ...
+```
+
+`run_assistant()` now accepts an optional `request=None` parameter. When the REST endpoint passes the Django request through, `request_meta` is populated automatically for all tool handlers that opt in. WebSocket calls do not pass a request; `request_meta` is `None` in that path.
 
 ### Other Registry Functions
 
