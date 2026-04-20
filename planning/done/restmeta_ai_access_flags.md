@@ -164,3 +164,58 @@ All in `tests/test_assistant/29_test_ai_access_flags.py`:
 - `docs/django_developer/rest/permissions.md` — new section "Assistant Access Flags" after CAN_CREATE / CAN_DELETE description.
 - `docs/django_developer/assistant/README.md` — Models Domain section: short note + link to the RestMeta doc.
 - `CHANGELOG.md` — one entry under `v1.1.0 - (current)` > Added.
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-04-19
+**Commits**: 8a04206 (main implementation) + a96fd4c (security-review fixes)
+
+### What Was Built
+
+Per-model opt-out for the assistant's model tools via four `DENY_AI_*` RestMeta flags plus a `DENY_AI` shorthand. All default `False`, so no existing model changes behavior. Flags are assistant-layer only — REST continues to operate unchanged for human-driven requests.
+
+| Flag | Blocks |
+|---|---|
+| `DENY_AI_VIEW` | `describe_model`, `query_model`, `aggregate_model`, `export_data` |
+| `DENY_AI_CREATE` | `save_model_instance` when `pk` is omitted |
+| `DENY_AI_UPDATE` | `save_model_instance` when `pk` is present |
+| `DENY_AI_DELETE` | `delete_model_instance` |
+| `DENY_AI` | all four (overrides per-verb flags even when explicitly `False`) |
+
+### Files Changed
+
+- `mojo/apps/assistant/services/tools/models.py` — new `_check_ai_access(model, verb, user, request=None)` helper and `_VERB_TO_FLAG` map. Wired into six tool handlers immediately after `_resolve_model` and before any permission check or DB work. Unknown verbs fail closed.
+- `tests/test_assistant/29_test_ai_access_flags.py` — new, 17 scenarios.
+- `docs/django_developer/rest/permissions.md` — flags added to the properties table plus a new "Assistant Access Flags" section with usage patterns.
+- `docs/django_developer/assistant/README.md` — `DENY_AI_*` subsection in Models Domain with cross-link.
+- `docs/web_developer/assistant/README.md` — note that `DENY_AI_*` produces a distinct error string so API consumers don't chase a permission fix.
+- `CHANGELOG.md` — v1.1.0 Added entry.
+
+### Tests
+
+- `tests/test_assistant/29_test_ai_access_flags.py` — 17 scenarios: helper with no flags / specific flag / shorthand, each verb gate (describe/query/aggregate/export/delete/create/update), shorthand overriding explicit `False`, unknown verb fail-closed, default state allows, security event emitted at level 4, denial message is distinct from "Permission denied", and ordering (AI gate fires before the REST permission check). Tests monkey-patch flags via `setattr`/`delattr` so no migrations are needed.
+- Run: `bin/run_tests -t test_assistant.29_test_ai_access_flags`
+- Full suite post-commit: 1672 passed, 0 regressions from this change.
+
+### Docs Updated
+
+- `docs/django_developer/rest/permissions.md` — flags added to RestMeta properties table + new "Assistant Access Flags" section.
+- `docs/django_developer/assistant/README.md` — Models Domain gained a `DENY_AI_*` subsection.
+- `docs/web_developer/assistant/README.md` — Models Domain top note on distinct error string for API consumers.
+- `CHANGELOG.md` — v1.1.0 Added entry.
+
+### Security Review
+
+Two actionable findings, both resolved in a96fd4c:
+
+- **WARNING (resolved)** — Dead `return model, None` left over from a copy-paste in `_check_ai_access`. Unreachable today, but would turn every model into a silent AI-deny if the preceding `return` ever moved. Deleted.
+- **MEDIUM (resolved)** — Unknown-verb path was fail-open. Now fails closed: an unrecognized verb denies, logs a warning, and emits the same level-4 event. Protects against future handler bugs silently bypassing the gate.
+- **LOW (resolved)** — Added the missing "shorthand overrides explicit False" test case plus an unknown-verb test.
+
+All other focus areas passed: gate ordering (verified across all six handlers), error-message distinctness, flag-reading correctness, security event payload (no secrets), and `save_model_instance` verb selection firing before the instance lookup.
+
+### Follow-up
+
+- **Applying `DENY_AI_*` to specific models** — out of scope here per the original AC. Candidates worth separate small requests: `account.User` (update/delete from AI likely unwise), `account.Group` (membership changes), `account.UserApiKey` (credential-adjacent), `account.OAuth`. File individually as operators identify concrete risks.
+- **Per-field AI access** — still explicitly out of scope; relies on existing `_is_sensitive_field` substring filter and `on_rest_save_field` gates.
