@@ -67,6 +67,8 @@ class Book(models.Model, MojoModel):
 | `PROTECTED_JSON_PERMS` | list | `[]` | Permissions required to modify the `"protected"` root key in any JSONField |
 | `OWNER_FIELD` | str | `"user"` | Field name for owner permission check |
 | `GROUP_FIELD` | str | `"group"` | Field name for group scoping |
+| `CREATED_BY_OWNER_FIELD` | str or None | `"user"` | Auto-stamped with `request.user` on create **only when the body omits it**. `None` disables. See [REST Permissions — Create-time owner stamping](../rest/permissions.md#create-time-owner-stamping). |
+| `UPDATED_BY_OWNER_FIELD` | str or None | `"modified_by"` | Always set to `request.user` on update (who last modified). See [REST Permissions](../rest/permissions.md). |
 | `ALT_PK_FIELD` | str | `"uuid"` | Field used for non-integer PK lookups |
 | `POST_SAVE_ACTIONS` | list | `["action"]` | Fields treated as post-save action triggers |
 | `FORMATS` | dict | `None` | Field lists for download formats (CSV etc.) |

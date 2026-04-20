@@ -100,3 +100,13 @@ To clear a foreign key:
 ```json
 {"author": null}
 ```
+
+## Owner Assignment on Create
+
+When creating a record (POST without a pk), the framework automatically stamps the `user` field with the authenticated caller if the body omits it. If you include `user` in the body, that value is used instead — provided you have view access to the target user account. This lets callers with sufficient permissions create records on behalf of another user:
+
+```json
+{"user": 7, "code": "abc"}
+```
+
+If the body sends `null` or `0` for `user`, the framework treats it as omitted and falls back to the authenticated caller. Omitting the field entirely is the normal self-signup path. See the framework reference for per-model opt-out options.
