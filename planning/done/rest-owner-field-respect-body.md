@@ -160,3 +160,50 @@ All asserts include descriptive failure messages per `.claude/rules/testing.md`.
 ### Docs
 - `docs/django_developer/rest/permissions.md` — new "Create-time owner stamping" section explaining the default, how to opt out, and the security implication.
 - `CHANGELOG.md` — `### Changed` entry under the current version.
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-04-20
+
+### What Was Built
+The framework's create-time auto-owner stamp in `mojo/models/rest.py` now mirrors the `group` behavior: only fires when the body did not provide a value for `CREATED_BY_OWNER_FIELD` (default `"user"`). Body wins; self-signup is unchanged; no new RestMeta flag introduced (per user decision — existing `CREATED_BY_OWNER_FIELD = None` + `on_rest_pre_save` remains the strict-ownership escape hatch). Security review surfaced six bundled models that relied on the old clobber as implicit create-time authorization; each now pins `user` via `NO_SAVE_FIELDS` so the framework auto-stamp continues to enforce caller identity for them.
+
+### Files Changed
+- `mojo/models/rest.py` — create branch now guards the setattr with `if getattr(self, owner_field, None) is None`. Update-path owner stamping (`UPDATED_BY_OWNER_FIELD` → `modified_by`) is unchanged.
+- `mojo/apps/account/models/totp.py` — `NO_SAVE_FIELDS = ["user"]` (CRITICAL: MFA factor takeover prevention).
+- `mojo/apps/account/models/oauth.py` — `NO_SAVE_FIELDS = ["user"]` (CRITICAL: OAuth identity injection prevention).
+- `mojo/apps/chat/models/message.py` — `user` added to existing `NO_SAVE_FIELDS` (message authorship spoofing).
+- `mojo/apps/chat/models/reaction.py` — `NO_SAVE_FIELDS = ["user"]` (reaction attribution).
+- `mojo/apps/chat/models/read_receipt.py` — `NO_SAVE_FIELDS = ["user"]` (read-receipt attribution).
+- `mojo/apps/account/models/push/device.py` — `NO_SAVE_FIELDS = ["user"]` (push-token routing redirection prevention).
+- `tests/test_models/owner_stamp.py` — 8 new tests covering the framework behavior.
+- `docs/django_developer/rest/permissions.md` — new "Create-time owner stamping" section with security implications and opt-out quick reference.
+- `docs/django_developer/core/mojo_model.md` — added `CREATED_BY_OWNER_FIELD` / `UPDATED_BY_OWNER_FIELD` rows to RestMeta properties table.
+- `docs/web_developer/core/request_response.md` — added "Owner Assignment on Create" note for API consumers.
+- `CHANGELOG.md` — Breaking-but-intended entry under v1.1.0.
+
+Two commits:
+- `45183e2` — framework change + tests + docs + CHANGELOG.
+- `7d219cf` — six models hardened with `NO_SAVE_FIELDS`.
+
+### Tests
+- `tests/test_models/owner_stamp.py` — body-omits auto-stamp, body-equals-caller no-op, body-other-user wins (core new behavior), null/0 fallback, `CREATED_BY_OWNER_FIELD = None` opt-out, update path passthrough, group regression.
+- Run: `bin/run_tests -t test_models.owner_stamp`
+- Full suite: 1707 passed / 0 failed / 110 skipped (all pre-existing skips — `test_security` opt-in etc.).
+
+### Docs Updated
+- `docs/django_developer/rest/permissions.md` — "Create-time owner stamping" section, expanded RestMeta table.
+- `docs/django_developer/core/mojo_model.md` — RestMeta properties table updated.
+- `docs/web_developer/core/request_response.md` — "Owner Assignment on Create" consumer note.
+
+### Security Review
+Security sub-agent audited all 32 models with a `user` FK. Two CRITICAL (UserTOTP, OAuthConnection) and four WARNING (ChatMessage, ChatReaction, ChatReadReceipt, push.RegisteredDevice) — all hardened in commit `7d219cf`. ChatMembership is intentionally left permissive (admin room-invite flow is legitimate — same pattern as `routes.Operator`). No hardening applied to framework-level; per-model `NO_SAVE_FIELDS` is the right granularity.
+
+### Follow-up
+- INFO-level attribution exposures (policy decisions for consumers, not clear bugs):
+  - `filevault.VaultFile` / `filevault.VaultData` — should admins be able to upload files attributed to other users? If not, add `user` to `NO_SAVE_FIELDS`.
+  - `jobs.ScheduledTask` — should admins be able to create scheduled tasks attributed to other users?
+  - `shortlink.ShortLink` — admins with `manage_shortlinks` can create shortlinks attributed to other users; attribution only, low impact.
+- Consumer apps (outside django-mojo) should audit their own models with `user` FKs after upgrading. Migration guidance in CHANGELOG.
+- The original reporter's concern (`POST /api/routes/operator` in the consumer project) is now unblocked — they can set `CREATED_BY_OWNER_FIELD` to its default and pass `user` in the body, then add their own `manage_routes` + membership check in `on_rest_pre_save` for the policy enforcement described in SERVER-026.
