@@ -1098,6 +1098,16 @@ class MojoModel:
                 self.debug("Skipping self-reference")
                 return
             related_instance = field.related_model.objects.get(pk=field_value)
+            # Gate the assignment by VIEW_PERMS on the related instance —
+            # otherwise a user with SAVE_PERMS on this model could attach FKs
+            # to records they cannot otherwise see. Mirrors the dict-value
+            # branch's perm check above. Silent skip on denial; the existing
+            # incident-event reporting in rest_check_permission carries audit.
+            if hasattr(field.related_model, "rest_check_permission"):
+                if not field.related_model.rest_check_permission(
+                    request, "VIEW_PERMS", related_instance,
+                ):
+                    return
             old_value = getattr(self, field.name, None)
             self._set_field_change(field.name, old_value, related_instance)
             setattr(self, field.name, related_instance)

@@ -12,6 +12,9 @@
 - **Per-mutation audit trail for assistant model tools** — Successful create/update/delete writes an entry to `logit.Log` with kind `assistant:model:created` / `:updated` / `:deleted`. Failed saves write `assistant:model:save_failed`. The audit message lists changed field NAMES only (never values) and the `payload` JSON carries `conversation_id` so audit entries tie back to the assistant turn. `delete_model_instance` was retrofitted to write the same audit entries.
 - **Tool dispatcher threads HTTP context** — `run_assistant(...)` now accepts the originating Django request and builds a slim `request_meta` objict (ip, user_agent, path, method). Tool handlers can opt into the context by adding `request_meta` and/or `conversation` as keyword-only parameters; existing handlers are unchanged. Without this, assistant-originated incident events recorded source ip as None instead of the user's real ip.
 
+### Fixed
+- **FK assignment by scalar pk now requires VIEW_PERMS on the related model** — `MojoModel.on_rest_save_related_field` previously assigned looked-up FK targets without checking permissions on the related instance. A user with SAVE_PERMS on model A but no perms on model B could set `a_instance.b = <any B pk>` via REST, allowing cross-model privilege escalation (e.g. re-parenting a record under a Group the user doesn't belong to). Now the scalar-pk path runs `field.related_model.rest_check_permission(request, "VIEW_PERMS", related_instance)`; on denial the assignment is silently skipped (matching the existing dict-value branch) and `rest_check_permission` records an incident event. **Behavior change**: existing REST callers that today assign FKs by pk to targets they lack VIEW_PERMS on will now silently no-op the assignment instead of succeeding. Self-reference, FK clear (value=0/None/""), and the `on_rest_related_save` custom-hook branch are unaffected.
+
 ## v1.1.24 - April 16, 2026
 
 bugfix when working with s3 buckets in the eu
