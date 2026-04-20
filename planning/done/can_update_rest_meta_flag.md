@@ -165,3 +165,60 @@ Add a real `CAN_UPDATE` RestMeta gate to `on_rest_handle_save`, default `True`, 
 - `docs/django_developer/shortlink/README.md` — line update.
 - `mojo/apps/filevault/DESIGN.md` — two example blocks.
 - `CHANGELOG.md` — Added + Changed entries, with the LoginEvent/Click behavior-change callout.
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-04-19
+**Commits**: 709e08f (main implementation) + 2121e22 (assistant bypass fix + doc follow-ups)
+
+### What Was Built
+
+Real `CAN_UPDATE` gate enforcing append-only behavior on models that want it, enforced at **two layers**:
+
+1. **REST layer** — `mojo/models/rest.py:on_rest_handle_save` checks `CAN_UPDATE` (default `True`) before running the permission chain. On `False`: returns `403` with `error = "UPDATE not allowed: <ModelName>"`.
+2. **Assistant layer** — `mojo/apps/assistant/services/tools/models.py:_tool_save_model_instance` re-enforces the same gate in the update branch. The assistant calls `instance.on_rest_save` directly and would otherwise bypass the REST-layer gate; the security-review agent caught this critical bypass.
+
+`CAN_SAVE` is honored as a deprecated one-release alias. Both layers prefer `CAN_UPDATE` when both are set; a once-per-class `logit.warn` fires for any class still using `CAN_SAVE` alone.
+
+### Files Changed
+
+- `mojo/models/rest.py` — new gate + deprecation helper (`_warn_can_save_deprecated` + `_DEPRECATED_CAN_SAVE_WARNED` set).
+- `mojo/apps/assistant/services/tools/models.py` — bypass fix in the update branch.
+- `mojo/apps/account/models/login_event.py` — `CAN_SAVE = False` → `CAN_UPDATE = False`.
+- `mojo/apps/shortlink/models/click.py` — `CAN_SAVE = False` → `CAN_UPDATE = False`.
+- Redundant `CAN_SAVE = True` dropped from: `mojo/apps/fileman/models/{manager,file,rendition}.py`, `mojo/apps/filevault/models/{data,file}.py`, `mojo/apps/shortlink/models/shortlink.py`.
+- `tests/test_models/__init__.py` + `tests/test_models/can_update_gate.py` — new package, 13 scenarios.
+- `docs/django_developer/rest/permissions.md` — new table row + dedicated "CAN_UPDATE" section with deprecation note.
+- `docs/django_developer/core/mojo_model.md` — RestMeta properties table updated (docs-updater).
+- `docs/django_developer/assistant/README.md` — corrected stale "no separate flag" claim (docs-updater).
+- `docs/django_developer/filevault/README.md`, `docs/django_developer/shortlink/README.md`, `mojo/apps/filevault/DESIGN.md` — example updates.
+- `CHANGELOG.md` — Added + Changed entries under v1.1.0.
+
+### Tests
+
+- `tests/test_models/can_update_gate.py` — 13 scenarios: gate on/off/default at REST layer, deprecation fallback, once-per-class dedup, `CAN_UPDATE` wins over `CAN_SAVE`, create/delete independence, real-model flag assertions, assistant bypass regression guards (3 cases).
+- Run: `bin/run_tests -t test_models`
+- Full suite post-commit (709e08f): 1696 passed, 0 failed. No regressions — the two models that gained blocking behavior (`LoginEvent`, `ShortLinkClick`) had no existing PUT tests.
+
+### Docs Updated
+
+- `docs/django_developer/rest/permissions.md` — CAN_UPDATE documented as a first-class RestMeta flag alongside CAN_CREATE and CAN_DELETE, with the deprecation note for CAN_SAVE.
+- `docs/django_developer/core/mojo_model.md`, `docs/django_developer/assistant/README.md` — stale references corrected.
+- `docs/django_developer/filevault/README.md`, `docs/django_developer/shortlink/README.md`, `mojo/apps/filevault/DESIGN.md` — example blocks updated.
+- `CHANGELOG.md` — records both the new gate (Added) and the breaking-fix for LoginEvent/Click (Changed).
+
+### Security Review
+
+One **CRITICAL** finding, addressed in `2121e22`:
+
+- **CRITICAL (resolved)** — Assistant bypass. The original commit enforced `CAN_UPDATE` only in `on_rest_handle_save` (the REST handler layer), but the assistant's `save_model_instance` tool calls `instance.on_rest_save` directly, skipping the gate entirely. An admin using the LLM could have mutated `CAN_UPDATE=False` models even though a direct REST PUT correctly 403s. The fix adds the same check in the assistant tool's update branch; three regression tests guard the bypass.
+- **INFO** — `_DEPRECATED_CAN_SAVE_WARNED` set is bounded by installed model count (fixed at startup). No DoS surface.
+- **INFO** — `getattr` semantics on inherited `RestMeta`: `get_rest_meta_prop` returns `None` when neither model nor parent sets the flag, which correctly falls through to `CAN_SAVE` and then the default. Inheritance is safe.
+
+All other focus areas (gate ordering, fallback logic, `update_from_dict`/`create_from_dict` as intentionally-unblocked internal callers, error message distinctness, warning dedup) were correctly implemented.
+
+### Follow-up
+
+- **Other models that might benefit from `CAN_UPDATE = False`** — this request migrated only the two known-broken ones. Candidates worth individual review: `incident.Event` (append-only signals), `logit.Log` (audit), `chat.ChatMessage`-style rows in other apps. File per-model requests as owners identify which need the treatment.
+- **Remove the `CAN_SAVE` deprecation alias** — scheduled for the next release after v1.1.0 per the one-release deprecation policy. No file yet; track in release notes.
