@@ -910,6 +910,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#token-masking-mask_tokentoken-visible4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Token masking — mask_token(token, visible=4)
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -3919,6 +3930,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#token-masking-mask_tokentoken-visible4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Token masking — mask_token(token, visible=4)
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -4034,10 +4056,11 @@
 </code></pre></div>
 <h2 id="sensitive-data-masking">Sensitive Data Masking<a class="headerlink" href="#sensitive-data-masking" title="Permanent link">&para;</a></h2>
 <h3 id="string-based-masking-mask_sensitive_datatext">String-based masking — <code>mask_sensitive_data(text)</code><a class="headerlink" href="#string-based-masking-mask_sensitive_datatext" title="Permanent link">&para;</a></h3>
-<p>Regex-based masker for log strings. Keys matching patterns like <code>password</code>, <code>token</code>, <code>api_key</code>, <code>secret</code> are automatically masked:</p>
+<p>Regex-based masker for log strings. The pattern is <strong>derived from <code>SENSITIVE_KEYS</code> at import time</strong>, so both string logs and dict-based sanitization share a single source of truth — adding a key to <code>SENSITIVE_KEYS</code> automatically extends the string masker.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">logit</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Auth attempt&quot;</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;username&quot;</span><span class="p">:</span> <span class="s2">&quot;alice&quot;</span><span class="p">,</span> <span class="s2">&quot;password&quot;</span><span class="p">:</span> <span class="s2">&quot;secret&quot;</span><span class="p">})</span>
 <a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="c1"># Logs: {&quot;username&quot;: &quot;alice&quot;, &quot;password&quot;: &quot;*****&quot;}</span>
 </code></pre></div>
+<p>The compiled pattern lives at <code>mojo.helpers.logit._SENSITIVE_KEY_PATTERN</code> (module-level, compiled once). Values are captured by stopping at the first quote, comma, or whitespace, so structured data is not over-masked.</p>
 <h3 id="dict-based-sanitization-sanitize_dictdata">Dict-based sanitization — <code>sanitize_dict(data)</code><a class="headerlink" href="#dict-based-sanitization-sanitize_dictdata" title="Permanent link">&para;</a></h3>
 <p>Strips sensitive keys from a dict or nested dict, returning a sanitized copy. Use this before storing or logging any structured dict that may contain user-supplied fields:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers.logit</span><span class="w"> </span><span class="kn">import</span> <span class="n">sanitize_dict</span>
@@ -4045,21 +4068,32 @@
 <a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="n">safe</span> <span class="o">=</span> <span class="n">sanitize_dict</span><span class="p">({</span><span class="s2">&quot;username&quot;</span><span class="p">:</span> <span class="s2">&quot;alice&quot;</span><span class="p">,</span> <span class="s2">&quot;password&quot;</span><span class="p">:</span> <span class="s2">&quot;secret&quot;</span><span class="p">,</span> <span class="s2">&quot;token&quot;</span><span class="p">:</span> <span class="s2">&quot;abc123&quot;</span><span class="p">})</span>
 <a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="c1"># Returns: {&quot;username&quot;: &quot;alice&quot;, &quot;password&quot;: &quot;*****&quot;, &quot;token&quot;: &quot;*****&quot;}</span>
 </code></pre></div>
-<p>Sanitized keys include: <code>password</code>, <code>pwd</code>, <code>new_password</code>, <code>current_password</code>, <code>secret</code>, <code>token</code>, <code>access_token</code>, <code>api_key</code>, <code>authorization</code>, <code>ssn</code>, <code>credit_card</code>, <code>card_number</code>, <code>pin</code>, <code>cvv</code>. Matching is case-insensitive and the function recurses into nested dicts.</p>
+<p>Sanitized keys (<code>SENSITIVE_KEYS</code>): <code>password</code>, <code>pwd</code>, <code>new_password</code>, <code>current_password</code>, <code>secret</code>, <code>token</code>, <code>access_token</code>, <code>refresh_token</code>, <code>id_token</code>, <code>api_key</code>, <code>auth_token</code>, <code>bearer_token</code>, <code>authorization</code>, <code>private_key</code>, <code>otp</code>, <code>mfa_code</code>, <code>ssn</code>, <code>credit_card</code>, <code>card_number</code>, <code>pin</code>, <code>cvv</code>. Matching is case-insensitive and the function recurses into nested dicts.</p>
 <p>Both the incident system (<code>report_event</code> kwargs) and the <code>Log</code> model (<code>payload</code> field) automatically apply sanitization — you do not need to call <code>sanitize_dict</code> manually when using those APIs.</p>
+<h3 id="token-masking-mask_tokentoken-visible4">Token masking — <code>mask_token(token, visible=4)</code><a class="headerlink" href="#token-masking-mask_tokentoken-visible4" title="Permanent link">&para;</a></h3>
+<p>Produces a log-safe version of a credential token (bearer, API key, etc.) that preserves enough tail for support correlation but is not replayable.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers.logit</span><span class="w"> </span><span class="kn">import</span> <span class="n">mask_token</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">mask_token</span><span class="p">(</span><span class="s2">&quot;abc123def456xyz789&quot;</span><span class="p">)</span>        <span class="c1"># &quot;****z789&quot;</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="n">mask_token</span><span class="p">(</span><span class="s2">&quot;abc123def456xyz789&quot;</span><span class="p">,</span> <span class="mi">6</span><span class="p">)</span>     <span class="c1"># &quot;****xyz789&quot;</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="n">mask_token</span><span class="p">(</span><span class="s2">&quot;abc&quot;</span><span class="p">)</span>                        <span class="c1"># &quot;*****&quot;  — no reveal on short tokens</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="n">mask_token</span><span class="p">(</span><span class="s2">&quot;&quot;</span><span class="p">)</span>                           <span class="c1"># &quot;&quot;       — empty passes through</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="n">mask_token</span><span class="p">(</span><span class="kc">None</span><span class="p">)</span>                         <span class="c1"># None     — None passes through</span>
+</code></pre></div>
+<p>Tokens with length <code>&lt;= visible</code> are fully masked (<code>"*****"</code>) with zero reveal, so a short dev token never leaks its contents. The incident reporter uses this to store masked bearers in <code>event_metadata["bearer"]</code>.</p>
 <h2 id="named-loggers">Named Loggers<a class="headerlink" href="#named-loggers" title="Permanent link">&para;</a></h2>
 <p>Create a named logger writing to a specific file:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">logger</span> <span class="o">=</span> <span class="n">logit</span><span class="o">.</span><span class="n">get_logger</span><span class="p">(</span><span class="s2">&quot;myapp&quot;</span><span class="p">,</span> <span class="s2">&quot;myapp.log&quot;</span><span class="p">)</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;App-specific event&quot;</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="n">logger</span> <span class="o">=</span> <span class="n">logit</span><span class="o">.</span><span class="n">get_logger</span><span class="p">(</span><span class="s2">&quot;myapp&quot;</span><span class="p">,</span> <span class="s2">&quot;myapp.log&quot;</span><span class="p">)</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;App-specific event&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="pretty-printing">Pretty Printing<a class="headerlink" href="#pretty-printing" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="n">logit</span><span class="o">.</span><span class="n">pretty_print</span><span class="p">({</span><span class="s2">&quot;key&quot;</span><span class="p">:</span> <span class="s2">&quot;value&quot;</span><span class="p">,</span> <span class="s2">&quot;nested&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;a&quot;</span><span class="p">:</span> <span class="mi">1</span><span class="p">}})</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="n">formatted</span> <span class="o">=</span> <span class="n">logit</span><span class="o">.</span><span class="n">pretty_format</span><span class="p">(</span><span class="n">my_dict</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="n">logit</span><span class="o">.</span><span class="n">pretty_print</span><span class="p">({</span><span class="s2">&quot;key&quot;</span><span class="p">:</span> <span class="s2">&quot;value&quot;</span><span class="p">,</span> <span class="s2">&quot;nested&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;a&quot;</span><span class="p">:</span> <span class="mi">1</span><span class="p">}})</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="n">formatted</span> <span class="o">=</span> <span class="n">logit</span><span class="o">.</span><span class="n">pretty_format</span><span class="p">(</span><span class="n">my_dict</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="in-models">In Models<a class="headerlink" href="#in-models" title="Permanent link">&para;</a></h2>
 <p><code>MojoModel</code> provides <code>self.log()</code> which wraps logit and writes to the <code>Log</code> database model:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># In a model method</span>
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="bp">self</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">log</span><span class="o">=</span><span class="s2">&quot;Order processed&quot;</span><span class="p">,</span> <span class="n">kind</span><span class="o">=</span><span class="s2">&quot;order:processed&quot;</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># In a model method</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="bp">self</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">log</span><span class="o">=</span><span class="s2">&quot;Order processed&quot;</span><span class="p">,</span> <span class="n">kind</span><span class="o">=</span><span class="s2">&quot;order:processed&quot;</span><span class="p">)</span>
 </code></pre></div>
 <p>Use <code>logit</code> directly for framework-level or service-layer logging that doesn't need a DB record.</p>
 

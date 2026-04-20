@@ -4672,7 +4672,15 @@
 </tr>
 <tr>
 <td><code>view_admin</code></td>
-<td>Query users, user detail, user activity, rate limits, permission summary, fetch metrics, system health, list tools, list metric categories/slugs, list permissions, browse web URLs, describe, query, aggregate, export, and delete any MojoModel (subject to model-level delete permissions), load domain tools</td>
+<td>Query users, user detail, user activity, rate limits, permission summary, system health, list tools, list permissions, browse web URLs, describe, query, aggregate, export, and delete any MojoModel (subject to model-level delete permissions), load domain tools</td>
+</tr>
+<tr>
+<td><code>view_metrics</code></td>
+<td>Fetch time-series metrics, gauges, discover metric accounts/categories/slugs</td>
+</tr>
+<tr>
+<td><code>write_metrics</code></td>
+<td>Set gauge values (maintenance_mode, feature flags, operational toggles)</td>
 </tr>
 <tr>
 <td><code>view_groups</code></td>
@@ -4692,6 +4700,7 @@
 <p>If the LLM tries to call a tool the user doesn't have permission for, the tool returns a permission error to the LLM (not to the client), and the LLM explains what permission is needed.</p>
 <h2 id="models-domain">Models Domain<a class="headerlink" href="#models-domain" title="Permanent link">&para;</a></h2>
 <p>Users with <code>view_admin</code> can ask the assistant to introspect and query any MojoModel directly. Two tools support this:</p>
+<p><strong>Policy blocks</strong>: Model authors can restrict assistant access on a per-verb basis using <code>DENY_AI_*</code> flags in <code>RestMeta</code>. If a model is blocked, the assistant returns <code>"&lt;app&gt;.&lt;Model&gt; is not available to the assistant"</code> — a distinct message that is not a permission error and cannot be resolved by requesting additional permissions.</p>
 <h3 id="describe_model"><code>describe_model</code><a class="headerlink" href="#describe_model" title="Permanent link">&para;</a></h3>
 <p>Returns a model's fields, available graphs, permissions, and search fields. Useful for discovery before querying.</p>
 <p><strong>Required permission</strong>: <code>view_admin</code></p>

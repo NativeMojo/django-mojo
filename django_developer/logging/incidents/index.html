@@ -5522,7 +5522,9 @@
 <div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>request_ip, http_path, http_protocol, http_method,
 <a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>http_query_string, http_user_agent, http_host,
 <a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>user_name, user_email (if authenticated)
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>bearer (if authenticated, masked via mask_token)
 </code></pre></div>
+<p><strong>Bearer masking</strong>: when the request is authenticated and carries a bearer token, <code>event_metadata["bearer"]</code> stores only a masked tail — typically <code>"****&lt;last4&gt;"</code> — via <code>mojo.helpers.logit.mask_token</code>. This is enough for support to correlate a token to a user-reported incident without leaving a replayable credential in the audit log. Tokens of length ≤ 4 are fully masked (<code>"*****"</code>) with no reveal. Masking is forward-only: pre-existing event rows keep whatever was stored at the time.</p>
 <hr />
 <h2 id="level-guide">Level Guide<a class="headerlink" href="#level-guide" title="Permanent link">&para;</a></h2>
 <table>

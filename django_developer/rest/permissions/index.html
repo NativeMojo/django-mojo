@@ -3654,6 +3654,45 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#can_update-block-writes-to-existing-instances" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CAN_UPDATE — block writes to existing instances
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="CAN_UPDATE — block writes to existing instances">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#can_save-is-deprecated" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CAN_SAVE is deprecated
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#assistant-access-flags" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Assistant Access Flags
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#special-permission-strings" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3780,6 +3819,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#fk-assignment-during-save" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        FK Assignment During Save
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -3850,6 +3900,11 @@
 <td>Must be <code>True</code> for DELETE to work at all.</td>
 </tr>
 <tr>
+<td><code>CAN_UPDATE</code></td>
+<td><code>True</code></td>
+<td>Set <code>False</code> to block PUT/POST against an existing instance (pair with <code>CAN_CREATE</code>/<code>CAN_DELETE</code>). Supersedes the deprecated <code>CAN_SAVE</code> — see below.</td>
+</tr>
+<tr>
 <td><code>NO_REST_SAVE</code></td>
 <td><code>False</code></td>
 <td>Blocks POST/PUT entirely.</td>
@@ -3869,8 +3924,79 @@
 <td><code>"group"</code></td>
 <td>FK field name pointing to the owning group.</td>
 </tr>
+<tr>
+<td><code>DENY_AI</code></td>
+<td><code>False</code></td>
+<td>Shorthand — denies all assistant model tools on this model regardless of verb.</td>
+</tr>
+<tr>
+<td><code>DENY_AI_VIEW</code></td>
+<td><code>False</code></td>
+<td>Blocks the assistant's <code>describe_model</code>, <code>query_model</code>, <code>aggregate_model</code>, and <code>export_data</code>.</td>
+</tr>
+<tr>
+<td><code>DENY_AI_CREATE</code></td>
+<td><code>False</code></td>
+<td>Blocks the create path of the assistant's <code>save_model_instance</code>.</td>
+</tr>
+<tr>
+<td><code>DENY_AI_UPDATE</code></td>
+<td><code>False</code></td>
+<td>Blocks the update path of the assistant's <code>save_model_instance</code>.</td>
+</tr>
+<tr>
+<td><code>DENY_AI_DELETE</code></td>
+<td><code>False</code></td>
+<td>Blocks the assistant's <code>delete_model_instance</code>.</td>
+</tr>
 </tbody>
 </table>
+<h2 id="can_update-block-writes-to-existing-instances"><code>CAN_UPDATE</code> — block writes to existing instances<a class="headerlink" href="#can_update-block-writes-to-existing-instances" title="Permanent link">&para;</a></h2>
+<p><code>CAN_UPDATE</code> gates PUT/POST on an existing pk, mirroring how <code>CAN_CREATE</code> gates creates and <code>CAN_DELETE</code> gates deletes. Default <code>True</code> — no existing model changes behavior unless you opt in. Set <code>False</code> to make a model append-only:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">RestMeta</span><span class="p">:</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>    <span class="n">CAN_CREATE</span> <span class="o">=</span> <span class="kc">False</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    <span class="n">CAN_UPDATE</span> <span class="o">=</span> <span class="kc">False</span>   <span class="c1"># blocks PUT to existing rows</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    <span class="n">CAN_DELETE</span> <span class="o">=</span> <span class="kc">False</span>
+</code></pre></div>
+<p>On denial the REST layer returns <code>403</code> with <code>error = "UPDATE not allowed: &lt;ModelName&gt;"</code> — a distinct message so operators can tell the block is policy, not a permission shortfall.</p>
+<h3 id="can_save-is-deprecated"><code>CAN_SAVE</code> is deprecated<a class="headerlink" href="#can_save-is-deprecated" title="Permanent link">&para;</a></h3>
+<p>Earlier versions referenced <code>CAN_SAVE</code> in RestMeta, but <code>rest.py</code> never read it — so <code>CAN_SAVE = False</code> on models like <code>LoginEvent</code> and <code>ShortLinkClick</code> did not actually block updates. <code>CAN_UPDATE</code> is the real gate. <code>CAN_SAVE</code> is now honored as a one-release deprecated alias: the framework prefers <code>CAN_UPDATE</code> when both are set, and emits a one-shot <code>logit.warning</code> for any class that still uses <code>CAN_SAVE</code> alone. Rename your models to <code>CAN_UPDATE</code> before the next release.</p>
+<h2 id="assistant-access-flags">Assistant Access Flags<a class="headerlink" href="#assistant-access-flags" title="Permanent link">&para;</a></h2>
+<p>The <code>DENY_AI_*</code> flags are <strong>defense in depth on top of REST permissions</strong>. They let model authors express "this model should not be accessible through the LLM assistant, even to users who have the REST perms for it." REST continues to work unchanged for human-driven requests — only the assistant tools honor the flags.</p>
+<table>
+<thead>
+<tr>
+<th>When to use</th>
+<th>Typical flag</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A model an operator could touch via the UI but the LLM shouldn't (e.g. <code>account.User</code> membership edits)</td>
+<td><code>DENY_AI_UPDATE</code></td>
+</tr>
+<tr>
+<td>Append-only / audit-style rows (<code>LoginEvent</code>, <code>Click</code>) that should never be mutated via chat</td>
+<td><code>DENY_AI_CREATE</code> + <code>DENY_AI_UPDATE</code> + <code>DENY_AI_DELETE</code></td>
+</tr>
+<tr>
+<td>Models containing secrets the LLM should not even introspect</td>
+<td><code>DENY_AI_VIEW</code></td>
+</tr>
+<tr>
+<td>Anything the LLM should stay away from entirely</td>
+<td><code>DENY_AI</code></td>
+</tr>
+</tbody>
+</table>
+<p>The gate runs <strong>before</strong> the REST permission check in the assistant tools, so denied requests return a distinct error — <code>"&lt;model&gt; is not available to the assistant"</code> — that tells the user a permission change will not help. Denials emit a level-4 informational <code>assistant_ai_denied</code> incident event for operator visibility; these are expected policy events, not attack signals.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">RestMeta</span><span class="p">:</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>    <span class="n">VIEW_PERMS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;view_users&quot;</span><span class="p">,</span> <span class="s2">&quot;users&quot;</span><span class="p">]</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    <span class="n">SAVE_PERMS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;manage_users&quot;</span><span class="p">,</span> <span class="s2">&quot;users&quot;</span><span class="p">]</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>    <span class="n">DENY_AI_UPDATE</span> <span class="o">=</span> <span class="kc">True</span>   <span class="c1"># humans via UI still fine; assistant cannot update</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>    <span class="n">DENY_AI_DELETE</span> <span class="o">=</span> <span class="kc">True</span>
+</code></pre></div>
+<p>Tools that honor the flags: <code>describe_model</code>, <code>query_model</code>, <code>aggregate_model</code>, <code>export_data</code>, <code>save_model_instance</code> (create vs update picked from pk presence), <code>delete_model_instance</code>.</p>
 <h2 id="special-permission-strings">Special Permission Strings<a class="headerlink" href="#special-permission-strings" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -3911,13 +4037,13 @@
 4. If NO and model has <code>group</code> field → check group-level permissions, filter by groups
 5. Otherwise → 403 or empty list</p>
 <h3 id="example-owner-scoped-with-admin-override">Example: Owner-scoped with admin override<a class="headerlink" href="#example-owner-scoped-with-admin-override" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">Conversation</span><span class="p">(</span><span class="n">models</span><span class="o">.</span><span class="n">Model</span><span class="p">,</span> <span class="n">MojoModel</span><span class="p">):</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>    <span class="n">user</span> <span class="o">=</span> <span class="n">models</span><span class="o">.</span><span class="n">ForeignKey</span><span class="p">(</span><span class="s2">&quot;account.User&quot;</span><span class="p">,</span> <span class="n">on_delete</span><span class="o">=</span><span class="n">models</span><span class="o">.</span><span class="n">CASCADE</span><span class="p">)</span>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    <span class="k">class</span><span class="w"> </span><span class="nc">RestMeta</span><span class="p">:</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>        <span class="n">VIEW_PERMS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;view_admin&quot;</span><span class="p">,</span> <span class="s2">&quot;owner&quot;</span><span class="p">]</span>
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>        <span class="n">OWNER_FIELD</span> <span class="o">=</span> <span class="s2">&quot;user&quot;</span>
-<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>        <span class="n">CAN_DELETE</span> <span class="o">=</span> <span class="kc">True</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">Conversation</span><span class="p">(</span><span class="n">models</span><span class="o">.</span><span class="n">Model</span><span class="p">,</span> <span class="n">MojoModel</span><span class="p">):</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>    <span class="n">user</span> <span class="o">=</span> <span class="n">models</span><span class="o">.</span><span class="n">ForeignKey</span><span class="p">(</span><span class="s2">&quot;account.User&quot;</span><span class="p">,</span> <span class="n">on_delete</span><span class="o">=</span><span class="n">models</span><span class="o">.</span><span class="n">CASCADE</span><span class="p">)</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>    <span class="k">class</span><span class="w"> </span><span class="nc">RestMeta</span><span class="p">:</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>        <span class="n">VIEW_PERMS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;view_admin&quot;</span><span class="p">,</span> <span class="s2">&quot;owner&quot;</span><span class="p">]</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>        <span class="n">OWNER_FIELD</span> <span class="o">=</span> <span class="s2">&quot;user&quot;</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>        <span class="n">CAN_DELETE</span> <span class="o">=</span> <span class="kc">True</span>
 </code></pre></div>
 <ul>
 <li>User with <code>view_admin</code> → sees all conversations, can delete any</li>
@@ -3925,13 +4051,13 @@
 <li>User without <code>view_admin</code> and not owner → 403</li>
 </ul>
 <h3 id="example-owner-only-no-admin-override">Example: Owner-only (no admin override)<a class="headerlink" href="#example-owner-only-no-admin-override" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">UserNote</span><span class="p">(</span><span class="n">models</span><span class="o">.</span><span class="n">Model</span><span class="p">,</span> <span class="n">MojoModel</span><span class="p">):</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>    <span class="n">user</span> <span class="o">=</span> <span class="n">models</span><span class="o">.</span><span class="n">ForeignKey</span><span class="p">(</span><span class="s2">&quot;account.User&quot;</span><span class="p">,</span> <span class="n">on_delete</span><span class="o">=</span><span class="n">models</span><span class="o">.</span><span class="n">CASCADE</span><span class="p">)</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>    <span class="k">class</span><span class="w"> </span><span class="nc">RestMeta</span><span class="p">:</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>        <span class="n">VIEW_PERMS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;owner&quot;</span><span class="p">]</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>        <span class="n">SAVE_PERMS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;owner&quot;</span><span class="p">]</span>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>        <span class="n">OWNER_FIELD</span> <span class="o">=</span> <span class="s2">&quot;user&quot;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">UserNote</span><span class="p">(</span><span class="n">models</span><span class="o">.</span><span class="n">Model</span><span class="p">,</span> <span class="n">MojoModel</span><span class="p">):</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>    <span class="n">user</span> <span class="o">=</span> <span class="n">models</span><span class="o">.</span><span class="n">ForeignKey</span><span class="p">(</span><span class="s2">&quot;account.User&quot;</span><span class="p">,</span> <span class="n">on_delete</span><span class="o">=</span><span class="n">models</span><span class="o">.</span><span class="n">CASCADE</span><span class="p">)</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>    <span class="k">class</span><span class="w"> </span><span class="nc">RestMeta</span><span class="p">:</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>        <span class="n">VIEW_PERMS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;owner&quot;</span><span class="p">]</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>        <span class="n">SAVE_PERMS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;owner&quot;</span><span class="p">]</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>        <span class="n">OWNER_FIELD</span> <span class="o">=</span> <span class="s2">&quot;user&quot;</span>
 </code></pre></div>
 <ul>
 <li>Only the owning user can see, create, and edit their notes</li>
@@ -3939,8 +4065,8 @@
 </ul>
 <h2 id="group-scoped-permissions">Group-Scoped Permissions<a class="headerlink" href="#group-scoped-permissions" title="Permanent link">&para;</a></h2>
 <p>When a model has a <code>group</code> FK and the user doesn't have system-level permissions, the framework checks if the user has the required permissions within any group:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">groups_with_perms</span> <span class="o">=</span> <span class="n">request</span><span class="o">.</span><span class="n">user</span><span class="o">.</span><span class="n">get_groups_with_permission</span><span class="p">(</span><span class="n">perms</span><span class="p">)</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">queryset</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">group__in</span><span class="o">=</span><span class="n">groups_with_perms</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">groups_with_perms</span> <span class="o">=</span> <span class="n">request</span><span class="o">.</span><span class="n">user</span><span class="o">.</span><span class="n">get_groups_with_permission</span><span class="p">(</span><span class="n">perms</span><span class="p">)</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="n">queryset</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">group__in</span><span class="o">=</span><span class="n">groups_with_perms</span><span class="p">)</span>
 </code></pre></div>
 <p>The <code>request.group</code> context is set automatically when an instance has a <code>group</code> attribute.</p>
 <h2 id="delete-gating">Delete Gating<a class="headerlink" href="#delete-gating" title="Permanent link">&para;</a></h2>
@@ -3951,31 +4077,31 @@
 <h2 id="no_rest_save">NO_REST_SAVE<a class="headerlink" href="#no_rest_save" title="Permanent link">&para;</a></h2>
 <p>When <code>NO_REST_SAVE = True</code>, POST/PUT are blocked. This is for models where mutations happen through service functions (not direct REST save). GET (list/detail) and DELETE (if <code>CAN_DELETE = True</code>) still work normally.</p>
 <h2 id="standard-crud-endpoint-pattern">Standard CRUD Endpoint Pattern<a class="headerlink" href="#standard-crud-endpoint-pattern" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo</span><span class="w"> </span><span class="kn">import</span> <span class="n">decorators</span> <span class="k">as</span> <span class="n">md</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">myapp.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">MyModel</span>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;mymodel&#39;</span><span class="p">)</span>
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;mymodel/&lt;int:pk&gt;&#39;</span><span class="p">)</span>
-<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="nd">@md</span><span class="o">.</span><span class="n">uses_model_security</span><span class="p">(</span><span class="n">MyModel</span><span class="p">)</span>
-<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_mymodel</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">pk</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
-<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>    <span class="k">return</span> <span class="n">MyModel</span><span class="o">.</span><span class="n">on_rest_request</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">pk</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo</span><span class="w"> </span><span class="kn">import</span> <span class="n">decorators</span> <span class="k">as</span> <span class="n">md</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">myapp.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">MyModel</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;mymodel&#39;</span><span class="p">)</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;mymodel/&lt;int:pk&gt;&#39;</span><span class="p">)</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="nd">@md</span><span class="o">.</span><span class="n">uses_model_security</span><span class="p">(</span><span class="n">MyModel</span><span class="p">)</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_mymodel</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">pk</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>    <span class="k">return</span> <span class="n">MyModel</span><span class="o">.</span><span class="n">on_rest_request</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">pk</span><span class="p">)</span>
 </code></pre></div>
 <p><code>@md.uses_model_security(Model)</code> is required — it sets up the permission context. Do NOT add <code>@md.requires_auth()</code> alongside it (VIEW_PERMS handles auth).</p>
 <h2 id="graphs">Graphs<a class="headerlink" href="#graphs" title="Permanent link">&para;</a></h2>
 <p>Graphs control serialization — what fields are included in the response.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">GRAPHS</span> <span class="o">=</span> <span class="p">{</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>    <span class="s2">&quot;default&quot;</span><span class="p">:</span> <span class="p">{</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>        <span class="s2">&quot;fields&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;id&quot;</span><span class="p">,</span> <span class="s2">&quot;title&quot;</span><span class="p">,</span> <span class="s2">&quot;created&quot;</span><span class="p">],</span>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>    <span class="p">},</span>
-<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>    <span class="s2">&quot;detail&quot;</span><span class="p">:</span> <span class="p">{</span>
-<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>        <span class="s2">&quot;fields&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;id&quot;</span><span class="p">,</span> <span class="s2">&quot;title&quot;</span><span class="p">,</span> <span class="s2">&quot;metadata&quot;</span><span class="p">,</span> <span class="s2">&quot;created&quot;</span><span class="p">,</span> <span class="s2">&quot;modified&quot;</span><span class="p">],</span>
-<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>        <span class="s2">&quot;extra&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;computed_field&quot;</span><span class="p">],</span>        <span class="c1"># @property on the model</span>
-<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>        <span class="s2">&quot;graphs&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;user&quot;</span><span class="p">:</span> <span class="s2">&quot;basic&quot;</span><span class="p">},</span>        <span class="c1"># serialize user FK with &quot;basic&quot; graph</span>
-<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>    <span class="p">},</span>
-<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>    <span class="s2">&quot;list&quot;</span><span class="p">:</span> <span class="p">{</span>
-<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>        <span class="s2">&quot;fields&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;id&quot;</span><span class="p">,</span> <span class="s2">&quot;title&quot;</span><span class="p">],</span>
-<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a>    <span class="p">},</span>
-<a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="n">GRAPHS</span> <span class="o">=</span> <span class="p">{</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>    <span class="s2">&quot;default&quot;</span><span class="p">:</span> <span class="p">{</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>        <span class="s2">&quot;fields&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;id&quot;</span><span class="p">,</span> <span class="s2">&quot;title&quot;</span><span class="p">,</span> <span class="s2">&quot;created&quot;</span><span class="p">],</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>    <span class="p">},</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>    <span class="s2">&quot;detail&quot;</span><span class="p">:</span> <span class="p">{</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>        <span class="s2">&quot;fields&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;id&quot;</span><span class="p">,</span> <span class="s2">&quot;title&quot;</span><span class="p">,</span> <span class="s2">&quot;metadata&quot;</span><span class="p">,</span> <span class="s2">&quot;created&quot;</span><span class="p">,</span> <span class="s2">&quot;modified&quot;</span><span class="p">],</span>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>        <span class="s2">&quot;extra&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;computed_field&quot;</span><span class="p">],</span>        <span class="c1"># @property on the model</span>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>        <span class="s2">&quot;graphs&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;user&quot;</span><span class="p">:</span> <span class="s2">&quot;basic&quot;</span><span class="p">},</span>        <span class="c1"># serialize user FK with &quot;basic&quot; graph</span>
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>    <span class="p">},</span>
+<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a>    <span class="s2">&quot;list&quot;</span><span class="p">:</span> <span class="p">{</span>
+<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a>        <span class="s2">&quot;fields&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;id&quot;</span><span class="p">,</span> <span class="s2">&quot;title&quot;</span><span class="p">],</span>
+<a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a>    <span class="p">},</span>
+<a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a><span class="p">}</span>
 </code></pre></div>
 <ul>
 <li><code>"fields"</code> — model fields to include</li>
@@ -3984,6 +4110,32 @@
 </ul>
 <p>The client selects a graph via <code>?graph=detail</code>. Default is <code>"default"</code>.</p>
 <p>For list endpoints, the framework uses <code>"list"</code> graph if it exists, otherwise <code>"default"</code>.</p>
+<h2 id="fk-assignment-during-save">FK Assignment During Save<a class="headerlink" href="#fk-assignment-during-save" title="Permanent link">&para;</a></h2>
+<p>When a save payload assigns a ForeignKey field by primary key — e.g. <code>data={"group": 5}</code> — the framework looks up the target via <code>field.related_model.objects.get(pk=value)</code> and then runs <code>field.related_model.rest_check_permission(request, "VIEW_PERMS", related_instance)</code> before assigning. On denial the assignment is silently skipped (the parent save proceeds with the field unchanged) and an incident event is recorded by <code>rest_check_permission</code>.</p>
+<p>This prevents cross-model privilege escalation: a user with SAVE_PERMS on model A but no view access to model B cannot attach B records to A. The same gate has always applied when the value is a dict (which triggers a cascading save and additionally requires SAVE_PERMS on the target).</p>
+<p>Cases that do <strong>not</strong> require VIEW_PERMS on the target:</p>
+<table>
+<thead>
+<tr>
+<th>Case</th>
+<th>Reason</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Self-reference (<code>a.parent = a.pk</code>)</td>
+<td>Caller already authorized for self</td>
+</tr>
+<tr>
+<td>Clear (<code>group=0</code> / <code>None</code> / <code>""</code>)</td>
+<td>No target to view</td>
+</tr>
+<tr>
+<td>Related model is non-MojoModel (no <code>rest_check_permission</code>)</td>
+<td>Framework only gates models that opt in</td>
+</tr>
+</tbody>
+</table>
 
 
 

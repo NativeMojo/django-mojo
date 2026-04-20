@@ -3782,10 +3782,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#metrics-domain-view_admin-view_security" class="md-nav__link">
+  <a href="#metrics-domain-view_metrics-write_metrics-view_admin-view_security" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Metrics Domain (view_admin / view_security)
+        Metrics Domain (view_metrics / write_metrics / view_admin / view_security)
       
     </span>
   </a>
@@ -3822,6 +3822,23 @@
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Models Domain (view_admin)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#deny_ai_-restmeta-flags" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DENY_AI_* RestMeta flags
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
         
@@ -3924,6 +3941,17 @@
     <span class="md-ellipsis">
       
         Design
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#audit-trail-logitlog" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Audit Trail (logit.Log)
       
     </span>
   </a>
@@ -4251,6 +4279,17 @@
     <span class="md-ellipsis">
       
         Tool Handler Guidelines
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#optional-handler-kwargs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Optional Handler Kwargs
       
     </span>
   </a>
@@ -4735,7 +4774,7 @@
 </tr>
 <tr>
 <td><code>models</code></td>
-<td><code>describe_model</code>, <code>query_model</code>, <code>aggregate_model</code>, <code>export_data</code>, <code>delete_model_instance</code></td>
+<td><code>describe_model</code>, <code>query_model</code>, <code>aggregate_model</code>, <code>export_data</code>, <code>delete_model_instance</code>, <code>save_model_instance</code></td>
 </tr>
 <tr>
 <td><code>docs</code></td>
@@ -5272,33 +5311,99 @@
 </tr>
 </tbody>
 </table>
-<h3 id="metrics-domain-view_admin-view_security">Metrics Domain (<code>view_admin</code> / <code>view_security</code>)<a class="headerlink" href="#metrics-domain-view_admin-view_security" title="Permanent link">&para;</a></h3>
+<h3 id="metrics-domain-view_metrics-write_metrics-view_admin-view_security">Metrics Domain (<code>view_metrics</code> / <code>write_metrics</code> / <code>view_admin</code> / <code>view_security</code>)<a class="headerlink" href="#metrics-domain-view_metrics-write_metrics-view_admin-view_security" title="Permanent link">&para;</a></h3>
+<p>Full reference: <a href="metrics_tools/">metrics_tools.md</a>.</p>
 <table>
 <thead>
 <tr>
 <th>Tool</th>
 <th>Permission</th>
 <th>Mutates</th>
+<th>Purpose</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>fetch_metrics</code></td>
-<td><code>view_admin</code></td>
+<td><code>list_metric_accounts</code></td>
+<td><code>view_metrics</code></td>
 <td>No</td>
+<td>Discover every account the user can view (unions configured + data-inferred)</td>
+</tr>
+<tr>
+<td><code>list_metric_categories</code></td>
+<td><code>view_metrics</code></td>
+<td>No</td>
+<td>Categories on a given account</td>
+</tr>
+<tr>
+<td><code>list_metric_slugs</code></td>
+<td><code>view_metrics</code></td>
+<td>No</td>
+<td>Time-series slugs on an account; supports category and prefix filters</td>
+</tr>
+<tr>
+<td><code>list_metric_gauges</code></td>
+<td><code>view_metrics</code></td>
+<td>No</td>
+<td>Gauge (non-time-series) slug names on an account</td>
+</tr>
+<tr>
+<td><code>describe_metric_slug</code></td>
+<td><code>view_metrics</code></td>
+<td>No</td>
+<td>Grep the codebase for <code>metrics.record()</code> call sites matching a slug</td>
+</tr>
+<tr>
+<td><code>resolve_group_account</code></td>
+<td><code>view_metrics</code></td>
+<td>No</td>
+<td>Turn a group name/id into the matching <code>group-&lt;id&gt;</code> account string</td>
+</tr>
+<tr>
+<td><code>fetch_metrics</code></td>
+<td><code>view_metrics</code></td>
+<td>No</td>
+<td>Time-series fetch; auto-granularity and retention notes</td>
+</tr>
+<tr>
+<td><code>fetch_metric_values</code></td>
+<td><code>view_metrics</code></td>
+<td>No</td>
+<td>Point-in-time snapshot across many slugs</td>
+</tr>
+<tr>
+<td><code>fetch_metrics_by_category</code></td>
+<td><code>view_metrics</code></td>
+<td>No</td>
+<td>Fetch every slug in a category at once, capped for token budget</td>
+</tr>
+<tr>
+<td><code>get_metric_gauge</code></td>
+<td><code>view_metrics</code></td>
+<td>No</td>
+<td>Read one or more gauge values</td>
+</tr>
+<tr>
+<td><code>set_metric_gauge</code></td>
+<td><code>write_metrics</code></td>
+<td>Yes</td>
+<td>Write a gauge (maintenance_mode, feature flags). Mutates — confirm first.</td>
 </tr>
 <tr>
 <td><code>get_system_health</code></td>
 <td><code>view_admin</code></td>
 <td>No</td>
+<td>Cross-domain roll-up: active users, jobs, incidents, events</td>
 </tr>
 <tr>
 <td><code>get_incident_trends</code></td>
 <td><code>view_security</code></td>
 <td>No</td>
+<td>Incident/event trends over 1h/6h/24h/7d</td>
 </tr>
 </tbody>
 </table>
+<p>Every read tool calls <code>mojo.apps.metrics.rest.helpers.check_view_permissions(request, account)</code>; the write tool calls <code>check_write_permissions</code>. This matches the REST layer exactly: per-account gating for <code>public</code>, <code>global</code>, <code>group-&lt;id&gt;</code>, <code>user-&lt;id&gt;</code>, and custom accounts. Denials return <code>{"error": ...}</code> and fire a level-5 security event.</p>
 <h3 id="web-domain-view_admin">Web Domain (<code>view_admin</code>)<a class="headerlink" href="#web-domain-view_admin" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
@@ -5376,7 +5481,13 @@
 <td><code>delete_model_instance</code></td>
 <td><code>view_admin</code></td>
 <td>Yes</td>
-<td>Delete a single model instance by primary key. The model must have <code>CAN_DELETE = True</code> in its <code>RestMeta</code>, and the user must pass the model's full delete permission chain (<code>DELETE_PERMS</code> → <code>SAVE_PERMS</code> → <code>VIEW_PERMS</code>), including owner and group checks — identical to the REST layer's <code>on_rest_handle_delete</code>. Calls <code>on_rest_pre_delete()</code> and deletes inside <code>transaction.atomic()</code>. Reports a security event on permission denial.</td>
+<td>Delete a single model instance by primary key. The model must have <code>CAN_DELETE = True</code> in its <code>RestMeta</code>, and the user must pass the model's full delete permission chain (<code>DELETE_PERMS</code> → <code>SAVE_PERMS</code> → <code>VIEW_PERMS</code>), including owner and group checks — identical to the REST layer's <code>on_rest_handle_delete</code>. Calls <code>on_rest_pre_delete()</code> and deletes inside <code>transaction.atomic()</code>. Reports a security event on permission denial. Writes <code>assistant:model:deleted</code> audit log on success.</td>
+</tr>
+<tr>
+<td><code>save_model_instance</code></td>
+<td><code>view_admin</code></td>
+<td>Yes</td>
+<td>Create or update a single MojoModel instance. Pass <code>pk</code> to update an existing row; omit <code>pk</code> to create a new one. Creates require <code>CAN_CREATE=True</code> plus the <code>CREATE_PERMS</code>/<code>SAVE_PERMS</code>/<code>VIEW_PERMS</code> chain. Updates require <code>SAVE_PERMS</code>/<code>VIEW_PERMS</code> on the target instance. FK fields can be set by pk in <code>data</code>. Runs via <code>on_rest_save()</code>. Writes <code>assistant:model:created</code> or <code>assistant:model:updated</code> audit log on success, <code>assistant:model:save_failed</code> on exception.</td>
 </tr>
 </tbody>
 </table>
@@ -5558,7 +5669,48 @@
 </tbody>
 </table>
 <p><code>export_data</code> requires <code>fileman</code> to be installed and a <code>FileManager</code> configured for the user/group. Files are stored with <code>metadata.expires_at</code> set to <code>FILEMAN_EXPORT_EXPIRES_DAYS</code> days from creation (default 14). If <code>mojo.apps.shortlink</code> is installed, the returned URL is a shortlink. The assistant should present the URL using a <code>file</code> block (see structured block types in the system prompt).</p>
-<p>All three tools enforce the same permission and owner/group scoping as the REST layer via <code>rest_check_permission</code> and <code>_apply_owner_group_filter</code>. Attempts to filter or aggregate on sensitive fields are blocked and reported as security events.</p>
+<h4 id="deny_ai_-restmeta-flags"><code>DENY_AI_*</code> RestMeta flags<a class="headerlink" href="#deny_ai_-restmeta-flags" title="Permanent link">&para;</a></h4>
+<p>Every tool in the Models Domain honors per-model opt-out flags on <code>RestMeta</code>: <code>DENY_AI_VIEW</code> (describe/query/aggregate/export), <code>DENY_AI_CREATE</code>, <code>DENY_AI_UPDATE</code>, <code>DENY_AI_DELETE</code>, plus <code>DENY_AI</code> as a shorthand for all four. All default <code>False</code>.</p>
+<p>The AI gate runs <strong>before</strong> the REST permission check, so denied requests return a distinct error — <code>"&lt;app&gt;.&lt;Model&gt; is not available to the assistant"</code> — to signal that the block is policy, not permission. Denials emit a level-4 <code>assistant_ai_denied</code> incident event for operator visibility. REST continues to work unchanged for humans — only the assistant tools honor the flags. See <a href="../rest/permissions/#assistant-access-flags">docs/django_developer/rest/permissions.md</a> for details.</p>
+<p><code>save_model_instance</code> parameters:</p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>app_name</code></td>
+<td>string</td>
+<td>required</td>
+<td>Django app label</td>
+</tr>
+<tr>
+<td><code>model_name</code></td>
+<td>string</td>
+<td>required</td>
+<td>Model class name</td>
+</tr>
+<tr>
+<td><code>pk</code></td>
+<td>integer</td>
+<td>—</td>
+<td>Primary key of an existing instance to update. Omit to create.</td>
+</tr>
+<tr>
+<td><code>data</code></td>
+<td>object</td>
+<td>required</td>
+<td>Dict of field names to values. FK fields accept the related instance's pk.</td>
+</tr>
+</tbody>
+</table>
+<p>The tool delegates to <code>instance.on_rest_save(request, data)</code> so all model-level save hooks, validators, and <code>POST_SAVE_ACTIONS</code> fire exactly as they would through the REST API. The <code>action_response</code> from <code>POST_SAVE_ACTIONS</code> is included in the return dict when present. Setting <code>CAN_CREATE = False</code> in <code>RestMeta</code> blocks creates; setting <code>CAN_UPDATE = False</code> blocks updates to existing instances.</p>
+<p>All five tools enforce the same permission and owner/group scoping as the REST layer via <code>rest_check_permission</code> and <code>_apply_owner_group_filter</code>. Attempts to filter or aggregate on sensitive fields are blocked and reported as security events.</p>
 <h3 id="logs-domain-view_logs">Logs Domain (<code>view_logs</code>)<a class="headerlink" href="#logs-domain-view_logs" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
@@ -5739,12 +5891,12 @@
 <tr>
 <td><code>list_metric_categories</code></td>
 <td><code>metrics</code></td>
-<td><code>view_admin</code></td>
+<td><code>view_metrics</code></td>
 </tr>
 <tr>
 <td><code>list_metric_slugs</code></td>
 <td><code>metrics</code></td>
-<td><code>view_admin</code></td>
+<td><code>view_metrics</code></td>
 </tr>
 <tr>
 <td><code>list_job_channels</code></td>
@@ -6022,6 +6174,41 @@
 <li><strong>Read-only tools = no events.</strong> Too high volume, low signal.</li>
 <li><strong>Events supplement, not replace, file logging.</strong> Existing <code>logger</code> calls remain for debug.</li>
 <li><strong><code>_report_event()</code> never raises</strong> — wrapped in try/except to avoid breaking the assistant if the incident system is down.</li>
+</ul>
+<h3 id="audit-trail-logitlog">Audit Trail (<code>logit.Log</code>)<a class="headerlink" href="#audit-trail-logitlog" title="Permanent link">&para;</a></h3>
+<p>The model mutation tools (<code>save_model_instance</code>, <code>delete_model_instance</code>) write per-row audit entries to <code>logit.Log</code> via <code>_audit_user_log()</code> in addition to the incident events above. These entries are queryable with the <code>query_logs</code> assistant tool (filter by <code>kind</code>).</p>
+<table>
+<thead>
+<tr>
+<th><code>kind</code></th>
+<th>When written</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>assistant:model:created</code></td>
+<td><code>save_model_instance</code> — new row created successfully</td>
+</tr>
+<tr>
+<td><code>assistant:model:updated</code></td>
+<td><code>save_model_instance</code> — existing row updated successfully</td>
+</tr>
+<tr>
+<td><code>assistant:model:deleted</code></td>
+<td><code>delete_model_instance</code> — row deleted successfully</td>
+</tr>
+<tr>
+<td><code>assistant:model:save_failed</code></td>
+<td><code>save_model_instance</code> — <code>on_rest_save()</code> raised an exception</td>
+</tr>
+</tbody>
+</table>
+<p><strong>What is recorded:</strong></p>
+<ul>
+<li>The <code>logit.Log</code> message includes the action, model label (<code>app.Model</code>), <code>pk</code>, and changed field <strong>names</strong> (never values).</li>
+<li>The <code>payload</code> JSON carries <code>conversation_id</code> (when available) so the audit trail ties back to the specific assistant turn.</li>
+<li>Sensitive field names (<code>password</code>, <code>auth_key</code>, etc.) are not filtered from the field name list — the field names themselves are considered safe metadata; only values are withheld.</li>
+<li>Entries are written against the target model (<code>model_name</code>, <code>model_id</code>) so they surface when querying logs for that model.</li>
 </ul>
 <h3 id="suggested-rulesets">Suggested RuleSets<a class="headerlink" href="#suggested-rulesets" title="Permanent link">&para;</a></h3>
 <table>
@@ -6467,19 +6654,51 @@
 <li><strong>Exclude secrets</strong>: Never include passwords, auth keys, tokens, or other sensitive fields.</li>
 <li><strong>Return simple types</strong>: Return dicts and lists with JSON-serializable values. Dates as strings.</li>
 <li><strong>Handle errors gracefully</strong>: Return <code>{"error": "message"}</code> instead of raising exceptions.</li>
-<li><strong>Signature</strong>: Always <code>(params, user)</code> — even if you don't use <code>user</code> today.</li>
+<li><strong>Signature</strong>: <code>(params, user)</code> is the baseline. Handlers that need HTTP context or the conversation can opt in to additional keyword-only arguments.</li>
 </ul>
+<h3 id="optional-handler-kwargs">Optional Handler Kwargs<a class="headerlink" href="#optional-handler-kwargs" title="Permanent link">&para;</a></h3>
+<p>The dispatcher inspects handler signatures at first call (result is cached). Handlers declare the kwargs they need; the dispatcher only passes them when present. Handlers that stick to <code>(params, user)</code> are untouched.</p>
+<table>
+<thead>
+<tr>
+<th>Kwarg</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>request_meta</code></td>
+<td><code>objict</code> or <code>None</code></td>
+<td>Slim HTTP context from the originating request: <code>ip</code>, <code>user_agent</code>, <code>path</code>, <code>method</code>. <code>None</code> when there is no HTTP request (e.g. WS path or programmatic call).</td>
+</tr>
+<tr>
+<td><code>conversation</code></td>
+<td><code>Conversation</code> instance</td>
+<td>The active Conversation model instance. Use to read metadata or to associate audit records with the conversation.</td>
+</tr>
+</tbody>
+</table>
+<p>Both kwargs are keyword-only (<code>*</code> in the signature):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="nd">@tool</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;my_tool&quot;</span><span class="p">,</span> <span class="n">domain</span><span class="o">=</span><span class="s2">&quot;myapp&quot;</span><span class="p">,</span> <span class="n">permission</span><span class="o">=</span><span class="s2">&quot;view_admin&quot;</span><span class="p">,</span> <span class="n">mutates</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>      <span class="n">description</span><span class="o">=</span><span class="s2">&quot;...&quot;</span><span class="p">,</span> <span class="n">input_schema</span><span class="o">=</span><span class="p">{</span><span class="o">...</span><span class="p">})</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="k">def</span><span class="w"> </span><span class="nf">_tool_my_tool</span><span class="p">(</span><span class="n">params</span><span class="p">,</span> <span class="n">user</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">request_meta</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">conversation</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>    <span class="c1"># request_meta.ip is the originating client IP (or None)</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>    <span class="c1"># conversation.pk links audit records to the turn</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>    <span class="o">...</span>
+</code></pre></div>
+<p><code>run_assistant()</code> now accepts an optional <code>request=None</code> parameter. When the REST endpoint passes the Django request through, <code>request_meta</code> is populated automatically for all tool handlers that opt in. WebSocket calls do not pass a request; <code>request_meta</code> is <code>None</code> in that path.</p>
 <h3 id="other-registry-functions">Other Registry Functions<a class="headerlink" href="#other-registry-functions" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.assistant</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
-<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>    <span class="n">tool</span><span class="p">,</span>                        <span class="c1"># @tool decorator (preferred)</span>
-<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>    <span class="n">register_tool</span><span class="p">,</span>               <span class="c1"># Register a single tool imperatively</span>
-<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>    <span class="n">register_tools</span><span class="p">,</span>              <span class="c1"># Register multiple tools from a list of dicts</span>
-<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>    <span class="n">get_registry</span><span class="p">,</span>                <span class="c1"># Get the full registry dict (all tools, unfiltered)</span>
-<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>    <span class="n">get_tools_for_user</span><span class="p">,</span>          <span class="c1"># All tools the user has permission for (backward compat)</span>
-<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a>    <span class="n">get_core_tools_for_user</span><span class="p">,</span>     <span class="c1"># Core tools only (tier 1, always sent)</span>
-<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a>    <span class="n">get_domain_tools_for_user</span><span class="p">,</span>   <span class="c1"># Tools for specific domains, filtered by perms</span>
-<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a>    <span class="n">get_available_domains</span><span class="p">,</span>       <span class="c1"># Domains the user has access to, with tool counts</span>
-<a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.assistant</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>    <span class="n">tool</span><span class="p">,</span>                        <span class="c1"># @tool decorator (preferred)</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>    <span class="n">register_tool</span><span class="p">,</span>               <span class="c1"># Register a single tool imperatively</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>    <span class="n">register_tools</span><span class="p">,</span>              <span class="c1"># Register multiple tools from a list of dicts</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>    <span class="n">get_registry</span><span class="p">,</span>                <span class="c1"># Get the full registry dict (all tools, unfiltered)</span>
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>    <span class="n">get_tools_for_user</span><span class="p">,</span>          <span class="c1"># All tools the user has permission for (backward compat)</span>
+<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a>    <span class="n">get_core_tools_for_user</span><span class="p">,</span>     <span class="c1"># Core tools only (tier 1, always sent)</span>
+<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a>    <span class="n">get_domain_tools_for_user</span><span class="p">,</span>   <span class="c1"># Tools for specific domains, filtered by perms</span>
+<a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a>    <span class="n">get_available_domains</span><span class="p">,</span>       <span class="c1"># Domains the user has access to, with tool counts</span>
+<a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a><span class="p">)</span>
 </code></pre></div>
 <p><code>get_domain_tools_for_user(user, domains)</code> accepts a list or single string. Returns only tools where <code>entry["domain"] in domains</code> and the user has permission.</p>
 <p><code>get_available_domains(user)</code> returns a dict keyed by domain name, each with <code>count</code>, <code>description</code>, and <code>examples</code> (first 3 tool names). Domains where every tool is already core are excluded — they're always loaded and don't need to be "activated".</p>
@@ -6560,18 +6779,18 @@
 </tbody>
 </table>
 <p>The <code>detail</code> graph includes nested messages using the message <code>default</code> graph:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="s2">&quot;detail&quot;</span><span class="p">:</span> <span class="p">{</span>
-<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>    <span class="s2">&quot;fields&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;id&quot;</span><span class="p">,</span> <span class="s2">&quot;title&quot;</span><span class="p">,</span> <span class="s2">&quot;created&quot;</span><span class="p">,</span> <span class="s2">&quot;modified&quot;</span><span class="p">,</span> <span class="s2">&quot;messages&quot;</span><span class="p">],</span>
-<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>    <span class="s2">&quot;graphs&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;messages&quot;</span><span class="p">:</span> <span class="s2">&quot;default&quot;</span><span class="p">},</span>
-<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="s2">&quot;detail&quot;</span><span class="p">:</span> <span class="p">{</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>    <span class="s2">&quot;fields&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;id&quot;</span><span class="p">,</span> <span class="s2">&quot;title&quot;</span><span class="p">,</span> <span class="s2">&quot;created&quot;</span><span class="p">,</span> <span class="s2">&quot;modified&quot;</span><span class="p">,</span> <span class="s2">&quot;messages&quot;</span><span class="p">],</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>    <span class="s2">&quot;graphs&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;messages&quot;</span><span class="p">:</span> <span class="s2">&quot;default&quot;</span><span class="p">},</span>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="p">}</span>
 </code></pre></div>
 <p>Request it with <code>GET /api/assistant/conversation/&lt;pk&gt;?graph=detail</code>.</p>
 <p>The REST handler is standard:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;conversation&#39;</span><span class="p">)</span>
-<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;conversation/&lt;int:pk&gt;&#39;</span><span class="p">)</span>
-<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="nd">@md</span><span class="o">.</span><span class="n">uses_model_security</span><span class="p">(</span><span class="n">Conversation</span><span class="p">)</span>
-<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_conversation</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">pk</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
-<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>    <span class="k">return</span> <span class="n">Conversation</span><span class="o">.</span><span class="n">on_rest_request</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">pk</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;conversation&#39;</span><span class="p">)</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;conversation/&lt;int:pk&gt;&#39;</span><span class="p">)</span>
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="nd">@md</span><span class="o">.</span><span class="n">uses_model_security</span><span class="p">(</span><span class="n">Conversation</span><span class="p">)</span>
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_conversation</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">pk</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a>    <span class="k">return</span> <span class="n">Conversation</span><span class="o">.</span><span class="n">on_rest_request</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">pk</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="message">Message<a class="headerlink" href="#message" title="Permanent link">&para;</a></h3>
 <p>A single message in a conversation.</p>
@@ -6620,14 +6839,14 @@
 <h2 id="websocket-interface">WebSocket Interface<a class="headerlink" href="#websocket-interface" title="Permanent link">&para;</a></h2>
 <p>The assistant also supports a WebSocket transport for real-time chat UIs. This uses the existing realtime system — no new WebSocket endpoint needed.</p>
 <h3 id="architecture_1">Architecture<a class="headerlink" href="#architecture_1" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>Client sends WS message {type: &quot;assistant_message&quot;, message: &quot;...&quot;, conversation_id: N}
-<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>  → User.on_realtime_message() dispatches to assistant handler
-<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>  → Handler validates, stores message, returns {type: &quot;assistant_thinking&quot;} immediately
-<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>  → Background job runs run_assistant_ws() with on_event callback
-<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a>  → Callback publishes WS events back to the user:
-<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a>      assistant_tool_call  (per tool)
-<a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a>      assistant_response   (final answer)
-<a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a>      assistant_error      (on failure)
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>Client sends WS message {type: &quot;assistant_message&quot;, message: &quot;...&quot;, conversation_id: N}
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>  → User.on_realtime_message() dispatches to assistant handler
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>  → Handler validates, stores message, returns {type: &quot;assistant_thinking&quot;} immediately
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>  → Background job runs run_assistant_ws() with on_event callback
+<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a>  → Callback publishes WS events back to the user:
+<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a>      assistant_tool_call  (per tool)
+<a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a>      assistant_response   (final answer)
+<a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a>      assistant_error      (on failure)
 </code></pre></div>
 <h3 id="key-files_3">Key Files<a class="headerlink" href="#key-files_3" title="Permanent link">&para;</a></h3>
 <ul>
@@ -6641,14 +6860,14 @@
 <p>LLM calls are too slow to block the WebSocket handler. The handler publishes a job via <code>mojo.apps.jobs</code> and returns immediately. The job function (<code>execute_assistant_job</code>) runs the agent loop and uses <code>send_to_user()</code> from the realtime manager to push events back to the user's WebSocket connections.</p>
 <h3 id="assistant_response-event-payload"><code>assistant_response</code> Event Payload<a class="headerlink" href="#assistant_response-event-payload" title="Permanent link">&para;</a></h3>
 <p><code>run_assistant_ws()</code> returns a dict that becomes the WS event payload. As of v1.1.8 it always includes:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="p">{</span>
-<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>    <span class="s2">&quot;message_id&quot;</span><span class="p">:</span> <span class="n">msg</span><span class="o">.</span><span class="n">pk</span><span class="p">,</span>          <span class="c1"># int — PK of the saved Message record</span>
-<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>    <span class="s2">&quot;created&quot;</span><span class="p">:</span> <span class="n">msg</span><span class="o">.</span><span class="n">created</span><span class="o">.</span><span class="n">isoformat</span><span class="p">(),</span>  <span class="c1"># ISO 8601 string</span>
-<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>    <span class="s2">&quot;response&quot;</span><span class="p">:</span> <span class="n">response_text</span><span class="p">,</span>     <span class="c1"># narrative text, block fences stripped</span>
-<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a>    <span class="s2">&quot;blocks&quot;</span><span class="p">:</span> <span class="n">blocks</span> <span class="ow">or</span> <span class="kc">None</span><span class="p">,</span>      <span class="c1"># parsed blocks, or None when absent</span>
-<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a>    <span class="s2">&quot;tool_calls_made&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">...</span><span class="p">],</span>       <span class="c1"># list of {tool, input} dicts</span>
-<a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a>    <span class="s2">&quot;conversation_id&quot;</span><span class="p">:</span> <span class="n">conversation</span><span class="o">.</span><span class="n">pk</span><span class="p">,</span>
-<a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="p">{</span>
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>    <span class="s2">&quot;message_id&quot;</span><span class="p">:</span> <span class="n">msg</span><span class="o">.</span><span class="n">pk</span><span class="p">,</span>          <span class="c1"># int — PK of the saved Message record</span>
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>    <span class="s2">&quot;created&quot;</span><span class="p">:</span> <span class="n">msg</span><span class="o">.</span><span class="n">created</span><span class="o">.</span><span class="n">isoformat</span><span class="p">(),</span>  <span class="c1"># ISO 8601 string</span>
+<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a>    <span class="s2">&quot;response&quot;</span><span class="p">:</span> <span class="n">response_text</span><span class="p">,</span>     <span class="c1"># narrative text, block fences stripped</span>
+<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a>    <span class="s2">&quot;blocks&quot;</span><span class="p">:</span> <span class="n">blocks</span> <span class="ow">or</span> <span class="kc">None</span><span class="p">,</span>      <span class="c1"># parsed blocks, or None when absent</span>
+<a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a>    <span class="s2">&quot;tool_calls_made&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">...</span><span class="p">],</span>       <span class="c1"># list of {tool, input} dicts</span>
+<a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a>    <span class="s2">&quot;conversation_id&quot;</span><span class="p">:</span> <span class="n">conversation</span><span class="o">.</span><span class="n">pk</span><span class="p">,</span>
+<a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a><span class="p">}</span>
 </code></pre></div>
 <p><code>blocks</code> is always included in the dict (<code>None</code> when empty) rather than conditionally omitted, making the shape consistent with the REST detail graph and easier for clients to handle.</p>
 <h2 id="structured-data-blocks">Structured Data Blocks<a class="headerlink" href="#structured-data-blocks" title="Permanent link">&para;</a></h2>
@@ -6703,39 +6922,39 @@
 </table>
 <h3 id="action-block"><code>action</code> Block<a class="headerlink" href="#action-block" title="Permanent link">&para;</a></h3>
 <p>Used for mutating operations that need user confirmation. The LLM presents an action card; the user clicks a button; the choice is sent back as a message.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="p">{</span>
-<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="w">    </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;action&quot;</span><span class="p">,</span>
-<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="w">    </span><span class="nt">&quot;title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Block IP&quot;</span><span class="p">,</span>
-<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="w">    </span><span class="nt">&quot;description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Block 1.2.3.4 on all firewall sets for 24 hours&quot;</span><span class="p">,</span>
-<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a><span class="w">    </span><span class="nt">&quot;actions&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-<a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a><span class="w">        </span><span class="p">{</span><span class="nt">&quot;label&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Confirm&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;confirm&quot;</span><span class="p">},</span>
-<a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a><span class="w">        </span><span class="p">{</span><span class="nt">&quot;label&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Cancel&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;cancel&quot;</span><span class="p">}</span>
-<a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a><span class="w">    </span><span class="p">],</span>
-<a id="__codelineno-15-9" name="__codelineno-15-9" href="#__codelineno-15-9"></a><span class="w">    </span><span class="nt">&quot;action_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;f47ac10b-58cc-4372-a567-0e02b2c3d479&quot;</span>
-<a id="__codelineno-15-10" name="__codelineno-15-10" href="#__codelineno-15-10"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="p">{</span>
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="w">    </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;action&quot;</span><span class="p">,</span>
+<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a><span class="w">    </span><span class="nt">&quot;title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Block IP&quot;</span><span class="p">,</span>
+<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="w">    </span><span class="nt">&quot;description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Block 1.2.3.4 on all firewall sets for 24 hours&quot;</span><span class="p">,</span>
+<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a><span class="w">    </span><span class="nt">&quot;actions&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a><span class="w">        </span><span class="p">{</span><span class="nt">&quot;label&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Confirm&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;confirm&quot;</span><span class="p">},</span>
+<a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a><span class="w">        </span><span class="p">{</span><span class="nt">&quot;label&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Cancel&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;cancel&quot;</span><span class="p">}</span>
+<a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a><span class="w">    </span><span class="p">],</span>
+<a id="__codelineno-16-9" name="__codelineno-16-9" href="#__codelineno-16-9"></a><span class="w">    </span><span class="nt">&quot;action_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;f47ac10b-58cc-4372-a567-0e02b2c3d479&quot;</span>
+<a id="__codelineno-16-10" name="__codelineno-16-10" href="#__codelineno-16-10"></a><span class="p">}</span>
 </code></pre></div>
 <p><code>action_id</code> is injected by the parser — the LLM does not set it. The frontend uses it to correlate the button click with the block.</p>
 <p>The system prompt instructs the LLM to use action blocks instead of asking "type yes to confirm". Always include a Cancel option.</p>
 <h3 id="list-block"><code>list</code> Block<a class="headerlink" href="#list-block" title="Permanent link">&para;</a></h3>
 <p>Used for single-record key/value summaries instead of a one-row table.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="p">{</span>
-<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="w">    </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;list&quot;</span><span class="p">,</span>
-<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a><span class="w">    </span><span class="nt">&quot;title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;User Detail&quot;</span><span class="p">,</span>
-<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="w">    </span><span class="nt">&quot;items&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a><span class="w">        </span><span class="p">{</span><span class="nt">&quot;label&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Email&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;admin@example.com&quot;</span><span class="p">},</span>
-<a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a><span class="w">        </span><span class="p">{</span><span class="nt">&quot;label&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Role&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Admin&quot;</span><span class="p">},</span>
-<a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a><span class="w">        </span><span class="p">{</span><span class="nt">&quot;label&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Last Login&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-04-01 09:30 UTC&quot;</span><span class="p">}</span>
-<a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a><span class="w">    </span><span class="p">]</span>
-<a id="__codelineno-16-9" name="__codelineno-16-9" href="#__codelineno-16-9"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="p">{</span>
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="w">    </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;list&quot;</span><span class="p">,</span>
+<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a><span class="w">    </span><span class="nt">&quot;title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;User Detail&quot;</span><span class="p">,</span>
+<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a><span class="w">    </span><span class="nt">&quot;items&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a><span class="w">        </span><span class="p">{</span><span class="nt">&quot;label&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Email&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;admin@example.com&quot;</span><span class="p">},</span>
+<a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a><span class="w">        </span><span class="p">{</span><span class="nt">&quot;label&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Role&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Admin&quot;</span><span class="p">},</span>
+<a id="__codelineno-17-7" name="__codelineno-17-7" href="#__codelineno-17-7"></a><span class="w">        </span><span class="p">{</span><span class="nt">&quot;label&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Last Login&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-04-01 09:30 UTC&quot;</span><span class="p">}</span>
+<a id="__codelineno-17-8" name="__codelineno-17-8" href="#__codelineno-17-8"></a><span class="w">    </span><span class="p">]</span>
+<a id="__codelineno-17-9" name="__codelineno-17-9" href="#__codelineno-17-9"></a><span class="p">}</span>
 </code></pre></div>
 <h3 id="alert-block"><code>alert</code> Block<a class="headerlink" href="#alert-block" title="Permanent link">&para;</a></h3>
 <p>Used for permission denials, rate limit warnings, error conditions, and success confirmations that need visual distinction from narrative text.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="p">{</span>
-<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="w">    </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;alert&quot;</span><span class="p">,</span>
-<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a><span class="w">    </span><span class="nt">&quot;level&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;warning&quot;</span><span class="p">,</span>
-<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a><span class="w">    </span><span class="nt">&quot;title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Rate Limited&quot;</span><span class="p">,</span>
-<a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a><span class="w">    </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;User exceeded 100 req/min threshold. Current rate: 142 req/min.&quot;</span>
-<a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="p">{</span>
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="w">    </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;alert&quot;</span><span class="p">,</span>
+<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="w">    </span><span class="nt">&quot;level&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;warning&quot;</span><span class="p">,</span>
+<a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a><span class="w">    </span><span class="nt">&quot;title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Rate Limited&quot;</span><span class="p">,</span>
+<a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a><span class="w">    </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;User exceeded 100 req/min threshold. Current rate: 142 req/min.&quot;</span>
+<a id="__codelineno-18-6" name="__codelineno-18-6" href="#__codelineno-18-6"></a><span class="p">}</span>
 </code></pre></div>
 <p>Valid levels: <code>info</code>, <code>success</code>, <code>warning</code>, <code>error</code>.</p>
 <h3 id="customizing">Customizing<a class="headerlink" href="#customizing" title="Permanent link">&para;</a></h3>
@@ -6753,29 +6972,29 @@
 <li>After all steps complete, the LLM synthesizes findings into a final response</li>
 </ol>
 <h3 id="plan-structure">Plan Structure<a class="headerlink" href="#plan-structure" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="c1"># Stored in conversation.metadata[&quot;plan&quot;]</span>
-<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="p">{</span>
-<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a>    <span class="s2">&quot;plan_id&quot;</span><span class="p">:</span> <span class="s2">&quot;f47ac10b-...&quot;</span><span class="p">,</span>   <span class="c1"># UUID string</span>
-<a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a>    <span class="s2">&quot;title&quot;</span><span class="p">:</span> <span class="s2">&quot;Security Audit (24h)&quot;</span><span class="p">,</span>
-<a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a>    <span class="s2">&quot;steps&quot;</span><span class="p">:</span> <span class="p">[</span>
-<a id="__codelineno-18-6" name="__codelineno-18-6" href="#__codelineno-18-6"></a>        <span class="p">{</span>
-<a id="__codelineno-18-7" name="__codelineno-18-7" href="#__codelineno-18-7"></a>            <span class="s2">&quot;id&quot;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>                    <span class="c1"># 1-indexed, assigned by create_plan</span>
-<a id="__codelineno-18-8" name="__codelineno-18-8" href="#__codelineno-18-8"></a>            <span class="s2">&quot;description&quot;</span><span class="p">:</span> <span class="s2">&quot;Check open incidents&quot;</span><span class="p">,</span>
-<a id="__codelineno-18-9" name="__codelineno-18-9" href="#__codelineno-18-9"></a>            <span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="s2">&quot;done&quot;</span><span class="p">,</span>           <span class="c1"># pending | in_progress | done | skipped</span>
-<a id="__codelineno-18-10" name="__codelineno-18-10" href="#__codelineno-18-10"></a>            <span class="s2">&quot;summary&quot;</span><span class="p">:</span> <span class="s2">&quot;14 open&quot;</span><span class="p">,</span>       <span class="c1"># set when done</span>
-<a id="__codelineno-18-11" name="__codelineno-18-11" href="#__codelineno-18-11"></a>            <span class="s2">&quot;parallel&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>
-<a id="__codelineno-18-12" name="__codelineno-18-12" href="#__codelineno-18-12"></a>            <span class="s2">&quot;tool&quot;</span><span class="p">:</span> <span class="s2">&quot;query_incidents&quot;</span><span class="p">,</span>
-<a id="__codelineno-18-13" name="__codelineno-18-13" href="#__codelineno-18-13"></a>            <span class="s2">&quot;tool_input&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="s2">&quot;open&quot;</span><span class="p">},</span>
-<a id="__codelineno-18-14" name="__codelineno-18-14" href="#__codelineno-18-14"></a>        <span class="p">},</span>
-<a id="__codelineno-18-15" name="__codelineno-18-15" href="#__codelineno-18-15"></a>        <span class="p">{</span>
-<a id="__codelineno-18-16" name="__codelineno-18-16" href="#__codelineno-18-16"></a>            <span class="s2">&quot;id&quot;</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
-<a id="__codelineno-18-17" name="__codelineno-18-17" href="#__codelineno-18-17"></a>            <span class="s2">&quot;description&quot;</span><span class="p">:</span> <span class="s2">&quot;Synthesize findings&quot;</span><span class="p">,</span>
-<a id="__codelineno-18-18" name="__codelineno-18-18" href="#__codelineno-18-18"></a>            <span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="s2">&quot;pending&quot;</span><span class="p">,</span>
-<a id="__codelineno-18-19" name="__codelineno-18-19" href="#__codelineno-18-19"></a>            <span class="s2">&quot;summary&quot;</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>
-<a id="__codelineno-18-20" name="__codelineno-18-20" href="#__codelineno-18-20"></a>            <span class="s2">&quot;parallel&quot;</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span>
-<a id="__codelineno-18-21" name="__codelineno-18-21" href="#__codelineno-18-21"></a>        <span class="p">},</span>
-<a id="__codelineno-18-22" name="__codelineno-18-22" href="#__codelineno-18-22"></a>    <span class="p">],</span>
-<a id="__codelineno-18-23" name="__codelineno-18-23" href="#__codelineno-18-23"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="c1"># Stored in conversation.metadata[&quot;plan&quot;]</span>
+<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a><span class="p">{</span>
+<a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a>    <span class="s2">&quot;plan_id&quot;</span><span class="p">:</span> <span class="s2">&quot;f47ac10b-...&quot;</span><span class="p">,</span>   <span class="c1"># UUID string</span>
+<a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a>    <span class="s2">&quot;title&quot;</span><span class="p">:</span> <span class="s2">&quot;Security Audit (24h)&quot;</span><span class="p">,</span>
+<a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a>    <span class="s2">&quot;steps&quot;</span><span class="p">:</span> <span class="p">[</span>
+<a id="__codelineno-19-6" name="__codelineno-19-6" href="#__codelineno-19-6"></a>        <span class="p">{</span>
+<a id="__codelineno-19-7" name="__codelineno-19-7" href="#__codelineno-19-7"></a>            <span class="s2">&quot;id&quot;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>                    <span class="c1"># 1-indexed, assigned by create_plan</span>
+<a id="__codelineno-19-8" name="__codelineno-19-8" href="#__codelineno-19-8"></a>            <span class="s2">&quot;description&quot;</span><span class="p">:</span> <span class="s2">&quot;Check open incidents&quot;</span><span class="p">,</span>
+<a id="__codelineno-19-9" name="__codelineno-19-9" href="#__codelineno-19-9"></a>            <span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="s2">&quot;done&quot;</span><span class="p">,</span>           <span class="c1"># pending | in_progress | done | skipped</span>
+<a id="__codelineno-19-10" name="__codelineno-19-10" href="#__codelineno-19-10"></a>            <span class="s2">&quot;summary&quot;</span><span class="p">:</span> <span class="s2">&quot;14 open&quot;</span><span class="p">,</span>       <span class="c1"># set when done</span>
+<a id="__codelineno-19-11" name="__codelineno-19-11" href="#__codelineno-19-11"></a>            <span class="s2">&quot;parallel&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>
+<a id="__codelineno-19-12" name="__codelineno-19-12" href="#__codelineno-19-12"></a>            <span class="s2">&quot;tool&quot;</span><span class="p">:</span> <span class="s2">&quot;query_incidents&quot;</span><span class="p">,</span>
+<a id="__codelineno-19-13" name="__codelineno-19-13" href="#__codelineno-19-13"></a>            <span class="s2">&quot;tool_input&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="s2">&quot;open&quot;</span><span class="p">},</span>
+<a id="__codelineno-19-14" name="__codelineno-19-14" href="#__codelineno-19-14"></a>        <span class="p">},</span>
+<a id="__codelineno-19-15" name="__codelineno-19-15" href="#__codelineno-19-15"></a>        <span class="p">{</span>
+<a id="__codelineno-19-16" name="__codelineno-19-16" href="#__codelineno-19-16"></a>            <span class="s2">&quot;id&quot;</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
+<a id="__codelineno-19-17" name="__codelineno-19-17" href="#__codelineno-19-17"></a>            <span class="s2">&quot;description&quot;</span><span class="p">:</span> <span class="s2">&quot;Synthesize findings&quot;</span><span class="p">,</span>
+<a id="__codelineno-19-18" name="__codelineno-19-18" href="#__codelineno-19-18"></a>            <span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="s2">&quot;pending&quot;</span><span class="p">,</span>
+<a id="__codelineno-19-19" name="__codelineno-19-19" href="#__codelineno-19-19"></a>            <span class="s2">&quot;summary&quot;</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>
+<a id="__codelineno-19-20" name="__codelineno-19-20" href="#__codelineno-19-20"></a>            <span class="s2">&quot;parallel&quot;</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span>
+<a id="__codelineno-19-21" name="__codelineno-19-21" href="#__codelineno-19-21"></a>        <span class="p">},</span>
+<a id="__codelineno-19-22" name="__codelineno-19-22" href="#__codelineno-19-22"></a>    <span class="p">],</span>
+<a id="__codelineno-19-23" name="__codelineno-19-23" href="#__codelineno-19-23"></a><span class="p">}</span>
 </code></pre></div>
 <h3 id="when-the-llm-should-plan">When the LLM Should Plan<a class="headerlink" href="#when-the-llm-should-plan" title="Permanent link">&para;</a></h3>
 <p>The system prompt provides guidance — do not plan for simple queries. Examples where planning is appropriate:
@@ -6819,7 +7038,7 @@
 <li>Results are returned to the LLM in completion order.</li>
 </ol>
 <h3 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="n">LLM_ADMIN_MAX_PARALLEL_TOOLS</span> <span class="o">=</span> <span class="mi">4</span>  <span class="c1"># default</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="n">LLM_ADMIN_MAX_PARALLEL_TOOLS</span> <span class="o">=</span> <span class="mi">4</span>  <span class="c1"># default</span>
 </code></pre></div>
 <p>The pool size is <code>min(LLM_ADMIN_MAX_PARALLEL_TOOLS, number_of_tools_in_batch)</code>.</p>
 <h3 id="thread-safety">Thread Safety<a class="headerlink" href="#thread-safety" title="Permanent link">&para;</a></h3>
@@ -6835,7 +7054,7 @@
 <li><code>mojo/apps/assistant/services/agent.py</code> — <code>_execute_tool()</code>, <code>_execute_tools()</code>, <code>_execute_parallel_plan_steps()</code></li>
 </ul>
 <h2 id="tests">Tests<a class="headerlink" href="#tests" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>./bin/run_tests<span class="w"> </span>-t<span class="w"> </span>test_assistant
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>./bin/run_tests<span class="w"> </span>-t<span class="w"> </span>test_assistant
 </code></pre></div>
 <p>Test files:
 - <code>tests/test_assistant/1_test_permissions.py</code> — Registry, permission gate, feature flag, sensitive field exclusion
