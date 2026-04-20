@@ -98,7 +98,7 @@ class GeoLocatedIP(models.Model, MojoModel):
     class RestMeta:
         VIEW_PERMS = ['manage_users', 'view_security', 'manage_security', 'security', 'users']
         SEARCH_FIELDS = ["ip_address", "city", "country_name", "asn_org", "isp"]
-        POST_SAVE_ACTIONS = ["refresh", "threat_analysis", "block", "unblock", "whitelist", "unwhitelist"],
+        POST_SAVE_ACTIONS = ["refresh", "threat_analysis", "block", "unblock", "whitelist", "unwhitelist"]
         GRAPHS = {
             'default': {
                 'extra': ['is_threat', 'is_suspicious', 'risk_score'],
