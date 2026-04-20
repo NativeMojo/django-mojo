@@ -345,8 +345,8 @@ The domain-specific discovery tools have been moved to their parent domains so t
 
 | Tool | Domain | Permission |
 |---|---|---|
-| `list_metric_categories` | `metrics` | `view_admin` |
-| `list_metric_slugs` | `metrics` | `view_admin` |
+| `list_metric_categories` | `metrics` | `view_metrics` |
+| `list_metric_slugs` | `metrics` | `view_metrics` |
 | `list_job_channels` | `jobs` | `view_jobs` |
 | `list_event_categories` | `security` | `view_security` |
 | `list_permissions` | `users` | `view_admin` |

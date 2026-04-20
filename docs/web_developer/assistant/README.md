@@ -487,7 +487,9 @@ The assistant checks the user's permissions before executing each tool. The tool
 | `manage_security` | All `view_security` tools + update incident, block IP, create ticket |
 | `view_jobs` | Query jobs, job events, job logs, job stats, queue health, list scheduled tasks |
 | `manage_jobs` | All `view_jobs` tools + cancel job, retry job, create/update/delete scheduled tasks, run job, run scheduled task now |
-| `view_admin` | Query users, user detail, user activity, rate limits, permission summary, fetch metrics, system health, list tools, list metric categories/slugs, list permissions, browse web URLs, describe, query, aggregate, export, and delete any MojoModel (subject to model-level delete permissions), load domain tools |
+| `view_admin` | Query users, user detail, user activity, rate limits, permission summary, system health, list tools, list permissions, browse web URLs, describe, query, aggregate, export, and delete any MojoModel (subject to model-level delete permissions), load domain tools |
+| `view_metrics` | Fetch time-series metrics, gauges, discover metric accounts/categories/slugs |
+| `write_metrics` | Set gauge values (maintenance_mode, feature flags, operational toggles) |
 | `view_groups` | Query groups, group detail, group members, group activity |
 | `view_logs` | Query the audit log trail (logit.Log) — request history, model changes, API errors, custom events |
 | `assistant` | Read, write, and delete memory entries and skills across all tiers (subject to per-tier access rules) |
