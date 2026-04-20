@@ -31,6 +31,34 @@ on_rest_request(request, pk)
 | `NO_REST` | `False` | Blocks all REST operations. |
 | `OWNER_FIELD` | `"user"` | FK field name pointing to the owning user. Used with `"owner"` perm. |
 | `GROUP_FIELD` | `"group"` | FK field name pointing to the owning group. |
+| `DENY_AI` | `False` | Shorthand — denies all assistant model tools on this model regardless of verb. |
+| `DENY_AI_VIEW` | `False` | Blocks the assistant's `describe_model`, `query_model`, `aggregate_model`, and `export_data`. |
+| `DENY_AI_CREATE` | `False` | Blocks the create path of the assistant's `save_model_instance`. |
+| `DENY_AI_UPDATE` | `False` | Blocks the update path of the assistant's `save_model_instance`. |
+| `DENY_AI_DELETE` | `False` | Blocks the assistant's `delete_model_instance`. |
+
+## Assistant Access Flags
+
+The `DENY_AI_*` flags are **defense in depth on top of REST permissions**. They let model authors express "this model should not be accessible through the LLM assistant, even to users who have the REST perms for it." REST continues to work unchanged for human-driven requests — only the assistant tools honor the flags.
+
+| When to use | Typical flag |
+|---|---|
+| A model an operator could touch via the UI but the LLM shouldn't (e.g. `account.User` membership edits) | `DENY_AI_UPDATE` |
+| Append-only / audit-style rows (`LoginEvent`, `Click`) that should never be mutated via chat | `DENY_AI_CREATE` + `DENY_AI_UPDATE` + `DENY_AI_DELETE` |
+| Models containing secrets the LLM should not even introspect | `DENY_AI_VIEW` |
+| Anything the LLM should stay away from entirely | `DENY_AI` |
+
+The gate runs **before** the REST permission check in the assistant tools, so denied requests return a distinct error — `"<model> is not available to the assistant"` — that tells the user a permission change will not help. Denials emit a level-4 informational `assistant_ai_denied` incident event for operator visibility; these are expected policy events, not attack signals.
+
+```python
+class RestMeta:
+    VIEW_PERMS = ["view_users", "users"]
+    SAVE_PERMS = ["manage_users", "users"]
+    DENY_AI_UPDATE = True   # humans via UI still fine; assistant cannot update
+    DENY_AI_DELETE = True
+```
+
+Tools that honor the flags: `describe_model`, `query_model`, `aggregate_model`, `export_data`, `save_model_instance` (create vs update picked from pk presence), `delete_model_instance`.
 
 ## Special Permission Strings
 

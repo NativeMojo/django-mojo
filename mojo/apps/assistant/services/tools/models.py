@@ -77,6 +77,56 @@ def _resolve_model(app_name, model_name):
     return model, None
 
 
+# ---------------------------------------------------------------------------
+# AI access gate — per-model, per-verb opt-out via RestMeta
+# ---------------------------------------------------------------------------
+
+# Per-verb flag names. `DENY_AI` (no suffix) is a shorthand that denies all.
+_VERB_TO_FLAG = {
+    "view": "DENY_AI_VIEW",
+    "create": "DENY_AI_CREATE",
+    "update": "DENY_AI_UPDATE",
+    "delete": "DENY_AI_DELETE",
+}
+
+
+def _check_ai_access(model, verb, user, request=None):
+    """Check per-model assistant opt-out flags. Returns None on allow, else an
+    error dict.
+
+    ``DENY_AI = True`` (shorthand) denies every verb regardless of the
+    per-verb flag. Per-verb flags (``DENY_AI_VIEW`` / ``DENY_AI_CREATE`` /
+    ``DENY_AI_UPDATE`` / ``DENY_AI_DELETE``) deny that verb specifically.
+
+    Denials emit a level-4 informational security event — this is expected
+    policy, not a permission probe. The error message is intentionally
+    distinct from "Permission denied" so users do not chase a perm fix.
+    """
+    flag = _VERB_TO_FLAG.get(verb)
+    if flag is None:
+        return None
+
+    blanket = model.get_rest_meta_prop("DENY_AI", False)
+    specific = model.get_rest_meta_prop(flag, False)
+    if not (blanket or specific):
+        return None
+
+    model_label = f"{model._meta.app_label}.{model.__name__}"
+    reason = "DENY_AI" if blanket else flag
+    details = (
+        f"AI access denied: {verb} on {model_label} by user "
+        f"{getattr(user, 'id', 'anon')} (flag={reason})"
+    )
+    logger.info(details)
+    _report_security_event(
+        "assistant_ai_denied", 4, details, user,
+        model_name=model_label, request=request,
+    )
+    return {"error": f"{model_label} is not available to the assistant"}
+
+    return model, None
+
+
 def _audit_user_log(user, kind, action, model_label, pk, request=None,
                     conversation=None, fields=None):
     """Write a per-mutation audit entry to logit.Log against the target model.
@@ -305,6 +355,10 @@ def _tool_describe_model(params, user):
     if err:
         return err
 
+    err = _check_ai_access(model, "view", user)
+    if err:
+        return err
+
     logger.info("describe_model", app_name, model_name, f"user={user.id}")
 
     fields = _get_field_info(model)
@@ -408,6 +462,10 @@ def _tool_query_model(params, user):
     # Build synthetic request for permission checking
     filters = params.get("filters") or {}
     request = _build_request(user, filters)
+
+    err = _check_ai_access(model, "view", user, request=request)
+    if err:
+        return err
 
     # Permission check — model's own VIEW_PERMS
     if not model.rest_check_permission(request, "VIEW_PERMS"):
@@ -541,6 +599,11 @@ def _tool_delete_model_instance(params, user, *, request_meta=None, conversation
         return err
 
     model_label = f"{app_name}.{model_name}"
+
+    # AI access gate — fails fast before any DB work
+    err = _check_ai_access(model, "delete", user)
+    if err:
+        return err
 
     # Gate 1: CAN_DELETE must be True
     if not model.get_rest_meta_prop("CAN_DELETE", False):
@@ -677,6 +740,11 @@ def _tool_save_model_instance(params, user, *, request_meta=None, conversation=N
 
     model_label = f"{app_name}.{model_name}"
     is_create = pk is None
+
+    # AI access gate — fails fast before any DB work
+    err = _check_ai_access(model, "create" if is_create else "update", user)
+    if err:
+        return err
 
     request = _build_request(
         user,
@@ -893,6 +961,11 @@ def _tool_aggregate_model(params, user):
     # Permission check
     filters = params.get("filters") or {}
     request = _build_request(user, filters)
+
+    err = _check_ai_access(model, "view", user, request=request)
+    if err:
+        return err
+
     if not model.rest_check_permission(request, "VIEW_PERMS"):
         details = f"Permission denied: aggregate_model on {model_label} by user {user.id}"
         logger.warning(details)
@@ -1110,6 +1183,11 @@ def _tool_export_data(params, user):
     # Permission check
     filters = params.get("filters") or {}
     request = _build_request(user, filters)
+
+    err = _check_ai_access(model, "view", user, request=request)
+    if err:
+        return err
+
     if not model.rest_check_permission(request, "VIEW_PERMS"):
         details = f"Permission denied: export_data on {model_label} by user {user.id}"
         logger.warning(details)
