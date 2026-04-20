@@ -11,15 +11,54 @@ Flow:
     5. Store assistant response as Message(s)
     6. Return response dict
 """
+import inspect
 import re
 import time
 import uuid
+import objict
 import ujson
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from mojo.helpers.settings import settings
 from mojo.helpers import logit, llm
 
 logger = logit.get_logger(__name__, "assistant.log")
+
+
+def _build_request_meta(request):
+    """Slim objict with the HTTP context tools may need (ip, user_agent, path, method).
+
+    Returns None when there is no originating HTTP request (e.g. WS path).
+    """
+    if request is None:
+        return None
+    return objict.objict(
+        ip=getattr(request, "ip", None),
+        user_agent=getattr(request, "META", {}).get("HTTP_USER_AGENT", ""),
+        path=getattr(request, "path", ""),
+        method=getattr(request, "method", ""),
+    )
+
+
+_HANDLER_SIG_CACHE = {}
+
+
+def _call_handler(handler, tool_input, user, request_meta, conversation):
+    """Invoke a tool handler, passing optional kwargs only when the handler declares them.
+
+    Existing handlers stay on ``(params, user)`` with no changes; new tools opt in
+    by adding ``request_meta`` and/or ``conversation`` as keyword-only parameters.
+    """
+    sig = _HANDLER_SIG_CACHE.get(handler)
+    if sig is None:
+        sig = inspect.signature(handler)
+        _HANDLER_SIG_CACHE[handler] = sig
+    kwargs = {}
+    params = sig.parameters
+    if "request_meta" in params:
+        kwargs["request_meta"] = request_meta
+    if "conversation" in params:
+        kwargs["conversation"] = conversation
+    return handler(tool_input, user, **kwargs)
 
 
 def _report_event(category, level, title, details, user=None, **kwargs):
@@ -543,7 +582,7 @@ def _handle_plan_tool(conversation, tool_name, tool_input, tool_result, on_event
 META_TOOLS = {"load_tools", "create_plan", "update_plan"}
 
 
-def _execute_tool(block, registry, user, conversation, tools, on_event, tool_calls_made):
+def _execute_tool(block, registry, user, conversation, tools, on_event, tool_calls_made, request_meta=None):
     """
     Execute a single tool call with permission gate, meta-tool handling,
     and event reporting.
@@ -586,7 +625,9 @@ def _execute_tool(block, registry, user, conversation, tools, on_event, tool_cal
                     "tool": tool_name,
                     "input": tool_input,
                 })
-            tool_result = tool_entry["handler"](tool_input, user)
+            tool_result = _call_handler(
+                tool_entry["handler"], tool_input, user, request_meta, conversation,
+            )
             tool_calls_made.append({
                 "tool": tool_name,
                 "input": tool_input,
@@ -631,7 +672,7 @@ def _execute_tool(block, registry, user, conversation, tools, on_event, tool_cal
     }
 
 
-def _execute_tools(tool_blocks, registry, user, conversation, tools, on_event, tool_calls_made):
+def _execute_tools(tool_blocks, registry, user, conversation, tools, on_event, tool_calls_made, request_meta=None):
     """
     Execute tool calls, using parallel execution when multiple non-meta tools
     are present in a single turn.
@@ -652,13 +693,13 @@ def _execute_tools(tool_blocks, registry, user, conversation, tools, on_event, t
 
     # Meta-tools run first, serially (they modify conversation state)
     for block in meta_blocks:
-        result = _execute_tool(block, registry, user, conversation, tools, on_event, tool_calls_made)
+        result = _execute_tool(block, registry, user, conversation, tools, on_event, tool_calls_made, request_meta)
         results.append(result)
 
     # Regular tools run in parallel if there are multiple
     if len(regular_blocks) <= 1:
         for block in regular_blocks:
-            result = _execute_tool(block, registry, user, conversation, tools, on_event, tool_calls_made)
+            result = _execute_tool(block, registry, user, conversation, tools, on_event, tool_calls_made, request_meta)
             results.append(result)
     else:
         with ThreadPoolExecutor(max_workers=min(max_workers, len(regular_blocks))) as pool:
@@ -666,7 +707,7 @@ def _execute_tools(tool_blocks, registry, user, conversation, tools, on_event, t
             for block in regular_blocks:
                 future = pool.submit(
                     _execute_tool, block, registry, user, conversation,
-                    tools, on_event, tool_calls_made,
+                    tools, on_event, tool_calls_made, request_meta,
                 )
                 futures[future] = block["id"]
 
@@ -686,7 +727,7 @@ def _execute_tools(tool_blocks, registry, user, conversation, tools, on_event, t
     return results
 
 
-def _execute_parallel_plan_steps(plan, registry, user, conversation, tools, on_event, tool_calls_made):
+def _execute_parallel_plan_steps(plan, registry, user, conversation, tools, on_event, tool_calls_made, request_meta=None):
     """
     Execute parallel plan steps concurrently.
 
@@ -742,7 +783,7 @@ def _execute_parallel_plan_steps(plan, registry, user, conversation, tools, on_e
     # Execute all in parallel
     if len(step_blocks) <= 1:
         for step, block in step_blocks:
-            result = _execute_tool(block, registry, user, conversation, tools, on_event, tool_calls_made)
+            result = _execute_tool(block, registry, user, conversation, tools, on_event, tool_calls_made, request_meta)
             results.append(result)
             # Parse the result to extract a summary
             try:
@@ -759,7 +800,7 @@ def _execute_parallel_plan_steps(plan, registry, user, conversation, tools, on_e
             for step, block in step_blocks:
                 future = pool.submit(
                     _execute_tool, block, registry, user, conversation,
-                    tools, on_event, tool_calls_made,
+                    tools, on_event, tool_calls_made, request_meta,
                 )
                 future_to_step[future] = (step, block)
 
@@ -835,7 +876,7 @@ def _build_conversation_messages(conversation, max_history):
     return messages
 
 
-def run_assistant(user, message, conversation_id=None, on_event=None):
+def run_assistant(user, message, conversation_id=None, on_event=None, request=None):
     """
     Main entry point for the admin assistant.
 
@@ -846,6 +887,9 @@ def run_assistant(user, message, conversation_id=None, on_event=None):
         on_event:        Optional callback ``(event_type, data_dict)`` for
                          live progress events (used by the WS handler).
                          Events: ``tool_call``, ``thinking``.
+        request:         Optional originating Django request, used to pass
+                         HTTP context (ip, user_agent, path, method) into
+                         tool handlers that opt into ``request_meta``.
 
     Returns:
         dict with keys: response, conversation_id, tool_calls_made, error
@@ -910,6 +954,7 @@ def run_assistant(user, message, conversation_id=None, on_event=None):
     max_turns = settings.get("LLM_ADMIN_MAX_TURNS", 25, kind="int")
     registry = get_registry()
     tool_calls_made = []
+    request_meta = _build_request_meta(request)
     t_start = time.time()
 
     try:
@@ -954,6 +999,7 @@ def run_assistant(user, message, conversation_id=None, on_event=None):
             tool_blocks = [b for b in result["content"] if b.get("type") == "tool_use"]
             tool_results = _execute_tools(
                 tool_blocks, registry, user, conversation, tools, on_event, tool_calls_made,
+                request_meta=request_meta,
             )
 
             # Store tool interaction messages
@@ -978,6 +1024,7 @@ def run_assistant(user, message, conversation_id=None, on_event=None):
             if plan and any(b["name"] == "create_plan" for b in tool_blocks):
                 plan_results, plan_blocks = _execute_parallel_plan_steps(
                     plan, registry, user, conversation, tools, on_event, tool_calls_made,
+                    request_meta=request_meta,
                 )
                 if plan_results:
                     # Inject parallel results as if the LLM had called them

@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+### Added
+- **`save_model_instance` assistant tool** — Create or update any MojoModel instance from the assistant. Pass `pk` to update, omit to create. Honors the REST permission chain exactly: creates require `CAN_CREATE` plus `CREATE_PERMS`/`SAVE_PERMS`/`VIEW_PERMS`; updates require `SAVE_PERMS`/`VIEW_PERMS` on the target instance. FK fields can be set by primary key in `data`. Permission denials report a level-6 incident event. `mutates=True`, `core=False`, requires `view_admin`.
+- **Per-mutation audit trail for assistant model tools** — Successful create/update/delete writes an entry to `logit.Log` with kind `assistant:model:created` / `:updated` / `:deleted`. Failed saves write `assistant:model:save_failed`. The audit message lists changed field NAMES only (never values) and the `payload` JSON carries `conversation_id` so audit entries tie back to the assistant turn. `delete_model_instance` was retrofitted to write the same audit entries.
+- **Tool dispatcher threads HTTP context** — `run_assistant(...)` now accepts the originating Django request and builds a slim `request_meta` objict (ip, user_agent, path, method). Tool handlers can opt into the context by adding `request_meta` and/or `conversation` as keyword-only parameters; existing handlers are unchanged. Without this, assistant-originated incident events recorded source ip as None instead of the user's real ip.
+
 ## v1.1.24 - April 16, 2026
 
 bugfix when working with s3 buckets in the eu

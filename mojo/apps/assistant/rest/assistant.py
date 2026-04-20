@@ -29,7 +29,7 @@ def on_assistant_message(request):
     message = request.DATA.message
     conversation_id = request.DATA.get("conversation_id")
 
-    result = run_assistant(request.user, message, conversation_id=conversation_id)
+    result = run_assistant(request.user, message, conversation_id=conversation_id, request=request)
 
     if "error" in result:
         status_code = result.get("status_code", 400)

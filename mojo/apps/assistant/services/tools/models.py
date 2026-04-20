@@ -77,9 +77,53 @@ def _resolve_model(app_name, model_name):
     return model, None
 
 
-def _report_security_event(category, level, details, user, model_name=None, **extra):
-    """Report a security event through the incident system."""
+def _audit_user_log(user, kind, action, model_label, pk, request=None,
+                    conversation=None, fields=None):
+    """Write a per-mutation audit entry to logit.Log against the target model.
+
+    Field NAMES are recorded in the message and payload; values are not.
+    Conversation id is stored in the payload when available so the audit
+    trail ties back to the assistant turn. The synthetic ``request`` is
+    passed through so uid/ip/user_agent flow into the Log row.
+    """
+    if user is None:
+        return
+    parts = [action, model_label, f"pk={pk}"]
+    if fields:
+        parts.append(f"fields=[{','.join(fields)}]")
+    message = " ".join(parts)
+    payload = {}
+    if conversation is not None:
+        conv_pk = getattr(conversation, "pk", None)
+        if conv_pk is not None:
+            payload["conversation_id"] = conv_pk
+    if fields:
+        payload["fields"] = list(fields)
+    try:
+        import ujson
+        from mojo.apps.logit.models import Log
+        Log.logit(
+            request, message, kind=kind,
+            model_name=model_label, model_id=pk if pk is not None else 0,
+            payload=ujson.dumps(payload) if payload else None,
+        )
+    except Exception:
+        logger.exception("Failed to write audit log entry")
+
+
+def _report_security_event(category, level, details, user, model_name=None,
+                           request=None, **extra):
+    """Report a security event through the incident system.
+
+    When ``request`` is provided (typically the synthetic request built by
+    ``_build_request``), its ip is forwarded so the event records the
+    originating source ip rather than defaulting to None.
+    """
     from mojo.apps.incident import reporter
+    if request is not None and "source_ip" not in extra:
+        ip = getattr(request, "ip", None)
+        if ip and ip != "assistant":
+            extra["source_ip"] = ip
     reporter.report_event(
         details,
         title=details[:80],
@@ -92,8 +136,13 @@ def _report_security_event(category, level, details, user, model_name=None, **ex
     )
 
 
-def _build_request(user, filters=None, method="GET", path="/assistant/query_model"):
-    """Build a synthetic request object for permission checking."""
+def _build_request(user, filters=None, method="GET", path="/assistant/query_model", request_meta=None):
+    """Build a synthetic request object for permission checking.
+
+    When ``request_meta`` is provided (an objict with ip, user_agent, path,
+    method), its values seed the synthetic request so downstream incident
+    events record the originating HTTP context instead of "assistant".
+    """
     req = objict.objict()
     req.user = user
     req.DATA = objict.objict(filters or {})
@@ -104,6 +153,13 @@ def _build_request(user, filters=None, method="GET", path="/assistant/query_mode
     req.ip = "assistant"
     req.path = path
     req.META = {}
+    if request_meta is not None:
+        if request_meta.get("ip"):
+            req.ip = request_meta.ip
+        if request_meta.get("user_agent"):
+            req.META["HTTP_USER_AGENT"] = request_meta.user_agent
+        if request_meta.get("path"):
+            req.META["HTTP_HOST"] = ""
     if hasattr(user, "api_key"):
         req.api_key = user.api_key
     else:
@@ -469,7 +525,7 @@ def _tool_query_model(params, user):
     },
     mutates=True,
 )
-def _tool_delete_model_instance(params, user):
+def _tool_delete_model_instance(params, user, *, request_meta=None, conversation=None):
     """Delete a model instance with full RestMeta permission checking."""
     import json
 
@@ -496,7 +552,11 @@ def _tool_delete_model_instance(params, user):
         return {"error": f"{model_label} with pk={pk} not found"}
 
     # Gate 2: full REST permission chain (DELETE_PERMS > SAVE_PERMS > VIEW_PERMS)
-    request = _build_request(user, method="DELETE", path=f"/assistant/delete_model/{model_label}/{pk}")
+    request = _build_request(
+        user, method="DELETE",
+        path=f"/assistant/delete_model/{model_label}/{pk}",
+        request_meta=request_meta,
+    )
     if not model.rest_check_permission(request, ["DELETE_PERMS", "SAVE_PERMS", "VIEW_PERMS"], instance):
         details = f"Permission denied: delete_model_instance on {model_label} pk={pk} by user {user.id}"
         logger.warning(details)
@@ -506,6 +566,7 @@ def _tool_delete_model_instance(params, user):
             details,
             user,
             model_name=model_label,
+            request=request,
         )
         return {"error": f"Permission denied to delete {model_label} pk={pk}"}
 
@@ -525,7 +586,190 @@ def _tool_delete_model_instance(params, user):
         return {"error": f"Delete failed for {model_label} pk={pk}"}
 
     logger.info("delete_model_instance", model_label, f"pk={pk}", f"user={user.id}")
+    _audit_user_log(
+        user, "assistant:model:deleted", "Deleted",
+        model_label, pk, request=request, conversation=conversation,
+    )
     return {"ok": True, "model": model_label, "pk": pk, "status": result.get("status", "deleted")}
+
+
+# ---------------------------------------------------------------------------
+# Save (create or update) a model instance
+# ---------------------------------------------------------------------------
+
+# Field names the underlying on_rest_save loop ignores; we use the same default
+# to compute the audited field list.
+_DEFAULT_NO_SAVE_FIELDS = {"id", "pk", "created", "uuid"}
+
+
+def _changed_field_names(model, data):
+    """Return the field names from `data` that on_rest_save will actually consider.
+
+    Strips the model's NO_SAVE_FIELDS (or the framework default). Names only —
+    values are never recorded in audit metadata.
+    """
+    no_save = set(model.get_rest_meta_prop("NO_SAVE_FIELDS", list(_DEFAULT_NO_SAVE_FIELDS)))
+    return [k for k in data.keys() if k not in no_save]
+
+
+@tool(
+    name="save_model_instance",
+    domain="models",
+    permission="view_admin",
+    mutates=True,
+    description=(
+        "Create or update a single MojoModel instance. "
+        "Pass `pk` to update an existing row; omit `pk` to create a new one. "
+        "Respects RestMeta permissions exactly like the REST API: creates require "
+        "CAN_CREATE plus CREATE_PERMS/SAVE_PERMS/VIEW_PERMS; updates require "
+        "SAVE_PERMS/VIEW_PERMS on the target instance. "
+        "FK fields can be set by primary key in `data` (e.g. {\"group\": 5}); "
+        "the related model's permissions are checked automatically. "
+        "The save runs inside a transaction — partial failures roll back. "
+        "Use describe_model first to discover available fields. "
+        "IMPORTANT: This mutates data and is irreversible. Always confirm the "
+        "exact instance, fields, and values with the user before executing. "
+        "Never save without explicit user approval. "
+        "Examples: "
+        "Create: save_model_instance(app_name='assistant', model_name='Skill', "
+        "data={'name': 'My Skill', 'description': '...'}). "
+        "Update: save_model_instance(app_name='assistant', model_name='Skill', "
+        "pk=42, data={'description': 'New description'})."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "app_name": {
+                "type": "string",
+                "description": "Django app label (e.g. 'account', 'incident', 'assistant')",
+            },
+            "model_name": {
+                "type": "string",
+                "description": "Model class name (e.g. 'User', 'Skill', 'Conversation')",
+            },
+            "pk": {
+                "type": "integer",
+                "description": "Primary key of an existing instance to update. Omit to create.",
+            },
+            "data": {
+                "type": "object",
+                "description": "Dict of field names to values. FK fields accept the related instance's pk.",
+            },
+        },
+        "required": ["app_name", "model_name", "data"],
+    },
+)
+def _tool_save_model_instance(params, user, *, request_meta=None, conversation=None):
+    """Create or update a model instance with full RestMeta permission checking."""
+    app_name = params.get("app_name", "").strip()
+    model_name = params.get("model_name", "").strip()
+    pk = params.get("pk")
+    data = params.get("data")
+
+    if not app_name or not model_name:
+        return {"error": "Both 'app_name' and 'model_name' are required"}
+    if not isinstance(data, dict):
+        return {"error": "'data' must be an object of field/value pairs"}
+
+    model, err = _resolve_model(app_name, model_name)
+    if err:
+        return err
+
+    model_label = f"{app_name}.{model_name}"
+    is_create = pk is None
+
+    request = _build_request(
+        user,
+        filters=data,
+        method="POST" if is_create else "PUT",
+        path=f"/assistant/save_model/{model_label}" + ("" if is_create else f"/{pk}"),
+        request_meta=request_meta,
+    )
+
+    if is_create:
+        # Gate 1: CAN_CREATE flag
+        if not model.get_rest_meta_prop("CAN_CREATE", True):
+            return {"error": f"Creation is not allowed on {model_label}"}
+
+        # Gate 2: full create permission chain
+        if not model.rest_check_permission(request, ["CREATE_PERMS", "SAVE_PERMS", "VIEW_PERMS"]):
+            details = f"Permission denied: save_model_instance create on {model_label} by user {user.id}"
+            logger.warning(details)
+            _report_security_event(
+                "assistant_permission_denied", 6, details, user,
+                model_name=model_label, request=request,
+            )
+            return {"error": f"Permission denied to create {model_label}"}
+
+        instance = model()
+    else:
+        instance = model.objects.filter(pk=pk).first()
+        if instance is None:
+            return {"error": f"{model_label} with pk={pk} not found"}
+
+        # Gate: update permission chain
+        if not model.rest_check_permission(request, ["SAVE_PERMS", "VIEW_PERMS"], instance):
+            details = (
+                f"Permission denied: save_model_instance update on {model_label} pk={pk} "
+                f"by user {user.id}"
+            )
+            logger.warning(details)
+            _report_security_event(
+                "assistant_permission_denied", 6, details, user,
+                model_name=model_label, request=request,
+            )
+            return {"error": f"Permission denied to update {model_label} pk={pk}"}
+
+    # Compute audit field names *before* the save, in case on_rest_save raises.
+    # The underlying on_rest_save is NOT atomic today (rest.py:save_now calls
+    # transaction.commit() directly, which forbids wrapping in transaction.atomic
+    # here). Partial-failure recovery relies on the same behavior REST sees.
+    fields = _changed_field_names(model, data)
+
+    try:
+        action_resp = instance.on_rest_save(request, data)
+    except Exception as e:
+        logger.exception("save_model_instance error %s pk=%s", model_label, pk)
+        _audit_user_log(
+            user, "assistant:model:save_failed",
+            f"Save failed ({type(e).__name__})",
+            model_label, pk if pk is not None else 0,
+            request=request, conversation=conversation, fields=fields,
+        )
+        return {"error": f"Save failed for {model_label}"}
+
+    saved_pk = instance.pk
+    kind = "assistant:model:created" if is_create else "assistant:model:updated"
+    action = "Created" if is_create else "Updated"
+    _audit_user_log(
+        user, kind, action, model_label, saved_pk,
+        request=request, conversation=conversation, fields=fields,
+    )
+    logger.info(
+        "save_model_instance", model_label, f"pk={saved_pk}",
+        f"created={is_create}", f"user={user.id}",
+    )
+
+    result = {
+        "ok": True,
+        "model": model_label,
+        "pk": saved_pk,
+        "created": is_create,
+    }
+
+    # POST_SAVE_ACTIONS may return a JsonResponse — surface its body inline
+    if action_resp is not None:
+        try:
+            import json
+            body = getattr(action_resp, "content", None)
+            if body is not None:
+                result["action_response"] = json.loads(body)
+            else:
+                result["action_response"] = action_resp
+        except Exception:
+            result["action_response"] = str(action_resp)
+
+    return result
 
 
 # ---------------------------------------------------------------------------
