@@ -1,7 +1,7 @@
 # Bouncer Auth Pages Drop Redirect URL
 
 **Type**: bug
-**Status**: open
+**Status**: resolved
 **Date**: 2026-04-12
 **Severity**: high
 
@@ -50,3 +50,18 @@ This affects any deployment where an external app redirects users to the auth pa
 - `mojo/apps/account/templates/account/bouncer_challenge.html` — challenge redirect URL
 - `mojo/apps/account/templates/account/auth_hero.html` — "Back to website" link
 - `docs/web_developer/account/auth_pages.md` — docs say `?redirect=/path` (relative only)
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-04-19
+
+Verified both root causes are addressed in current code:
+
+1. **Absolute redirect URLs accepted** — `mojo/apps/account/templates/account/auth_base.html:64` reads `paramRedirect` from `redirect`/`next`/`returnTo` query params and uses it directly as `redirectTo`; the old "must start with `/`" filter is gone.
+
+2. **Redirect param forwarded through challenge** — `_serve_challenge()` in `mojo/apps/account/rest/bouncer/views.py:271-285` builds `fwd_params` with `group`, `redirect`, and `back`, urlencodes them, and appends to `login_url`. The user lands on the auth page with the redirect param intact after the challenge.
+
+The `back` param is also forwarded now, addressing the "Back to website" clarification: the static `AUTH_BACK_TO_WEBSITE_URL` setting is still the default but can be overridden per-request via `?back=...`.
+
+No additional code changes needed — closing.
