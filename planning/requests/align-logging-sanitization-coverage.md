@@ -1,7 +1,7 @@
 # Align Logging Sanitization Coverage
 
 **Type**: request
-**Status**: open
+**Status**: planned
 **Date**: 2026-04-14
 **Priority**: medium
 
@@ -106,3 +106,81 @@ Add a `mask_token(token, visible=4)` helper in `mojo/helpers/logit.py` that retu
 - Changing the `SENSITIVE_KEYS` set itself (already comprehensive after v1.1.21)
 - Rewriting `Log.logit()` to use `sanitize_dict` for all dict-valued logs (already handled in v1.1.21 for the `payload` field)
 - Masking other request/response fields outside the sensitive-key set (phone numbers, emails, etc.) — privacy, not credential exposure, and belongs in a separate request
+
+## Plan
+
+**Status**: planned
+**Planned**: 2026-04-19
+
+### Objective
+
+Make `SENSITIVE_KEYS` the single source of truth for all logging sanitization, and mask bearer tokens in incident event metadata so raw replayable credentials never land in the audit log.
+
+### Steps
+
+1. `mojo/helpers/logit.py` — move the `SENSITIVE_KEYS` frozenset (currently lines 115-121) above `mask_sensitive_data` so it's in scope at module-load time. Replace the two hardcoded regex patterns with a single module-level compiled pattern built from `SENSITIVE_KEYS`:
+   ```python
+   _SENSITIVE_KEY_PATTERN = re.compile(
+       r'("?(' + "|".join(re.escape(k) for k in SENSITIVE_KEYS) + r')"?\s*[:=]\s*"?)[^",\s]+',
+       flags=re.IGNORECASE,
+   )
+   ```
+   Rewrite `mask_sensitive_data(text)` to use it: `return _SENSITIVE_KEY_PATTERN.sub(r'\1*****', text)`. Preserves `\1` backreference and `[^",\s]+` value tail — only the key alternation changes.
+
+2. `mojo/helpers/logit.py` — add `mask_token(token, visible=4)`:
+   - Returns input unchanged if falsy (None / "").
+   - Returns `"*****"` if `len(token) <= visible` (no reveal on short tokens).
+   - Otherwise `"****" + token[-visible:]`.
+
+3. `mojo/apps/incident/reporter.py` — import `mask_token`; replace `event_metadata["bearer"] = request.bearer` (line 48) with `event_metadata["bearer"] = mask_token(request.bearer)`.
+
+4. `tests/test_helpers/logit_sanitize.py` — extend:
+   - `test_mask_sensitive_covers_all_sensitive_keys` — loop over every `SENSITIVE_KEYS` entry; assert both `key=value` and `"key": "value"` JSON-like forms get masked through `mask_sensitive_data`.
+   - `test_mask_sensitive_derived_from_frozenset` — assert `_SENSITIVE_KEY_PATTERN.pattern` contains every key (catches drift if anyone re-hardcodes).
+   - `test_mask_sensitive_case_insensitive` — mixed-case inputs all masked.
+   - `test_mask_token_long`, `_short`, `_empty`, `_none`.
+   - `test_create_event_dict_masks_bearer` — build a fake request with `bearer="abc123def456xyz"`; call `_create_event_dict(..., request=req)`; assert `event_metadata["bearer"]` is not the raw token and ends with the last 4 chars.
+
+5. `docs/django_developer/helpers/logit.md` — document `mask_token` signature + behavior; note that `mask_sensitive_data` is derived from `SENSITIVE_KEYS` so adding a key there covers both paths.
+
+6. `docs/django_developer/logging/incidents.md` — short note that `event_metadata["bearer"]` is masked (not raw) for new events; existing rows are forward-only.
+
+7. `CHANGELOG.md` — v1.1.0 Added entry describing the coverage alignment and bearer masking.
+
+### Design Decisions
+
+- **Single source of truth via derivation**: `mask_sensitive_data` rebuilds its alternation from `SENSITIVE_KEYS`. Adding a new key auto-covers both code paths. Zero drift risk.
+- **Compile at import, not per call**: one module-level `_SENSITIVE_KEY_PATTERN`. The current code compiles two patterns inline on every invocation — the new form is strictly faster on the hot `Log.logit()` path.
+- **Preserve value-matching tail `[^",\s]+`**: only the key alternation changes; the greediness behavior (stops at quote, comma, whitespace) stays identical, so no over-masking of structured data.
+- **`re.escape` on keys**: required so any future entry with regex metacharacters doesn't break the pattern.
+- **Forward-only bearer masking**: append-only audit log; existing rows stay as-is per AC.
+- **`mask_token` returns input unchanged on None/empty**: matches how the caller checks `if request.bearer:` before passing — keeps the helper unsurprising for future callers who may not pre-check.
+- **4-char tail default**: enough for support to correlate a token against user reports without being replayable.
+- **`"*****"` for short tokens**: strictly no reveal — protects the pathological "someone sets a 3-char dev token" case from disclosing the whole thing.
+
+### Edge Cases
+
+- **Frozenset iteration order varies across Python runs**: alternation order doesn't affect correctness for `re.sub` — every key is tried. OK.
+- **`authorization: Bearer <token>` string**: the regex stops at the first whitespace after `authorization`, so `Bearer` is masked but the token that follows is not. This is a pre-existing behavior and out of scope per the request — the concrete concern (bearer in incident metadata) is fully handled by step 3.
+- **Empty `request.bearer`**: `mask_token("")` returns `""` — benign; the outer `if request.bearer:` check guards this today anyway.
+- **Tokens with trailing whitespace**: `mask_token` slices from the end — any trailing space becomes part of the visible tail. Tokens don't have trailing whitespace in practice; accept.
+- **Regex compilation failure at import**: only possible if `SENSITIVE_KEYS` grows to contain invalid-regex content, and we `re.escape` every entry. Not a practical risk.
+
+### Testing
+
+All additions in `tests/test_helpers/logit_sanitize.py` using the existing `@th.unit_test(...)` pattern (pure Python, no Django needed).
+
+- `mask_sensitive_covers_all_sensitive_keys` → parametrized over every frozenset entry, `key=value` + JSON forms.
+- `mask_sensitive_derived_from_frozenset` → pattern string contains every key (drift guard).
+- `mask_sensitive_case_insensitive` → `PASSWORD=x` / `Password=x` / `password=x`.
+- `mask_token_long` → 16-char token → `****` + last 4.
+- `mask_token_short` → 3-char token → `*****`, no reveal.
+- `mask_token_empty` → `""` → `""`.
+- `mask_token_none` → `None` → `None`.
+- `create_event_dict_masks_bearer` → synthetic request with `bearer="abc123def456xyz"`, assert `event_metadata["bearer"]` != raw, ends with last 4.
+
+### Docs
+
+- `docs/django_developer/helpers/logit.md` — `mask_token` reference; note on derivation link.
+- `docs/django_developer/logging/incidents.md` — bearer-masking note in the event-metadata section.
+- `CHANGELOG.md` — one entry under `v1.1.0 - (current)` > Added.

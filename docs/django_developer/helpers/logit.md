@@ -43,12 +43,14 @@ logit.info("User action", user, action, extra_data)
 
 ### String-based masking — `mask_sensitive_data(text)`
 
-Regex-based masker for log strings. Keys matching patterns like `password`, `token`, `api_key`, `secret` are automatically masked:
+Regex-based masker for log strings. The pattern is **derived from `SENSITIVE_KEYS` at import time**, so both string logs and dict-based sanitization share a single source of truth — adding a key to `SENSITIVE_KEYS` automatically extends the string masker.
 
 ```python
 logit.info("Auth attempt", {"username": "alice", "password": "secret"})
 # Logs: {"username": "alice", "password": "*****"}
 ```
+
+The compiled pattern lives at `mojo.helpers.logit._SENSITIVE_KEY_PATTERN` (module-level, compiled once). Values are captured by stopping at the first quote, comma, or whitespace, so structured data is not over-masked.
 
 ### Dict-based sanitization — `sanitize_dict(data)`
 
@@ -61,9 +63,25 @@ safe = sanitize_dict({"username": "alice", "password": "secret", "token": "abc12
 # Returns: {"username": "alice", "password": "*****", "token": "*****"}
 ```
 
-Sanitized keys include: `password`, `pwd`, `new_password`, `current_password`, `secret`, `token`, `access_token`, `api_key`, `authorization`, `ssn`, `credit_card`, `card_number`, `pin`, `cvv`. Matching is case-insensitive and the function recurses into nested dicts.
+Sanitized keys (`SENSITIVE_KEYS`): `password`, `pwd`, `new_password`, `current_password`, `secret`, `token`, `access_token`, `refresh_token`, `id_token`, `api_key`, `auth_token`, `bearer_token`, `authorization`, `private_key`, `otp`, `mfa_code`, `ssn`, `credit_card`, `card_number`, `pin`, `cvv`. Matching is case-insensitive and the function recurses into nested dicts.
 
 Both the incident system (`report_event` kwargs) and the `Log` model (`payload` field) automatically apply sanitization — you do not need to call `sanitize_dict` manually when using those APIs.
+
+### Token masking — `mask_token(token, visible=4)`
+
+Produces a log-safe version of a credential token (bearer, API key, etc.) that preserves enough tail for support correlation but is not replayable.
+
+```python
+from mojo.helpers.logit import mask_token
+
+mask_token("abc123def456xyz789")        # "****z789"
+mask_token("abc123def456xyz789", 6)     # "****xyz789"
+mask_token("abc")                        # "*****"  — no reveal on short tokens
+mask_token("")                           # ""       — empty passes through
+mask_token(None)                         # None     — None passes through
+```
+
+Tokens with length `<= visible` are fully masked (`"*****"`) with zero reveal, so a short dev token never leaks its contents. The incident reporter uses this to store masked bearers in `event_metadata["bearer"]`.
 
 ## Named Loggers
 

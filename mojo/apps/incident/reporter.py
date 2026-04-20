@@ -45,7 +45,8 @@ def _create_event_dict(details, title=None, category="api_error", level=1, reque
         if request.user.is_authenticated:
             event_data["uid"] = request.user.id
             if request.bearer:
-                event_metadata["bearer"] = request.bearer
+                from mojo.helpers.logit import mask_token
+                event_metadata["bearer"] = mask_token(request.bearer)
             event_metadata["user_name"] = request.user.display_name
             event_metadata["user_email"] = request.user.email
 

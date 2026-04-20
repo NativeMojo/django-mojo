@@ -101,17 +101,6 @@ def exception(*args):
     _error_logger.exception(*args)
 
 
-# Mask sensitive data in the log
-def mask_sensitive_data(text):
-    sensitive_patterns = [
-        r'("?(password|pwd|secret|token|access_token|api_key|authorization)"?\s*[:=]\s*"?)[^",\s]+',
-        r'("?(ssn|credit_card|card_number|pin|cvv)"?\s*[:=]\s*"?)[^",\s]+',
-    ]
-    for pattern in sensitive_patterns:
-        text = re.sub(pattern, r'\1*****', text, flags=re.IGNORECASE)
-    return text
-
-
 SENSITIVE_KEYS = frozenset({
     "password", "pwd", "new_password", "current_password",
     "secret", "token", "access_token", "refresh_token", "id_token",
@@ -119,6 +108,37 @@ SENSITIVE_KEYS = frozenset({
     "private_key", "otp", "mfa_code",
     "ssn", "credit_card", "card_number", "pin", "cvv",
 })
+
+# Pattern derived from SENSITIVE_KEYS at import time so both the string masker
+# and the dict sanitizer share one source of truth. Adding a key to
+# SENSITIVE_KEYS automatically extends the string masker — no second place
+# to maintain. Compiled once; the pattern runs on every Log.logit() write.
+_SENSITIVE_KEY_PATTERN = re.compile(
+    r'("?(' + "|".join(re.escape(k) for k in sorted(SENSITIVE_KEYS)) + r')"?\s*[:=]\s*"?)[^",\s]+',
+    flags=re.IGNORECASE,
+)
+
+
+def mask_sensitive_data(text):
+    """Mask values for any key in SENSITIVE_KEYS within a string log line."""
+    return _SENSITIVE_KEY_PATTERN.sub(r'\1*****', text)
+
+
+def mask_token(token, visible=4):
+    """Return a log-safe version of a credential token.
+
+    Reveals only the last ``visible`` characters when the token is longer
+    than ``visible``; otherwise returns ``"*****"`` with no reveal. Returns
+    the input unchanged when falsy (None / empty).
+    """
+    if not token:
+        return token
+    if not isinstance(token, str):
+        token = str(token)
+    if len(token) <= visible:
+        return "*****"
+    return "****" + token[-visible:]
+
 
 def sanitize_dict(data):
     """Strip sensitive keys from a dict/objict/list, returning a sanitized copy.

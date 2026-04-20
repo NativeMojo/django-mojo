@@ -319,7 +319,10 @@ When a `request` is passed, metadata is also automatically enriched with:
 request_ip, http_path, http_protocol, http_method,
 http_query_string, http_user_agent, http_host,
 user_name, user_email (if authenticated)
+bearer (if authenticated, masked via mask_token)
 ```
+
+**Bearer masking**: when the request is authenticated and carries a bearer token, `event_metadata["bearer"]` stores only a masked tail — typically `"****<last4>"` — via `mojo.helpers.logit.mask_token`. This is enough for support to correlate a token to a user-reported incident without leaving a replayable credential in the audit log. Tokens of length ≤ 4 are fully masked (`"*****"`) with no reveal. Masking is forward-only: pre-existing event rows keep whatever was stored at the time.
 
 ---
 

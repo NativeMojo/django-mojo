@@ -139,3 +139,147 @@ def test_incident_reporter_sanitizes(opts):
         f"username should be preserved in incident metadata, got {req_data.get('username')}"
     assert req_data.get("action") == "login", \
         f"non-sensitive fields should be preserved, got {req_data.get('action')}"
+
+
+# ---------------------------------------------------------------------------
+# mask_sensitive_data — derived from SENSITIVE_KEYS
+# ---------------------------------------------------------------------------
+
+@th.unit_test("mask_sensitive_data covers every SENSITIVE_KEYS entry (key=value)")
+def test_mask_sensitive_covers_all_keys_keyvalue(opts):
+    from mojo.helpers.logit import mask_sensitive_data, SENSITIVE_KEYS
+    for key in SENSITIVE_KEYS:
+        line = f"prefix {key}=supersecret99 suffix"
+        result = mask_sensitive_data(line)
+        assert "supersecret99" not in result, (
+            f"Value for key '{key}' should be masked in '{line}', got: {result}"
+        )
+        assert "*****" in result, (
+            f"Mask placeholder missing for key '{key}', got: {result}"
+        )
+
+
+@th.unit_test("mask_sensitive_data covers every SENSITIVE_KEYS entry (JSON form)")
+def test_mask_sensitive_covers_all_keys_json(opts):
+    from mojo.helpers.logit import mask_sensitive_data, SENSITIVE_KEYS
+    for key in SENSITIVE_KEYS:
+        line = f'{{"{key}": "jsonsecret42", "other": "keep"}}'
+        result = mask_sensitive_data(line)
+        assert "jsonsecret42" not in result, (
+            f"JSON value for key '{key}' should be masked in '{line}', got: {result}"
+        )
+        assert "keep" in result, (
+            f"Non-sensitive JSON field should be preserved, got: {result}"
+        )
+
+
+@th.unit_test("mask_sensitive_data regex is derived from SENSITIVE_KEYS (drift guard)")
+def test_mask_sensitive_derived_from_frozenset(opts):
+    """If someone hardcodes a parallel key list this test catches it."""
+    from mojo.helpers.logit import _SENSITIVE_KEY_PATTERN, SENSITIVE_KEYS
+    pattern = _SENSITIVE_KEY_PATTERN.pattern
+    for key in SENSITIVE_KEYS:
+        assert key in pattern, (
+            f"Key '{key}' missing from compiled pattern — drift detected. "
+            f"Pattern: {pattern}"
+        )
+
+
+@th.unit_test("mask_sensitive_data is case-insensitive across cases")
+def test_mask_sensitive_case_insensitive(opts):
+    from mojo.helpers.logit import mask_sensitive_data
+    cases = [
+        "PASSWORD=topsecret1",
+        "Password=topsecret2",
+        "password=topsecret3",
+        "PasSwOrD=topsecret4",
+    ]
+    for line in cases:
+        result = mask_sensitive_data(line)
+        assert "topsecret" not in result, (
+            f"Case variant should be masked: input={line}, got={result}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# mask_token
+# ---------------------------------------------------------------------------
+
+@th.unit_test("mask_token reveals only last 4 for long tokens")
+def test_mask_token_long(opts):
+    from mojo.helpers.logit import mask_token
+    result = mask_token("abcdef1234567890")
+    assert result == "****7890", f"Expected '****7890', got {result!r}"
+    assert "abcdef" not in result, f"Leading chars must not leak: {result!r}"
+
+
+@th.unit_test("mask_token fully masks short tokens (no reveal)")
+def test_mask_token_short(opts):
+    from mojo.helpers.logit import mask_token
+    # 3 chars, default visible=4 — token is <= visible, must reveal nothing
+    result = mask_token("abc")
+    assert result == "*****", f"Short token should be fully masked, got {result!r}"
+    # Exactly equal to visible length still reveals nothing
+    result2 = mask_token("abcd")
+    assert result2 == "*****", (
+        f"Token of length == visible should be fully masked, got {result2!r}"
+    )
+
+
+@th.unit_test("mask_token respects custom visible length")
+def test_mask_token_custom_visible(opts):
+    from mojo.helpers.logit import mask_token
+    result = mask_token("abcdef1234567890", visible=6)
+    assert result == "****567890", f"Expected '****567890', got {result!r}"
+
+
+@th.unit_test("mask_token returns empty/None unchanged")
+def test_mask_token_empty_and_none(opts):
+    from mojo.helpers.logit import mask_token
+    assert mask_token("") == "", f"Empty string should pass through, got {mask_token('')!r}"
+    assert mask_token(None) is None, f"None should pass through, got {mask_token(None)!r}"
+
+
+# ---------------------------------------------------------------------------
+# incident reporter — bearer masking
+# ---------------------------------------------------------------------------
+
+@th.unit_test("_create_event_dict masks request.bearer in metadata")
+def test_create_event_dict_masks_bearer(opts):
+    import objict
+    from mojo.apps.incident.reporter import _create_event_dict
+
+    raw_token = "abc123def456xyz789"
+    # Synthetic request just detailed enough to exercise the auth branch.
+    req = objict.objict()
+    req.ip = "10.0.0.1"
+    req.path = "/api/test"
+    req.method = "POST"
+    req.META = {}
+    req.bearer = raw_token
+    req.user = objict.objict()
+    req.user.is_authenticated = True
+    req.user.id = 42
+    req.user.display_name = "Test User"
+    req.user.email = "test@example.com"
+
+    event = _create_event_dict(
+        "test event",
+        title="test",
+        category="test_cat",
+        level=3,
+        request=req,
+        scope="global",
+    )
+
+    bearer_val = event["metadata"].get("bearer")
+    assert bearer_val is not None, "bearer should be recorded in metadata"
+    assert bearer_val != raw_token, (
+        f"Raw bearer must not be stored in metadata, got {bearer_val!r}"
+    )
+    assert bearer_val.endswith(raw_token[-4:]), (
+        f"Masked bearer should end with last 4 chars, got {bearer_val!r}"
+    )
+    assert raw_token[:8] not in bearer_val, (
+        f"Leading chars of raw token must not appear, got {bearer_val!r}"
+    )
