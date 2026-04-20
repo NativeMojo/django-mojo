@@ -154,3 +154,17 @@ GRAPHS = {
 The client selects a graph via `?graph=detail`. Default is `"default"`.
 
 For list endpoints, the framework uses `"list"` graph if it exists, otherwise `"default"`.
+
+## FK Assignment During Save
+
+When a save payload assigns a ForeignKey field by primary key — e.g. `data={"group": 5}` — the framework looks up the target via `field.related_model.objects.get(pk=value)` and then runs `field.related_model.rest_check_permission(request, "VIEW_PERMS", related_instance)` before assigning. On denial the assignment is silently skipped (the parent save proceeds with the field unchanged) and an incident event is recorded by `rest_check_permission`.
+
+This prevents cross-model privilege escalation: a user with SAVE_PERMS on model A but no view access to model B cannot attach B records to A. The same gate has always applied when the value is a dict (which triggers a cascading save and additionally requires SAVE_PERMS on the target).
+
+Cases that do **not** require VIEW_PERMS on the target:
+
+| Case | Reason |
+|---|---|
+| Self-reference (`a.parent = a.pk`) | Caller already authorized for self |
+| Clear (`group=0` / `None` / `""`) | No target to view |
+| Related model is non-MojoModel (no `rest_check_permission`) | Framework only gates models that opt in |
