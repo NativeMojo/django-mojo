@@ -261,3 +261,77 @@ def test_shortlink_click_update_is_blocked(opts):
     assert ShortLinkClick.get_rest_meta_prop("CAN_UPDATE", None) is False, (
         "ShortLinkClick must declare CAN_UPDATE=False"
     )
+
+
+# ---------------------------------------------------------------------------
+# Assistant save_model_instance — must enforce the same CAN_UPDATE gate
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test()
+def test_assistant_save_respects_can_update_false(opts):
+    """Assistant `save_model_instance` update path must honor CAN_UPDATE=False.
+
+    Regression guard for the bypass caught in security review of 709e08f:
+    the assistant tool calls `instance.on_rest_save` directly, bypassing
+    `on_rest_handle_save`. The gate must be re-enforced at the tool layer.
+    """
+    from mojo.apps.assistant.services.tools.models import _tool_save_model_instance
+    from mojo.apps.incident.models import RuleSet
+    _clear_flags(RuleSet)
+    setattr(RuleSet.RestMeta, "CAN_UPDATE", False)
+    try:
+        result = _tool_save_model_instance({
+            "app_name": "incident", "model_name": "RuleSet",
+            "pk": opts.ruleset.pk,
+            "data": {"description": "assistant should not update this"},
+        }, opts.admin)
+        assert "error" in result, (
+            f"Assistant update must be blocked when CAN_UPDATE=False, got: {result}"
+        )
+        assert "not allowed" in result["error"].lower(), (
+            f"Error must cite the gate, not a perm failure: {result['error']}"
+        )
+    finally:
+        _clear_flags(RuleSet)
+
+
+@th.django_unit_test()
+def test_assistant_save_respects_can_save_alias_false(opts):
+    """Assistant update path honors the deprecated CAN_SAVE=False alias too."""
+    from mojo.apps.assistant.services.tools.models import _tool_save_model_instance
+    from mojo.apps.incident.models import RuleSet
+    _clear_flags(RuleSet)
+    setattr(RuleSet.RestMeta, "CAN_SAVE", False)
+    try:
+        result = _tool_save_model_instance({
+            "app_name": "incident", "model_name": "RuleSet",
+            "pk": opts.ruleset.pk,
+            "data": {"description": "alias should still block"},
+        }, opts.admin)
+        assert "error" in result, (
+            f"Assistant update must be blocked when CAN_SAVE=False (alias), got: {result}"
+        )
+    finally:
+        _clear_flags(RuleSet)
+
+
+@th.django_unit_test()
+def test_assistant_save_create_unaffected_by_can_update(opts):
+    """CAN_UPDATE=False must not block the create path in the assistant tool."""
+    from mojo.apps.assistant.services.tools.models import _tool_save_model_instance
+    from mojo.apps.incident.models import RuleSet
+    _clear_flags(RuleSet)
+    setattr(RuleSet.RestMeta, "CAN_UPDATE", False)
+    # Make sure no leftover row with this name exists
+    RuleSet.objects.filter(name="canupdate_assistant_create").delete()
+    try:
+        result = _tool_save_model_instance({
+            "app_name": "incident", "model_name": "RuleSet",
+            "data": {"name": "canupdate_assistant_create", "category": "canupdate_cat"},
+        }, opts.admin)
+        assert result.get("ok") is True, (
+            f"Create must not be blocked by CAN_UPDATE=False, got: {result}"
+        )
+        RuleSet.objects.filter(name="canupdate_assistant_create").delete()
+    finally:
+        _clear_flags(RuleSet)

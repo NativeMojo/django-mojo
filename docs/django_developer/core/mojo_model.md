@@ -56,6 +56,7 @@ class Book(models.Model, MojoModel):
 | `CREATE_PERMS` | list | `[]` | Permissions required to create (falls back to SAVE_PERMS) |
 | `CAN_DELETE` | bool | `False` | Must be `True` to allow DELETE requests |
 | `CAN_CREATE` | bool | `True` | Set `False` to block POST creation |
+| `CAN_UPDATE` | bool | `True` | Set `False` to block PUT/POST against an existing instance (deprecated alias: `CAN_SAVE`) |
 | `CAN_BATCH` | bool | `False` | Allow batch create/update via `batched` param |
 | `SEARCH_FIELDS` | list | all CharField/TextField | Fields searched by `?search=` param |
 | `GRAPHS` | dict | `{}` | Serialization shapes (see [Graphs](graphs.md)) |

@@ -787,7 +787,17 @@ def _tool_save_model_instance(params, user, *, request_meta=None, conversation=N
         if instance is None:
             return {"error": f"{model_label} with pk={pk} not found"}
 
-        # Gate: update permission chain
+        # Gate 1: CAN_UPDATE flag (default True). Mirrors the REST-layer gate
+        # in on_rest_handle_save; the assistant reaches on_rest_save directly,
+        # so we re-enforce the same flag here. CAN_SAVE is honored as a
+        # deprecated alias for one release to match REST semantics.
+        can_update = model.get_rest_meta_prop("CAN_UPDATE", None)
+        if can_update is None:
+            can_update = model.get_rest_meta_prop("CAN_SAVE", True)
+        if not can_update:
+            return {"error": f"Update is not allowed on {model_label}"}
+
+        # Gate 2: update permission chain
         if not model.rest_check_permission(request, ["SAVE_PERMS", "VIEW_PERMS"], instance):
             details = (
                 f"Permission denied: save_model_instance update on {model_label} pk={pk} "

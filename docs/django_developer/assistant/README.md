@@ -302,7 +302,7 @@ The AI gate runs **before** the REST permission check, so denied requests return
 | `pk` | integer | — | Primary key of an existing instance to update. Omit to create. |
 | `data` | object | required | Dict of field names to values. FK fields accept the related instance's pk. |
 
-The tool delegates to `instance.on_rest_save(request, data)` so all model-level save hooks, validators, and `POST_SAVE_ACTIONS` fire exactly as they would through the REST API. The `action_response` from `POST_SAVE_ACTIONS` is included in the return dict when present. Setting `CAN_CREATE = False` in `RestMeta` blocks creates; there is no separate flag to block updates (use `SAVE_PERMS` for that).
+The tool delegates to `instance.on_rest_save(request, data)` so all model-level save hooks, validators, and `POST_SAVE_ACTIONS` fire exactly as they would through the REST API. The `action_response` from `POST_SAVE_ACTIONS` is included in the return dict when present. Setting `CAN_CREATE = False` in `RestMeta` blocks creates; setting `CAN_UPDATE = False` blocks updates to existing instances.
 
 All five tools enforce the same permission and owner/group scoping as the REST layer via `rest_check_permission` and `_apply_owner_group_filter`. Attempts to filter or aggregate on sensitive fields are blocked and reported as security events.
 
