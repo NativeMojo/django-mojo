@@ -117,5 +117,5 @@ class RestMeta:
 - Always pass `kind` — it's the primary way to filter logs
 - Use `self.log()` on models; use `logit.info()` for service/helper layer messages
 - `LOG_CHANGES = True` provides automatic audit trails with no extra code
-- Sensitive fields (`password`, `key`, `secret`, `token`) are automatically masked in change diffs
-- The `payload` field is automatically sanitized before storage — sensitive keys (e.g. `password`, `token`, `api_key`) are replaced with `*****` so plaintext credentials are never written to the Log table
+- Sensitive fields are automatically masked in change diffs — the full key list is `SENSITIVE_KEYS` in `mojo/helpers/logit.py` (single source of truth, see `docs/django_developer/helpers/logit.md`)
+- The `payload` field is automatically sanitized before storage via `sanitize_dict()`, which shares the same `SENSITIVE_KEYS` list — plaintext credentials are never written to the Log table
