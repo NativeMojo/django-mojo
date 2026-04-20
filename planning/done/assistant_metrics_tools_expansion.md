@@ -1,7 +1,7 @@
 # Assistant metrics tools — full discovery, gauges, and per-account enforcement
 
 **Type**: request
-**Status**: planned
+**Status**: resolved
 **Date**: 2026-04-19
 **Priority**: high
 
@@ -431,3 +431,59 @@ Setup helpers in the test file:
 - **Rewriting `get_system_health` / `get_incident_trends`** to use the metrics app instead of direct ORM queries. They're convenience aggregates; keeping them unchanged is a deliberate simplification.
 - **Per-slug retention/expiry inspection**: no tool to read TTL or `GRANULARITY_EXPIRES_DAYS` per slug. Defer until a user asks for it.
 - **Alerting / thresholds**: no "alert if this metric exceeds X" — belongs in a dedicated alerts domain.
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-04-19
+**Commits**: 6ef57c4 (main implementation) + 747a7d6 (security hardening)
+
+### What Was Built
+
+13-tool metrics domain for the assistant — full read surface plus one write tool for operational gauges. Every read enforces per-account permissions via the same helpers the REST layer uses. Closed the prior loophole where tool-level `view_admin` let admins read any account's metrics.
+
+**Read tools (10)**: `list_metric_accounts`, `list_metric_categories`, `list_metric_slugs`, `list_metric_gauges`, `describe_metric_slug`, `resolve_group_account`, `fetch_metrics`, `fetch_metric_values`, `fetch_metrics_by_category`, `get_metric_gauge`.
+
+**Write tools (1)**: `set_metric_gauge` — `mutates=True`, `write_metrics` gate, `check_write_permissions` per call, `logit.Log` audit (slug + account, never the value).
+
+**Retained unchanged**: `get_system_health` (`view_admin`), `get_incident_trends` (`view_security`).
+
+### Files Changed
+
+- `mojo/apps/assistant/services/tools/metrics.py` — full rewrite (1,199 line diff).
+- `mojo/apps/assistant/services/tools/discovery.py` — removed duplicate `list_metric_categories` / `list_metric_slugs` registrations (re-homed in metrics.py with proper gating).
+- `mojo/apps/assistant/__init__.py` — updated `DOMAIN_DESCRIPTIONS["metrics"]`.
+- `mojo/apps/metrics/redis_metrics.py` — added `list_accounts_with_data` (scans `mets:*:slugs`) and `list_gauge_slugs` (scans `{mets:<acct>}:mets:<acct>:val:*`).
+- `mojo/apps/metrics/__init__.py` — re-exported `get_account_slugs`, `list_accounts_with_data`, `list_gauge_slugs`, `delete_metrics_slug`.
+- `tests/test_assistant/28_test_metrics_tools.py` — new, 53 tests.
+- `docs/django_developer/assistant/metrics_tools.md` — new reference.
+- `docs/django_developer/assistant/README.md` — Metrics Domain + Discovery Domain tables updated.
+- `docs/web_developer/assistant/README.md` — Permission Mapping table updated.
+- `CHANGELOG.md` — entry.
+
+### Tests
+
+- `tests/test_assistant/28_test_metrics_tools.py` — 53 scenarios covering registration, discovery, fetch, gauges, per-account permission enforcement across all five account forms (public/global/group-/user-/custom), slug explanation, group resolution with ambiguity, truncation, retention notes, and audit logging.
+- Run: `bin/run_tests -t test_assistant.28_test_metrics_tools`
+
+Full suite run post-commit: **1654 passed, 0 failed, 56 skipped (expected opt-in)**.
+
+### Docs Updated
+
+- `docs/django_developer/assistant/metrics_tools.md` — new per-tool reference with discovery flow diagram.
+- `docs/django_developer/assistant/README.md` — Metrics Domain table expanded to 13 entries; Discovery Domain cross-reference corrected (moved tools now show `view_metrics`).
+- `docs/web_developer/assistant/README.md` — Permission Mapping table updated: removed stale `view_admin` claims, added `view_metrics` and `write_metrics` rows.
+- `CHANGELOG.md` — entry describing the expansion and permission tightening.
+
+### Security Review
+
+One WARNING and one INFO finding. No critical or high-severity concerns.
+
+- **WARNING (fixed in 747a7d6)** — `describe_metric_slug` could surface adjacent secrets in its 200-char line snippets if a developer wrote a `metrics.record()` call next to an inline credential in `settings.BASE_DIR`. Mitigated: filename denylist (`secret`, `credential`, `password`, `private_key`, `.env`, `local_settings`, case-insensitive) added alongside the existing `__pycache__`/`.venv`/`node_modules` skip list.
+- **INFO (acceptable)** — `resolve_group_account` returns different error strings for "no such pk" vs "no access to pk". This is a minor existence oracle, but any `view_metrics` holder already sees `group-<id>` strings in `list_metric_accounts`, so no additional data leaks.
+
+All other focus areas passed: permission gating on every read and write path, account format validation (no ReDoS, no Redis key injection), Redis scan pattern safety, audit-log value exclusion, and account enumeration in `_resolve_user_accessible_accounts`.
+
+### Follow-up
+
+- **Counter correction tools** — deferred to a separate request. The use case is "fix bad metrics" via ORM reconciliation; distinct from the operational toggles that `set_metric_gauge` handles. See the "Follow-up Request (Tracked Separately)" section above.
