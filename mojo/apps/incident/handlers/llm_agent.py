@@ -677,38 +677,36 @@ def _normalize_field_name(field_name):
 
 
 def _rule_signature(category, handler, rules_list):
-    """Canonical signature for dedup: category|handler|sorted child rule tuples.
+    """Canonical signature for dedup.
 
+    Uses JSON canonical form so LLM-supplied `value` strings containing
+    separator characters cannot collide with unrelated rule combinations.
     rules_list is the incoming tool-call payload (dicts with field/comparator/value/value_type).
     """
     tuples = []
     for r in (rules_list or []):
-        tuples.append((
+        tuples.append([
             _normalize_field_name(r.get("field", "")),
             r.get("comparator", "==") or "==",
             str(r.get("value", "")),
             r.get("value_type", "str") or "str",
-        ))
+        ])
     tuples.sort()
-    parts = [category or "", handler or ""]
-    parts.extend(f"{t[0]}|{t[1]}|{t[2]}|{t[3]}" for t in tuples)
-    return "||".join(parts)
+    return ujson.dumps([category or "", handler or "", tuples])
 
 
 def _rule_signature_from_ruleset(ruleset):
     """Same signature computed from a persisted RuleSet + its child Rules."""
     tuples = []
     for r in ruleset.rules.all():
-        tuples.append((
+        tuples.append([
             _normalize_field_name(r.field_name or ""),
             r.comparator or "==",
             str(r.value or ""),
             r.value_type or "str",
-        ))
+        ])
     tuples.sort()
-    parts = [ruleset.category or "", ruleset.handler or ""]
-    parts.extend(f"{t[0]}|{t[1]}|{t[2]}|{t[3]}" for t in tuples)
-    return "||".join(parts)
+    return ujson.dumps([ruleset.category or "", ruleset.handler or "", tuples])
 
 
 def _find_matching_proposed_ruleset(category, signature):
