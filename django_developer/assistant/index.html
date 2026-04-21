@@ -6165,6 +6165,21 @@
 <td>5</td>
 <td>LLM API rate limit hit</td>
 </tr>
+<tr>
+<td><code>assistant:error:serialize</code></td>
+<td>7</td>
+<td>Tool result could not be serialized to JSON (datetime/Decimal/UUID/Model fallback failed)</td>
+</tr>
+<tr>
+<td><code>assistant:error:parallel</code></td>
+<td>6</td>
+<td>A parallel tool call or plan step raised an exception</td>
+</tr>
+<tr>
+<td><code>assistant:error:unhandled</code></td>
+<td>8</td>
+<td>Catch-all agent-loop exception not covered by a more specific category</td>
+</tr>
 </tbody>
 </table>
 <h3 id="design">Design<a class="headerlink" href="#design" title="Permanent link">&para;</a></h3>
