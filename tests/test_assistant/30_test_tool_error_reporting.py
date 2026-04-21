@@ -229,8 +229,16 @@ def test_execute_tool_result_with_model_instance_soft_coerces(opts):
     )
     parsed = json.loads(result["content"])
     assert_true("user" in parsed, "model field must serialize, not crash")
-    # MojoModel provides to_dict() -> dict, so we expect a dict here.
+    # MojoModel.to_dict() is used — the RestMeta graph governs which fields
+    # are exposed, so sensitive fields (password hashes, tokens) are already
+    # filtered out by the model's default graph.
     assert_true(
-        isinstance(parsed["user"], (dict, str, int)),
-        "model instance must coerce to a JSON-native value (via to_dict/pk/repr)",
+        isinstance(parsed["user"], (dict, int)),
+        "model instance must coerce to a JSON-native value",
+    )
+    # The User's default graph must not include the password hash.
+    raw = result["content"]
+    assert_true(
+        "password" not in raw,
+        "User default RestMeta graph must not expose password field",
     )

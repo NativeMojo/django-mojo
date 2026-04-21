@@ -1,5 +1,13 @@
 ## v1.1.0 - (current)
 
+## v1.1.28 - April 20, 2026
+
+### Fixed
+- **Assistant agent tool-result serialization crash** — `ujson.dumps` was used at the tool-result boundary with no fallback, so any tool returning a `datetime`, `Decimal`, `UUID`, or Django `Model` instance crashed the agent turn silently. Replaced with a stdlib `json` serializer (`_dumps_tool_result`) that handles `datetime`/`date`/`Decimal`/`UUID`/`Model`/`QuerySet`/`bytes`/`set`. On unrecoverable failure, a JSON error payload is returned to the LLM so the turn continues instead of stalling.
+
+### Added
+- **Three new assistant incident categories** — `assistant:error:serialize` (level 7, tool-result serialization failure), `assistant:error:parallel` (level 6, parallel tool or plan-step failure), `assistant:error:unhandled` (level 8, catch-all agent-loop exception). Previously these failure paths only logged to file and were invisible to the incident system.
+
 ## v1.1.27 - April 20, 2026
 
 BUG FIX release for ip post actions

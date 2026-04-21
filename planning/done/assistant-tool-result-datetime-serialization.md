@@ -1,7 +1,7 @@
 # Assistant tool_result serialization fails on datetime values
 
 **Type**: bug
-**Status**: planned
+**Status**: resolved
 **Date**: 2026-04-20
 **Severity**: high
 
@@ -99,3 +99,36 @@ Make the assistant tool-result boundary serialization-safe for datetime/Decimal/
 ### Follow-ups (separate planning items)
 - `planning/requests/framework-wide-error-to-incident-sweep.md` — broader audit that every framework-level exception raises an incident (not just assistant).
 - Possible `planning/issues/optimized-serializer-datetime-leak.md` if step 3 confirms the serializer is the root source.
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-04-20
+
+### What Was Built
+Replaced the three `ujson.dumps(tool_result)` sites in the assistant agent with a new `_dumps_tool_result` helper that uses stdlib `json.dumps` + a `_json_default` fallback for datetime/date/Decimal/UUID/set/bytes. For Django Model instances, `_json_default` uses `MojoModel.to_dict()` — the RestMeta graph system already governs which fields are exposed, so sensitive fields (password hashes, tokens) are filtered by the default graph. Falls back to `{pk, model}` only when `to_dict()` is unavailable or raises. Serialization failures, tool-handler exceptions, parallel-tool / plan-step failures, and unhandled agent-loop exceptions all emit enriched incidents (new categories: `assistant:error:serialize` L7, `assistant:error:parallel` L6, `assistant:error:unhandled` L8). Tool-exception details now include traceback and `tool_input` keys (values excluded). Step 3 investigation: `OptimizedGraphSerializer` already uses `.isoformat()` when `SERIALIZE_DATETIME_TO_ISO` is set, so it was not the leak source — the fault was at the boundary.
+
+### Files Changed
+- `mojo/apps/assistant/services/agent.py` — `_json_default`, `_dumps_tool_result`, three `ujson.dumps` replacements, enriched incident reporting at the five error sites.
+- `tests/test_assistant/30_test_tool_error_reporting.py` — new regression suite.
+- `CHANGELOG.md` — v1.1.28 entry.
+- `docs/django_developer/assistant/README.md` — three new incident categories in the Event Categories table.
+
+### Tests
+- `tests/test_assistant/30_test_tool_error_reporting.py` — 7 tests, all passing. Covers: datetime `_json_default`; Decimal/UUID/set coercion; `_dumps_tool_result` datetime round-trip; fallback + `assistant:error:serialize` incident on unserializable input; `_execute_tool` datetime round-trip; `_execute_tool` exception → incident with traceback + `input_keys`; Model instance soft-coercion without leaking `password`.
+- Run: `bin/run_tests --agent -t test_assistant.30_test_tool_error_reporting`
+- Full suite regression: 1773 tests, 1717 passed, 0 failed, 56 skipped (opt-in slow only).
+
+### Docs Updated
+- `CHANGELOG.md` — v1.1.28 bug fix entry.
+- `docs/django_developer/assistant/README.md` — incident category table extended.
+- No `docs/web_developer/` changes (internal hardening).
+
+### Security Review
+Concerns raised by security-review:
+1. **Model data leakage via `to_dict()`** — reviewed and dismissed. `_json_default` uses `MojoModel.to_dict()` which is gated by the RestMeta graph system; the default graph already excludes sensitive fields (password hashes, tokens). Regression test asserts no `password` field appears when a User is accidentally returned.
+2. **Exception-message leakage** — noted as a framework-wide concern (exception `repr` and traceback still appear in incident details) and carried into `planning/requests/framework-wide-error-to-incident-sweep.md` for the broader sweep.
+3. **Incident flooding** — `_report_event` has no rate limiting. A deterministically failing tool can emit one incident per turn. Deferred to the framework-wide sweep.
+
+### Follow-up
+- `planning/requests/framework-wide-error-to-incident-sweep.md` — broader error-to-incident audit, incident rate limiting, exception-message sanitization convention.

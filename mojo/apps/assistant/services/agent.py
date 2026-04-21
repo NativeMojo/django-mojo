@@ -100,6 +100,11 @@ def _json_default(obj):
             return obj.decode("utf-8")
         except Exception:
             return repr(obj)
+    # Django Model: use MojoModel.to_dict() — the RestMeta graph system
+    # controls exactly which fields are exposed, so sensitive fields
+    # (password hashes, tokens, etc.) are already excluded from the
+    # default graph. Fall back to a minimal {pk, model} reference if
+    # to_dict() is unavailable or raises.
     to_dict = getattr(obj, "to_dict", None)
     if callable(to_dict):
         try:

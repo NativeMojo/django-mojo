@@ -429,6 +429,9 @@ The assistant reports security-relevant actions and errors to the incident syste
 | `assistant:error` | 5 | Max tool turns exhausted |
 | `assistant:error:api` | 7 | LLM API auth failure or model not found |
 | `assistant:error:api` | 5 | LLM API rate limit hit |
+| `assistant:error:serialize` | 7 | Tool result could not be serialized to JSON (datetime/Decimal/UUID/Model fallback failed) |
+| `assistant:error:parallel` | 6 | A parallel tool call or plan step raised an exception |
+| `assistant:error:unhandled` | 8 | Catch-all agent-loop exception not covered by a more specific category |
 
 ### Design
 

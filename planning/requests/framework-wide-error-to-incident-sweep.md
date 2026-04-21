@@ -31,3 +31,7 @@ The assistant datetime-serialization bug ([planning/issues/assistant-tool-result
 
 ## Related
 - [planning/issues/assistant-tool-result-datetime-serialization.md](planning/issues/assistant-tool-result-datetime-serialization.md) — the bug that motivated this sweep.
+
+## Known Open Concerns (carry forward)
+- **Incident flooding**: `_report_event` has no rate limiting. A deterministically failing tool can emit one incident per invocation per turn; an attacker with assistant access could flood the incident table. Add per-user / per-category rate limiting or dedup with a TTL counter as part of this sweep.
+- **Exception-message leakage**: Incident `details` strings include `{exc!r}` and truncated `traceback.format_exc()`. A tool handler that interpolates user input into an exception message (e.g. `raise ValueError(f"Bad query: {user_input}")`) will leak that input into the incident record. Either sanitize incident details to exception type only, or add a code convention enforced by review that tool-handler exceptions must not include raw input. Document in the framework-wide sweep.
