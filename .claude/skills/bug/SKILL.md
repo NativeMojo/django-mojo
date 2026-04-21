@@ -58,7 +58,7 @@ Create `planning/issues/<slug>.md`:
 Print:
 - The issue file path
 - A one-line summary of what you found
-- `To plan the fix, start a new session and run: /bug planning/issues/<slug>.md`
+- `To plan the fix, start a new session and run: /design planning/issues/<slug>.md, or just say continue here to enter 'design' skill and continue.`
 
 ## Rules
 

@@ -93,8 +93,14 @@ class Incident(models.Model, MojoModel):
             group: Group context
             media: Attached file evidence
         """
+        if not self.pk:
+            return
         try:
             from mojo.apps.incident.models import IncidentHistory
+            # Guard against a caller holding a stale Incident whose row
+            # has been deleted — insert would otherwise hit a FK error.
+            if not Incident.objects.filter(pk=self.pk).exists():
+                return
             IncidentHistory.objects.create(
                 parent=self,
                 kind=kind,
@@ -124,6 +130,10 @@ class Incident(models.Model, MojoModel):
         if (self.metadata or {}).get("do_not_delete"):
             return False
         if not self.rule_set_id:
+            return False
+        # Keep any incident that has a ticket — ticket creation implies
+        # the incident is worth preserving as history.
+        if self.tickets.exists():
             return False
         try:
             rule_set = self.rule_set
@@ -240,10 +250,15 @@ class Incident(models.Model, MojoModel):
             event_count = incident.events.count()
             # Move all events from the other incident to this incident
             incident.events.update(incident=self)
+            # Reassign any tickets to the target so deleting the merged
+            # incident does not strand ticket history.
+            ticket_count = incident.tickets.update(incident=self)
 
-            self.add_history("merged",
-                note=f"Merged incident #{incident.id} ({event_count} events)",
-                by=by)
+            note = f"Merged incident #{incident.id} ({event_count} events"
+            if ticket_count:
+                note += f", {ticket_count} tickets"
+            note += ")"
+            self.add_history("merged", note=note, by=by)
 
             # Delete the now-empty incident
             incident.delete()

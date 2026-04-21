@@ -292,6 +292,80 @@ def test_llm_create_rule_with_conditions(opts):
 
 
 @th.django_unit_test()
+def test_ticketed_incident_not_auto_deleted(opts):
+    """check_delete_on_resolution skips incidents referenced by a ticket."""
+    from mojo.apps.incident.models import Incident, Ticket
+
+    incident = _create_incident(opts.ruleset_delete, status="resolved")
+    pk = incident.pk
+    Ticket.objects.filter(incident=incident).delete()
+    ticket = Ticket.objects.create(
+        title="Preserve this incident",
+        incident=incident,
+        metadata={"llm_linked": True},
+    )
+
+    result = incident.check_delete_on_resolution()
+    assert result is False, \
+        "check_delete_on_resolution should return False when a ticket references the incident"
+    assert Incident.objects.filter(pk=pk).exists(), \
+        "Ticketed incident should not be deleted even with delete_on_resolution"
+    ticket.refresh_from_db()
+    assert ticket.incident_id == pk, \
+        "Ticket should still reference the preserved incident"
+
+    ticket.delete()
+    incident.delete()
+
+
+@th.django_unit_test()
+def test_add_history_tolerates_deleted_incident(opts):
+    """add_history returns silently instead of raising FK error on deleted parent."""
+    from mojo.apps.incident.models import Incident, IncidentHistory
+
+    incident = _create_incident(opts.ruleset_keep, status="open")
+    pk = incident.pk
+    Incident.objects.filter(pk=pk).delete()  # kill row behind the in-memory object
+    # No exception should propagate even though pk still set on the instance.
+    incident.add_history("status_changed", note="should be skipped")
+    assert not IncidentHistory.objects.filter(parent_id=pk).exists(), \
+        "No history row should be inserted when parent incident is gone"
+
+
+@th.django_unit_test()
+def test_merge_reassigns_tickets(opts):
+    """on_action_merge repoints tickets from merged incidents to the target."""
+    from mojo.apps.incident.models import Incident, Ticket
+
+    Incident.objects.filter(category__startswith=f"{CATEGORY}_merge").delete()
+    target = Incident.objects.create(
+        category=f"{CATEGORY}_merge", scope="global",
+        title="Merge target", status="new",
+    )
+    source = Incident.objects.create(
+        category=f"{CATEGORY}_merge", scope="global",
+        title="Merge source", status="new",
+    )
+    Ticket.objects.filter(incident=source).delete()
+    ticket = Ticket.objects.create(
+        title="Ticket on source",
+        incident=source,
+        metadata={"llm_linked": True},
+    )
+
+    target.on_action_merge([source.pk])
+
+    assert not Incident.objects.filter(pk=source.pk).exists(), \
+        "Source incident should be deleted after merge"
+    ticket.refresh_from_db()
+    assert ticket.incident_id == target.pk, \
+        f"Ticket should now reference the merge target, got incident_id={ticket.incident_id}"
+
+    ticket.delete()
+    target.delete()
+
+
+@th.django_unit_test()
 def test_cascade_deletes_events_and_history(opts):
     """When incident is deleted, its events and history are cascade-deleted."""
     from mojo.apps.incident.models import Incident, Event, IncidentHistory

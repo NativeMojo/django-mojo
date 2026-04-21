@@ -29,6 +29,7 @@ Produce a concrete, file-level implementation plan:
 - **Objective** — one sentence
 - **Steps** — ordered, file-level breakdown of what changes
 - **Design decisions** — key choices with brief rationale
+- **User cases** -- think through all the possible use cases
 - **Edge cases** — risks and guards
 - **Testing** — test scenarios mapped to test files
 - **Docs** — which doc tracks need updating

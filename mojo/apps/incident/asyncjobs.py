@@ -21,9 +21,12 @@ def prune_incidents(job):
     from django.db.models import Q
     from mojo.apps.incident.models import Incident
     cutoff = timezone.now() - timedelta(days=INCIDENT_PRUNE_DAYS)
+    # Never prune incidents referenced by a ticket — the ticket is
+    # evidence the incident was serious enough to keep.
     qset = Incident.objects.filter(
         created__lt=cutoff,
         status__in=("resolved", "closed", "ignored"),
+        tickets__isnull=True,
     ).filter(
         Q(metadata__do_not_delete=False)
         | ~Q(metadata__has_key="do_not_delete"),

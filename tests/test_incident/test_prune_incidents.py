@@ -55,6 +55,19 @@ def setup_prune_incidents(opts):
     opts.recent_resolved = Incident.objects.create(
         category=CATEGORY, title="Recent resolved", status="resolved", metadata={})
 
+    # Old resolved incident with a ticket attached — should NOT be pruned.
+    # A ticket implies the incident was serious enough to keep as history.
+    from mojo.apps.incident.models import Ticket
+    opts.old_ticketed = Incident.objects.create(
+        category=CATEGORY, title="Old ticketed", status="resolved", metadata={})
+    Incident.objects.filter(pk=opts.old_ticketed.pk).update(created=old)
+    Ticket.objects.filter(incident=opts.old_ticketed).delete()
+    opts.ticket = Ticket.objects.create(
+        title="Ticket referencing old incident",
+        incident=opts.old_ticketed,
+        metadata={"llm_linked": True},
+    )
+
 
 @th.django_unit_test()
 def test_prune_deletes_old_terminal(opts):
@@ -105,3 +118,16 @@ def test_prune_skips_recent(opts):
 
     assert Incident.objects.filter(pk=opts.recent_resolved.pk).exists(), \
         "Recent resolved incident should survive pruning"
+
+
+@th.django_unit_test()
+def test_prune_skips_ticketed(opts):
+    """prune_incidents never deletes an incident referenced by a ticket."""
+    from mojo.apps.incident.models import Incident, Ticket
+
+    assert Incident.objects.filter(pk=opts.old_ticketed.pk).exists(), \
+        "Old ticketed incident should survive pruning"
+    # Ticket still points to the incident, not NULL.
+    ticket = Ticket.objects.get(pk=opts.ticket.pk)
+    assert ticket.incident_id == opts.old_ticketed.pk, \
+        "Ticket.incident should still reference the preserved incident"
