@@ -492,6 +492,12 @@ The standard triage agent (`execute_llm_handler`) has 12 tools. The analysis age
 
 `query_open_incidents` — Takes optional `category` (string) and `limit` (int, max 100, default 50). Returns incidents in `new`, `open`, or `investigating` status with event counts. Used to identify merge candidates across the incident backlog.
 
+### Tool Deduplication
+
+`create_ticket` — If an open, `llm_linked` ticket already exists on the incident, the tool reuses it (appends a `TicketNote` and an incident history entry) instead of creating a duplicate. The tool response includes `deduplicated: true` in this case.
+
+`create_rule` — Before creating a new `RuleSet`, the tool computes a canonical signature from `category | handler | sorted rule conditions` and scans existing `llm_proposed` RuleSets in the same category. If a pending match is found, its `metadata.occurrence_count` is incremented and a note is appended to the existing approval ticket rather than spawning a second one. If an active (enabled) match is found, the proposal is silently skipped. If the pending rule's approval ticket has been closed, a fresh ticket is opened on the existing RuleSet.
+
 ### Agent Memory
 
 Each RuleSet can have an `agent_memory` field in its metadata. The agent reads this at the start of each invocation and can update it with learnings. This provides continuity across invocations — the agent remembers patterns it has seen before for this rule type.

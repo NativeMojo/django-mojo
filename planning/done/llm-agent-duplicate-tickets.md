@@ -1,7 +1,7 @@
 # LLM agent creates duplicate tickets for the same incident
 
 **Type**: bug
-**Status**: planned
+**Status**: resolved
 **Date**: 2026-04-20
 **Severity**: medium
 
@@ -100,3 +100,44 @@ Add two dedup layers in the LLM agent handler: (A) reuse an existing open, LLM-l
 ### Docs
 - `CHANGELOG.md` — one-line entry under the next release: LLM agent deduplicates incident tickets and rule proposals; re-observations of a pending rule bump `occurrence_count` instead of spawning new tickets.
 - No `docs/django_developer/` or `docs/web_developer/` updates needed (internal handler behavior, no REST/model surface change).
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-04-20
+
+### What Was Built
+Two dedup layers in the LLM security agent:
+- **Incident tickets**: `_tool_create_ticket` looks up the newest open, LLM-linked ticket on the incident; if present, appends a `TicketNote` + an incident history entry and returns `{deduplicated: True}` instead of creating a duplicate.
+- **Rule proposals**: `_tool_create_rule` computes a canonical signature (`[category, handler, sorted rule tuples]` serialized with `ujson`) and scans `llm_proposed` RuleSets in the same category. Pending matches bump `metadata.occurrence_count` and append to the approval ticket. Active matches are skipped silently. If a pending rule's approval ticket was closed, a fresh ticket is opened on the existing RuleSet.
+- `_tool_create_ticket` gained an internal `ruleset_id` param (not in Claude's tool schema) so rule dedup can locate the approval ticket via `Ticket.metadata.ruleset_id`.
+- Security hardening: signature uses `ujson.dumps` canonical form so LLM-supplied `value` strings containing `|` can't collide with unrelated rule combinations.
+
+### Files Changed
+- `mojo/apps/incident/handlers/llm_agent.py` — added `_rule_signature`, `_rule_signature_from_ruleset`, `_find_matching_proposed_ruleset`, `_append_ticket_note`, `_get_llm_system_user` helpers; added dedup branches in `_tool_create_ticket` and `_tool_create_rule`.
+- `tests/test_incident/llm_agent.py` — 3 new tests (ticket dedup, rule dedup pending, rule dedup active).
+- `CHANGELOG.md` — one-line entry under v1.1.0.
+- `docs/django_developer/security/README.md` — added "Tool Deduplication" subsection under the LLM Security Agent section (by docs-updater agent).
+
+### Tests
+- `test_llm_agent_create_ticket_deduplicates` — two `create_ticket` calls → 1 Ticket, 2 TicketNotes.
+- `test_llm_agent_create_rule_deduplicates_pending` — two identical `create_rule` calls → 1 RuleSet with `occurrence_count=2`, 1 approval ticket with 2 notes (initial + "Pattern seen again").
+- `test_llm_agent_create_rule_deduplicates_active` — pre-seeded active rule with matching signature → no new RuleSet, no new ticket.
+- Run: `bin/run_tests --agent -t test_incident.llm_agent` (all 7 pass, including 4 pre-existing).
+
+### Docs Updated
+- `docs/django_developer/security/README.md` — Tool Deduplication subsection under Section 6 (LLM Security Agent).
+
+### Security Review
+- **MEDIUM**: signature-collision via `|` in LLM-supplied rule values → fixed in follow-up commit 7d00cd1 using `ujson.dumps` canonical form.
+- **LOW**: ticket dedup authorization scope correct (lookup scoped to the resolved incident, not LLM-controlled).
+- **LOW**: concurrent `occurrence_count` bump has no DB lock — acknowledged in plan (job engine serializes per-channel; lost counter bump is cosmetic).
+- **INFO**: `params["reasoning"]` appended to ticket notes is LLM-generated text; no secret-bleed surface.
+- **INFO**: fail-open on DB error between dedup lookup and note write — acceptable reliability edge case.
+
+### Commits
+- `e9c3e6f` — primary dedup implementation.
+- `7d00cd1` — signature hardening (ujson canonical form).
+
+### Follow-up
+None. The full-suite test-runner flagged one failure in `test_delete_on_resolution.test_cascade_deletes_events_and_history` — verified unrelated to this change (stale `opts.ruleset_delete` pk referenced after a prior test deletion). That belongs in a separate issue.
