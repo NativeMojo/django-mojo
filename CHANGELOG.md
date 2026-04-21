@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## v1.1.27 - April 20, 2026
+
+BUG FIX release for ip post actions
+
+
 ## v1.1.26 - April 20, 2026
 
 SECURITY PATCH: when assigning users; fix GeoLocatedIP POST_SAVE_ACTIONS
