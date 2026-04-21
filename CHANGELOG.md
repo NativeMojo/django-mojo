@@ -2,8 +2,11 @@
 
 ## v1.1.26 - April 20, 2026
 
-SECURITY PATCH: when assigning users
+SECURITY PATCH: when assigning users; fix GeoLocatedIP POST_SAVE_ACTIONS
 
+
+### Fixed
+- **`GeoLocatedIP` POST_SAVE_ACTIONS broken by trailing comma** — A stray trailing comma in `RestMeta.POST_SAVE_ACTIONS` turned the list into a 1-tuple containing a list. The REST dispatcher checks `action in POST_SAVE_ACTIONS`, which always returned `False` against a tuple, silently dropping all six action handlers (`block`, `unblock`, `whitelist`, `unwhitelist`, `refresh`, `threat_analysis`) on `PUT /api/system/geoip/<pk>`. Fixed by removing the trailing comma; all six actions now route correctly. Regression test added in `tests/test_account/test_geoip_actions.py`.
 
 ### Changed
 - **Create-time owner auto-stamp now respects body-provided values** — `on_rest_save` in `mojo/models/rest.py` previously overwrote `CREATED_BY_OWNER_FIELD` (default `"user"`) with `request.user` unconditionally on every create, discarding any value the body provided. It now mirrors the existing `group` behavior: the framework only auto-stamps when the field is `None` after the body has been applied. Body-provided `user` values win; self-signup (body omits `user`) is unchanged. **Breaking (intended fix)**: any model that implicitly relied on the clobber as create-time authorization (i.e. "users cannot create records owned by someone else") now becomes permissive at the framework level — callers with `SAVE_PERMS` plus `VIEW_PERMS` on `account.User` can designate another user as owner via the body. Migration: if you need strict self-ownership, set `CREATED_BY_OWNER_FIELD = None` on the model's `RestMeta` and re-assert `self.user = self.active_user` in `on_rest_pre_save`. See `docs/django_developer/rest/permissions.md` → "Create-time owner stamping" for policy patterns (strict self-ownership, admin-creates-for-user). Motivated by consumer reports of admin flows (e.g. enrolling another group member as an operator) silently creating rows against the authenticated user and leaking raw Postgres uniqueness errors.
