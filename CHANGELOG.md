@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## v1.1.29 - April 20, 2026
+
+Security AI update
+
+
 ### Fixed
 - **Incident pruning preserves ticketed incidents** — `prune_incidents` and `Incident.check_delete_on_resolution()` now skip any incident referenced by a `Ticket`. If the LLM or an operator created a ticket from an incident, that incident is worth keeping as history. Previously a ticket's `incident` FK (`on_delete=SET_NULL`) would silently go to `NULL` when the incident was pruned or auto-deleted on resolution, stranding the conversation transcript.
 - **`Incident.on_action_merge` reassigns tickets before delete** — merged-in incidents' tickets are now repointed to the target incident instead of losing their linkage.
