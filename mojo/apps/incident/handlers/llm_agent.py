@@ -537,6 +537,29 @@ def _tool_block_ip(params):
     return {"ok": True, "ip": ip, "blocked": True, "ttl": ttl}
 
 
+TICKET_CLOSED_STATUSES = ("closed", "resolved")
+
+
+def _get_llm_system_user():
+    from django.contrib.auth import get_user_model
+    User = get_user_model()
+    return User.objects.filter(is_superuser=True, is_active=True).first()
+
+
+def _append_ticket_note(ticket, note_text, system_user=None):
+    from mojo.apps.incident.models import TicketNote
+    if system_user is None:
+        system_user = _get_llm_system_user()
+    if not system_user:
+        return None
+    return TicketNote.objects.create(
+        parent=ticket,
+        user=system_user,
+        note=f"[LLM Agent] {note_text}",
+        group=ticket.group,
+    )
+
+
 def _tool_create_ticket(params):
     from mojo.apps.incident.models import Ticket
 
@@ -548,28 +571,38 @@ def _tool_create_ticket(params):
         except Exception:
             pass
 
+    # Dedup: if this incident already has an open LLM-linked ticket, append a note
+    # to that ticket instead of spawning a duplicate.
+    if incident is not None:
+        existing = (
+            incident.tickets
+            .filter(metadata__llm_linked=True)
+            .exclude(status__in=TICKET_CLOSED_STATUSES)
+            .order_by("-modified")
+            .first()
+        )
+        if existing is not None:
+            _append_ticket_note(existing, params["note"])
+            incident.add_history(
+                "handler:llm",
+                note=f"[LLM Agent] Appended to existing ticket #{existing.pk}: {params['title']}",
+            )
+            return {"ok": True, "ticket_id": existing.pk, "deduplicated": True}
+
+    metadata = {"llm_linked": True}
+    if params.get("ruleset_id"):
+        metadata["ruleset_id"] = params["ruleset_id"]
+
     ticket = Ticket.objects.create(
         title=params["title"],
         description=params["note"],
         priority=params.get("priority", 5),
         category="llm_review",
         incident=incident,
-        metadata={"llm_linked": True},
+        metadata=metadata,
     )
 
-    # Add the LLM's note
-    from mojo.apps.incident.models import TicketNote
-    from django.contrib.auth import get_user_model
-    User = get_user_model()
-    # Use first superuser as the "system" user for LLM notes
-    system_user = User.objects.filter(is_superuser=True, is_active=True).first()
-    if system_user:
-        TicketNote.objects.create(
-            parent=ticket,
-            user=system_user,
-            note=f"[LLM Agent] {params['note']}",
-            group=ticket.group,
-        )
+    _append_ticket_note(ticket, params["note"])
 
     if incident:
         incident.add_history("handler:llm",
@@ -637,13 +670,135 @@ def _tool_send_alert(params):
     return {"ok": False, "error": f"Unknown channel: {channel}"}
 
 
-def _tool_create_rule(params):
-    from mojo.apps.incident.models import RuleSet, Rule
+def _normalize_field_name(field_name):
+    if field_name and field_name.startswith("metadata."):
+        return field_name[9:]
+    return field_name or ""
 
+
+def _rule_signature(category, handler, rules_list):
+    """Canonical signature for dedup: category|handler|sorted child rule tuples.
+
+    rules_list is the incoming tool-call payload (dicts with field/comparator/value/value_type).
+    """
+    tuples = []
+    for r in (rules_list or []):
+        tuples.append((
+            _normalize_field_name(r.get("field", "")),
+            r.get("comparator", "==") or "==",
+            str(r.get("value", "")),
+            r.get("value_type", "str") or "str",
+        ))
+    tuples.sort()
+    parts = [category or "", handler or ""]
+    parts.extend(f"{t[0]}|{t[1]}|{t[2]}|{t[3]}" for t in tuples)
+    return "||".join(parts)
+
+
+def _rule_signature_from_ruleset(ruleset):
+    """Same signature computed from a persisted RuleSet + its child Rules."""
+    tuples = []
+    for r in ruleset.rules.all():
+        tuples.append((
+            _normalize_field_name(r.field_name or ""),
+            r.comparator or "==",
+            str(r.value or ""),
+            r.value_type or "str",
+        ))
+    tuples.sort()
+    parts = [ruleset.category or "", ruleset.handler or ""]
+    parts.extend(f"{t[0]}|{t[1]}|{t[2]}|{t[3]}" for t in tuples)
+    return "||".join(parts)
+
+
+def _find_matching_proposed_ruleset(category, signature):
+    """Scan llm_proposed RuleSets in this category for a signature match."""
+    from mojo.apps.incident.models import RuleSet
+    candidates = RuleSet.objects.filter(category=category, metadata__llm_proposed=True)
+    for rs in candidates:
+        if _rule_signature_from_ruleset(rs) == signature:
+            return rs
+    return None
+
+
+def _tool_create_rule(params):
+    from mojo.apps.incident.models import RuleSet, Rule, Ticket
+
+    category = params["category"]
+    handler = params["handler"]
+    rules_payload = params.get("rules") or []
+    signature = _rule_signature(category, handler, rules_payload)
+
+    existing = _find_matching_proposed_ruleset(category, signature)
+    if existing is not None:
+        existing_meta = existing.metadata or {}
+
+        # Active match — rule is live, nothing to do.
+        if not existing_meta.get("disabled"):
+            return {
+                "ok": True,
+                "ruleset_id": existing.pk,
+                "deduplicated": True,
+                "already_active": True,
+            }
+
+        # Pending match — bump occurrence counter and append to approval ticket.
+        occurrence_count = int(existing_meta.get("occurrence_count") or 1) + 1
+        existing_meta["occurrence_count"] = occurrence_count
+        existing.metadata = existing_meta
+        existing.save(update_fields=["metadata"])
+
+        open_ticket = (
+            Ticket.objects
+            .filter(metadata__ruleset_id=existing.pk)
+            .exclude(status__in=TICKET_CLOSED_STATUSES)
+            .order_by("-modified")
+            .first()
+        )
+
+        if open_ticket is not None:
+            note_text = (
+                f"Pattern seen again — total observations: {occurrence_count}. "
+                f"Reasoning from latest sighting: {params['reasoning']}"
+            )
+            _append_ticket_note(open_ticket, note_text)
+            return {
+                "ok": True,
+                "ruleset_id": existing.pk,
+                "ticket_id": open_ticket.pk,
+                "deduplicated": True,
+                "occurrence_count": occurrence_count,
+            }
+
+        # Pending rule has no open approval ticket (human closed/rejected without
+        # disabling the LLM flag). Re-propose with a fresh ticket on the existing rule.
+        ticket_result = _tool_create_ticket({
+            "title": f"[Rule Proposal] {existing.name}",
+            "note": (
+                f"Re-proposing a previously seen rule — total observations: {occurrence_count}.\n\n"
+                f"**Name**: {existing.name}\n"
+                f"**Category**: {category}\n"
+                f"**Handler**: {handler}\n"
+                f"**Reasoning**: {params['reasoning']}\n\n"
+                f"The rule is currently disabled. Please review and approve by replying to this ticket."
+            ),
+            "priority": 3,
+            "ruleset_id": existing.pk,
+        })
+        return {
+            "ok": True,
+            "ruleset_id": existing.pk,
+            "ticket_id": ticket_result.get("ticket_id"),
+            "deduplicated": True,
+            "occurrence_count": occurrence_count,
+        }
+
+    # No match — create a new RuleSet and approval ticket.
     metadata = {
         "disabled": True,
         "llm_proposed": True,
         "llm_reasoning": params["reasoning"],
+        "occurrence_count": 1,
     }
     if params.get("min_count"):
         metadata["min_count"] = params["min_count"]
@@ -654,29 +809,25 @@ def _tool_create_rule(params):
 
     ruleset = RuleSet.objects.create(
         name=params["name"],
-        category=params["category"],
-        handler=params["handler"],
+        category=category,
+        handler=handler,
         bundle_by=params.get("bundle_by", 4),
         bundle_minutes=params.get("bundle_minutes", 30),
         priority=params.get("priority", 50),
         metadata=metadata,
     )
 
-    for i, rule_data in enumerate(params.get("rules") or []):
-        field_name = rule_data.get("field", "")
-        if field_name.startswith("metadata."):
-            field_name = field_name[9:]
+    for i, rule_data in enumerate(rules_payload):
         Rule.objects.create(
             parent=ruleset,
             name=rule_data.get("name", ""),
             index=i,
-            field_name=field_name,
+            field_name=_normalize_field_name(rule_data.get("field", "")),
             comparator=rule_data.get("comparator", "=="),
             value=rule_data.get("value", ""),
             value_type=rule_data.get("value_type", "str"),
         )
 
-    # Create a ticket for human approval
     delete_note = ""
     if metadata.get("delete_on_resolution"):
         delete_note = "\n**Delete on Resolution**: Yes (noise pattern — incidents auto-deleted when resolved/closed)\n"
@@ -685,13 +836,14 @@ def _tool_create_rule(params):
         "note": (
             f"I've detected a recurring pattern and propose a new rule:\n\n"
             f"**Name**: {params['name']}\n"
-            f"**Category**: {params['category']}\n"
-            f"**Handler**: {params['handler']}\n"
+            f"**Category**: {category}\n"
+            f"**Handler**: {handler}\n"
             f"{delete_note}"
             f"**Reasoning**: {params['reasoning']}\n\n"
             f"The rule is currently disabled. Please review and approve by replying to this ticket."
         ),
         "priority": 3,
+        "ruleset_id": ruleset.pk,
     })
 
     return {"ok": True, "ruleset_id": ruleset.pk, "ticket_id": ticket_result.get("ticket_id")}

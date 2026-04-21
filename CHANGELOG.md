@@ -1,5 +1,11 @@
 ## v1.1.0 - (current)
 
+### Fixed
+- **Incident pruning preserves ticketed incidents** — `prune_incidents` and `Incident.check_delete_on_resolution()` now skip any incident referenced by a `Ticket`. If the LLM or an operator created a ticket from an incident, that incident is worth keeping as history. Previously a ticket's `incident` FK (`on_delete=SET_NULL`) would silently go to `NULL` when the incident was pruned or auto-deleted on resolution, stranding the conversation transcript.
+- **`Incident.on_action_merge` reassigns tickets before delete** — merged-in incidents' tickets are now repointed to the target incident instead of losing their linkage.
+- **`Incident.add_history` tolerates a deleted parent** — if the in-memory incident's row has been deleted between load and insert, the method returns silently instead of raising a FK violation. Fixes noisy `ForeignKeyViolation` errors from `execute_llm_ticket_reply` when the LLM operated on an incident that had been removed between turns.
+- **LLM agent deduplicates tickets and rule proposals** — `_tool_create_ticket` now reuses an open, LLM-linked ticket on the same incident instead of spawning duplicates, and `_tool_create_rule` now matches proposals by `(category, handler, sorted rule conditions)` against existing `llm_proposed` RuleSets: pending matches bump `metadata.occurrence_count` and append to the approval ticket, active matches are skipped silently. Previously repeated agent invocations could create hundreds of identical approval tickets for the same pattern.
+
 ## v1.1.28 - April 20, 2026
 
 Bugfix in AI Assistant serializer

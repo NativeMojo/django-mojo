@@ -341,3 +341,279 @@ def test_llm_ticket_reply(opts):
     # Assert the new note starts with [LLM Agent]
     latest_note = TicketNote.objects.filter(parent=ticket).order_by("-created").first()
     assert latest_note.note.startswith("[LLM Agent]"), f"LLM note should start with [LLM Agent], got: {latest_note.note[:50]}"
+
+
+@th.django_unit_test("LLM agent: create_ticket deduplicates on the same incident")
+def test_llm_agent_create_ticket_deduplicates(opts):
+    from mojo.apps.incident.models import Event, Incident, Ticket, TicketNote
+    from mojo.apps.jobs.models import Job
+    from mojo.apps import jobs
+    from django.contrib.auth import get_user_model
+    User = get_user_model()
+
+    # Clean up
+    Event.objects.filter(category="llm_dedup_ticket").delete()
+    Incident.objects.filter(category="llm_dedup_ticket").delete()
+    Ticket.objects.filter(category="llm_review").delete()
+    Job.objects.filter(channel="default").delete()
+
+    # Need a system user for LLM notes
+    if not User.objects.filter(is_superuser=True, is_active=True).exists():
+        User.objects.create_user(
+            username="llm_dedup_admin",
+            email="llm_dedup_admin@test.com",
+            password="testpass123",
+            is_superuser=True,
+            is_active=True,
+        )
+
+    event = Event.objects.create(
+        category="llm_dedup_ticket",
+        level=8,
+        title="Dedup ticket test",
+        source_ip="10.77.0.1",
+    )
+    incident = Incident.objects.create(
+        priority=8, state=0, status="new",
+        category="llm_dedup_ticket", scope="global",
+        title="Dedup ticket test",
+        source_ip="10.77.0.1",
+    )
+    event.incident = incident
+    event.save(update_fields=["incident"])
+
+    # Two create_ticket calls in a single agent loop for the same incident.
+    mock_responses = [
+        _claude_response("tool_use", [
+            _tool_use_block("t1", "create_ticket", {
+                "title": "Review 10.77.0.1",
+                "note": "First observation.",
+                "priority": 5,
+                "incident_id": incident.pk,
+            }),
+        ]),
+        _claude_response("tool_use", [
+            _tool_use_block("t2", "create_ticket", {
+                "title": "Review 10.77.0.1 — follow up",
+                "note": "Second observation.",
+                "priority": 5,
+                "incident_id": incident.pk,
+            }),
+        ]),
+        _claude_response("end_turn", [_text_block("Done.")]),
+    ]
+
+    with patch("mojo.apps.incident.handlers.llm_agent._call_claude", side_effect=mock_responses):
+        with patch("mojo.apps.incident.handlers.llm_agent._get_llm_api_key", return_value="test-key"):
+            jobs.publish(
+                "mojo.apps.incident.handlers.llm_agent.execute_llm_handler",
+                {"event_id": event.pk, "incident_id": incident.pk, "ruleset_id": None},
+                channel="default",
+            )
+            executed = th.run_pending_jobs(channel="default")
+
+    assert executed >= 1, f"Expected at least 1 job executed, got {executed}"
+
+    tickets = Ticket.objects.filter(incident=incident, category="llm_review")
+    assert tickets.count() == 1, f"Expected exactly 1 ticket after dedup, got {tickets.count()}"
+
+    ticket = tickets.first()
+    notes = TicketNote.objects.filter(parent=ticket).order_by("created")
+    assert notes.count() == 2, f"Expected 2 ticket notes (one per create_ticket call), got {notes.count()}"
+    assert all(n.note.startswith("[LLM Agent]") for n in notes), \
+        f"All notes should be tagged as LLM Agent, got: {[n.note[:30] for n in notes]}"
+
+
+@th.django_unit_test("LLM agent: create_rule deduplicates against a pending proposal")
+def test_llm_agent_create_rule_deduplicates_pending(opts):
+    from mojo.apps.incident.models import Event, Incident, RuleSet, Rule, Ticket, TicketNote
+    from mojo.apps.jobs.models import Job
+    from mojo.apps import jobs
+    from django.contrib.auth import get_user_model
+    User = get_user_model()
+
+    # Clean up
+    RuleSet.objects.filter(category="llm_dedup_rule").delete()
+    Event.objects.filter(category="llm_dedup_rule").delete()
+    Incident.objects.filter(category="llm_dedup_rule").delete()
+    Ticket.objects.filter(category="llm_review").delete()
+    Job.objects.filter(channel="default").delete()
+
+    if not User.objects.filter(is_superuser=True, is_active=True).exists():
+        User.objects.create_user(
+            username="llm_dedup_rule_admin",
+            email="llm_dedup_rule_admin@test.com",
+            password="testpass123",
+            is_superuser=True,
+            is_active=True,
+        )
+
+    event = Event.objects.create(
+        category="llm_dedup_rule",
+        level=9,
+        title="Rule dedup test",
+        source_ip="10.77.1.1",
+    )
+    incident = Incident.objects.create(
+        priority=9, state=0, status="new",
+        category="llm_dedup_rule", scope="global",
+        title="Rule dedup test",
+        source_ip="10.77.1.1",
+    )
+    event.incident = incident
+    event.save(update_fields=["incident"])
+
+    rule_payload = {
+        "name": "Dedup test rule",
+        "category": "llm_dedup_rule",
+        "handler": "block://?ttl=3600",
+        "rules": [
+            {"name": "Level high", "field": "level", "comparator": ">=", "value": "9", "value_type": "int"},
+        ],
+        "reasoning": "Recurring high-level pattern.",
+        "bundle_by": 4,
+        "bundle_minutes": 30,
+    }
+
+    # Two create_rule calls with identical payloads in a single agent loop.
+    mock_responses = [
+        _claude_response("tool_use", [
+            _tool_use_block("t1", "create_rule", rule_payload),
+        ]),
+        _claude_response("tool_use", [
+            _tool_use_block("t2", "create_rule", rule_payload),
+        ]),
+        _claude_response("end_turn", [_text_block("Done.")]),
+    ]
+
+    with patch("mojo.apps.incident.handlers.llm_agent._call_claude", side_effect=mock_responses):
+        with patch("mojo.apps.incident.handlers.llm_agent._get_llm_api_key", return_value="test-key"):
+            jobs.publish(
+                "mojo.apps.incident.handlers.llm_agent.execute_llm_handler",
+                {"event_id": event.pk, "incident_id": incident.pk, "ruleset_id": None},
+                channel="default",
+            )
+            executed = th.run_pending_jobs(channel="default")
+
+    assert executed >= 1, f"Expected at least 1 job executed, got {executed}"
+
+    rulesets = RuleSet.objects.filter(category="llm_dedup_rule", metadata__llm_proposed=True)
+    assert rulesets.count() == 1, f"Expected exactly 1 llm_proposed RuleSet after dedup, got {rulesets.count()}"
+
+    ruleset = rulesets.first()
+    assert (ruleset.metadata or {}).get("occurrence_count") == 2, \
+        f"Expected occurrence_count=2, got {(ruleset.metadata or {}).get('occurrence_count')}"
+
+    approval_tickets = Ticket.objects.filter(metadata__ruleset_id=ruleset.pk)
+    assert approval_tickets.count() == 1, \
+        f"Expected exactly 1 approval ticket after dedup, got {approval_tickets.count()}"
+
+    ticket = approval_tickets.first()
+    notes = TicketNote.objects.filter(parent=ticket).order_by("created")
+    # One note from the initial create + one "Pattern seen again" note from dedup
+    assert notes.count() == 2, \
+        f"Expected 2 notes on approval ticket (initial + dedup), got {notes.count()}"
+    latest = notes.order_by("-created").first()
+    assert "Pattern seen again" in latest.note, \
+        f"Latest note should reference the dedup bump, got: {latest.note[:80]}"
+
+
+@th.django_unit_test("LLM agent: create_rule skips when an active rule already matches")
+def test_llm_agent_create_rule_deduplicates_active(opts):
+    from mojo.apps.incident.models import Event, Incident, RuleSet, Rule, Ticket
+    from mojo.apps.jobs.models import Job
+    from mojo.apps import jobs
+    from django.contrib.auth import get_user_model
+    User = get_user_model()
+
+    # Clean up
+    RuleSet.objects.filter(category="llm_dedup_active").delete()
+    Event.objects.filter(category="llm_dedup_active").delete()
+    Incident.objects.filter(category="llm_dedup_active").delete()
+    Ticket.objects.filter(category="llm_review").delete()
+    Job.objects.filter(channel="default").delete()
+
+    if not User.objects.filter(is_superuser=True, is_active=True).exists():
+        User.objects.create_user(
+            username="llm_dedup_active_admin",
+            email="llm_dedup_active_admin@test.com",
+            password="testpass123",
+            is_superuser=True,
+            is_active=True,
+        )
+
+    # Pre-seed an ACTIVE (disabled=False) llm_proposed RuleSet with the same signature.
+    existing_ruleset = RuleSet.objects.create(
+        name="Already active rule",
+        category="llm_dedup_active",
+        handler="block://?ttl=3600",
+        bundle_by=4,
+        bundle_minutes=30,
+        metadata={
+            "llm_proposed": True,
+            "disabled": False,
+            "llm_reasoning": "Approved previously",
+        },
+    )
+    Rule.objects.create(
+        parent=existing_ruleset,
+        name="Level high",
+        index=0,
+        field_name="level",
+        comparator=">=",
+        value="9",
+        value_type="int",
+    )
+
+    event = Event.objects.create(
+        category="llm_dedup_active",
+        level=9,
+        title="Active dedup test",
+        source_ip="10.77.2.1",
+    )
+    incident = Incident.objects.create(
+        priority=9, state=0, status="new",
+        category="llm_dedup_active", scope="global",
+        title="Active dedup test",
+        source_ip="10.77.2.1",
+    )
+    event.incident = incident
+    event.save(update_fields=["incident"])
+
+    rule_payload = {
+        "name": "Duplicate proposal",
+        "category": "llm_dedup_active",
+        "handler": "block://?ttl=3600",
+        "rules": [
+            {"name": "Level high", "field": "level", "comparator": ">=", "value": "9", "value_type": "int"},
+        ],
+        "reasoning": "Same signature, different name.",
+        "bundle_by": 4,
+        "bundle_minutes": 30,
+    }
+
+    mock_responses = [
+        _claude_response("tool_use", [
+            _tool_use_block("t1", "create_rule", rule_payload),
+        ]),
+        _claude_response("end_turn", [_text_block("Done.")]),
+    ]
+
+    with patch("mojo.apps.incident.handlers.llm_agent._call_claude", side_effect=mock_responses):
+        with patch("mojo.apps.incident.handlers.llm_agent._get_llm_api_key", return_value="test-key"):
+            jobs.publish(
+                "mojo.apps.incident.handlers.llm_agent.execute_llm_handler",
+                {"event_id": event.pk, "incident_id": incident.pk, "ruleset_id": None},
+                channel="default",
+            )
+            executed = th.run_pending_jobs(channel="default")
+
+    assert executed >= 1, f"Expected at least 1 job executed, got {executed}"
+
+    rulesets = RuleSet.objects.filter(category="llm_dedup_active", metadata__llm_proposed=True)
+    assert rulesets.count() == 1, \
+        f"Expected no new RuleSet (active match), got {rulesets.count()}"
+
+    tickets = Ticket.objects.filter(metadata__ruleset_id=existing_ruleset.pk)
+    assert tickets.count() == 0, \
+        f"Expected no approval ticket (rule already active), got {tickets.count()}"
