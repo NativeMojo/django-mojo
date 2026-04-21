@@ -2,6 +2,11 @@
 
 ## v1.1.28 - April 20, 2026
 
+Bugfix in AI Assistant serializer
+
+
+## v1.1.28 - April 20, 2026
+
 ### Fixed
 - **Assistant agent tool-result serialization crash** — `ujson.dumps` was used at the tool-result boundary with no fallback, so any tool returning a `datetime`, `Decimal`, `UUID`, or Django `Model` instance crashed the agent turn silently. Replaced with a stdlib `json` serializer (`_dumps_tool_result`) that handles `datetime`/`date`/`Decimal`/`UUID`/`Model`/`QuerySet`/`bytes`/`set`. On unrecoverable failure, a JSON error payload is returned to the LLM so the turn continues instead of stalling.
 
