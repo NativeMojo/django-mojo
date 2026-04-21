@@ -11,9 +11,13 @@ Flow:
     5. Store assistant response as Message(s)
     6. Return response dict
 """
+import datetime
+import decimal
 import inspect
+import json
 import re
 import time
+import traceback
 import uuid
 import objict
 import ujson
@@ -74,6 +78,71 @@ def _report_event(category, level, title, details, user=None, **kwargs):
         report_event(details, title=title, category=category, level=level, **extra)
     except Exception:
         logger.exception("Failed to report event: %s / %s", category, title)
+
+
+def _json_default(obj):
+    """JSON fallback encoder for tool results.
+
+    Coerces common non-JSON-native types that tool handlers may return
+    (datetime/date, Decimal, UUID, set, Django Model, QuerySet) into
+    JSON-safe values so the boundary never crashes on them.
+    """
+    if isinstance(obj, (datetime.datetime, datetime.date)):
+        return obj.isoformat()
+    if isinstance(obj, decimal.Decimal):
+        return str(obj)
+    if isinstance(obj, uuid.UUID):
+        return str(obj)
+    if isinstance(obj, (set, frozenset)):
+        return list(obj)
+    if isinstance(obj, bytes):
+        try:
+            return obj.decode("utf-8")
+        except Exception:
+            return repr(obj)
+    to_dict = getattr(obj, "to_dict", None)
+    if callable(to_dict):
+        try:
+            return to_dict()
+        except Exception:
+            pass
+    if hasattr(obj, "pk") and hasattr(obj, "_meta"):
+        return {"pk": obj.pk, "model": obj.__class__.__name__}
+    values = getattr(obj, "values", None)
+    if callable(values) and hasattr(obj, "model"):
+        try:
+            return list(obj.values())
+        except Exception:
+            pass
+    return str(obj)
+
+
+def _dumps_tool_result(obj, user=None, conversation=None, tool_name=None):
+    """Safely serialize a tool result to a JSON string.
+
+    Falls back through ``_json_default`` for non-native types. If serialization
+    still fails, reports an ``assistant:error:serialize`` incident and returns
+    a JSON error payload so the agent turn keeps flowing.
+    """
+    try:
+        return json.dumps(obj, default=_json_default)
+    except Exception as exc:
+        conv_pk = getattr(conversation, "pk", None)
+        user_email = getattr(user, "email", None)
+        _report_event(
+            "assistant:error:serialize", 7,
+            f"Tool result serialization failed: {tool_name or 'unknown'}",
+            (
+                f"Serialization failed for tool '{tool_name}'. "
+                f"user={user_email} conv={conv_pk}. "
+                f"Error: {exc!r}\n{traceback.format_exc()[:2000]}"
+            ),
+            user=user,
+        )
+        logger.exception("Tool result serialization failed for %s", tool_name)
+        return json.dumps({
+            "error": f"Tool result could not be serialized: {exc}",
+        })
 
 
 # Regex to extract ```assistant_block ... ``` fences from LLM output
@@ -654,21 +723,31 @@ def _execute_tool(block, registry, user, conversation, tools, on_event, tool_cal
                     f"'{tool_name}'. conv={conversation.pk}",
                     user=user,
                 )
-        except Exception:
+        except Exception as exc:
             logger.exception("Tool %s failed", tool_name)
             tool_result = {"error": f"Tool '{tool_name}' encountered an internal error."}
+            try:
+                input_keys = list(tool_input.keys()) if isinstance(tool_input, dict) else []
+            except Exception:
+                input_keys = []
             _report_event(
                 "assistant:error", 6,
                 f"Tool exception: {tool_name}",
-                f"Tool '{tool_name}' raised an exception for user {user.email} "
-                f"(id={user.pk}). conv={conversation.pk}",
+                (
+                    f"Tool '{tool_name}' raised an exception for user {user.email} "
+                    f"(id={user.pk}). conv={conversation.pk}. "
+                    f"input_keys={input_keys}. Error: {exc!r}\n"
+                    f"{traceback.format_exc()[:2000]}"
+                ),
                 user=user,
             )
 
     return {
         "type": "tool_result",
         "tool_use_id": tool_id,
-        "content": ujson.dumps(tool_result),
+        "content": _dumps_tool_result(
+            tool_result, user=user, conversation=conversation, tool_name=tool_name,
+        ),
     }
 
 
@@ -715,13 +794,26 @@ def _execute_tools(tool_blocks, registry, user, conversation, tools, on_event, t
                 try:
                     result = future.result(timeout=30)
                     results.append(result)
-                except Exception:
+                except Exception as exc:
                     tool_id = futures[future]
                     logger.exception("Parallel tool execution failed for tool_use_id %s", tool_id)
+                    _report_event(
+                        "assistant:error:parallel", 6,
+                        "Parallel tool execution failed",
+                        (
+                            f"Parallel tool_use_id={tool_id} failed for user "
+                            f"{user.email} (id={user.pk}) conv={conversation.pk}. "
+                            f"Error: {exc!r}\n{traceback.format_exc()[:2000]}"
+                        ),
+                        user=user,
+                    )
                     results.append({
                         "type": "tool_result",
                         "tool_use_id": tool_id,
-                        "content": ujson.dumps({"error": "Tool execution timed out or failed."}),
+                        "content": _dumps_tool_result(
+                            {"error": "Tool execution timed out or failed."},
+                            user=user, conversation=conversation,
+                        ),
                     })
 
     return results
@@ -817,12 +909,25 @@ def _execute_parallel_plan_steps(plan, registry, user, conversation, tools, on_e
                     _handle_plan_tool(conversation, "update_plan", {},
                                       {"step_id": step["id"], "status": "done", "summary": summary, "updated": True},
                                       on_event)
-                except Exception:
+                except Exception as exc:
                     logger.exception("Parallel plan step %d failed", step["id"])
+                    _report_event(
+                        "assistant:error:parallel", 6,
+                        "Parallel plan step failed",
+                        (
+                            f"Plan step {step['id']} ('{step['description']}') failed for user "
+                            f"{user.email} (id={user.pk}) conv={conversation.pk}. "
+                            f"Error: {exc!r}\n{traceback.format_exc()[:2000]}"
+                        ),
+                        user=user,
+                    )
                     results.append({
                         "type": "tool_result",
                         "tool_use_id": block["id"],
-                        "content": ujson.dumps({"error": f"Step '{step['description']}' failed."}),
+                        "content": _dumps_tool_result(
+                            {"error": f"Step '{step['description']}' failed."},
+                            user=user, conversation=conversation,
+                        ),
                     })
                     _handle_plan_tool(conversation, "update_plan", {},
                                       {"step_id": step["id"], "status": "skipped", "summary": "Failed", "updated": True},
@@ -1083,10 +1188,13 @@ def run_assistant(user, message, conversation_id=None, on_event=None, request=No
         else:
             error = f"Assistant error: {err_str[:200]}"
             _report_event(
-                "assistant:error", 7,
-                "Agent loop exception",
-                f"Agent crashed for user {user.email} (id={user.pk}). "
-                f"conv={conversation.pk}. Error: {err_str[:500]}",
+                "assistant:error:unhandled", 8,
+                "Agent loop unhandled exception",
+                (
+                    f"Agent crashed for user {user.email} (id={user.pk}). "
+                    f"conv={conversation.pk}. Error: {err_str[:500]}\n"
+                    f"{traceback.format_exc()[:2000]}"
+                ),
                 user=user,
             )
         return {
@@ -1225,10 +1333,13 @@ def run_assistant_ws(user, message, conversation_id, on_event=None):
             _report_event("assistant:error:api", 5, "LLM API rate limit", err_str[:500], user=user)
             return {"error": "LLM API rate limit reached. Please wait a moment and try again."}
         _report_event(
-            "assistant:error", 7,
-            "WS agent loop exception",
-            f"WS agent crashed for user {user.email} (id={user.pk}). "
-            f"conv={conversation.pk}. Error: {err_str[:500]}",
+            "assistant:error:unhandled", 8,
+            "WS agent loop unhandled exception",
+            (
+                f"WS agent crashed for user {user.email} (id={user.pk}). "
+                f"conv={conversation.pk}. Error: {err_str[:500]}\n"
+                f"{traceback.format_exc()[:2000]}"
+            ),
             user=user,
         )
         return {"error": f"Assistant error: {err_str[:200]}"}
