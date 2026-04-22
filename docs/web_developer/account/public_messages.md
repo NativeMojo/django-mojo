@@ -100,9 +100,33 @@ POST /api/account/bouncer/message
   "category": "bug",
   "severity": "high",
   "message": "I cannot log in since the last deploy.",
-  "bouncer_token": "<bouncer token from assess>"
+  "bouncer_token": "<bouncer token from assess>",
+  "metadata": {
+    "utm_source": "google",
+    "utm_campaign": "spring-2026",
+    "referrer": "https://example.com/blog/post",
+    "landing_page": "/pricing"
+  }
 }
 ```
+
+### Free-form `metadata`
+
+A marketing or landing page can attach arbitrary tracking payload under the
+top-level `metadata` key. Rules:
+
+- Flat object only — primitive values (`string`, `number`, `boolean`, `null`).
+  Arrays and nested objects are silently dropped.
+- Keys must match `[A-Za-z0-9_.-]+` and be ≤ 64 chars. Others are dropped.
+- String values are capped at 500 chars (trimmed silently).
+- Up to 25 keys; extras are ignored.
+- Kind-schema keys (e.g. `category`, `severity`, `company`) **cannot** be
+  spoofed through `metadata` — the kind-provided value always wins.
+- Values are stored verbatim and not run through content moderation, so do
+  not put submitter free-text in here. Use the `message` field for that.
+
+The stored `metadata` column on the row is the merged blob — kind-specific
+fields plus whatever client extras survived the cleanse.
 
 ### Response
 

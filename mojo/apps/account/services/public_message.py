@@ -68,6 +68,15 @@ _COMMON_FIELDS = {'name', 'email', 'subject', 'message'}
 
 _EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 
+# Caps for the free-form client metadata blob — tight enough that a marketing
+# page can attach utm_* / referrer / landing_page tags, loose enough not to
+# become an unbounded storage bucket.
+_EXTRAS_MAX_KEYS = 25
+_EXTRAS_KEY_MAX_LEN = 64
+_EXTRAS_VALUE_MAX_LEN = 500
+_EXTRAS_KEY_RE = re.compile(r'^[A-Za-z0-9_.\-]+$')
+_EXTRAS_PRIMITIVES = (str, int, float, bool, type(None))
+
 
 def get_kind(kind):
     """Return the schema for a kind, or None if unknown."""
@@ -154,7 +163,50 @@ def validate_submission(kind, data):
     # Optional content moderation — fail-open on exceptions.
     _run_content_guard(common)
 
+    # Merge client-supplied metadata last so kind-specific keys always win.
+    extras = _clean_client_metadata(data.get('metadata'), reserved=set(metadata.keys()))
+    if extras:
+        for k, v in extras.items():
+            metadata.setdefault(k, v)
+
     return common, metadata
+
+
+def _clean_client_metadata(raw, reserved=None):
+    """
+    Accept a free-form metadata dict from the client and return a sanitized copy.
+
+    Rules:
+    - Must be a mapping; anything else is dropped silently.
+    - Keys matching [A-Za-z0-9_.-]+ only, ≤ _EXTRAS_KEY_MAX_LEN chars.
+    - Values must be str/int/float/bool/None; strings capped at _EXTRAS_VALUE_MAX_LEN.
+    - Reserved keys (owned by the kind schema) are stripped — kind wins.
+    - Total keys capped at _EXTRAS_MAX_KEYS.
+    """
+    if not raw or not hasattr(raw, 'items'):
+        return {}
+
+    reserved = reserved or set()
+    cleaned = {}
+    for key, value in raw.items():
+        if len(cleaned) >= _EXTRAS_MAX_KEYS:
+            break
+        if not isinstance(key, str):
+            continue
+        if not key or len(key) > _EXTRAS_KEY_MAX_LEN or not _EXTRAS_KEY_RE.match(key):
+            continue
+        if key in reserved:
+            continue
+        if not isinstance(value, _EXTRAS_PRIMITIVES):
+            # Arrays, nested dicts, bytes, etc. all dropped — tracking
+            # payloads should be flat primitives.
+            continue
+        if isinstance(value, str):
+            value = value.strip()
+            if len(value) > _EXTRAS_VALUE_MAX_LEN:
+                value = value[:_EXTRAS_VALUE_MAX_LEN]
+        cleaned[key] = value
+    return cleaned
 
 
 def _run_content_guard(common):

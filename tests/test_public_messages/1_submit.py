@@ -311,6 +311,120 @@ def test_notification_failure_is_caught_per_recipient(opts):
 
 
 @th.django_unit_test()
+def test_client_metadata_passthrough(opts):
+    """Clients can attach free-form tracking metadata alongside the form."""
+    from mojo.apps.account.models import PublicMessage
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip=TEST_IP, key="public_message_submit")
+
+    PublicMessage.objects.filter(email="metadata-extras@example.com").delete()
+
+    token = _mint_token()
+    resp = opts.client.post(SUBMIT_PATH, {
+        "kind": "contact_us",
+        "name": "Jane",
+        "email": "metadata-extras@example.com",
+        "company": "Acme",
+        "message": "Hello from the landing page.",
+        "bouncer_token": token,
+        "metadata": {
+            "utm_source": "google",
+            "utm_campaign": "spring-2026",
+            "referrer": "https://example.com/blog/post",
+            "landing_page": "/pricing",
+        },
+    })
+    assert_eq(resp.status_code, 200, f"expected 200, got {resp.status_code}: {resp.response}")
+
+    msg = PublicMessage.objects.get(pk=resp.response.data.id)
+    assert_eq(msg.metadata.get("company"), "Acme", "kind-schema metadata preserved")
+    assert_eq(msg.metadata.get("utm_source"), "google", "client utm_source stored")
+    assert_eq(msg.metadata.get("utm_campaign"), "spring-2026", "client utm_campaign stored")
+    assert_eq(msg.metadata.get("referrer"), "https://example.com/blog/post", "client referrer stored")
+    assert_eq(msg.metadata.get("landing_page"), "/pricing", "client landing_page stored")
+
+
+@th.django_unit_test()
+def test_client_metadata_hardening(opts):
+    """Service-level: reserved keys can't be spoofed, and shape is enforced."""
+    from mojo.apps.account.services import public_message as svc
+
+    common, metadata = svc.validate_submission("support", {
+        "name": "Jane",
+        "email": "shape@example.com",
+        "category": "bug",
+        "severity": "low",
+        "message": "hello",
+        "metadata": {
+            # Attempt to spoof kind-schema keys — must be ignored.
+            "category": "billing",
+            "severity": "high",
+            # Invalid key characters — must be dropped.
+            "not a key": "x",
+            "weird$key!": "x",
+            # Nested / non-primitive — must be dropped.
+            "nested": {"deep": "value"},
+            "list_val": [1, 2, 3],
+            # Valid primitives — must be kept.
+            "utm_source": "facebook",
+            "retries": 3,
+            "is_returning": True,
+            "note": None,
+        },
+    })
+
+    assert_eq(
+        metadata.get("severity"), "low",
+        f"kind-schema severity must win over client attempt, got {metadata.get('severity')}",
+    )
+    assert_eq(
+        metadata.get("category"), "bug",
+        f"kind-schema category must win over client attempt, got {metadata.get('category')}",
+    )
+    assert_true("not a key" not in metadata, "space in key must be dropped")
+    assert_true("weird$key!" not in metadata, "special chars in key must be dropped")
+    assert_true("nested" not in metadata, "nested dict value must be dropped")
+    assert_true("list_val" not in metadata, "list value must be dropped")
+    assert_eq(metadata.get("utm_source"), "facebook", "primitive str must survive")
+    assert_eq(metadata.get("retries"), 3, "primitive int must survive")
+    assert_eq(metadata.get("is_returning"), True, "primitive bool must survive")
+    assert_true("note" in metadata, "explicit None must survive as a stored key")
+
+
+@th.django_unit_test()
+def test_client_metadata_caps(opts):
+    """Too-many keys, oversized keys/values are trimmed."""
+    from mojo.apps.account.services import public_message as svc
+
+    big = {f"k{i}": f"v{i}" for i in range(40)}  # 40 keys, cap is 25
+    big["overlong_value"] = "x" * 10_000
+    big["x" * 200] = "dropped-because-key-too-long"
+
+    _, metadata = svc.validate_submission("contact_us", {
+        "name": "Jane",
+        "email": "caps@example.com",
+        "message": "hi",
+        "metadata": big,
+    })
+
+    # Kind-schema never wrote any keys, so metadata is purely extras here.
+    extras_keys = [k for k in metadata if k.startswith("k") or k == "overlong_value"]
+    assert_true(
+        len(extras_keys) <= 25,
+        f"key count should be capped to 25, got {len(extras_keys)}",
+    )
+    assert_true(
+        not any(k.startswith("x" * 200) for k in metadata),
+        "oversized keys must be dropped",
+    )
+    if "overlong_value" in metadata:
+        assert_true(
+            len(metadata["overlong_value"]) <= 500,
+            f"string values must be capped to 500 chars, got {len(metadata['overlong_value'])}",
+        )
+
+
+@th.django_unit_test()
 def test_rate_limit(opts):
     from mojo.apps.account.models import PublicMessage
     from mojo.decorators.limits import clear_rate_limits

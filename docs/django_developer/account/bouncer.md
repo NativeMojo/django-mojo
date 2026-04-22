@@ -432,6 +432,24 @@ a single dict drives both form rendering and submit validation. v1 ships two:
 Adding a kind means adding one entry to `KIND_SCHEMAS`. No template or validator
 changes are required.
 
+### Free-form metadata
+
+Clients can attach an arbitrary tracking payload by POSTing `metadata: {...}`
+alongside the normal form fields. The service sanitizes it:
+
+- Primitives only (`str` / `int` / `float` / `bool` / `None`) — nested dicts
+  and arrays are dropped.
+- Keys match `[A-Za-z0-9_.-]+` and are ≤ 64 chars; strings ≤ 500 chars.
+- Max 25 keys.
+- Keys owned by the kind schema (e.g. `category`, `severity`, `company`)
+  cannot be spoofed via the client `metadata` blob — kind-specific values win.
+- Client extras skip `content_guard` — a utm token like `black+friday`
+  shouldn't be moderated.
+
+The merged result lives on `PublicMessage.metadata`. Admin UIs should render
+kind-known keys with friendly labels and fall through to a generic
+`key → value` list for anything else.
+
 ### Endpoint
 
 ```
