@@ -1037,6 +1037,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="qrcode">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#build_vcard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        build_vcard
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -3811,6 +3828,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="qrcode">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#build_vcard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        build_vcard
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -3915,53 +3949,72 @@
 <a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="c1"># Generate and save to file</span>
 <a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="n">qrcode</span><span class="o">.</span><span class="n">generate_to_file</span><span class="p">(</span><span class="s2">&quot;https://example.com&quot;</span><span class="p">,</span> <span class="s2">&quot;/tmp/qr.png&quot;</span><span class="p">)</span>
 </code></pre></div>
-<h2 id="filetypes">filetypes<a class="headerlink" href="#filetypes" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="n">filetypes</span>
+<h3 id="build_vcard">build_vcard<a class="headerlink" href="#build_vcard" title="Permanent link">&para;</a></h3>
+<p>Build a vCard 3.0 (default) or MeCard payload string from a structured dict. Pass the result as <code>data</code> to <code>generate_qrcode()</code> to render a contact QR code.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers.qrcode</span><span class="w"> </span><span class="kn">import</span> <span class="n">build_vcard</span><span class="p">,</span> <span class="n">generate_qrcode</span>
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="n">mime</span> <span class="o">=</span> <span class="n">filetypes</span><span class="o">.</span><span class="n">get_mime_type</span><span class="p">(</span><span class="s2">&quot;document.pdf&quot;</span><span class="p">)</span>   <span class="c1"># &quot;application/pdf&quot;</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="n">ext</span> <span class="o">=</span> <span class="n">filetypes</span><span class="o">.</span><span class="n">get_extension</span><span class="p">(</span><span class="s2">&quot;image/jpeg&quot;</span><span class="p">)</span>       <span class="c1"># &quot;.jpg&quot;</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="n">is_img</span> <span class="o">=</span> <span class="n">filetypes</span><span class="o">.</span><span class="n">is_image</span><span class="p">(</span><span class="s2">&quot;image/png&quot;</span><span class="p">)</span>          <span class="c1"># True</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="n">payload_str</span> <span class="o">=</span> <span class="n">build_vcard</span><span class="p">({</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>    <span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;Jane Doe&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>    <span class="s2">&quot;org&quot;</span><span class="p">:</span> <span class="s2">&quot;Acme Inc&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>    <span class="s2">&quot;phone&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;+15551234567&quot;</span><span class="p">,</span> <span class="s2">&quot;+15557654321&quot;</span><span class="p">],</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>    <span class="s2">&quot;email&quot;</span><span class="p">:</span> <span class="s2">&quot;jane@acme.com&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="p">})</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="n">qr</span> <span class="o">=</span> <span class="n">generate_qrcode</span><span class="p">(</span><span class="n">data</span><span class="o">=</span><span class="n">payload_str</span><span class="p">,</span> <span class="n">fmt</span><span class="o">=</span><span class="s2">&quot;png&quot;</span><span class="p">,</span> <span class="n">error_correction</span><span class="o">=</span><span class="s2">&quot;h&quot;</span><span class="p">)</span>
+</code></pre></div>
+<ul>
+<li><code>name</code> is required; all other fields optional.</li>
+<li><code>phone</code>, <code>email</code>, and <code>url</code> accept a string or a list of strings.</li>
+<li><code>fmt="mecard"</code> produces a compact MeCard payload instead of vCard 3.0.</li>
+<li>Raises <code>QRCodeError</code> on missing <code>name</code> or unknown <code>fmt</code>.</li>
+<li>Values are escaped per RFC 6350 (vCard) or MeCard rules before concatenation.</li>
+</ul>
+<h2 id="filetypes">filetypes<a class="headerlink" href="#filetypes" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="n">filetypes</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="n">mime</span> <span class="o">=</span> <span class="n">filetypes</span><span class="o">.</span><span class="n">get_mime_type</span><span class="p">(</span><span class="s2">&quot;document.pdf&quot;</span><span class="p">)</span>   <span class="c1"># &quot;application/pdf&quot;</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="n">ext</span> <span class="o">=</span> <span class="n">filetypes</span><span class="o">.</span><span class="n">get_extension</span><span class="p">(</span><span class="s2">&quot;image/jpeg&quot;</span><span class="p">)</span>       <span class="c1"># &quot;.jpg&quot;</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="n">is_img</span> <span class="o">=</span> <span class="n">filetypes</span><span class="o">.</span><span class="n">is_image</span><span class="p">(</span><span class="s2">&quot;image/png&quot;</span><span class="p">)</span>          <span class="c1"># True</span>
 </code></pre></div>
 <h2 id="domain">domain<a class="headerlink" href="#domain" title="Permanent link">&para;</a></h2>
 <p>Large utility module for domain parsing, email extraction, and domain validation.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="n">domain</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="c1"># Extract domain from email</span>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="n">d</span> <span class="o">=</span> <span class="n">domain</span><span class="o">.</span><span class="n">from_email</span><span class="p">(</span><span class="s2">&quot;alice@example.com&quot;</span><span class="p">)</span>  <span class="c1"># &quot;example.com&quot;</span>
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>
-<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="c1"># Validate domain format</span>
-<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="n">is_valid</span> <span class="o">=</span> <span class="n">domain</span><span class="o">.</span><span class="n">is_valid</span><span class="p">(</span><span class="s2">&quot;example.com&quot;</span><span class="p">)</span>
-<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>
-<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="c1"># Parse domain parts</span>
-<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="n">parts</span> <span class="o">=</span> <span class="n">domain</span><span class="o">.</span><span class="n">parse</span><span class="p">(</span><span class="s2">&quot;subdomain.example.co.uk&quot;</span><span class="p">)</span>
-<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="c1"># {&quot;subdomain&quot;: &quot;subdomain&quot;, &quot;domain&quot;: &quot;example&quot;, &quot;tld&quot;: &quot;co.uk&quot;}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="n">domain</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="c1"># Extract domain from email</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="n">d</span> <span class="o">=</span> <span class="n">domain</span><span class="o">.</span><span class="n">from_email</span><span class="p">(</span><span class="s2">&quot;alice@example.com&quot;</span><span class="p">)</span>  <span class="c1"># &quot;example.com&quot;</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="c1"># Validate domain format</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="n">is_valid</span> <span class="o">=</span> <span class="n">domain</span><span class="o">.</span><span class="n">is_valid</span><span class="p">(</span><span class="s2">&quot;example.com&quot;</span><span class="p">)</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="c1"># Parse domain parts</span>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="n">parts</span> <span class="o">=</span> <span class="n">domain</span><span class="o">.</span><span class="n">parse</span><span class="p">(</span><span class="s2">&quot;subdomain.example.co.uk&quot;</span><span class="p">)</span>
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="c1"># {&quot;subdomain&quot;: &quot;subdomain&quot;, &quot;domain&quot;: &quot;example&quot;, &quot;tld&quot;: &quot;co.uk&quot;}</span>
 </code></pre></div>
 <h2 id="geoip">geoip<a class="headerlink" href="#geoip" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers.geoip</span><span class="w"> </span><span class="kn">import</span> <span class="n">lookup</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="n">info</span> <span class="o">=</span> <span class="n">lookup</span><span class="p">(</span><span class="s2">&quot;1.2.3.4&quot;</span><span class="p">)</span>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="c1"># {&quot;country&quot;: &quot;US&quot;, &quot;city&quot;: &quot;New York&quot;, &quot;lat&quot;: 40.71, &quot;lon&quot;: -74.00, ...}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers.geoip</span><span class="w"> </span><span class="kn">import</span> <span class="n">lookup</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">info</span> <span class="o">=</span> <span class="n">lookup</span><span class="p">(</span><span class="s2">&quot;1.2.3.4&quot;</span><span class="p">)</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="c1"># {&quot;country&quot;: &quot;US&quot;, &quot;city&quot;: &quot;New York&quot;, &quot;lat&quot;: 40.71, &quot;lon&quot;: -74.00, ...}</span>
 </code></pre></div>
 <p>Requires a GeoIP database file configured in settings:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">GEOIP_PATH</span> <span class="o">=</span> <span class="s2">&quot;/path/to/GeoLite2-City.mmdb&quot;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="n">GEOIP_PATH</span> <span class="o">=</span> <span class="s2">&quot;/path/to/GeoLite2-City.mmdb&quot;</span>
 </code></pre></div>
 <h2 id="sysinfo">sysinfo<a class="headerlink" href="#sysinfo" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="n">sysinfo</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="n">info</span> <span class="o">=</span> <span class="n">sysinfo</span><span class="o">.</span><span class="n">get</span><span class="p">()</span>
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="c1"># {&quot;hostname&quot;: &quot;server1&quot;, &quot;cpu_count&quot;: 4, &quot;memory_gb&quot;: 16, ...}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="n">sysinfo</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="n">info</span> <span class="o">=</span> <span class="n">sysinfo</span><span class="o">.</span><span class="n">get</span><span class="p">()</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="c1"># {&quot;hostname&quot;: &quot;server1&quot;, &quot;cpu_count&quot;: 4, &quot;memory_gb&quot;: 16, ...}</span>
 </code></pre></div>
 <h2 id="ua-user-agent-parsing">ua (User Agent Parsing)<a class="headerlink" href="#ua-user-agent-parsing" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="n">ua</span>
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>
-<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="n">parsed</span> <span class="o">=</span> <span class="n">ua</span><span class="o">.</span><span class="n">parse</span><span class="p">(</span><span class="s2">&quot;Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)...&quot;</span><span class="p">)</span>
-<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="c1"># {&quot;browser&quot;: &quot;Chrome&quot;, &quot;os&quot;: &quot;macOS&quot;, &quot;device&quot;: &quot;desktop&quot;}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="n">ua</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="n">parsed</span> <span class="o">=</span> <span class="n">ua</span><span class="o">.</span><span class="n">parse</span><span class="p">(</span><span class="s2">&quot;Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)...&quot;</span><span class="p">)</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="c1"># {&quot;browser&quot;: &quot;Chrome&quot;, &quot;os&quot;: &quot;macOS&quot;, &quot;device&quot;: &quot;desktop&quot;}</span>
 </code></pre></div>
 <h2 id="paths">paths<a class="headerlink" href="#paths" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="n">paths</span>
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>
-<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="n">base</span> <span class="o">=</span> <span class="n">paths</span><span class="o">.</span><span class="n">get_base_dir</span><span class="p">()</span>          <span class="c1"># project root</span>
-<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="n">media</span> <span class="o">=</span> <span class="n">paths</span><span class="o">.</span><span class="n">get_media_root</span><span class="p">()</span>       <span class="c1"># MEDIA_ROOT from settings</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="n">paths</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="n">base</span> <span class="o">=</span> <span class="n">paths</span><span class="o">.</span><span class="n">get_base_dir</span><span class="p">()</span>          <span class="c1"># project root</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="n">media</span> <span class="o">=</span> <span class="n">paths</span><span class="o">.</span><span class="n">get_media_root</span><span class="p">()</span>       <span class="c1"># MEDIA_ROOT from settings</span>
 </code></pre></div>
 
 

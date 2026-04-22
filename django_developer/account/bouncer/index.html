@@ -3886,6 +3886,111 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#public-messages-contact-support" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Public Messages (Contact / Support)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Public Messages (Contact / Support)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#kinds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Kinds
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#free-form-metadata" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Free-form metadata
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#endpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Endpoint
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Model
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#notifications" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Notifications
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Settings
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rollout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rollout
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#moderation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Moderation
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -4227,6 +4332,146 @@ to identify the group.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps</span><span class="w"> </span><span class="kn">import</span> <span class="n">jobs</span>
 <a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="n">jobs</span><span class="o">.</span><span class="n">publish</span><span class="p">(</span><span class="s1">&#39;mojo.apps.account.asyncjobs.refresh_bouncer_sig_cache&#39;</span><span class="p">,</span> <span class="p">{})</span>
 </code></pre></div>
+<hr />
+<h2 id="public-messages-contact-support">Public Messages (Contact / Support)<a class="headerlink" href="#public-messages-contact-support" title="Permanent link">&para;</a></h2>
+<p>Public (unauthenticated) contact / support intake reuses the bouncer gate so the
+same bot protection that covers login also covers every inbound message.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>Request → GET BOUNCER_CONTACT_PATH (default: /contact)
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>              ↓  (same pipeline as /auth, page_type=&#39;public_message&#39;)
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>     signature cache → pass cookie → pre-screen → decoy / challenge / page
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>              ↓
+<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a>     POST /api/account/bouncer/message
+<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a>        @md.requires_bouncer_token(&#39;public_message&#39;) — single-use token
+<a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a>        @md.strict_rate_limit(&#39;public_message_submit&#39;, ip_limit=5, ip_window=300)
+<a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a>              ↓
+<a id="__codelineno-13-9" name="__codelineno-13-9" href="#__codelineno-13-9"></a>     PublicMessage saved + incident event + metric + notify_admins(msg)
+</code></pre></div>
+<h3 id="kinds">Kinds<a class="headerlink" href="#kinds" title="Permanent link">&para;</a></h3>
+<p>Field schemas live in <code>mojo.apps.account.services.public_message.KIND_SCHEMAS</code> —
+a single dict drives both form rendering and submit validation. v1 ships two:</p>
+<table>
+<thead>
+<tr>
+<th>Kind</th>
+<th>Common fields</th>
+<th>Metadata fields</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>contact_us</code></td>
+<td>name, email, message</td>
+<td>company (optional)</td>
+</tr>
+<tr>
+<td><code>support</code></td>
+<td>name, email, message</td>
+<td>category (billing/account/bug/other), severity (low/normal/high)</td>
+</tr>
+</tbody>
+</table>
+<p>Adding a kind means adding one entry to <code>KIND_SCHEMAS</code>. No template or validator
+changes are required.</p>
+<h3 id="free-form-metadata">Free-form metadata<a class="headerlink" href="#free-form-metadata" title="Permanent link">&para;</a></h3>
+<p>Clients can attach an arbitrary tracking payload by POSTing <code>metadata: {...}</code>
+alongside the normal form fields. The service sanitizes it:</p>
+<ul>
+<li>Primitives only (<code>str</code> / <code>int</code> / <code>float</code> / <code>bool</code> / <code>None</code>) — nested dicts
+  and arrays are dropped.</li>
+<li>Keys match <code>[A-Za-z0-9_.-]+</code> and are ≤ 64 chars; strings ≤ 500 chars.</li>
+<li>Max 25 keys.</li>
+<li>Keys owned by the kind schema (e.g. <code>category</code>, <code>severity</code>, <code>company</code>)
+  cannot be spoofed via the client <code>metadata</code> blob — kind-specific values win.</li>
+<li>Client extras skip <code>content_guard</code> — a utm token like <code>black+friday</code>
+  shouldn't be moderated.</li>
+</ul>
+<p>The merged result lives on <code>PublicMessage.metadata</code>. Admin UIs should render
+kind-known keys with friendly labels and fall through to a generic
+<code>key → value</code> list for anything else.</p>
+<h3 id="endpoint">Endpoint<a class="headerlink" href="#endpoint" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>GET  /contact?kind=&lt;kind&gt;      — bouncer-gated HTML form page
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>POST /api/account/bouncer/message  — submit (bouncer token required)
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>GET/POST /api/account/public_message[/&lt;pk&gt;]  — admin list / detail
+</code></pre></div>
+<p>Unknown <code>kind</code> on the page falls back to <code>contact_us</code>. Unknown <code>kind</code> on the
+submit endpoint returns 400.</p>
+<h3 id="model">Model<a class="headerlink" href="#model" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">PublicMessage</span>
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="n">msg</span> <span class="o">=</span> <span class="n">PublicMessage</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">status</span><span class="o">=</span><span class="s1">&#39;open&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">latest</span><span class="p">(</span><span class="s1">&#39;created&#39;</span><span class="p">)</span>
+<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="n">msg</span><span class="o">.</span><span class="n">kind</span>          <span class="c1"># &#39;contact_us&#39; | &#39;support&#39;</span>
+<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a><span class="n">msg</span><span class="o">.</span><span class="n">name</span><span class="p">,</span> <span class="n">msg</span><span class="o">.</span><span class="n">email</span><span class="p">,</span> <span class="n">msg</span><span class="o">.</span><span class="n">subject</span><span class="p">,</span> <span class="n">msg</span><span class="o">.</span><span class="n">message</span>
+<a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a><span class="n">msg</span><span class="o">.</span><span class="n">metadata</span>      <span class="c1"># kind-specific fields (company, category, severity, …)</span>
+<a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a><span class="n">msg</span><span class="o">.</span><span class="n">status</span>        <span class="c1"># &#39;open&#39; | &#39;closed&#39;</span>
+<a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a><span class="n">msg</span><span class="o">.</span><span class="n">group</span>         <span class="c1"># set when the bouncer resolved a group for the request</span>
+<a id="__codelineno-15-9" name="__codelineno-15-9" href="#__codelineno-15-9"></a><span class="n">msg</span><span class="o">.</span><span class="n">ip_address</span>    <span class="c1"># captured at submit</span>
+</code></pre></div>
+<p>RestMeta:
+- <code>VIEW_PERMS = ["view_support", "security", "support"]</code>
+- <code>SAVE_PERMS = ["manage_support", "security", "support"]</code>
+- <code>DELETE_PERMS = ["manage_support"]</code>
+- <code>GROUP_FIELD = "group"</code> — admins with only group-scoped perms see just their group's messages.</p>
+<h3 id="notifications">Notifications<a class="headerlink" href="#notifications" title="Permanent link">&para;</a></h3>
+<p>Every flagged user receives a templated email when a message is submitted.
+Flag is a single boolean under the <code>protected</code> metadata namespace:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="n">user</span><span class="o">.</span><span class="n">set_protected_metadata</span><span class="p">(</span><span class="s2">&quot;notify_public_messages&quot;</span><span class="p">,</span> <span class="kc">True</span><span class="p">)</span>
+</code></pre></div>
+<ul>
+<li>Ungrouped message → every flagged user across the system.</li>
+<li>Group-scoped message → only flagged users who are active members of that group.</li>
+<li>Per-recipient send failures are logged and skipped; the loop continues.</li>
+</ul>
+<p>Admin tooling is expected to set this flag — it sits under <code>protected</code> so
+end-users cannot toggle their own subscription through the standard user REST
+graph.</p>
+<p>Email template: <code>public_message_notify</code> (seed included; override by name in
+<code>EmailTemplate</code> or via the <code>PUBLIC_MESSAGE_NOTIFY_TEMPLATE</code> setting).</p>
+<h3 id="settings">Settings<a class="headerlink" href="#settings" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Default</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>BOUNCER_CONTACT_PATH</code></td>
+<td><code>contact</code></td>
+<td>URL path for the gated contact/support page</td>
+</tr>
+<tr>
+<td><code>BOUNCER_PUBLIC_MESSAGE_MAX_LENGTH</code></td>
+<td><code>4000</code></td>
+<td>Cap on the <code>message</code> field at submit time</td>
+</tr>
+<tr>
+<td><code>PUBLIC_MESSAGE_NOTIFY_SUBJECT</code></td>
+<td><code>"New {kind} message"</code></td>
+<td><code>.format(kind=...)</code> substitution</td>
+</tr>
+<tr>
+<td><code>PUBLIC_MESSAGE_NOTIFY_TEMPLATE</code></td>
+<td><code>public_message_notify</code></td>
+<td>EmailTemplate name</td>
+</tr>
+</tbody>
+</table>
+<h3 id="rollout">Rollout<a class="headerlink" href="#rollout" title="Permanent link">&para;</a></h3>
+<p>The submit endpoint uses <code>@md.requires_bouncer_token('public_message')</code>. With
+<code>BOUNCER_REQUIRE_TOKEN=False</code> (default), missing or invalid tokens are logged
+but the request proceeds — safe for gradual rollout behind a marketing site
+that may not yet be serving the bouncer gate. Flip to <code>True</code> once clients are
+updated, or opt-in per-group via <code>group.metadata['require_bouncer_token']=True</code>.</p>
+<p>The contact page itself is always bouncer-gated — there is no opt-out for the
+page pipeline.</p>
+<h3 id="moderation">Moderation<a class="headerlink" href="#moderation" title="Permanent link">&para;</a></h3>
+<p>The service runs <code>mojo.helpers.content_guard.check_text</code> on the name, subject,
+and message fields at submit time. A <code>decision='block'</code> result raises
+<code>ValueError('&lt;field&gt;:blocked')</code> which the endpoint maps to 400. Any exception
+inside content_guard is swallowed and logged (fail-open) so a broken
+moderation engine cannot take contact submissions offline.</p>
 
 
 
