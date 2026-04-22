@@ -191,3 +191,37 @@ Add a dedicated `/api/qrcode/vcard` endpoint that accepts structured contact fie
 - `docs/web_developer/files/qrcode.md` — new vCard Endpoint section with schema table, defaulting rules, example request/response, SVG-logo note.
 - `docs/django_developer/helpers/other.md` — `build_vcard()` signature and usage.
 - `CHANGELOG.md` — one-line entry.
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-04-22
+
+### What Was Built
+New `POST /api/qrcode/vcard` endpoint that accepts a structured `vcard` object (`name`, `org`, `title`, `phone`, `email`, `url`, `address`, `note`) and encodes it as a QR code. Supports vCard 3.0 (default) and MeCard via `vcard_format`. Auto-defaults `error_correction` to `h`; when `logo` is supplied, forces `h` and bumps `size` to 512 for scannability. New `mojo.helpers.qrcode.build_vcard()` helper performs RFC 6350 escaping and is reusable outside the endpoint. Also fixed a latent bug in `/api/qrcode` where error-path responses crashed calling nonexistent `md.response_error`. Hardening: 512KB cap on decoded logo payload (both endpoints) and `@md.rate_limit` (60/min on base, 30/min on vcard).
+
+### Files Changed
+- `mojo/helpers/qrcode.py` — added `build_vcard()`, `_build_vcard_30`, `_build_mecard`, escape helpers, `MAX_LOGO_BYTES` cap enforced in `_decode_base64`.
+- `mojo/apps/fileman/rest/qrcode.py` — added `on_qrcode_vcard` handler, factored `_build_response` + `_error_response` shared helpers, applied `@md.rate_limit` to both endpoints, fixed `md.response_error` error path.
+- `tests/test_fileman/1_test_qrcode.py` — added 8 builder unit tests, 5 endpoint tests, oversized-logo DoS test.
+- `docs/web_developer/files/qrcode.md` — new vCard Endpoint section, rate limits, logo cap note.
+- `docs/web_developer/account/user_self_management.md` — quick reference row for `/api/qrcode/vcard`.
+- `docs/django_developer/helpers/other.md` — `build_vcard()` subsection.
+- `CHANGELOG.md` — entries for feature + hardening.
+
+### Tests
+- `tests/test_fileman/1_test_qrcode.py` — builder correctness (minimal, full, escaping, mecard, missing name, unknown format, empty array), endpoint behavior (PNG minimal, missing param, missing name 400, base64 JSON, mecard variant), oversized logo rejection.
+- Run: `bin/run_tests --agent -t test_fileman.1_test_qrcode`
+- Full suite: 1761 passed, 0 failed (113s).
+
+### Docs Updated
+- `docs/web_developer/files/qrcode.md` — vCard Endpoint section + rate limits.
+- `docs/web_developer/account/user_self_management.md` — quick reference row.
+- `docs/django_developer/helpers/other.md` — `build_vcard()` usage.
+- `CHANGELOG.md` — feature and hardening entries.
+
+### Security Review
+Two DoS concerns flagged: oversized `logo` base64 and unbounded vcard field sizes. **Logo cap enforced (512KB)** and **rate limits applied** in follow-up commit `14ef0fc`. Per-field vcard size caps deferred — rate limit combined with QR library's own size ceiling (QR v40 ~2953 bytes) bounds the per-request work; revisit if abuse patterns emerge.
+
+### Follow-up
+- Consider adding per-field length caps on vcard inputs (note/address/arrays) if rate limit proves insufficient under load.
