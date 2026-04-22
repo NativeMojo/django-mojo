@@ -21,6 +21,28 @@ b64 = qrcode.generate("https://example.com")
 qrcode.generate_to_file("https://example.com", "/tmp/qr.png")
 ```
 
+### build_vcard
+
+Build a vCard 3.0 (default) or MeCard payload string from a structured dict. Pass the result as `data` to `generate_qrcode()` to render a contact QR code.
+
+```python
+from mojo.helpers.qrcode import build_vcard, generate_qrcode
+
+payload_str = build_vcard({
+    "name": "Jane Doe",
+    "org": "Acme Inc",
+    "phone": ["+15551234567", "+15557654321"],
+    "email": "jane@acme.com",
+})
+qr = generate_qrcode(data=payload_str, fmt="png", error_correction="h")
+```
+
+- `name` is required; all other fields optional.
+- `phone`, `email`, and `url` accept a string or a list of strings.
+- `fmt="mecard"` produces a compact MeCard payload instead of vCard 3.0.
+- Raises `QRCodeError` on missing `name` or unknown `fmt`.
+- Values are escaped per RFC 6350 (vCard) or MeCard rules before concatenation.
+
 ## filetypes
 
 ```python

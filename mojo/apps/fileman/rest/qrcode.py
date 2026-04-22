@@ -3,13 +3,13 @@ from django.http import HttpResponse
 from mojo import JsonResponse
 from mojo import decorators as md
 from mojo.helpers import logit
-from mojo.helpers.qrcode import QRCodeError, generate_qrcode
+from mojo.helpers.qrcode import QRCodeError, build_vcard, generate_qrcode
 
 
 @md.URL("/api/qrcode")
 @md.URL("qrcode")
 @md.public_endpoint("we allow this to be a public endpoint")
-@md.requires_params(["data"])
+@md.requires_params("data")
 def on_qrcode(request):
     """
     Generate a QR code image in PNG, SVG, or base64-encoded form.
@@ -31,11 +31,67 @@ def on_qrcode(request):
         )
     except QRCodeError as exc:
         status_code = getattr(exc, "status", 400)
-        return md.response_error(str(exc), status=status_code)
+        return _error_response(str(exc), status_code)
     except Exception:  # pragma: no cover - unexpected failure
         logit.error("mojo.apps.fileman.rest.qrcode", "QR code generation failed", exc_info=True)
-        return md.response_error("Unable to generate QR code.", status=500)
+        return _error_response("Unable to generate QR code.", 500)
 
+    return _build_response(request, payload, fmt)
+
+
+@md.URL("/api/qrcode/vcard")
+@md.URL("qrcode/vcard")
+@md.public_endpoint("we allow this to be a public endpoint")
+@md.requires_params("vcard")
+def on_qrcode_vcard(request):
+    """
+    Generate a QR code encoding a vCard (or MeCard) from structured contact fields.
+    """
+    fmt = (request.DATA.get("format") or "png").lower()
+    vcard_fields = request.DATA.get("vcard")
+    vcard_format = (request.DATA.get("vcard_format") or "vcard").lower()
+    logo = request.DATA.get("logo")
+
+    error_correction = request.DATA.get("error_correction")
+    if logo:
+        # Logos cover modules — force H recovery regardless of caller input.
+        error_correction = "h"
+    elif not error_correction:
+        error_correction = "h"
+
+    size = request.DATA.get("size")
+    if logo and not size:
+        size = 512
+
+    try:
+        data = build_vcard(vcard_fields, fmt=vcard_format)
+        payload = generate_qrcode(
+            data=data,
+            fmt=fmt,
+            size=size,
+            border=request.DATA.get("border"),
+            error_correction=error_correction,
+            color=request.DATA.get("color"),
+            background=request.DATA.get("background"),
+            base64_format=request.DATA.get("base64_format"),
+            logo=logo,
+            logo_scale=request.DATA.get("logo_scale"),
+        )
+    except QRCodeError as exc:
+        status_code = getattr(exc, "status", 400)
+        return _error_response(str(exc), status_code)
+    except Exception:  # pragma: no cover - unexpected failure
+        logit.error("mojo.apps.fileman.rest.qrcode", "vCard QR code generation failed", exc_info=True)
+        return _error_response("Unable to generate QR code.", 500)
+
+    return _build_response(request, payload, fmt)
+
+
+def _error_response(message, status):
+    return JsonResponse({"success": False, "status": False, "error": message}, status=status)
+
+
+def _build_response(request, payload, fmt):
     if fmt == "base64":
         return JsonResponse(
             {

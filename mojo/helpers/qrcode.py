@@ -32,6 +32,7 @@ except ImportError:  # pragma: no cover - dependency missing at runtime
 HEX_COLOR_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}){1,2}$")
 SUPPORTED_FORMATS = {"png", "svg", "base64"}
 SUPPORTED_ERROR_LEVELS = {"l", "m", "q", "h"}
+SUPPORTED_VCARD_FORMATS = {"vcard", "mecard"}
 ERROR_CORRECTION_MAP = {
     "l": ERROR_CORRECT_L,
     "m": ERROR_CORRECT_M,
@@ -281,6 +282,120 @@ def _clamp_float(value, default, minimum=None, maximum=None):
     if maximum is not None:
         value = min(maximum, value)
     return value
+
+
+def build_vcard(fields, fmt="vcard"):
+    """
+    Build a vCard 3.0 or MeCard payload string from a structured dict.
+
+    :param fields: dict with keys: name (required), org, title, phone, email,
+        url, address, note. phone/email/url may be a string or list of strings.
+    :param fmt: "vcard" (default) or "mecard".
+    """
+    if not isinstance(fields, dict):
+        raise QRCodeError("vcard must be an object with contact fields.")
+
+    fmt = (fmt or "vcard").lower()
+    if fmt not in SUPPORTED_VCARD_FORMATS:
+        raise QRCodeError("Unsupported vcard_format. Choose vcard or mecard.")
+
+    name = fields.get("name")
+    if not name or not str(name).strip():
+        raise QRCodeError("vcard.name is required.")
+
+    if fmt == "mecard":
+        return _build_mecard(fields, str(name).strip())
+    return _build_vcard_30(fields, str(name).strip())
+
+
+def _build_vcard_30(fields, name):
+    lines = ["BEGIN:VCARD", "VERSION:3.0"]
+    lines.append("FN:" + _vcard_escape(name))
+
+    parts = name.split()
+    if len(parts) >= 2:
+        family = parts[-1]
+        given = " ".join(parts[:-1])
+        lines.append("N:{};{};;;".format(_vcard_escape(family), _vcard_escape(given)))
+    else:
+        lines.append("N:{};;;;".format(_vcard_escape(name)))
+
+    for key, prefix in (("org", "ORG"), ("title", "TITLE")):
+        value = fields.get(key)
+        if value is not None and str(value) != "":
+            lines.append("{}:{}".format(prefix, _vcard_escape(str(value))))
+
+    for key, prefix in (("phone", "TEL"), ("email", "EMAIL"), ("url", "URL")):
+        for value in _as_value_list(fields.get(key)):
+            lines.append("{}:{}".format(prefix, _vcard_escape(value)))
+
+    address = fields.get("address")
+    if address is not None and str(address) != "":
+        lines.append("ADR:;;{};;;;".format(_vcard_escape(str(address))))
+
+    note = fields.get("note")
+    if note is not None and str(note) != "":
+        lines.append("NOTE:" + _vcard_escape(str(note)))
+
+    lines.append("END:VCARD")
+    return "\r\n".join(lines)
+
+
+def _build_mecard(fields, name):
+    segments = ["N:" + _mecard_escape(name)]
+
+    for value in _as_value_list(fields.get("phone")):
+        segments.append("TEL:" + _mecard_escape(value))
+    for value in _as_value_list(fields.get("email")):
+        segments.append("EMAIL:" + _mecard_escape(value))
+    for value in _as_value_list(fields.get("url")):
+        segments.append("URL:" + _mecard_escape(value))
+
+    org = fields.get("org")
+    if org is not None and str(org) != "":
+        segments.append("ORG:" + _mecard_escape(str(org)))
+
+    address = fields.get("address")
+    if address is not None and str(address) != "":
+        segments.append("ADR:" + _mecard_escape(str(address)))
+
+    note = fields.get("note")
+    if note is not None and str(note) != "":
+        segments.append("NOTE:" + _mecard_escape(str(note)))
+
+    return "MECARD:" + ";".join(segments) + ";;"
+
+
+def _as_value_list(value):
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        return [str(v) for v in value if v is not None and str(v) != ""]
+    if str(value) == "":
+        return []
+    return [str(value)]
+
+
+def _vcard_escape(value):
+    # RFC 6350: escape backslash, comma, semicolon; encode newlines as \n
+    return (
+        value.replace("\\", "\\\\")
+        .replace(";", "\\;")
+        .replace(",", "\\,")
+        .replace("\r\n", "\\n")
+        .replace("\n", "\\n")
+        .replace("\r", "\\n")
+    )
+
+
+def _mecard_escape(value):
+    # MeCard: escape backslash, semicolon, colon, comma
+    return (
+        value.replace("\\", "\\\\")
+        .replace(";", "\\;")
+        .replace(":", "\\:")
+        .replace(",", "\\,")
+    )
 
 
 def _decode_base64(value: str) -> bytes:

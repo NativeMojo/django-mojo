@@ -62,6 +62,77 @@ Base64 mode returns JSON:
 
 Decode `data` and store or embed as needed.
 
+## vCard Endpoint
+
+Generate a QR code that encodes a vCard (or MeCard) contact. The endpoint builds the vCard payload for you from structured fields — no need to format `BEGIN:VCARD...END:VCARD` on the client.
+
+- `POST /api/qrcode/vcard` (public)
+- Required param: `vcard` (object with contact fields)
+- Optional params:
+  - `vcard_format`: `vcard` (default, vCard 3.0) or `mecard`
+  - All optional params from `/api/qrcode` (`format`, `size`, `border`, `error_correction`, `color`, `background`, `base64_format`, `logo`, `logo_scale`, `filename`, `download`)
+
+### `vcard` Object Schema
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `name` | string | yes | Maps to `FN:` and structured `N:` fields |
+| `org` | string | no | Company / organization |
+| `title` | string | no | Job title |
+| `phone` | string or array | no | One or more phone numbers |
+| `email` | string or array | no | One or more email addresses |
+| `url` | string or array | no | Website(s) |
+| `address` | string | no | Free-form street address (single line) |
+| `note` | string | no | Free-form note |
+
+### Defaulting Rules
+
+- When `error_correction` is not provided → `h` (30% recovery). vCards are long and benefit from higher recovery.
+- When `logo` is provided and `size` is not → `512` (better logo clarity).
+- When `logo` is provided → `error_correction` is forced to `h` regardless of caller input. Logos overlay QR modules and require maximum recovery to stay scannable.
+
+### Example
+
+```http
+POST /api/qrcode/vcard
+Content-Type: application/json
+
+{
+  "vcard": {
+    "name": "Jane Doe",
+    "org": "Acme Inc",
+    "title": "Engineer",
+    "phone": ["+15551234567", "+15557654321"],
+    "email": "jane@acme.com",
+    "url": "https://acme.com"
+  },
+  "format": "png",
+  "size": 512
+}
+```
+
+Returns PNG bytes (or JSON for `format=base64`). The encoded payload is:
+
+```
+BEGIN:VCARD
+VERSION:3.0
+FN:Jane Doe
+N:Doe;Jane;;;
+ORG:Acme Inc
+TITLE:Engineer
+TEL:+15551234567
+TEL:+15557654321
+EMAIL:jane@acme.com
+URL:https://acme.com
+END:VCARD
+```
+
+### Notes
+
+- vCard 3.0 is the default because all modern iOS/Android scanners support it. MeCard is more compact but has gaps in niche scanners — opt in with `vcard_format: "mecard"` only when payload size matters.
+- Logo overlay (`logo` param) only applies to PNG output. When `format=svg`, the logo is ignored (same as the base `/api/qrcode` endpoint).
+- Missing `vcard.name` returns a 400 error.
+
 ## Helper Usage
 
 Import `generate_qrcode` for internal use:

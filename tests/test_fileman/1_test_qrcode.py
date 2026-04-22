@@ -5,7 +5,7 @@ Test QR code helper behaviour.
 from testit import helpers as th
 from testit.helpers import assert_eq, assert_true
 
-from mojo.helpers.qrcode import QRCodeError, generate_qrcode
+from mojo.helpers.qrcode import QRCodeError, build_vcard, generate_qrcode
 
 
 @th.unit_test("png output returns binary payload with dimensions")
@@ -153,3 +153,134 @@ def test_size_clamping(opts):
 
     payload_large = generate_qrcode(data="test", size=5000)  # Above max of 2048
     assert_true(len(payload_large.content) > 0, "Size above maximum should be clamped")
+
+
+@th.unit_test("build_vcard minimal returns valid vCard 3.0")
+def test_build_vcard_minimal(opts):
+    result = build_vcard({"name": "Jane Doe"})
+    assert_true(result.startswith("BEGIN:VCARD\r\nVERSION:3.0\r\n"), f"vCard should start with BEGIN/VERSION, got: {result[:60]!r}")
+    assert_true(result.endswith("END:VCARD"), f"vCard should end with END:VCARD, got: {result[-40:]!r}")
+    assert_true("FN:Jane Doe" in result, f"vCard should include FN line, got: {result!r}")
+    assert_true("N:Doe;Jane;;;" in result, f"vCard should include structured N line, got: {result!r}")
+
+
+@th.unit_test("build_vcard full field set with arrays emits repeated TEL/EMAIL")
+def test_build_vcard_full(opts):
+    result = build_vcard({
+        "name": "Jane Q Doe",
+        "org": "Acme Inc",
+        "title": "Engineer",
+        "phone": ["+15551234567", "+15557654321"],
+        "email": "jane@acme.com",
+        "url": "https://acme.com",
+        "address": "123 Main St",
+        "note": "VIP contact",
+    })
+    assert_true("FN:Jane Q Doe" in result, "vCard should include FN with full name")
+    assert_true("N:Doe;Jane Q;;;" in result, f"vCard should split given/family on last space, got: {result!r}")
+    assert_true("ORG:Acme Inc" in result, "vCard should include ORG")
+    assert_true("TITLE:Engineer" in result, "vCard should include TITLE")
+    assert_true("TEL:+15551234567" in result, "vCard should include first TEL")
+    assert_true("TEL:+15557654321" in result, "vCard should include second TEL")
+    assert_true("EMAIL:jane@acme.com" in result, "vCard should include EMAIL")
+    assert_true("URL:https://acme.com" in result, "vCard should include URL")
+    assert_true("ADR:;;123 Main St;;;;" in result, "vCard should include ADR with street in component 3")
+    assert_true("NOTE:VIP contact" in result, "vCard should include NOTE")
+
+
+@th.unit_test("build_vcard escapes RFC 6350 special characters")
+def test_build_vcard_escaping(opts):
+    result = build_vcard({
+        "name": "Doe, Jane",
+        "org": "Acme; Inc",
+        "note": "line1\nline2",
+        "title": "back\\slash",
+    })
+    assert_true("FN:Doe\\, Jane" in result, f"comma should be escaped, got: {result!r}")
+    assert_true("ORG:Acme\; Inc" in result, f"semicolon should be escaped, got: {result!r}")
+    assert_true("NOTE:line1\\nline2" in result, f"newline should become literal \\n, got: {result!r}")
+    assert_true("TITLE:back\\\\slash" in result, f"backslash should be escaped, got: {result!r}")
+
+
+@th.unit_test("build_vcard mecard variant produces MECARD string")
+def test_build_vcard_mecard(opts):
+    result = build_vcard({
+        "name": "Jane Doe",
+        "phone": "+15551234567",
+        "email": "jane@acme.com",
+    }, fmt="mecard")
+    assert_true(result.startswith("MECARD:"), f"mecard should start with MECARD:, got: {result[:40]!r}")
+    assert_true(result.endswith(";;"), f"mecard should end with terminator ;;, got: {result[-10:]!r}")
+    assert_true("N:Jane Doe" in result, "mecard should include N field")
+    assert_true("TEL:+15551234567" in result, "mecard should include TEL field")
+    assert_true("EMAIL:jane@acme.com" in result, "mecard should include EMAIL field")
+
+
+@th.unit_test("build_vcard missing name raises QRCodeError")
+def test_build_vcard_missing_name(opts):
+    try:
+        build_vcard({"phone": "+15551234567"})
+    except QRCodeError as exc:
+        assert_true("name" in str(exc).lower(), f"error should mention name requirement, got: {exc}")
+    else:
+        assert_true(False, "missing name should raise QRCodeError")
+
+
+@th.unit_test("build_vcard unknown format raises QRCodeError")
+def test_build_vcard_unknown_format(opts):
+    try:
+        build_vcard({"name": "x"}, fmt="ical")
+    except QRCodeError as exc:
+        assert_true("vcard_format" in str(exc).lower() or "vcard" in str(exc).lower(), f"error should mention format, got: {exc}")
+    else:
+        assert_true(False, "unknown format should raise QRCodeError")
+
+
+@th.unit_test("build_vcard empty phone array emits no TEL lines")
+def test_build_vcard_empty_array(opts):
+    result = build_vcard({"name": "Jane Doe", "phone": []})
+    assert_true("TEL:" not in result, f"empty phone array should not emit TEL, got: {result!r}")
+
+
+@th.django_unit_test("REST: qrcode/vcard generates PNG for minimal vcard")
+def test_rest_vcard_minimal(opts):
+    resp = opts.client.post("/api/qrcode/vcard", {"vcard": {"name": "Jane Doe"}})
+    assert_eq(resp.status_code, 200, f"vcard endpoint should return 200, got {resp.status_code}")
+    headers = opts.client.last_response.headers
+    content_type = headers.get("Content-Type") or headers.get("content-type") or ""
+    assert_true(content_type.startswith("image/png"), f"default format should be PNG, got content-type: {content_type!r}, all headers: {dict(headers)}")
+
+
+@th.django_unit_test("REST: qrcode/vcard missing vcard param returns error")
+def test_rest_vcard_missing(opts):
+    resp = opts.client.post("/api/qrcode/vcard", {})
+    assert_true(resp.status_code >= 400, f"missing vcard should fail, got {resp.status_code}")
+
+
+@th.django_unit_test("REST: qrcode/vcard missing name inside vcard returns 400")
+def test_rest_vcard_missing_name(opts):
+    resp = opts.client.post("/api/qrcode/vcard", {"vcard": {"phone": "+15551234567"}})
+    assert_eq(resp.status_code, 400, f"missing vcard.name should return 400, got {resp.status_code}")
+
+
+@th.django_unit_test("REST: qrcode/vcard base64 returns JSON with PNG content")
+def test_rest_vcard_base64(opts):
+    resp = opts.client.post("/api/qrcode/vcard", {
+        "vcard": {"name": "Jane Doe", "email": "jane@acme.com"},
+        "format": "base64",
+    })
+    assert_eq(resp.status_code, 200, f"vcard base64 should return 200, got {resp.status_code}")
+    data = resp.response
+    assert_eq(data.get("format"), "png", f"base64 default should be png, got: {data.get('format')}")
+    assert_true(data.get("data") and len(data["data"]) > 0, "base64 data should be non-empty")
+
+
+@th.django_unit_test("REST: qrcode/vcard mecard format generates successfully")
+def test_rest_vcard_mecard(opts):
+    resp = opts.client.post("/api/qrcode/vcard", {
+        "vcard": {"name": "Jane Doe", "phone": "+15551234567"},
+        "vcard_format": "mecard",
+        "format": "base64",
+    })
+    assert_eq(resp.status_code, 200, f"mecard vcard should return 200, got {resp.status_code}")
+    assert_true(len(resp.response.get("data", "")) > 0, "mecard base64 data should be non-empty")
