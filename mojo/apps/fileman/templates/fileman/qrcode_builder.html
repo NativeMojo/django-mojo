@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>QR Code Builder</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --fg:#111; --muted:#666; --bg:#fafafa; --card:#fff; --border:#ddd; --accent:#0d9488; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; color:var(--fg); background:var(--bg); }
+  .wrap { max-width:980px; margin:0 auto; padding:32px 20px; }
+  h1 { margin:0 0 8px; font-size:24px; }
+  .sub { color:var(--muted); margin:0 0 24px; }
+  .grid { display:grid; grid-template-columns: 1fr 1fr; gap:24px; }
+  @media (max-width:720px) { .grid { grid-template-columns:1fr; } }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:8px; padding:20px; }
+  fieldset { border:none; padding:0; margin:0 0 16px; }
+  legend { font-weight:600; margin-bottom:8px; font-size:13px; text-transform:uppercase; letter-spacing:0.04em; color:var(--muted); }
+  label { display:block; font-size:13px; color:var(--muted); margin-bottom:4px; }
+  input[type=text], input[type=email], input[type=tel], input[type=url], input[type=number], textarea, select {
+    width:100%; padding:8px 10px; border:1px solid var(--border); border-radius:4px; font:inherit; background:#fff;
+  }
+  textarea { min-height:60px; resize:vertical; }
+  .row { margin-bottom:12px; }
+  .inline { display:flex; gap:12px; }
+  .inline > div { flex:1; }
+  button { background:var(--accent); color:#fff; border:none; padding:10px 20px; border-radius:4px; font:inherit; cursor:pointer; font-weight:600; }
+  button:hover { opacity:0.9; }
+  button:disabled { opacity:0.5; cursor:not-allowed; }
+  .result { text-align:center; }
+  .result img { max-width:100%; height:auto; border:1px solid var(--border); border-radius:4px; background:#fff; }
+  .result .placeholder { color:var(--muted); padding:60px 20px; border:2px dashed var(--border); border-radius:4px; }
+  .links { margin-top:16px; display:flex; gap:8px; justify-content:center; flex-wrap:wrap; }
+  .links a { color:var(--accent); text-decoration:none; font-size:13px; padding:6px 12px; border:1px solid var(--border); border-radius:4px; }
+  .links a:hover { background:#f0f0f0; }
+  .err { color:#b91c1c; background:#fee; padding:10px; border-radius:4px; margin-top:12px; font-size:13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>QR Code Builder</h1>
+  <p class="sub">Generate a vCard QR code. Scans straight into the contacts app on iOS &amp; Android.</p>
+
+  <div class="grid">
+    <form id="f" class="card">
+      <fieldset>
+        <legend>Contact</legend>
+        <div class="row"><label>Name *</label><input type="text" name="name" required placeholder="Jane Doe"></div>
+        <div class="inline">
+          <div class="row"><label>Organization</label><input type="text" name="org" placeholder="Acme Inc"></div>
+          <div class="row"><label>Title</label><input type="text" name="title" placeholder="Engineer"></div>
+        </div>
+        <div class="row"><label>Phone</label><input type="tel" name="phone" placeholder="+15551234567"></div>
+        <div class="row"><label>Email</label><input type="email" name="email" placeholder="jane@acme.com"></div>
+        <div class="row"><label>Website</label><input type="url" name="url" placeholder="https://acme.com"></div>
+        <div class="row"><label>Address</label><input type="text" name="address" placeholder="123 Main St, Austin TX"></div>
+        <div class="row"><label>Note</label><textarea name="note" placeholder="Anything else…"></textarea></div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Options</legend>
+        <div class="inline">
+          <div class="row">
+            <label>Size (px)</label>
+            <input type="number" name="size" value="512" min="128" max="2048" step="32">
+          </div>
+          <div class="row">
+            <label>Format</label>
+            <select name="vcard_format">
+              <option value="vcard">vCard 3.0 (recommended)</option>
+              <option value="mecard">MeCard (compact)</option>
+            </select>
+          </div>
+        </div>
+        <div class="inline">
+          <div class="row">
+            <label>Foreground</label>
+            <input type="text" name="color" value="#000000" placeholder="#000000">
+          </div>
+          <div class="row">
+            <label>Background</label>
+            <input type="text" name="background" value="#FFFFFF" placeholder="#FFFFFF">
+          </div>
+        </div>
+        <div class="row">
+          <label>Logo (optional, max 512KB)</label>
+          <input type="file" name="logo" accept="image/png,image/jpeg,image/webp">
+        </div>
+      </fieldset>
+
+      <button type="submit" id="go">Generate</button>
+      <div id="err" class="err" style="display:none"></div>
+    </form>
+
+    <div class="card result">
+      <div id="out"><div class="placeholder">Fill in the form and click Generate.</div></div>
+      <div class="links" id="links" style="display:none">
+        <a id="dl" download="qrcode.png">Download PNG</a>
+        <a id="raw" target="_blank">Open raw</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const form = document.getElementById('f');
+const out = document.getElementById('out');
+const err = document.getElementById('err');
+const links = document.getElementById('links');
+const btn = document.getElementById('go');
+
+function readFile(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result.split(',')[1]);
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
+}
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  err.style.display = 'none';
+  btn.disabled = true;
+  btn.textContent = 'Generating…';
+
+  try {
+    const fd = new FormData(form);
+    const vcard = {};
+    ['name','org','title','phone','email','url','address','note'].forEach(k => {
+      const v = fd.get(k);
+      if (v) vcard[k] = v;
+    });
+
+    const body = {
+      vcard,
+      vcard_format: fd.get('vcard_format') || 'vcard',
+      format: 'base64',
+      size: parseInt(fd.get('size'), 10) || 512,
+      color: fd.get('color') || '#000000',
+      background: fd.get('background') || '#FFFFFF',
+    };
+
+    const logoFile = fd.get('logo');
+    if (logoFile && logoFile.size) {
+      if (logoFile.size > 512 * 1024) {
+        throw new Error('Logo exceeds 512KB limit.');
+      }
+      body.logo = await readFile(logoFile);
+    }
+
+    const resp = await fetch('/api/qrcode/vcard', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    const data = await resp.json();
+    if (!resp.ok || !data.success) {
+      throw new Error(data.error || `HTTP ${resp.status}`);
+    }
+
+    const src = `data:${data.content_type};base64,${data.data}`;
+    out.innerHTML = `<img src="${src}" alt="QR code">`;
+    document.getElementById('dl').href = src;
+    document.getElementById('raw').href = src;
+    links.style.display = 'flex';
+  } catch (ex) {
+    err.textContent = ex.message || String(ex);
+    err.style.display = 'block';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Generate';
+  }
+});
+</script>
+</body>
+</html>

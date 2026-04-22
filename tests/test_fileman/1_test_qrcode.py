@@ -288,6 +288,16 @@ def test_rest_vcard_base64(opts):
     assert_true(data.get("data") and len(data["data"]) > 0, "base64 data should be non-empty")
 
 
+@th.django_unit_test("REST: qrcode/builder renders HTML page")
+def test_rest_qrcode_builder(opts):
+    resp = opts.client.get("/qrcode/builder")
+    assert_eq(resp.status_code, 200, f"builder page should return 200, got {resp.status_code}")
+    body = opts.client.last_response.body
+    body_text = body if isinstance(body, str) else str(body)
+    assert_true("QR Code Builder" in body_text, "builder page should contain title")
+    assert_true("/api/qrcode/vcard" in body_text, "builder page should reference the vcard endpoint")
+
+
 @th.django_unit_test("REST: qrcode/vcard mecard format generates successfully")
 def test_rest_vcard_mecard(opts):
     resp = opts.client.post("/api/qrcode/vcard", {

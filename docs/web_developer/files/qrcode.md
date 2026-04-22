@@ -133,6 +133,10 @@ END:VCARD
 - Logo overlay (`logo` param) only applies to PNG output. When `format=svg`, the logo is ignored (same as the base `/api/qrcode` endpoint).
 - Missing `vcard.name` returns a 400 error.
 
+### Builder UI
+
+`GET /qrcode/builder` serves a self-contained HTML page with a form for filling in contact fields, picking size/colors/logo, and rendering a live QR preview. Useful as an admin tool or an internal "generate me a vCard QR" utility. The page submits to `/api/qrcode/vcard` via `fetch` and requires no external JavaScript.
+
 ### Rate Limits
 
 - `POST /api/qrcode` — 60 requests per minute per IP.

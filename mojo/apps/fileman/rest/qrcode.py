@@ -1,9 +1,20 @@
 from django.http import HttpResponse
+from django.shortcuts import render
 
 from mojo import JsonResponse
 from mojo import decorators as md
 from mojo.helpers import logit
 from mojo.helpers.qrcode import QRCodeError, build_vcard, generate_qrcode
+
+
+@md.URL("/qrcode/builder")
+@md.URL("qrcode/builder")
+@md.public_endpoint("QR code builder UI for developers/admins")
+def on_qrcode_builder(request):
+    """
+    Render the interactive QR code builder page.
+    """
+    return render(request, "fileman/qrcode_builder.html", {})
 
 
 @md.URL("/api/qrcode")
