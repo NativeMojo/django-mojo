@@ -1,7 +1,7 @@
 # Bouncer Public Messages (Contact Us / Support)
 
 **Type**: request
-**Status**: planned
+**Status**: resolved
 **Date**: 2026-04-22
 **Priority**: medium
 
@@ -275,3 +275,50 @@ All tests use `testit` with `@th.django_unit_test()`, `opts.client` for HTTP, `t
 - `docs/django_developer/account/bouncer.md` — add "Public Messages" section.
 - `docs/web_developer/account/public_messages.md` — new file covering the REST contract.
 - `CHANGELOG.md` — one-line entry.
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-04-22
+
+### What Was Built
+New unauthenticated contact/support intake built into the existing bouncer gate. Visitors hit `/contact[?kind=contact_us|support]`, complete the bouncer challenge, and POST to `account/bouncer/message` with a single-use bouncer token. Submissions land in `account.PublicMessage`, fire an incident event + metric, and email every User flagged with `metadata.protected.notify_public_messages=True` (group-scoped if the bouncer resolved a group). Admin RestMeta surface at `account/public_message` gated by `view_support` / `manage_support` / `security` / `support`.
+
+### Files Changed
+- `mojo/apps/account/models/public_message.py` — new PublicMessage model
+- `mojo/apps/account/models/__init__.py` — export
+- `mojo/apps/account/services/public_message.py` — KIND_SCHEMAS, validate_submission, notify_admins, render_context_for_kind
+- `mojo/apps/account/rest/bouncer/public_message.py` — submit + admin RestMeta endpoints
+- `mojo/apps/account/rest/bouncer/__init__.py` — re-export
+- `mojo/apps/account/rest/bouncer/views.py` — `on_contact_page`, `_serve_contact`, challenge redirect path
+- `mojo/apps/account/templates/account/contact.html` — new contact/support form page
+- `mojo/apps/account/migrations/0040_publicmessage.py` — schema
+- `mojo/apps/aws/seeds/email_templates/public_message_notify.json` — admin notification email
+
+### Tests
+- `tests/test_public_messages/1_submit.py` — submit happy paths, kind/field validation, token enforcement, content_guard block, rate limit, notification failure isolation
+- `tests/test_public_messages/2_notify.py` — fan-out target selection (system-wide vs group-scoped), per-recipient failure isolation
+- `tests/test_public_messages/3_admin.py` — RestMeta perms, group-scoped filtering, delete requires manage_support
+- `tests/test_public_messages/4_contact_page.py` — page renders per kind, invalid kind falls back, service schema contract
+- Run: `bin/run_tests --agent -t test_public_messages` — 25/25 passing
+- Full suite: 1749/1805 pass (56 pre-existing skips), no regressions
+
+### Docs Updated
+- `docs/django_developer/account/bouncer.md` — new "Public Messages" section
+- `docs/django_developer/account/README.md` — index entry
+- `docs/django_developer/account/auth_pages.md` — URL routes + settings table
+- `docs/django_developer/helpers/settings_reference.md` — BOUNCER and PUBLIC_MESSAGE namespaces
+- `docs/web_developer/account/public_messages.md` — new REST contract doc
+- `docs/web_developer/account/README.md` — index entry
+- `CHANGELOG.md`
+
+### Security Review
+Two findings from the security-review agent:
+- **Fixed**: incident.report_event no longer interpolates submitter-supplied email into the event `details` string. Email now goes through kwargs and is sanitized by `reporter._create_event_dict`.
+- **Documented**: `BOUNCER_REQUIRE_TOKEN` default-False (log-only) means production deployments that never flip the flag rely solely on the 5-per-5-min rate limit for bot defense. Already called out in `bouncer.md`.
+
+Informational findings (`metadata__contains` is Postgres-specific; `notify_public_messages` lives in user-writable JSON but only grants email subscription — no elevated access) are documented but not changed.
+
+### Follow-up
+- Web-mojo admin UI: `web-mojo/planning/requests/public-messages-admin.md` — read/triage admin interface in the Messaging nav.
+- Consider a startup warning when `BOUNCER_REQUIRE_TOKEN=False` on deployments that expose the submit endpoint (security review recommendation).

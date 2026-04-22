@@ -240,6 +240,7 @@ for a full custom stylesheet hosted on your CDN.
 |------|--------|------|-------------|
 | `/{BOUNCER_LOGIN_PATH}` | GET | `on_login_page` | Bouncer-gated login page |
 | `/{BOUNCER_REGISTER_PATH}` | GET | `on_register_page` | Bouncer-gated registration page |
+| `/{BOUNCER_CONTACT_PATH}` | GET | `on_contact_page` | Bouncer-gated contact/support page |
 | `/login` | GET | `on_decoy_page` | Honeypot decoy |
 | `/login` | POST | `on_decoy_post` | Dead endpoint — logs, returns fake error |
 | `/signin` | GET/POST | (same) | Honeypot decoy |
@@ -327,5 +328,6 @@ not hidden by JS).
 |---------|---------|-------------|
 | `BOUNCER_LOGIN_PATH` | `'auth'` | Real login page URL path |
 | `BOUNCER_REGISTER_PATH` | `'register'` | Real registration page URL path |
+| `BOUNCER_CONTACT_PATH` | `'contact'` | Bouncer-gated contact/support page URL path |
 
 See [bouncer.md](bouncer.md) for the full bouncer settings reference.

@@ -59,8 +59,11 @@ def on_submit_public_message(request):
         pass
 
     try:
+        # Do NOT interpolate submitter-supplied email into `details` — it ends up
+        # in the Event title/details verbatim. Keep user-controlled fields in
+        # kwargs, which go through sanitize_dict in reporter._create_event_dict.
         incident.report_event(
-            f"Public message received: kind={raw_kind} email={common.get('email', '')} "
+            f"Public message received: kind={raw_kind} message_id={msg.id} "
             f"group={getattr(group, 'id', None)}",
             category='security:bouncer:public_message',
             scope='account',
@@ -69,6 +72,7 @@ def on_submit_public_message(request):
             kind=raw_kind,
             message_id=msg.id,
             group_id=getattr(group, 'id', None),
+            submitter_email=common.get('email', ''),
         )
     except Exception as err:
         logger.warning(f"public_message: incident.report_event failed: {err}")
