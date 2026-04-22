@@ -322,3 +322,6 @@ Informational findings (`metadata__contains` is Postgres-specific; `notify_publi
 ### Follow-up
 - Web-mojo admin UI: `web-mojo/planning/requests/public-messages-admin.md` — read/triage admin interface in the Messaging nav.
 - Consider a startup warning when `BOUNCER_REQUIRE_TOKEN=False` on deployments that expose the submit endpoint (security review recommendation).
+
+### Post-resolution additions
+- **b6d715e** — accept free-form client `metadata: {...}` so marketing pages can attach utm / referrer / landing_page tags. Sanitized (flat primitives, key regex, ≤ 25 keys, ≤ 500-char values) with kind-schema keys reserved so `severity` / `category` can't be spoofed. 3 new tests (28 total, all passing). Docs updated in `bouncer.md` and `public_messages.md`.
