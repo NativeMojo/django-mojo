@@ -15,3 +15,4 @@ from .bouncer_device import BouncerDevice
 from .bouncer_signal import BouncerSignal
 from .bot_signature import BotSignature
 from .login_event import UserLoginEvent
+from .public_message import PublicMessage

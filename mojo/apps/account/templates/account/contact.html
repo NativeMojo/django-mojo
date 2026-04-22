@@ -1,0 +1,108 @@
+{% extends "account/auth_base.html" %}
+
+{% block page_title %}{{ kind_title }}{% endblock %}
+
+{% block title %}{{ kind_title }}{% endblock %}
+
+{% block subtitle_block %}{{ kind_subtitle }}{% endblock %}
+
+{% block content %}
+<div id="view-contact" class="mat-view is-active">
+    <form id="form-contact" novalidate data-kind="{{ kind }}">
+        {% for field in kind_fields %}
+        <div class="mat-field">
+            <label class="mat-label" for="pm-{{ field.name }}">{{ field.label }}</label>
+            {% if field.input == "textarea" %}
+            <textarea class="mat-input" id="pm-{{ field.name }}" name="{{ field.name }}"
+                      placeholder="{{ field.placeholder|default:'' }}"
+                      maxlength="{{ field.max_length }}"
+                      rows="6"
+                      {% if field.required %}required{% endif %}></textarea>
+            {% elif field.input == "select" %}
+            <select class="mat-input" id="pm-{{ field.name }}" name="{{ field.name }}"
+                    {% if field.required %}required{% endif %}>
+                <option value="">— Select —</option>
+                {% for value, label in field.choices %}
+                <option value="{{ value }}">{{ label }}</option>
+                {% endfor %}
+            </select>
+            {% else %}
+            <input class="mat-input" type="{{ field.input }}"
+                   id="pm-{{ field.name }}" name="{{ field.name }}"
+                   placeholder="{{ field.placeholder|default:'' }}"
+                   maxlength="{{ field.max_length }}"
+                   {% if field.required %}required{% endif %} />
+            {% endif %}
+        </div>
+        {% endfor %}
+
+        <button class="mat-btn mat-btn-primary" type="submit" id="btn-contact-submit">
+            <span class="mat-btn-text">Send Message</span>
+            <span class="mat-spinner"></span>
+        </button>
+    </form>
+
+    <div class="mat-footer-links">
+        {% for k in known_kinds %}
+        {% if k != kind %}
+        <span class="mat-footer-link">
+            <a href="?kind={{ k }}{% if group_uuid %}&amp;group={{ group_uuid }}{% endif %}">
+                Switch to {{ k|cut:"_"|capfirst }}
+            </a>
+        </span>
+        {% endif %}
+        {% endfor %}
+    </div>
+</div>
+{% endblock %}
+
+{% block page_script %}
+<script>
+(function () {
+    var form = document.getElementById("form-contact");
+    if (!form) return;
+    var submitBtn = document.getElementById("btn-contact-submit");
+    var submitUrl = (window._matConfig && window._matConfig.apiBase ? window._matConfig.apiBase : "")
+        + "/api/{{ contact_submit_url }}";
+
+    function collect() {
+        var data = { kind: form.dataset.kind || "{{ kind }}" };
+        var inputs = form.querySelectorAll("input, textarea, select");
+        for (var i = 0; i < inputs.length; i++) {
+            data[inputs[i].name] = inputs[i].value;
+        }
+        var bt = (window.MojoAuth && window.MojoAuth.getBouncerToken) ? window.MojoAuth.getBouncerToken() : "";
+        if (bt) data.bouncer_token = bt;
+        return data;
+    }
+
+    form.addEventListener("submit", function (e) {
+        e.preventDefault();
+        window._mat.hideMessage();
+        window._mat.setLoading(submitBtn, true);
+
+        fetch(submitUrl, {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(collect()),
+        })
+        .then(function (resp) { return resp.json().then(function (body) { return { ok: resp.ok, status: resp.status, body: body }; }); })
+        .then(function (r) {
+            window._mat.setLoading(submitBtn, false);
+            if (r.ok && r.body && r.body.status) {
+                form.reset();
+                window._mat.showMessage("Thanks — we received your message.", "success");
+            } else {
+                var msg = (r.body && (r.body.error || r.body.reason)) || "Something went wrong — please try again.";
+                window._mat.showMessage(msg, "error");
+            }
+        })
+        .catch(function () {
+            window._mat.setLoading(submitBtn, false);
+            window._mat.showMessage("Network error — please try again.", "error");
+        });
+    });
+})();
+</script>
+{% endblock %}

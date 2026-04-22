@@ -270,6 +270,8 @@ def _serve_challenge(request, challenge_tier=1, page_type='login', group=None):
     # After challenge, redirect back to the page that sent them here
     if page_type == 'registration':
         redirect_path = settings.get_static('BOUNCER_REGISTER_PATH', 'register')
+    elif page_type == 'public_message':
+        redirect_path = settings.get_static('BOUNCER_CONTACT_PATH', 'contact')
     else:
         redirect_path = settings.get_static('BOUNCER_LOGIN_PATH', 'auth')
     # Preserve group, redirect, and back params through the challenge redirect
@@ -305,6 +307,86 @@ def _serve_decoy(request):
         'logo_url': settings.get_static('BOUNCER_LOGO_URL', ''),
         'accent_color': settings.get_static('BOUNCER_ACCENT_COLOR', ''),
     })
+
+
+# ---------------------------------------------------------------------------
+# Contact / Support page (gated) — reuses bouncer challenge + token flow
+# ---------------------------------------------------------------------------
+
+_CONTACT_PATH = settings.get_static('BOUNCER_CONTACT_PATH', 'contact')
+_ABS_CONTACT_PATH = f'/{_CONTACT_PATH}'
+
+
+@md.GET(_ABS_CONTACT_PATH)
+@md.public_endpoint("Bouncer-gated public message (contact/support) page")
+def on_contact_page(request):
+    """Same bouncer gate as login/register — serves challenge, full page, or decoy."""
+    from mojo.apps.account.services.bouncer.learner import check_signature_cache
+    from mojo.apps.account.services.bouncer.environment import EnvironmentService
+    from mojo.apps.account.services.bouncer.scoring import RiskScorer, ScoringContext
+
+    if DISABLE_LOGIN:
+        from django.http import Http404
+        raise Http404("Page not found")
+
+    group = _resolve_group(request)
+    ua = request.user_agent
+    fingerprint_id = request.DATA.get('fp', '')
+    kind = request.DATA.get('kind', '')
+
+    matched, sig_type, sig_value = check_signature_cache(request.ip, ua, fingerprint_id)
+    if matched:
+        logger.info(f"bouncer: pre-screen blocked by signature {sig_type}:{sig_value} ip={request.ip}")
+        try:
+            metrics.record("bouncer:pre_screen_blocks", category="bouncer")
+        except Exception:
+            pass
+        return _serve_decoy(request)
+
+    pass_cookie = request.COOKIES.get('mbp', '')
+    if pass_cookie:
+        cookie_muid = verify_pass_cookie(pass_cookie, request.ip)
+        if cookie_muid:
+            return _serve_contact(request, kind=kind, group=group)
+
+    geo_ip = _geolocate(request.ip)
+    server_signals = EnvironmentService.analyze_request(request, geo_ip)
+    context = ScoringContext(
+        client_signals={},
+        server_signals=server_signals,
+        device_session=None,
+        page_type='public_message',
+        request=None,
+    )
+    result = RiskScorer.score(context)
+
+    if result.decision == 'block':
+        logger.info(f"bouncer: pre-screen blocked ip={request.ip} score={result.score}")
+        try:
+            metrics.record("bouncer:pre_screen_blocks", category="bouncer")
+        except Exception:
+            pass
+        return _serve_decoy(request)
+
+    if result.score >= 40:
+        challenge_tier = 3
+    elif result.score >= 20:
+        challenge_tier = 2
+    else:
+        challenge_tier = 1
+    return _serve_challenge(request, challenge_tier, page_type='public_message', group=group)
+
+
+def _serve_contact(request, kind='', group=None):
+    from mojo.apps.account.services import public_message as svc
+
+    ctx = _auth_context(request, group=group)
+    kind_ctx = svc.render_context_for_kind(kind)
+    ctx.update(kind_ctx)
+    ctx['page_title'] = kind_ctx['kind_title']
+    ctx['subtitle'] = kind_ctx['kind_subtitle']
+    ctx['contact_submit_url'] = 'account/bouncer/message'
+    return render(request, 'account/contact.html', ctx)
 
 
 # ---------------------------------------------------------------------------

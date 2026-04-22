@@ -37,3 +37,4 @@
 - [Notifications](notifications.md) — Inbox, mark read, WebSocket delivery
 - [GeoIP](geoip.md) — IP geolocation and time lookup endpoints
 - [Login Events](login_events.md) — Login history with geolocation, aggregation for maps, anomaly detection
+- [Public Messages](public_messages.md) — Bouncer-gated contact / support form and admin endpoint

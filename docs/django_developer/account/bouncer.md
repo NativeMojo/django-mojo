@@ -399,3 +399,115 @@ Or publish the scheduled job:
 from mojo.apps import jobs
 jobs.publish('mojo.apps.account.asyncjobs.refresh_bouncer_sig_cache', {})
 ```
+
+---
+
+## Public Messages (Contact / Support)
+
+Public (unauthenticated) contact / support intake reuses the bouncer gate so the
+same bot protection that covers login also covers every inbound message.
+
+```
+Request → GET BOUNCER_CONTACT_PATH (default: /contact)
+              ↓  (same pipeline as /auth, page_type='public_message')
+     signature cache → pass cookie → pre-screen → decoy / challenge / page
+              ↓
+     POST /api/account/bouncer/message
+        @md.requires_bouncer_token('public_message') — single-use token
+        @md.strict_rate_limit('public_message_submit', ip_limit=5, ip_window=300)
+              ↓
+     PublicMessage saved + incident event + metric + notify_admins(msg)
+```
+
+### Kinds
+
+Field schemas live in `mojo.apps.account.services.public_message.KIND_SCHEMAS` —
+a single dict drives both form rendering and submit validation. v1 ships two:
+
+| Kind | Common fields | Metadata fields |
+|---|---|---|
+| `contact_us` | name, email, message | company (optional) |
+| `support` | name, email, message | category (billing/account/bug/other), severity (low/normal/high) |
+
+Adding a kind means adding one entry to `KIND_SCHEMAS`. No template or validator
+changes are required.
+
+### Endpoint
+
+```
+GET  /contact?kind=<kind>      — bouncer-gated HTML form page
+POST /api/account/bouncer/message  — submit (bouncer token required)
+GET/POST /api/account/public_message[/<pk>]  — admin list / detail
+```
+
+Unknown `kind` on the page falls back to `contact_us`. Unknown `kind` on the
+submit endpoint returns 400.
+
+### Model
+
+```python
+from mojo.apps.account.models import PublicMessage
+
+msg = PublicMessage.objects.filter(status='open').latest('created')
+msg.kind          # 'contact_us' | 'support'
+msg.name, msg.email, msg.subject, msg.message
+msg.metadata      # kind-specific fields (company, category, severity, …)
+msg.status        # 'open' | 'closed'
+msg.group         # set when the bouncer resolved a group for the request
+msg.ip_address    # captured at submit
+```
+
+RestMeta:
+- `VIEW_PERMS = ["view_support", "security", "support"]`
+- `SAVE_PERMS = ["manage_support", "security", "support"]`
+- `DELETE_PERMS = ["manage_support"]`
+- `GROUP_FIELD = "group"` — admins with only group-scoped perms see just their group's messages.
+
+### Notifications
+
+Every flagged user receives a templated email when a message is submitted.
+Flag is a single boolean under the `protected` metadata namespace:
+
+```python
+user.set_protected_metadata("notify_public_messages", True)
+```
+
+- Ungrouped message → every flagged user across the system.
+- Group-scoped message → only flagged users who are active members of that group.
+- Per-recipient send failures are logged and skipped; the loop continues.
+
+Admin tooling is expected to set this flag — it sits under `protected` so
+end-users cannot toggle their own subscription through the standard user REST
+graph.
+
+Email template: `public_message_notify` (seed included; override by name in
+`EmailTemplate` or via the `PUBLIC_MESSAGE_NOTIFY_TEMPLATE` setting).
+
+### Settings
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `BOUNCER_CONTACT_PATH` | `contact` | URL path for the gated contact/support page |
+| `BOUNCER_PUBLIC_MESSAGE_MAX_LENGTH` | `4000` | Cap on the `message` field at submit time |
+| `PUBLIC_MESSAGE_NOTIFY_SUBJECT` | `"New {kind} message"` | `.format(kind=...)` substitution |
+| `PUBLIC_MESSAGE_NOTIFY_TEMPLATE` | `public_message_notify` | EmailTemplate name |
+
+### Rollout
+
+The submit endpoint uses `@md.requires_bouncer_token('public_message')`. With
+`BOUNCER_REQUIRE_TOKEN=False` (default), missing or invalid tokens are logged
+but the request proceeds — safe for gradual rollout behind a marketing site
+that may not yet be serving the bouncer gate. Flip to `True` once clients are
+updated, or opt-in per-group via `group.metadata['require_bouncer_token']=True`.
+
+The contact page itself is always bouncer-gated — there is no opt-out for the
+page pipeline.
+
+### Moderation
+
+The service runs `mojo.helpers.content_guard.check_text` on the name, subject,
+and message fields at submit time. A `decision='block'` result raises
+`ValueError('<field>:blocked')` which the endpoint maps to 400. Any exception
+inside content_guard is swallowed and logged (fail-open) so a broken
+moderation engine cannot take contact submissions offline.
+

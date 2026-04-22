@@ -1,0 +1,15 @@
+{
+  "name": "public_message_notify",
+  "metadata": {
+    "description": "Notification email sent to admins when a public (contact/support) message is submitted through the bouncer.",
+    "context_keys": ["message", "group_name"],
+    "notes": [
+      "Sent to every User flagged with metadata.protected.notify_public_messages=True.",
+      "Group-scoped messages only notify members of that group.",
+      "Subject is overridden at call time via PUBLIC_MESSAGE_NOTIFY_SUBJECT setting."
+    ]
+  },
+  "subject_template": "New {{ message.kind }} message from {{ message.name }}",
+  "text_template": "A new public message was submitted.\n\nKind: {{ message.kind }}\nFrom: {{ message.name }} <{{ message.email }}>\n{% if group_name %}Group: {{ group_name }}\n{% endif %}{% if message.metadata.company %}Company: {{ message.metadata.company }}\n{% endif %}{% if message.metadata.category %}Category: {{ message.metadata.category }}\n{% endif %}{% if message.metadata.severity %}Severity: {{ message.metadata.severity }}\n{% endif %}\nMessage:\n{{ message.message }}\n\nSubmitted: {{ message.created }}\nMessage ID: {{ message.id }}\n",
+  "html_template": "<!doctype html>\n<html lang=\"en\">\n  <head>\n    <meta charset=\"utf-8\">\n    <title>New {{ message.kind }} message</title>\n  </head>\n  <body style=\"margin:0;padding:0;background:#f6f7f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#111;\">\n    <div style=\"max-width:640px;margin:0 auto;padding:24px;\">\n      <div style=\"background:#ffffff;border:1px solid #e6e8ec;border-radius:10px;padding:24px;\">\n        <h1 style=\"margin:0 0 12px 0;font-size:20px;line-height:1.3;\">New {{ message.kind }} message</h1>\n        <p style=\"margin:0 0 16px 0;font-size:14px;color:#333;\">\n          <strong>From:</strong> {{ message.name }} &lt;{{ message.email }}&gt;<br>\n          {% if group_name %}<strong>Group:</strong> {{ group_name }}<br>{% endif %}\n          {% if message.metadata.company %}<strong>Company:</strong> {{ message.metadata.company }}<br>{% endif %}\n          {% if message.metadata.category %}<strong>Category:</strong> {{ message.metadata.category }}<br>{% endif %}\n          {% if message.metadata.severity %}<strong>Severity:</strong> {{ message.metadata.severity }}<br>{% endif %}\n        </p>\n        <div style=\"background:#f9fafb;border:1px solid #e6e8ec;border-radius:6px;padding:16px;margin:16px 0;white-space:pre-wrap;font-size:14px;color:#111;\">{{ message.message }}</div>\n        <p style=\"margin:16px 0 0 0;font-size:12px;color:#666;\">Message ID: {{ message.id }} &bull; {{ message.created }}</p>\n      </div>\n    </div>\n  </body>\n</html>\n"
+}

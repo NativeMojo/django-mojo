@@ -1,5 +1,8 @@
 ## v1.1.0 - (current)
 
+### Added
+- **Bouncer public messages (contact / support intake)** — new `account.PublicMessage` model, bouncer-gated HTML page at `/contact` (configurable via `BOUNCER_CONTACT_PATH`), and public submit endpoint `POST /api/account/bouncer/message` protected by `@md.requires_bouncer_token('public_message')` + `@md.strict_rate_limit('public_message_submit', ip_limit=5, ip_window=300)`. Ships with `contact_us` and `support` kinds — schemas live in `mojo.apps.account.services.public_message.KIND_SCHEMAS` as a single source of truth for both the form renderer and submit validator. Submissions fire an incident event, a metric, and an email notification to every `User` flagged via `metadata.protected.notify_public_messages=True` (group-scoped when the bouncer resolves a group). Admin list/detail/status-update surface at `/api/account/public_message[/<pk>]` behind `view_support` / `manage_support` / `support` / `security` perms with automatic group-scoped filtering. See `docs/django_developer/account/bouncer.md` § Public Messages and `docs/web_developer/account/public_messages.md`.
+
 ## v1.1.29 - April 20, 2026
 
 Security AI update
