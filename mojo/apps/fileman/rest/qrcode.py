@@ -9,6 +9,7 @@ from mojo.helpers.qrcode import QRCodeError, build_vcard, generate_qrcode
 @md.URL("/api/qrcode")
 @md.URL("qrcode")
 @md.public_endpoint("we allow this to be a public endpoint")
+@md.rate_limit("qrcode", ip_limit=60, ip_window=60)
 @md.requires_params("data")
 def on_qrcode(request):
     """
@@ -42,6 +43,7 @@ def on_qrcode(request):
 @md.URL("/api/qrcode/vcard")
 @md.URL("qrcode/vcard")
 @md.public_endpoint("we allow this to be a public endpoint")
+@md.rate_limit("qrcode_vcard", ip_limit=30, ip_window=60)
 @md.requires_params("vcard")
 def on_qrcode_vcard(request):
     """

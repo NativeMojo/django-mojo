@@ -14,7 +14,7 @@ The `fileman` REST module exposes a simple QR code generator backed by a reusabl
   - `color`: foreground hex (`#000000` default)
   - `background`: background hex (`#FFFFFF` default)
   - `base64_format`: when `format=base64`, choose `png` (default) or `svg`
-  - `logo`: base64-encoded image to center overlay
+  - `logo`: base64-encoded image to center overlay (max 512KB decoded)
   - `logo_scale`: fraction of QR size for logo (0.05–0.35, default 0.2)
   - `filename`: set download filename (PNG/SVG responses only)
   - `download`: truthy flag to force download disposition
@@ -132,6 +132,12 @@ END:VCARD
 - vCard 3.0 is the default because all modern iOS/Android scanners support it. MeCard is more compact but has gaps in niche scanners — opt in with `vcard_format: "mecard"` only when payload size matters.
 - Logo overlay (`logo` param) only applies to PNG output. When `format=svg`, the logo is ignored (same as the base `/api/qrcode` endpoint).
 - Missing `vcard.name` returns a 400 error.
+
+### Rate Limits
+
+- `POST /api/qrcode` — 60 requests per minute per IP.
+- `POST /api/qrcode/vcard` — 30 requests per minute per IP.
+- `logo` payloads are capped at 512KB decoded on both endpoints.
 
 ## Helper Usage
 

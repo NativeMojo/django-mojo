@@ -236,6 +236,19 @@ def test_build_vcard_unknown_format(opts):
         assert_true(False, "unknown format should raise QRCodeError")
 
 
+@th.unit_test("oversized logo rejected with QRCodeError")
+def test_oversized_logo(opts):
+    import base64 as _b64
+    # 600 KB of data exceeds 512 KB cap
+    oversized = _b64.b64encode(b"x" * (600 * 1024)).decode("ascii")
+    try:
+        generate_qrcode(data="test", logo=oversized)
+    except QRCodeError as exc:
+        assert_true("512" in str(exc) or "limit" in str(exc).lower(), f"error should mention the size limit, got: {exc}")
+    else:
+        assert_true(False, "oversized logo should raise QRCodeError")
+
+
 @th.unit_test("build_vcard empty phone array emits no TEL lines")
 def test_build_vcard_empty_array(opts):
     result = build_vcard({"name": "Jane Doe", "phone": []})

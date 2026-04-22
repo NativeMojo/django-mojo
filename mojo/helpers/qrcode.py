@@ -33,6 +33,7 @@ HEX_COLOR_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}){1,2}$")
 SUPPORTED_FORMATS = {"png", "svg", "base64"}
 SUPPORTED_ERROR_LEVELS = {"l", "m", "q", "h"}
 SUPPORTED_VCARD_FORMATS = {"vcard", "mecard"}
+MAX_LOGO_BYTES = 512 * 1024  # 512 KB cap on decoded logo payload
 ERROR_CORRECTION_MAP = {
     "l": ERROR_CORRECT_L,
     "m": ERROR_CORRECT_M,
@@ -403,7 +404,14 @@ def _decode_base64(value: str) -> bytes:
         raise QRCodeError("Logo must be a base64 encoded string.")
     _, _, payload = value.partition(",")
     candidate = payload or value
+    # Reject oversized payloads before decoding to avoid DoS via large base64 blobs.
+    # ceil(n*3/4) bound; 4/3 * MAX_LOGO_BYTES gives the max base64 string length.
+    if len(candidate) > (MAX_LOGO_BYTES * 4 // 3) + 16:
+        raise QRCodeError("Logo payload exceeds 512KB limit.")
     try:
-        return base64.b64decode(candidate, validate=True)
+        decoded = base64.b64decode(candidate, validate=True)
     except (binascii.Error, ValueError) as exc:
         raise QRCodeError("Invalid base64 logo data.") from exc
+    if len(decoded) > MAX_LOGO_BYTES:
+        raise QRCodeError("Logo payload exceeds 512KB limit.")
+    return decoded
