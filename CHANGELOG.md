@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## v1.1.30 - April 22, 2026
+
+new bouncer contact us, improved qrcode generation
+
+
 ### Added
 - **QR code builder page** — new `GET /qrcode/builder` serves a self-contained HTML form for generating vCard QR codes interactively (name/phone/email/logo/color controls, live preview, PNG download). Useful as an admin/dev tool. Public endpoint; uses the existing `/api/qrcode/vcard` API.
 - **QR code endpoint hardening** — `/api/qrcode` and `/api/qrcode/vcard` now enforce a 512KB cap on decoded `logo` payloads (`MAX_LOGO_BYTES` in `mojo.helpers.qrcode`) and apply `@md.rate_limit` (60/min/IP for base endpoint, 30/min/IP for vcard). Protects the public endpoints against DoS via oversized logo blobs or high-volume image generation.
