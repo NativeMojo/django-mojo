@@ -1646,3 +1646,4 @@ Refresh the user profile to pick up the updated `is_email_verified` or
 | Download encrypted file (get token) | POST | `/api/filevault/file/<id>/unlock` | Required |
 | View own activity log | GET | `/api/logs` | Required + `view_logs` |
 | Generate QR code | GET/POST | `/api/qrcode` | Public |
+| Generate vCard QR code | POST | `/api/qrcode/vcard` | Public |
