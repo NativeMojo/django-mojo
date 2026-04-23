@@ -55,6 +55,19 @@ AWS_STORAGE_BUCKET_NAME = "my-bucket"
 AWS_S3_REGION_NAME = "us-east-1"
 ```
 
+### Backend interface — `download(file_path, local_path)`
+
+All backends used by the renderer pipeline (image, video, audio, document) must implement:
+
+```python
+def download(self, file_path: str, local_path: str) -> None:
+    """Copy the stored file at file_path to a local filesystem path."""
+```
+
+The renderers download the original file to a temp path before processing. The local backend (`FileSystemStorageBackend`) and the S3 backend both implement this. If you write a custom backend, implement `download()` or rendition generation will fail for that backend's files.
+
+See `mojo/apps/fileman/backends/` — each backend inherits `BaseStorageBackend`.
+
 ## Direct Upload Flow (S3)
 
 ```python

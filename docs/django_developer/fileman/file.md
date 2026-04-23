@@ -114,16 +114,23 @@ file.mark_as_completed(file_size=1024, checksum="abc123", commit=True)
 file.mark_as_failed(error_message="Storage error", commit=True)
 ```
 
-`mark_as_completed` also triggers rendition creation automatically.
+`mark_as_completed` enqueues an async rendition job via `mojo.apps.jobs` (channel `"renditions"`). Renditions appear shortly after completion but are not available immediately. See [renditions.md](renditions.md).
 
 ## Renditions
 
-Renditions are alternate versions of a file (thumbnail, resized image, PDF preview):
+Renditions (thumbnails, previews, transcoded video/audio) are produced asynchronously after `mark_as_completed()` succeeds. The `renditions` map may be empty `{}` immediately after completion — re-fetch after a short delay.
 
 ```python
-thumbnail_url = file_instance.thumbnail  # URL of thumbnail rendition
+thumbnail_url = file_instance.thumbnail  # URL of thumbnail rendition, or None
 renditions = file_instance.renditions    # objict of all renditions by role
 rendition = file_instance.get_rendition_by_role("thumbnail")
+```
+
+To manually enqueue or re-enqueue rendition work:
+
+```python
+file_instance.publish_renditions()                          # enqueue default renditions
+file_instance.publish_regenerate_renditions(roles=["thumbnail"])  # regenerate specific roles
 ```
 
 ## File on Related Models

@@ -80,6 +80,8 @@ curl -X POST \
 }
 ```
 
+The file's `upload_status` becomes `completed` immediately. Renditions (thumbnails, previews, etc.) are generated **asynchronously** in the background — the `renditions` map may be empty `{}` right after this call. Re-fetch the file after a short delay if you need renditions.
+
 ### Step 4: Associate with a Model (optional)
 
 If you want to associate the uploaded file with a model instance, set the relevant field to the returned file id after upload completes.

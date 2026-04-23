@@ -215,12 +215,24 @@ class File(models.Model, MojoModel):
                 self.generate_storage_filename()
 
     def on_rest_pre_delete(self):
-        # we need to handle the deletion of the file from storage
+        # Remove every rendition's storage object (each row knows its own
+        # storage_path — the renderers use inconsistent path conventions,
+        # so walking rows is the only layout-agnostic way to clean up).
+        backend = self.file_manager.backend
+        for rendition in self.file_renditions.all():
+            if rendition.storage_path:
+                try:
+                    backend.delete(rendition.storage_path)
+                except Exception as e:
+                    logger.warning("on_rest_pre_delete: failed to delete rendition %s (%s): %s",
+                                   rendition.id, rendition.storage_path, str(e))
+        # Then the original.
         if self.storage_file_path:
-            name, ext = os.path.splitext(self.filename)
-            renditions_path = os.path.join(self.file_manager.root_path, name)
-            self.file_manager.backend.delete_folder(renditions_path)
-            self.file_manager.backend.delete(self.storage_file_path)
+            try:
+                backend.delete(self.storage_file_path)
+            except Exception as e:
+                logger.warning("on_rest_pre_delete: failed to delete original %s: %s",
+                               self.storage_file_path, str(e))
 
     def generate_upload_token(self, commit=False):
         """Generate a unique upload token"""
@@ -324,6 +336,11 @@ class File(models.Model, MojoModel):
                 roles = req.DATA.get("roles", None)
             self.publish_regenerate_renditions(roles=roles)
 
+    # Upper bound on how many rendition roles a single regenerate request
+    # may target. Prevents a caller with manage_files from kicking off an
+    # unbounded ffmpeg loop on the worker.
+    MAX_REGENERATE_ROLES = 20
+
     def set_filename(self, filename):
         self.filename = filename
         if not self.content_type:
@@ -360,16 +377,37 @@ class File(models.Model, MojoModel):
         transaction.on_commit(_publish)
 
     def publish_regenerate_renditions(self, roles=None):
-        """Enqueue an async job to regenerate renditions (all or specified roles)."""
+        """Enqueue an async job to regenerate renditions (all or specified roles).
+
+        `roles` is sanitized: non-iterables become None (regenerate all);
+        each entry is coerced to a stripped string, blanks dropped, and the
+        list is capped at MAX_REGENERATE_ROLES to prevent unbounded worker
+        loops from a compromised/overeager caller.
+        """
         from mojo.apps import jobs
 
         file_id = self.id
         if not file_id:
             return None
 
-        payload = {"file_id": file_id}
+        sanitized = None
         if roles:
-            payload["roles"] = list(roles)
+            if isinstance(roles, str) or not hasattr(roles, "__iter__"):
+                # Not a list — ignore silently; caller gets a full regenerate.
+                sanitized = None
+            else:
+                sanitized = []
+                for r in roles:
+                    if not isinstance(r, str):
+                        continue
+                    r = r.strip()
+                    if r:
+                        sanitized.append(r)
+                sanitized = sanitized[: self.MAX_REGENERATE_ROLES] or None
+
+        payload = {"file_id": file_id}
+        if sanitized:
+            payload["roles"] = sanitized
 
         def _publish():
             try:
