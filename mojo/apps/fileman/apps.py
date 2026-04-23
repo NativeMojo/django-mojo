@@ -10,6 +10,4 @@ class FilemanConfig(AppConfig):
         """
         Perform initialization tasks when the app is ready
         """
-        # Import signal handlers if any
-        # from . import signals
-        pass
+        return None

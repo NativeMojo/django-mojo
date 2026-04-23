@@ -4,6 +4,88 @@ from mojo.helpers import logit
 logger = logit.get_logger("fileman", "fileman.log")
 
 
+def process_file_renditions(job):
+    """Create all default renditions for a completed File.
+
+    Payload:
+        file_id: int — the File primary key
+
+    Idempotent: the renderer short-circuits roles that already exist.
+    """
+    from mojo.apps.fileman.models import File
+    from mojo.apps.fileman import renderer
+
+    file_id = job.payload.get("file_id") if isinstance(job.payload, dict) else None
+    if not file_id:
+        logger.warning("process_file_renditions: missing file_id in payload")
+        return "completed:skipped=no-file-id"
+
+    try:
+        f = File.objects.get(pk=file_id)
+    except File.DoesNotExist:
+        logger.info("process_file_renditions: file %s no longer exists", file_id)
+        return "completed:skipped=file-missing"
+
+    if not f.is_completed:
+        logger.info("process_file_renditions: file %s not completed (status=%s)",
+                    file_id, f.upload_status)
+        return "completed:skipped=not-completed"
+
+    created = renderer.create_all_renditions(f)
+    logger.info("process_file_renditions: file %s created %d renditions", file_id, len(created))
+    return f"completed:created={len(created)}"
+
+
+def regenerate_renditions(job):
+    """Regenerate specific or all renditions for a File.
+
+    Payload:
+        file_id: int — the File primary key
+        roles: list[str] | None — specific roles to regenerate (None = all defaults)
+    """
+    from mojo.apps.fileman.models import File, FileRendition
+    from mojo.apps.fileman import renderer
+
+    payload = job.payload if isinstance(job.payload, dict) else {}
+    file_id = payload.get("file_id")
+    roles = payload.get("roles")
+
+    if not file_id:
+        logger.warning("regenerate_renditions: missing file_id in payload")
+        return "completed:skipped=no-file-id"
+
+    try:
+        f = File.objects.get(pk=file_id)
+    except File.DoesNotExist:
+        logger.info("regenerate_renditions: file %s no longer exists", file_id)
+        return "completed:skipped=file-missing"
+
+    rndr = renderer.get_renderer_for_file(f)
+    if rndr is None:
+        logger.warning("regenerate_renditions: no renderer for file %s (category=%s)",
+                       file_id, f.category)
+        return "completed:skipped=no-renderer"
+
+    created = []
+    if roles:
+        # Delete only the requested roles, then recreate each.
+        FileRendition.objects.filter(original_file=f, role__in=roles).delete()
+        for role in roles:
+            try:
+                r = rndr.create_rendition(role)
+                if r:
+                    created.append(r)
+            except Exception as e:
+                logger.exception("regenerate_renditions: role=%s failed: %s", role, str(e))
+    else:
+        # Wipe all existing renditions and recreate defaults.
+        rndr.cleanup_renditions()
+        created = rndr.create_all_renditions()
+
+    logger.info("regenerate_renditions: file %s recreated %d renditions", file_id, len(created))
+    return f"completed:created={len(created)}"
+
+
 def _parse_expires_at(value):
     """Parse an ISO 8601 expires_at value into a datetime. Returns None on failure."""
     if not value or not isinstance(value, str):

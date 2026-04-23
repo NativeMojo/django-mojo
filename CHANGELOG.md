@@ -1,5 +1,17 @@
 ## v1.1.0 - (current)
 
+### Changed
+- **Fileman renditions are now async** — `File.mark_as_completed()` no longer blocks on ffmpeg/Pillow work. It enqueues a `mojo.apps.jobs` job (`mojo.apps.fileman.asyncjobs.process_file_renditions`) on the `renditions` channel via `transaction.on_commit`, with `idempotency_key="renditions:<file_id>"` to collapse duplicate publishes. The file's `upload_status` flips to `completed` immediately; the `renditions` map may be empty briefly until the worker finishes. Fixes video renditions never appearing (the previous synchronous path timed out on any non-trivial video).
+- **Fileman `regenerate_renditions` action** — `POST /api/fileman/file/<id>` with `{"action": "regenerate_renditions"}` enqueues a background regenerate job. Optional `roles: [...]` scopes regeneration to specific rendition roles; omit to rebuild all defaults.
+- **Fileman REST hardening** — `/api/fileman/manager` and `/api/fileman/file` endpoints now decorate with `@md.uses_model_security(Model)` (required by the current framework for RestMeta endpoints). `FileRendition` REST is now read-only (`CAN_CREATE=False`, `CAN_DELETE=False`) — renditions are derived data and are managed through the parent `File` (cascade on delete, `regenerate_renditions` action for rebuild).
+
+### Removed
+- **Fileman Celery layer removed** — `mojo/apps/fileman/tasks.py` and `mojo/apps/fileman/signals.py` deleted. They were never wired (the signals import in `apps.py` had always been commented out), `tasks.py` had a broken import (`process_new_file`), and Celery was not a declared dependency. All background work now flows through `mojo.apps.jobs`.
+- **Fileman dead utils removed** — `get_file_manager`, `validate_file_request`, `initiate_upload`, `finalize_upload` deleted from `mojo/apps/fileman/utils/upload.py`. They referenced `File` fields (`uploaded_by`, `original_filename`, `file_path`, `upload_expires_at`) that no longer exist. `direct_upload` and `get_download_url` — the live functions — are preserved.
+
+### Docs
+- Renamed `docs/django_developer/files/` → `docs/django_developer/fileman/` and `docs/web_developer/files/` → `docs/web_developer/fileman/` (folder names now match the URL prefix and avoid confusion with the `files` permission category). New `docs/django_developer/fileman/renditions.md` covers the async pipeline.
+
 ## v1.1.30 - April 22, 2026
 
 new bouncer contact us, improved qrcode generation

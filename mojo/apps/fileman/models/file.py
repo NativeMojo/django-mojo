@@ -1,4 +1,4 @@
-from django.db import models
+from django.db import models, transaction
 from mojo.models import MojoModel
 from objict import objict
 import io
@@ -11,6 +11,9 @@ from datetime import datetime
 import os
 from mojo.apps.fileman import utils
 from mojo.apps.fileman.models import FileManager
+from mojo.helpers import logit
+
+logger = logit.get_logger("fileman", "fileman.log")
 
 
 class File(models.Model, MojoModel):
@@ -311,6 +314,15 @@ class File(models.Model, MojoModel):
             self.mark_as_failed(commit=True)
         elif action == "mark_as_uploading":
             self.mark_as_uploading(commit=True)
+        elif action == "regenerate_renditions":
+            # Optional list of specific rendition roles to regenerate.
+            # Passed alongside the action field, e.g.
+            #   {"action": "regenerate_renditions", "roles": ["thumbnail"]}
+            roles = None
+            req = self.active_request
+            if req is not None:
+                roles = req.DATA.get("roles", None)
+            self.publish_regenerate_renditions(roles=roles)
 
     def set_filename(self, filename):
         self.filename = filename
@@ -319,10 +331,58 @@ class File(models.Model, MojoModel):
             self.category = utils.get_file_category(self.content_type)
 
 
-    def create_renditions(self):
-        """Create renditions for the file"""
-        from mojo.apps.fileman import renderer
-        renderer.create_all_renditions(self)
+    def publish_renditions(self):
+        """Enqueue an async job to build all default renditions for this file.
+
+        Uses transaction.on_commit so the worker never reads pre-commit state,
+        and an idempotency key so repeat publishes for the same file collapse.
+        """
+        from mojo.apps import jobs
+
+        file_id = self.id
+        if not file_id:
+            return None
+
+        def _publish():
+            try:
+                jobs.publish(
+                    "mojo.apps.fileman.asyncjobs.process_file_renditions",
+                    {"file_id": file_id},
+                    channel="renditions",
+                    idempotency_key=f"renditions:{file_id}",
+                    max_exec_seconds=1800,
+                )
+            except Exception as e:
+                logger.exception("publish_renditions: file %s failed: %s", file_id, str(e))
+
+        # on_commit fires immediately when there is no active transaction,
+        # so this works in both request-wrapped and standalone code paths.
+        transaction.on_commit(_publish)
+
+    def publish_regenerate_renditions(self, roles=None):
+        """Enqueue an async job to regenerate renditions (all or specified roles)."""
+        from mojo.apps import jobs
+
+        file_id = self.id
+        if not file_id:
+            return None
+
+        payload = {"file_id": file_id}
+        if roles:
+            payload["roles"] = list(roles)
+
+        def _publish():
+            try:
+                jobs.publish(
+                    "mojo.apps.fileman.asyncjobs.regenerate_renditions",
+                    payload,
+                    channel="renditions",
+                    max_exec_seconds=1800,
+                )
+            except Exception as e:
+                logger.exception("publish_regenerate_renditions: file %s failed: %s", file_id, str(e))
+
+        transaction.on_commit(_publish)
 
     def mark_as_uploading(self, commit=False):
         """Mark file as currently being uploaded"""
@@ -338,7 +398,12 @@ class File(models.Model, MojoModel):
             self.checksum = checksum
         if self.file_manager.backend.exists(self.storage_file_path):
             self.upload_status = self.COMPLETED
-            self.create_renditions()
+            if commit:
+                self.atomic_save()
+            # Rendition creation is offloaded to the async jobs engine.
+            # transaction.on_commit keeps the worker from racing the commit.
+            self.publish_renditions()
+            return
         else:
             self.upload_status = self.FAILED
         if commit:

@@ -79,9 +79,11 @@ Deletes the database record and the underlying file from storage (including all 
 
 ## Renditions
 
-Renditions are automatically created when an upload completes (thumbnails, previews, resized images depending on FileManager configuration).
+Renditions (thumbnails, previews, resized images, transcoded video/audio) are created **asynchronously** after a file is marked completed. The server enqueues a background job on the `renditions` channel; the file's `upload_status` flips to `completed` immediately while rendition work runs in the background.
 
-Access via the `renditions` field or `thumbnail` shortcut:
+This means: **immediately after completion the `renditions` map may be empty `{}`**. Poll the file or re-fetch after a short delay until the map is populated.
+
+Access via the `renditions` field or the `thumbnail` shortcut:
 
 ```json
 {
@@ -92,6 +94,29 @@ Access via the `renditions` field or `thumbnail` shortcut:
   }
 }
 ```
+
+### Regenerating renditions
+
+To rebuild renditions (e.g., after changing FileManager settings), POST to the file with the `regenerate_renditions` action.
+
+**POST** `/api/fileman/file/123`
+
+Regenerate all default renditions:
+
+```json
+{ "action": "regenerate_renditions" }
+```
+
+Regenerate only specific roles:
+
+```json
+{
+  "action": "regenerate_renditions",
+  "roles": ["thumbnail", "preview"]
+}
+```
+
+The call returns immediately; the actual work runs on the background worker. Only the named roles (or all, if `roles` is omitted) are replaced.
 
 ## Upload Token Direct Endpoint
 

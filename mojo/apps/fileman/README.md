@@ -440,6 +440,33 @@ def validate_upload(request, file_data):
         raise ValidationError('Upload would exceed user quota')
 ```
 
+## Renditions (async)
+
+Renditions — thumbnails, previews, transcoded video/audio, document page images — are produced by the renderer system under `mojo/apps/fileman/renderer/` and created **asynchronously** after a file is marked completed.
+
+When `File.mark_as_completed()` succeeds it enqueues a job via `mojo.apps.jobs`:
+
+```python
+jobs.publish(
+    "mojo.apps.fileman.asyncjobs.process_file_renditions",
+    {"file_id": file.id},
+    channel="renditions",
+    idempotency_key=f"renditions:{file.id}",
+    max_exec_seconds=1800,
+)
+```
+
+The worker picks it up and runs `renderer.create_all_renditions(file)`. The client-visible `renditions` map on the file may be `{}` briefly after completion until the worker finishes.
+
+Regenerate with the REST action:
+
+```json
+POST /api/fileman/file/<id>
+{"action": "regenerate_renditions", "roles": ["thumbnail"]}
+```
+
+See `docs/django_developer/fileman/renditions.md` for the full pipeline, channel configuration, and how to add a new role.
+
 ## Security Considerations
 
 ### Environment Variables

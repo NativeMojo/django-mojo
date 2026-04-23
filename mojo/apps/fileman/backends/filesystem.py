@@ -250,6 +250,13 @@ class FileSystemStorageBackend(StorageBackend):
         full_path = self._get_full_path(file_path)
         return open(full_path, mode)
 
+    def download(self, file_path: str, local_path: str) -> None:
+        """Copy a stored file to a local path (matches S3 backend contract)."""
+        import shutil as _shutil
+        full_path = self._get_full_path(file_path)
+        os.makedirs(os.path.dirname(local_path) or ".", exist_ok=True)
+        _shutil.copyfile(full_path, local_path)
+
     def list_files(self, path_prefix: str = "", limit: int = 1000) -> List[str]:
         """List files in the file system with optional path prefix"""
         try:

@@ -16,8 +16,12 @@ class FileRendition(models.Model, MojoModel):
     """
 
     class RestMeta:
-        CAN_CREATE = True
-        CAN_DELETE = True
+        # Renditions are derived data produced by the renderer pipeline.
+        # Direct create/delete via REST is not allowed — renditions are
+        # managed through the parent File (cascade on delete, or the
+        # `regenerate_renditions` action on File).
+        CAN_CREATE = False
+        CAN_DELETE = False
         DEFAULT_SORT = "-created"
         VIEW_PERMS = ["view_fileman", "manage_files", "files"]
         SAVE_PERMS = ["manage_files", "files"]

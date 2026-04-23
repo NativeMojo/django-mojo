@@ -199,7 +199,7 @@ For developers building applications with Django-MOJO.
 | [Helpers](docs/django_developer/helpers/README.md) | logit, dates, settings, crypto, request, redis, and other utilities |
 | [Account](docs/django_developer/account/README.md) | User, Group, JWT auth, OAuth, TOTP, passkeys, API keys, sessions |
 | [Logging](docs/django_developer/logging/README.md) | Database logging, security incidents |
-| [Files](docs/django_developer/files/README.md) | File upload, storage backends, renditions |
+| [Fileman](docs/django_developer/fileman/README.md) | File upload, storage backends, renditions |
 | [Email](docs/django_developer/email/README.md) | AWS SES email, templates, inbound handling |
 | [Jobs](docs/django_developer/jobs/README.md) | Async task queue |
 | [Metrics](docs/django_developer/metrics/README.md) | Redis-backed time-series metrics |
@@ -216,7 +216,7 @@ For frontend and mobile developers integrating with Django-MOJO APIs.
 | [Core](docs/web_developer/core/README.md) | Authentication, request format, filtering, pagination, graphs |
 | [Account](docs/web_developer/account/README.md) | Login, users, groups, API keys |
 | [Logging](docs/web_developer/logging/README.md) | Log queries, incident management |
-| [Files](docs/web_developer/files/README.md) | File uploads and downloads |
+| [Fileman](docs/web_developer/fileman/README.md) | File uploads and downloads |
 | [Email](docs/web_developer/email/README.md) | Templates, mailboxes |
 | [Jobs](docs/web_developer/jobs/README.md) | Job status |
 | [Metrics](docs/web_developer/metrics/README.md) | Time-series metrics |

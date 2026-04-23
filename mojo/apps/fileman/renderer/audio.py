@@ -79,10 +79,9 @@ class AudioRenderer(BaseRenderer):
             _, ext = os.path.splitext(self.file.filename)
             temp_path = self.get_temp_path(ext)
             
-            # Download file from storage
-            with open(temp_path, 'wb') as f:
-                backend.download(self.file.storage_file_path, f)
-            
+            # Download file from storage (backend.download writes to a path)
+            backend.download(self.file.storage_file_path, temp_path)
+
             return temp_path
         except Exception as e:
             logger.error(f"Failed to download original audio file: {str(e)}")
