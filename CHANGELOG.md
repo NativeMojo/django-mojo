@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## v1.1.31 - April 23, 2026
+
+BUGFIX in video rendering
+
+
 ### Changed
 - **Fileman renditions are now async** — `File.mark_as_completed()` no longer blocks on ffmpeg/Pillow work. It enqueues a `mojo.apps.jobs` job (`mojo.apps.fileman.asyncjobs.process_file_renditions`) on the `renditions` channel via `transaction.on_commit`, with `idempotency_key="renditions:<file_id>"` to collapse duplicate publishes. The file's `upload_status` flips to `completed` immediately; the `renditions` map may be empty briefly until the worker finishes. Fixes video renditions never appearing (the previous synchronous path timed out on any non-trivial video).
 - **Fileman `regenerate_renditions` action** — `POST /api/fileman/file/<id>` with `{"action": "regenerate_renditions"}` enqueues a background regenerate job. Optional `roles: [...]` scopes regeneration to specific rendition roles; omit to rebuild all defaults.
