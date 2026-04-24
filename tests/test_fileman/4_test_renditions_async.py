@@ -240,7 +240,7 @@ def test_regenerate_action_enqueues(opts):
     opts.client.login(TEST_USER, TEST_PWORD)
     resp = opts.client.post(
         f"/api/fileman/file/{opts.image_file_id}",
-        {"action": "regenerate_renditions", "roles": ["thumbnail"]},
+        {"regenerate_renditions": ["thumbnail"]},
     )
     assert_eq(resp.status_code, 200,
               f"regenerate action should return 200, got {resp.status_code} {getattr(resp, 'response', None)}")

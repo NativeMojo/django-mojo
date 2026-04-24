@@ -16,6 +16,233 @@ from mojo.helpers import logit
 logger = logit.get_logger("fileman", "fileman.log")
 
 
+# --- shortlink integration helpers -------------------------------------------
+# Shortlink is an optional dependency: fileman works fine without it. These
+# helpers no-op (or return the direct URL) when the shortlink app is not
+# installed, or when the global/per-manager toggle is off.
+
+FILEMAN_SHORTLINK_SOURCE = "fileman"
+FILEMAN_SHARE_SOURCE = "fileman-share"
+
+
+def _shortlink_installed():
+    from django.apps import apps
+    return apps.is_installed("mojo.apps.shortlink")
+
+
+def _shortlinks_enabled(file_manager):
+    """Effective on/off state for file URL shortening.
+
+    Order of precedence:
+      1. If the shortlink app is not installed → False.
+      2. Per-FileManager setting `use_shortlinks` (True/False), if set.
+      3. Global setting `FILEMAN_USE_SHORTLINKS` (default True).
+    """
+    if not _shortlink_installed():
+        return False
+    per_fm = file_manager.get_setting("use_shortlinks", None) if file_manager else None
+    if per_fm is not None:
+        return bool(per_fm)
+    from mojo.helpers.settings import settings
+    return bool(settings.get("FILEMAN_USE_SHORTLINKS", True))
+
+
+def _shortlink_base_url():
+    from mojo.helpers.settings import settings
+    base = (
+        settings.get("SHORTLINK_BASE_URL")
+        or settings.get("WEBAPP_BASE_URL")
+        or settings.get("BASE_URL", "")
+    )
+    return (base or "").rstrip("/")
+
+
+def _compose_short_url(code):
+    return f"{_shortlink_base_url()}/s/{code}"
+
+
+def _extract_code_from_short_url(url):
+    # URLs look like "<base>/s/<code>"; take the last path segment.
+    if not url:
+        return None
+    return url.rstrip("/").rsplit("/", 1)[-1] or None
+
+
+def _get_or_create_shortlink_url(file=None, rendition=None):
+    """Return the composed tier-1 short URL for a File or FileRendition.
+
+    If a shortlink_code is already cached on the row and points to an active
+    ShortLink, compose and return `<base>/s/<code>`. Otherwise call
+    `shortlink.shorten(...)` to mint a new row, write the code back to the
+    owning row using a race-safe idempotent UPDATE, and return the URL.
+
+    A stale shortlink_code (row deleted or deactivated) triggers a regenerate.
+    """
+    from mojo.apps.shortlink import shorten
+    from mojo.apps.shortlink.models import ShortLink
+
+    owner = rendition or file
+    if owner is None or not getattr(owner, "id", None):
+        return None
+
+    # Happy path: cached code + active shortlink row → compose and return.
+    code = getattr(owner, "shortlink_code", None)
+    if code:
+        link = ShortLink.objects.filter(code=code, is_active=True).first()
+        if link is not None:
+            return _compose_short_url(code)
+        # Stale code — null it and mint a fresh link.
+        type(owner).objects.filter(pk=owner.pk).update(shortlink_code=None)
+        owner.shortlink_code = None
+
+    # Resolve per-FileManager shortlink options.
+    file_manager = rendition.file_manager if rendition else file.file_manager
+    expire_days = int(file_manager.get_setting("shortlink_expire_days", 0) or 0)
+    track_clicks = bool(file_manager.get_setting("shortlink_track_clicks", False))
+    owner_user = getattr(owner, "user", None)
+    owner_group = getattr(owner, "group", None)
+    # FileRendition has no direct user/group — inherit from parent File.
+    if rendition is not None:
+        owner_user = rendition.original_file.user
+        owner_group = rendition.original_file.group
+
+    # Mint a new ShortLink. resolve_file=True → each click regenerates the
+    # backend URL via get_direct_download_url().
+    kwargs = dict(
+        source=FILEMAN_SHORTLINK_SOURCE,
+        expire_days=expire_days,
+        expire_hours=0,
+        track_clicks=track_clicks,
+        resolve_file=True,
+        bot_passthrough=False,
+        user=owner_user,
+        group=owner_group,
+    )
+    if rendition is not None:
+        short_url = shorten(rendition=rendition, **kwargs)
+    else:
+        short_url = shorten(file=file, **kwargs)
+
+    new_code = _extract_code_from_short_url(short_url)
+    if not new_code:
+        return short_url
+
+    # Race-safe idempotent write: only set if still NULL. If another concurrent
+    # call already wrote a code, keep that one (and our minted row becomes a
+    # harmless orphan — acceptable waste; cleanup cron can sweep by source+age).
+    updated = type(owner).objects.filter(pk=owner.pk, shortlink_code__isnull=True).update(
+        shortlink_code=new_code
+    )
+    if updated == 0:
+        # Re-read to pick up the winner's code.
+        owner.refresh_from_db(fields=["shortlink_code"])
+    else:
+        owner.shortlink_code = new_code
+
+    return _compose_short_url(owner.shortlink_code or new_code)
+
+
+def _mint_share_link(owner, value):
+    """Mint a tier-2 share shortlink for a File or FileRendition.
+
+    `value` is `True` or a dict of {expire_days, expire_hours, track_clicks, note}.
+    Returns {url, code, expires_at, track_clicks} on success, or
+    {status: False, error: ...} when shortlink is unavailable.
+    """
+    if not _shortlink_installed():
+        return {"status": False, "error": "shortlink app is not installed"}
+
+    opts = value if isinstance(value, dict) else {}
+    # Sanitize / clamp.
+    max_days = getattr(owner, "MAX_SHARE_EXPIRE_DAYS", 3650)
+    max_note = getattr(owner, "MAX_SHARE_NOTE_LEN", 512)
+    try:
+        expire_days = int(opts.get("expire_days", 0) or 0)
+    except (TypeError, ValueError):
+        expire_days = 0
+    expire_days = max(0, min(expire_days, max_days))
+    try:
+        expire_hours = int(opts.get("expire_hours", 0) or 0)
+    except (TypeError, ValueError):
+        expire_hours = 0
+    expire_hours = max(0, min(expire_hours, 24 * max_days))
+    track_clicks = bool(opts.get("track_clicks", False))
+    note = opts.get("note")
+    if note is not None:
+        note = str(note)[:max_note]
+    metadata = {"note": note} if note else None
+
+    # Resolve who the sharer is (prefer active request user, fall back to owner's user).
+    req = getattr(owner, "active_request", None)
+    sharer = getattr(req, "user", None) if req is not None else None
+    from mojo.apps.fileman.models.rendition import FileRendition
+    if sharer is None:
+        if isinstance(owner, FileRendition):
+            sharer = owner.original_file.user
+        else:
+            sharer = getattr(owner, "user", None)
+
+    if isinstance(owner, FileRendition):
+        group = owner.original_file.group
+    else:
+        group = getattr(owner, "group", None)
+
+    from mojo.apps.shortlink import shorten
+    kwargs = dict(
+        source=FILEMAN_SHARE_SOURCE,
+        expire_days=expire_days,
+        expire_hours=expire_hours,
+        track_clicks=track_clicks,
+        resolve_file=True,
+        bot_passthrough=False,
+        metadata=metadata,
+        user=sharer,
+        group=group,
+    )
+    if isinstance(owner, FileRendition):
+        short_url = shorten(rendition=owner, **kwargs)
+    else:
+        short_url = shorten(file=owner, **kwargs)
+
+    code = _extract_code_from_short_url(short_url)
+    # Look up the row we just created to capture expires_at.
+    from mojo.apps.shortlink.models import ShortLink
+    link = ShortLink.objects.filter(code=code).first() if code else None
+    expires_at = link.expires_at.isoformat() if (link and link.expires_at) else None
+    # NB: key is named `shortlink_code` (not just `code`) to avoid colliding with
+    # `mojo.helpers.response.JsonResponse` which injects `code = <http_status>`.
+    return {
+        "url": short_url,
+        "shortlink_code": code,
+        "expires_at": expires_at,
+        "track_clicks": track_clicks,
+    }
+
+
+def _delete_fileman_shortlinks(file=None, rendition=None):
+    """Delete auto-generated shortlink rows for a File or FileRendition on delete.
+
+    Scoped to our `source` values so human-created shortlinks pointing at the
+    same file/rendition are preserved.
+    """
+    if not _shortlink_installed():
+        return
+    try:
+        from mojo.apps.shortlink.models import ShortLink
+        q = ShortLink.objects.filter(
+            source__in=[FILEMAN_SHORTLINK_SOURCE, FILEMAN_SHARE_SOURCE]
+        )
+        if rendition is not None:
+            q = q.filter(rendition=rendition)
+        elif file is not None:
+            q = q.filter(file=file)
+        else:
+            return
+        q.delete()
+    except Exception as e:
+        logger.warning("_delete_fileman_shortlinks: cleanup failed: %s", str(e))
+
+
 class File(models.Model, MojoModel):
     """
     File model representing uploaded files with metadata and storage information
@@ -28,7 +255,7 @@ class File(models.Model, MojoModel):
         VIEW_PERMS = ["view_fileman", "manage_files", "files"]
         SAVE_PERMS = ["manage_files", "files"]
         SEARCH_FIELDS = ["filename", "content_type"]
-        POST_SAVE_ACTIONS = ["action"]
+        POST_SAVE_ACTIONS = ["action", "regenerate_renditions", "share"]
         SEARCH_TERMS = [
             "filename",  "content_type",
             ("group", "group__name"),
@@ -191,7 +418,25 @@ class File(models.Model, MojoModel):
         help_text="Whether this file can be accessed without authentication"
     )
 
+    shortlink_code = models.CharField(
+        max_length=10,
+        null=True,
+        blank=True,
+        default=None,
+        db_index=True,
+        help_text="Code of the shortlink that wraps this file's download URL (tier 1, internal)"
+    )
+
     upload_url = None
+
+    # Upper bound on how many rendition roles a single regenerate request
+    # may target. Prevents a caller with manage_files from kicking off an
+    # unbounded ffmpeg loop on the renditions worker.
+    MAX_REGENERATE_ROLES = 20
+    # Maximum days a share shortlink may live. Shares above this are clamped.
+    MAX_SHARE_EXPIRE_DAYS = 3650
+    # Max length of the free-form `note` stored in a share shortlink's metadata.
+    MAX_SHARE_NOTE_LEN = 512
 
     class Meta:
         indexes = [
@@ -233,6 +478,9 @@ class File(models.Model, MojoModel):
             except Exception as e:
                 logger.warning("on_rest_pre_delete: failed to delete original %s: %s",
                                self.storage_file_path, str(e))
+        # Drop auto-generated shortlink rows (tier-1 display + tier-2 share).
+        # Human-created shortlinks (different `source`) stay intact.
+        _delete_fileman_shortlinks(file=self)
 
     def generate_upload_token(self, commit=False):
         """Generate a unique upload token"""
@@ -311,35 +559,62 @@ class File(models.Model, MojoModel):
     def get_rendition_by_role(self, role):
         return self.file_renditions.filter(role=role).first()
 
-    def generate_download_url(self):
-        if self.download_url:
-            return self.download_url
+    def get_direct_download_url(self):
+        """Return the raw backend URL (presigned for private, public for public),
+        bypassing any shortlink wrapping. Used by the shortlink resolver and
+        as the fallback when shortlinks are disabled.
+        """
         if self.file_manager.is_public:
-            self.download_url = self.file_manager.backend.get_url(self.storage_file_path)
+            if not self.download_url:
+                self.download_url = self.file_manager.backend.get_url(self.storage_file_path)
             return self.download_url
-        return self.file_manager.backend.get_url(self.storage_file_path, self.file_manager.get_setting("urls_expire_in", 3600))
+        # Private — regenerate a fresh presigned URL every call.
+        return self.file_manager.backend.get_url(
+            self.storage_file_path,
+            self.file_manager.get_setting("urls_expire_in", 3600),
+        )
+
+    def generate_download_url(self):
+        """Return the URL clients should use.
+
+        When shortlinks are enabled (global + per-manager toggle, and the
+        shortlink app is installed), returns a `/s/<code>` short URL backed
+        by a tier-1 ShortLink row tied to this file. Otherwise returns the
+        raw backend URL (identical to pre-shortlink behavior).
+        """
+        if not _shortlinks_enabled(self.file_manager):
+            return self.get_direct_download_url()
+        return _get_or_create_shortlink_url(self, rendition=None)
 
     def on_action_action(self, action):
+        # Legacy dispatch for the single-verb {"action": "..."} shape.
+        # Kept for existing UI compatibility on lifecycle transitions.
         if action == "mark_as_completed":
             self.mark_as_completed(commit=True)
         elif action == "mark_as_failed":
             self.mark_as_failed(commit=True)
         elif action == "mark_as_uploading":
             self.mark_as_uploading(commit=True)
-        elif action == "regenerate_renditions":
-            # Optional list of specific rendition roles to regenerate.
-            # Passed alongside the action field, e.g.
-            #   {"action": "regenerate_renditions", "roles": ["thumbnail"]}
-            roles = None
-            req = self.active_request
-            if req is not None:
-                roles = req.DATA.get("roles", None)
-            self.publish_regenerate_renditions(roles=roles)
 
-    # Upper bound on how many rendition roles a single regenerate request
-    # may target. Prevents a caller with manage_files from kicking off an
-    # unbounded ffmpeg loop on the worker.
-    MAX_REGENERATE_ROLES = 20
+    def on_action_regenerate_renditions(self, value):
+        """Enqueue a rendition regenerate job.
+
+        Triggered by {"regenerate_renditions": true | ["role1", "role2"]}.
+        - value=True → regenerate all default roles
+        - value=list → regenerate only the named roles
+        """
+        roles = value if isinstance(value, list) else None
+        self.publish_regenerate_renditions(roles=roles)
+        return {"queued": True, "roles": roles}
+
+    def on_action_share(self, value):
+        """Mint a new tier-2 share shortlink for this file.
+
+        Triggered by {"share": true | {"expire_days": 30, "track_clicks": true, "note": "..."}}.
+        Returns {url, code, expires_at, track_clicks}. If shortlink is not
+        installed, returns {status: False, error: "..."}.
+        """
+        return _mint_share_link(self, value)
 
     def set_filename(self, filename):
         self.filename = filename

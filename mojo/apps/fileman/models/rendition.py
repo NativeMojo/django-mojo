@@ -23,6 +23,7 @@ class FileRendition(models.Model, MojoModel):
         CAN_CREATE = False
         CAN_DELETE = False
         DEFAULT_SORT = "-created"
+        POST_SAVE_ACTIONS = ["share"]
         VIEW_PERMS = ["view_fileman", "manage_files", "files"]
         SAVE_PERMS = ["manage_files", "files"]
         SEARCH_FIELDS = ["filename", "content_type"]
@@ -106,6 +107,20 @@ class FileRendition(models.Model, MojoModel):
         help_text="Current status of rendering"
     )
 
+    shortlink_code = models.CharField(
+        max_length=10,
+        null=True,
+        blank=True,
+        default=None,
+        db_index=True,
+        help_text="Code of the shortlink that wraps this rendition's download URL (tier 1, internal)"
+    )
+
+    # Share-action clamps mirrored from File so the rendition share handler
+    # can apply the same policy via _mint_share_link.
+    MAX_SHARE_EXPIRE_DAYS = 3650
+    MAX_SHARE_NOTE_LEN = 512
+
     @property
     def file_manager(self):
         return self.original_file.file_manager
@@ -114,10 +129,42 @@ class FileRendition(models.Model, MojoModel):
     def url(self):
         return self.generate_download_url()
 
-    def generate_download_url(self):
-        if self.download_url:
-            return self.download_url
+    def get_direct_download_url(self):
+        """Return the raw backend URL, bypassing any shortlink wrapping.
+        Used by the shortlink resolver and as the fallback when shortlinks are disabled.
+        """
         if self.file_manager.is_public:
-            self.download_url = self.file_manager.backend.get_url(self.storage_path)
+            if not self.download_url:
+                self.download_url = self.file_manager.backend.get_url(self.storage_path)
             return self.download_url
-        return self.file_manager.backend.get_url(self.storage_path, self.file_manager.get_setting("urls_expire_in", 3600))
+        return self.file_manager.backend.get_url(
+            self.storage_path,
+            self.file_manager.get_setting("urls_expire_in", 3600),
+        )
+
+    def generate_download_url(self):
+        """Return the URL clients should use.
+
+        Shortlink-aware when the shortlink app is installed and the file
+        manager has `use_shortlinks` enabled. Falls back to the raw backend
+        URL in all other cases.
+        """
+        from mojo.apps.fileman.models.file import (
+            _shortlinks_enabled,
+            _get_or_create_shortlink_url,
+        )
+        if not _shortlinks_enabled(self.file_manager):
+            return self.get_direct_download_url()
+        return _get_or_create_shortlink_url(rendition=self)
+
+    def on_action_share(self, value):
+        """Mint a new tier-2 share shortlink for this rendition.
+
+        Triggered by {"share": true | {"expire_days": N, "track_clicks": bool, "note": "..."}}.
+        """
+        from mojo.apps.fileman.models.file import _mint_share_link
+        return _mint_share_link(self, value)
+
+    def on_rest_pre_delete(self):
+        from mojo.apps.fileman.models.file import _delete_fileman_shortlinks
+        _delete_fileman_shortlinks(rendition=self)

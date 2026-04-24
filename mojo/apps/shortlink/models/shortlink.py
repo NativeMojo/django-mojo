@@ -93,6 +93,16 @@ class ShortLink(models.Model, MojoModel):
         help_text="Optional linked file for file-sharing shortlinks"
     )
 
+    rendition = models.ForeignKey(
+        "fileman.FileRendition",
+        related_name="shortlinks",
+        null=True,
+        blank=True,
+        default=None,
+        on_delete=models.SET_NULL,
+        help_text="Optional linked rendition for rendition-sharing shortlinks"
+    )
+
     hit_count = models.IntegerField(default=0)
 
     expires_at = models.DateTimeField(
@@ -151,7 +161,7 @@ class ShortLink(models.Model, MojoModel):
     def create(cls, url="", source="", expire_days=3, expire_hours=0,
                metadata=None, track_clicks=False, resolve_file=True,
                bot_passthrough=False, is_protected=False,
-               user=None, group=None, file=None):
+               user=None, group=None, file=None, rendition=None):
         """Create a short link with a unique code."""
         code = cls._generate_code()
 
@@ -173,6 +183,7 @@ class ShortLink(models.Model, MojoModel):
             user=user,
             group=group,
             file=file,
+            rendition=rendition,
         )
 
     @classmethod
@@ -214,9 +225,15 @@ class ShortLink(models.Model, MojoModel):
         except Exception:
             pass  # metrics are best-effort
 
-        # Resolve destination
-        if self.file and self.resolve_file:
-            return self.file.generate_download_url()
+        # Resolve destination. Prefer rendition over file when both are set.
+        # Both file-linked and rendition-linked shortlinks call the model's
+        # `get_direct_download_url()` so we never re-enter the shortlink-aware
+        # `generate_download_url()` path (which would recurse).
+        if self.resolve_file:
+            if self.rendition_id and self.rendition:
+                return self.rendition.get_direct_download_url()
+            if self.file_id and self.file:
+                return self.file.get_direct_download_url()
 
         return self.url or None
 

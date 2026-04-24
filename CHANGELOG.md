@@ -1,5 +1,16 @@
 ## v1.1.0 - (current)
 
+### Added
+- **Fileman URLs via shortlink, by default** — `File.generate_download_url()` and `FileRendition.generate_download_url()` now return a `/s/<code>` URL backed by a tier-1 `ShortLink` row (auto-created on first read, cached in a new `shortlink_code` column). The shortlink resolver regenerates the underlying backend URL per click, so S3 presigns stay fresh behind a stable short URL. Opt-out is available globally via `FILEMAN_USE_SHORTLINKS=False` and per-FileManager via `FileManager.settings["use_shortlinks"]`. Optional per-manager settings: `shortlink_track_clicks` (bool, default False), `shortlink_expire_days` (int, default 0 = never). Shortlink is treated as an **optional** dependency — when the app isn't installed, fileman falls back to direct backend URLs (behavior identical to pre-shortlink). `bot_passthrough=False` across the board — preview crawlers hit the OG interstitial, never the signed URL.
+- **Fileman share action (tier-2 share links)** — new `POST /api/fileman/file/<id>` and `POST /api/fileman/rendition/<id>` with body `{"share": true}` or `{"share": {"expire_days": 30, "track_clicks": true, "note": "for Alice"}}`. Each call mints a distinct `ShortLink` row (`source="fileman-share"`) attributed to the sharing user, enabling per-sharer audit ("whose link got used, how many times"). Returns `{url, shortlink_code, expires_at, track_clicks}`. `expire_days` is clamped to 3650; `note` is truncated to 512 chars. Returns an error dict when shortlink isn't installed.
+- **`GET /api/fileman/rendition[/<pk>]`** — read-only REST endpoint for `FileRendition` (needed to support the rendition `share` action). Create/delete remain blocked.
+- **`ShortLink.rendition` FK** — new nullable FK from `shortlink.ShortLink` to `fileman.FileRendition`. `shortlink.shorten(rendition=r)` and `ShortLink.create(rendition=r)` accept the new kwarg; the resolver prefers `rendition.get_direct_download_url()` over `file`.
+- **`get_direct_download_url()`** on File and FileRendition — escape hatch that returns the raw backend URL, bypassing shortlink wrapping. Used by the shortlink resolver (preventing recursion) and as the disabled-path fallback.
+
+### Changed
+- **`regenerate_renditions` action shape** — promoted from a string-switch inside `{"action": "regenerate_renditions"}` to a discrete POST_SAVE_ACTIONS key. Clients now send `{"regenerate_renditions": true}` (regenerate all defaults) or `{"regenerate_renditions": ["thumbnail", "preview"]}` (specific roles). The legacy `{"action": "regenerate_renditions"}` shape is no longer recognized. Legacy `{"action": "mark_as_*"}` shapes remain supported for UI compatibility.
+- **File delete cleanup** — `File.on_rest_pre_delete` now also removes auto-generated shortlink rows (`source__in=["fileman", "fileman-share"]`) for the file and its renditions. Human-created shortlinks (other `source` values) are preserved (FK `SET_NULL`).
+
 ## v1.1.31 - April 23, 2026
 
 BUGFIX in video rendering

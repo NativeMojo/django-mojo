@@ -28,7 +28,7 @@ Usage:
 """
 
 
-def shorten(url="", file=None, source="", expire_days=3, expire_hours=0,
+def shorten(url="", file=None, rendition=None, source="", expire_days=3, expire_hours=0,
             metadata=None, track_clicks=False, resolve_file=True,
             bot_passthrough=False, is_protected=False,
             user=None, group=None, base_url=None):
@@ -55,12 +55,17 @@ def shorten(url="", file=None, source="", expire_days=3, expire_hours=0,
     from .models import ShortLink
     from mojo.helpers.settings import settings
 
-    if not url and not file:
-        raise ValueError("Either url or file must be provided")
+    if not url and not file and not rendition:
+        raise ValueError("Either url, file, or rendition must be provided")
 
-    # If file provided without a url and resolve_file is False, snapshot the URL now
-    if file and not url and not resolve_file:
-        url = file.generate_download_url() or ""
+    # Snapshot the underlying URL when resolve_file is False.
+    # Use get_direct_download_url() to avoid recursing through the
+    # shortlink-aware generate_download_url() on the file/rendition.
+    if not url and not resolve_file:
+        if rendition:
+            url = rendition.get_direct_download_url() or ""
+        elif file:
+            url = file.get_direct_download_url() or ""
 
     link = ShortLink.create(
         url=url,
@@ -75,6 +80,7 @@ def shorten(url="", file=None, source="", expire_days=3, expire_hours=0,
         user=user,
         group=group,
         file=file,
+        rendition=rendition,
     )
 
     # Record creation metric
@@ -86,7 +92,14 @@ def shorten(url="", file=None, source="", expire_days=3, expire_hours=0,
 
     # Fire async scrape job if no custom OG data and not bot_passthrough
     if not bot_passthrough and not any(k.startswith("og:") for k in (metadata or {})):
-        target = url or (file.generate_download_url() if file else "")
+        if url:
+            target = url
+        elif rendition:
+            target = rendition.get_direct_download_url() or ""
+        elif file:
+            target = file.get_direct_download_url() or ""
+        else:
+            target = ""
         if target and target.startswith("http"):
             try:
                 from mojo.apps import jobs
