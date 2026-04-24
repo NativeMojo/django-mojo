@@ -30,6 +30,7 @@ class File(models.Model, MojoModel):
 | `user` | FK → User | Uploader |
 | `file_manager` | FK → FileManager | Storage backend config |
 | `download_url` | TextField | Cached persistent download URL |
+| `shortlink_code` | CharField(10) | Cached tier-1 shortlink code (`/s/<code>`) for this file's download URL. Null until the first `generate_download_url()` call when shortlinks are enabled. |
 
 ## Upload Flow
 
@@ -102,9 +103,21 @@ file_instance = File.create_from_file(buf, "report.pdf", user=user, group=group)
 url = file_instance.generate_download_url()
 ```
 
-- Public files return a permanent URL
-- Private files return a time-limited presigned URL (configurable TTL via `urls_expire_in` setting on FileManager)
-- The URL is cached in `download_url` for public files
+When `mojo.apps.shortlink` is installed and shortlinks are enabled (global `FILEMAN_USE_SHORTLINKS=True`, or per-FileManager `use_shortlinks=True`), this returns a `/s/<code>` short URL backed by a tier-1 `ShortLink` row. The short URL resolver regenerates the underlying backend URL on every click, so presigned URLs stay fresh without rotating the surface URL.
+
+When shortlinks are disabled or the app is not installed, behavior is identical to the pre-shortlink implementation:
+- Public files return a permanent CDN/storage URL (cached in `download_url`)
+- Private files return a time-limited presigned URL (TTL from `urls_expire_in` FileManager setting)
+
+To bypass shortlink wrapping and get the raw backend URL directly (e.g., from within the shortlink resolver itself), call:
+
+```python
+url = file_instance.get_direct_download_url()
+```
+
+`get_direct_download_url()` never produces a short URL and never recurses into the shortlink system. Use it when you need the actual fetch URL, not the stable surface URL.
+
+See [shortlinks.md](shortlinks.md) for the full pipeline, per-manager toggles, and the tier-1/tier-2 distinction.
 
 ## Upload Status Management
 

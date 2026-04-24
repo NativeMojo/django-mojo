@@ -463,6 +463,11 @@ class File(models.Model, MojoModel):
         # Remove every rendition's storage object (each row knows its own
         # storage_path — the renderers use inconsistent path conventions,
         # so walking rows is the only layout-agnostic way to clean up).
+        # Also drop the rendition's shortlink rows here — the parent
+        # `_delete_fileman_shortlinks(file=self)` below only covers rows
+        # whose `file` FK points at this File, and rendition shortlinks
+        # have `file=NULL` + `rendition=<id>`. Without this loop, the
+        # rendition's SET_NULL cascade would leave orphan inert rows.
         backend = self.file_manager.backend
         for rendition in self.file_renditions.all():
             if rendition.storage_path:
@@ -471,6 +476,7 @@ class File(models.Model, MojoModel):
                 except Exception as e:
                     logger.warning("on_rest_pre_delete: failed to delete rendition %s (%s): %s",
                                    rendition.id, rendition.storage_path, str(e))
+            _delete_fileman_shortlinks(rendition=rendition)
         # Then the original.
         if self.storage_file_path:
             try:
@@ -478,8 +484,9 @@ class File(models.Model, MojoModel):
             except Exception as e:
                 logger.warning("on_rest_pre_delete: failed to delete original %s: %s",
                                self.storage_file_path, str(e))
-        # Drop auto-generated shortlink rows (tier-1 display + tier-2 share).
-        # Human-created shortlinks (different `source`) stay intact.
+        # Drop auto-generated shortlink rows (tier-1 display + tier-2 share)
+        # attached to the File itself. Human-created shortlinks (different
+        # `source`) stay intact (their FK goes NULL via SET_NULL).
         _delete_fileman_shortlinks(file=self)
 
     def generate_upload_token(self, commit=False):

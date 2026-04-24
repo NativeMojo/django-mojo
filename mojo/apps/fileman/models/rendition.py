@@ -26,6 +26,11 @@ class FileRendition(models.Model, MojoModel):
         POST_SAVE_ACTIONS = ["share"]
         VIEW_PERMS = ["view_fileman", "manage_files", "files"]
         SAVE_PERMS = ["manage_files", "files"]
+        # Rendition has no direct group FK — scope list queries to the
+        # request.group via the parent File. Without this, the list endpoint
+        # would expose all renditions across all groups to any caller holding
+        # `view_fileman` / `manage_files` / `files`.
+        GROUP_FIELD = "original_file__group"
         SEARCH_FIELDS = ["filename", "content_type"]
         SEARCH_TERMS = [
             "filename",  "content_type",

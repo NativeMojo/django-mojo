@@ -26,6 +26,9 @@ url = shorten(
 # File shortlink (resolves download URL dynamically on each click)
 url = shorten(file=file_obj, source="fileman")
 
+# Rendition shortlink (same, for a FileRendition)
+url = shorten(rendition=rendition_obj, source="fileman")
+
 # Transactional link — skip bot detection, just redirect
 url = shorten("https://example.com/reset?t=xyz", source="sms", bot_passthrough=True)
 
@@ -44,15 +47,16 @@ url = shorten("https://example.com/page", source="partner", base_url="https://sh
 ## `shorten()` API
 
 ```python
-shorten(url="", file=None, source="", expire_days=3, expire_hours=0,
+shorten(url="", file=None, rendition=None, source="", expire_days=3, expire_hours=0,
         metadata=None, track_clicks=False, resolve_file=True,
         bot_passthrough=False, user=None, group=None, base_url=None)
 ```
 
 | Param | Default | Description |
 |---|---|---|
-| `url` | `""` | Destination URL. Required unless `file` is provided. |
+| `url` | `""` | Destination URL. Required unless `file` or `rendition` is provided. |
 | `file` | `None` | `fileman.File` instance for file-sharing shortlinks. |
+| `rendition` | `None` | `fileman.FileRendition` instance for rendition-sharing shortlinks. Pass instead of (or alongside) `file`. |
 | `source` | `""` | Traceability tag: `"sms"`, `"email"`, `"fileman"`, etc. Used in metrics. |
 | `expire_days` | `3` | Days until expiry. Set both `expire_days=0` and `expire_hours=0` for no expiry. |
 | `expire_hours` | `0` | Additional hours until expiry. Combined with `expire_days`. |
@@ -67,7 +71,7 @@ shorten(url="", file=None, source="", expire_days=3, expire_hours=0,
 
 **Returns:** Full short URL string, e.g. `"https://itf.io/s/Xk9mR2p"`
 
-**Raises:** `ValueError` if neither `url` nor `file` is provided.
+**Raises:** `ValueError` if none of `url`, `file`, or `rendition` is provided.
 
 ---
 
@@ -92,6 +96,7 @@ This means users with owner access can operate on their own `ShortLink` records 
 | `user` | FK → User | Creator (nullable). |
 | `group` | FK → Group | Group scope (nullable). |
 | `file` | FK → File | Linked fileman.File (nullable). |
+| `rendition` | FK → FileRendition | Linked fileman.FileRendition (nullable). Used for rendition share links. |
 | `hit_count` | IntegerField | Total resolve count. Incremented atomically via `F()`. |
 | `expires_at` | DateTimeField | When the link expires. `null` = never. |
 | `is_active` | BooleanField | Soft-delete flag. |
@@ -105,6 +110,8 @@ This means users with owner access can operate on their own `ShortLink` records 
 
 ```python
 link = ShortLink.create(url="...", source="sms", expire_days=3)
+link = ShortLink.create(file=file_obj, source="fileman", resolve_file=True)
+link = ShortLink.create(rendition=rendition_obj, source="fileman", resolve_file=True)
 
 # Resolve: returns URL, increments hit_count, records metric. None if expired/inactive.
 destination = link.resolve()
@@ -207,25 +214,28 @@ is_bot_user_agent("Mozilla/5.0 (iPhone; ...)")   # False
 
 ---
 
-## File Shortlinks
+## File and Rendition Shortlinks
 
-Link a `fileman.File` instead of (or alongside) a URL:
+Link a `fileman.File` or `fileman.FileRendition` instead of (or alongside) a URL:
 
 ```python
-from mojo.apps.fileman.models import File
+from mojo.apps.fileman.models import File, FileRendition
 
 file = File.objects.get(pk=123)
+rendition = FileRendition.objects.get(pk=456)
 
-# Dynamic: generates a fresh download URL on each click
+# Dynamic: generates a fresh download URL on each click (default)
 url = shorten(file=file, source="fileman")
+url = shorten(rendition=rendition, source="fileman")
 
 # Snapshot: captures the download URL at creation time
 url = shorten(file=file, source="fileman", resolve_file=False)
+url = shorten(rendition=rendition, source="fileman", resolve_file=False)
 ```
 
-Dynamic resolution (`resolve_file=True`, the default) calls `file.generate_download_url()` on every click. This is ideal for S3 presigned URLs that expire.
+Dynamic resolution (`resolve_file=True`, the default) calls `file.get_direct_download_url()` or `rendition.get_direct_download_url()` on every click. Using `get_direct_download_url()` (rather than `generate_download_url()`) avoids infinite recursion when the resolver is called from within the shortlink system itself.
 
-Snapshot mode (`resolve_file=False`) captures the URL once at creation — useful when the URL is stable.
+Snapshot mode (`resolve_file=False`) captures the URL once at creation — useful when the URL is stable and presigning is not required.
 
 ---
 

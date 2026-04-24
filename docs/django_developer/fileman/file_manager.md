@@ -33,6 +33,27 @@ is_pub = fm.is_public                             # Whether files are publicly a
 root = fm.root_path                               # Storage root path/bucket
 ```
 
+### Shortlink settings
+
+Three optional keys control shortlink behavior for files and renditions in this manager:
+
+| Key | Default | Description |
+|---|---|---|
+| `use_shortlinks` | `None` (inherit global) | Force-on (`True`) or force-off (`False`) shortlink wrapping for this manager. `None` defers to the global `FILEMAN_USE_SHORTLINKS` setting (default `True`). |
+| `shortlink_track_clicks` | `False` | When `True`, tier-1 shortlinks (auto-generated display URLs) log each click as a `ShortLinkClick` record. |
+| `shortlink_expire_days` | `0` (never) | Lifetime in days for tier-1 shortlinks. `0` means the shortlink never expires. |
+
+These settings apply only to tier-1 (auto-generated) links. Tier-2 share links set their own `expire_days` and `track_clicks` per call and do not consult these settings.
+
+```python
+fm.set_setting("use_shortlinks", False)          # disable short URLs for this manager
+fm.set_setting("shortlink_track_clicks", True)   # log clicks on display URLs
+fm.set_setting("shortlink_expire_days", 90)      # expire tier-1 links after 90 days
+fm.save()
+```
+
+See [shortlinks.md](shortlinks.md) for the full shortlink pipeline and opt-out behavior.
+
 ## Storage Backends
 
 ### Local Backend

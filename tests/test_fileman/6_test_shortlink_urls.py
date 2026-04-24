@@ -242,7 +242,7 @@ def test_toggle_fm_true_wins(opts):
     from mojo.apps.fileman.models import file as file_module
     with mock.patch.object(file_module, "_shortlink_installed", return_value=True):
         with mock.patch("mojo.helpers.settings.settings.get") as mget:
-            def _fake_get(k, default=None):
+            def _fake_get(k, default=None, **kwargs):
                 if k == "FILEMAN_USE_SHORTLINKS":
                     return False
                 return default
@@ -588,6 +588,136 @@ def test_delete_scoped_cleanup(opts):
         ShortLink.objects.filter(pk=manual_id).exists(),
         "human-created (source='manual') shortlink should survive file delete",
     )
+
+
+# ---------------------------------------------------------------------------
+# Security regressions (from review of f5bf944)
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test("Security: rendition shortlinks are cleaned up on File delete")
+def test_rendition_shortlinks_cleaned_on_file_delete(opts):
+    """Before the fix, File.on_rest_pre_delete only deleted shortlinks with
+    `file=<self>`. Rendition shortlinks have `file=NULL` + `rendition=<id>`,
+    so they were orphaned as inert rows after SET_NULL cascade."""
+    from mojo.apps.fileman.models import FileRendition
+    from mojo.apps.shortlink.models import ShortLink
+
+    f = _mk_file(opts, "rendition_orphan.txt")
+    r = FileRendition.objects.create(
+        original_file=f,
+        role="thumb_orphan",
+        filename="orphan.jpg",
+        storage_path=f"{opts.tmpdir}/orphan.jpg",
+        content_type="image/jpeg",
+        category="image",
+        upload_status=FileRendition.COMPLETED,
+    )
+    _write_file(opts.tmpdir, r.storage_path, b"stub")
+
+    r.generate_download_url()  # tier-1 rendition shortlink
+    opts.client.login(TEST_USER, TEST_PWORD)
+    opts.client.post(f"/api/fileman/rendition/{r.id}", {"share": True})  # tier-2
+
+    assert_true(
+        ShortLink.objects.filter(rendition=r, source="fileman").exists(),
+        "precondition: tier-1 rendition shortlink exists",
+    )
+    assert_true(
+        ShortLink.objects.filter(rendition=r, source="fileman-share").exists(),
+        "precondition: tier-2 rendition share exists",
+    )
+
+    f.on_rest_pre_delete()
+
+    remaining = ShortLink.objects.filter(
+        rendition=r, source__in=["fileman", "fileman-share"]
+    )
+    assert_eq(remaining.count(), 0,
+              f"rendition shortlinks must be deleted when File is deleted, "
+              f"got {[(s.code, s.source) for s in remaining]}")
+
+
+@th.django_unit_test("Security: rendition list endpoint is group-scoped via GROUP_FIELD")
+def test_rendition_list_group_scoped(opts):
+    """FileRendition has no direct `group` FK. Without `GROUP_FIELD` pointing
+    through the parent File, a request scoped to group A would still return
+    group B's renditions. Verify that when `request.group` is set (via the
+    `group=<id>` query param picked up by the auth decorator), the list
+    filters to that group via `original_file__group=request.group`."""
+    from mojo.apps.account.models import Group
+    from mojo.apps.fileman.models import File, FileManager, FileRendition
+
+    # Group A — the caller's scope.
+    group_a = Group.objects.filter(name="rendition_scope_a").first()
+    if group_a is None:
+        group_a = Group(name="rendition_scope_a")
+        group_a.save()
+
+    # Group B — a different group; its renditions must not leak.
+    group_b = Group.objects.filter(name="rendition_scope_b").first()
+    if group_b is None:
+        group_b = Group(name="rendition_scope_b")
+        group_b.save()
+
+    def _mk_rendition_in_group(group, role, filename):
+        fm = FileManager.objects.filter(
+            name=f"test_sl_scope_fm_{group.name}"
+        ).first()
+        if fm is None:
+            fm = FileManager(
+                name=f"test_sl_scope_fm_{group.name}",
+                backend_type="file",
+                backend_url="file://",
+                group=group,
+                is_active=True,
+                is_default=False,
+                is_public=False,
+            )
+            fm.save()
+        fm.set_setting("base_path", opts.tmpdir)
+        fm.save(update_fields=["mojo_secrets", "modified"])
+
+        fobj = File(
+            filename=filename, content_type="text/plain", category="text",
+            file_size=2, file_manager=fm, user=None, group=group,
+        )
+        fobj.generate_storage_filename()
+        fobj.save()
+        _write_file(opts.tmpdir, fobj.storage_file_path, b"hi")
+        r = FileRendition.objects.create(
+            original_file=fobj,
+            role=role,
+            filename=f"{role}.jpg",
+            storage_path=f"{opts.tmpdir}/{role}.jpg",
+            content_type="image/jpeg",
+            category="image",
+            upload_status=FileRendition.COMPLETED,
+        )
+        return fobj, fm, r
+
+    file_a, fm_a, rend_a = _mk_rendition_in_group(group_a, "scope_a_thumb", "scope_a.txt")
+    file_b, fm_b, rend_b = _mk_rendition_in_group(group_b, "scope_b_thumb", "scope_b.txt")
+
+    opts.client.logout()
+    opts.client.login(TEST_USER, TEST_PWORD)
+    # Passing `group=<group_a.id>` sets request.group=group_a via the auth
+    # decorator; GROUP_FIELD then filters the queryset.
+    resp = opts.client.get(f"/api/fileman/rendition?group={group_a.id}&size=500")
+    assert_eq(resp.status_code, 200, f"list 200, got {resp.status_code}")
+
+    items = getattr(resp.response, "data", None) or []
+    returned_ids = {getattr(it, "id", None) for it in items}
+    assert_true(rend_a.id in returned_ids,
+                f"group A's rendition should appear; returned_ids={returned_ids}")
+    assert_true(rend_b.id not in returned_ids,
+                f"group B's rendition MUST NOT leak to a group-A-scoped list; "
+                f"returned_ids={returned_ids}")
+
+    # Cleanup
+    rend_a.delete(); rend_b.delete()
+    file_a.delete(); file_b.delete()
+    fm_a.delete(); fm_b.delete()
+    group_a.delete(); group_b.delete()
 
 
 # ---------------------------------------------------------------------------

@@ -61,7 +61,14 @@ Triggered via the `regenerate_renditions` POST_SAVE_ACTION on `File`:
 
 ```json
 POST /api/fileman/file/123
-{"action": "regenerate_renditions", "roles": ["thumbnail"]}
+{"regenerate_renditions": ["thumbnail"]}
+```
+
+Regenerate all default roles:
+
+```json
+POST /api/fileman/file/123
+{"regenerate_renditions": true}
 ```
 
 ## Renderers
