@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## v1.1.32 - April 25, 2026
+
+shortlink support
+
+
 ### Added
 - **Fileman URLs via shortlink, by default** — `File.generate_download_url()` and `FileRendition.generate_download_url()` now return a `/s/<code>` URL backed by a tier-1 `ShortLink` row (auto-created on first read, cached in a new `shortlink_code` column). The shortlink resolver regenerates the underlying backend URL per click, so S3 presigns stay fresh behind a stable short URL. Opt-out is available globally via `FILEMAN_USE_SHORTLINKS=False` and per-FileManager via `FileManager.settings["use_shortlinks"]`. Optional per-manager settings: `shortlink_track_clicks` (bool, default False), `shortlink_expire_days` (int, default 0 = never). Shortlink is treated as an **optional** dependency — when the app isn't installed, fileman falls back to direct backend URLs (behavior identical to pre-shortlink). `bot_passthrough=False` across the board — preview crawlers hit the OG interstitial, never the signed URL.
 - **Fileman share action (tier-2 share links)** — new `POST /api/fileman/file/<id>` and `POST /api/fileman/rendition/<id>` with body `{"share": true}` or `{"share": {"expire_days": 30, "track_clicks": true, "note": "for Alice"}}`. Each call mints a distinct `ShortLink` row (`source="fileman-share"`) attributed to the sharing user, enabling per-sharer audit ("whose link got used, how many times"). Returns `{url, shortlink_code, expires_at, track_clicks}`. `expire_days` is clamped to 3650; `note` is truncated to 512 chars. Returns an error dict when shortlink isn't installed.
