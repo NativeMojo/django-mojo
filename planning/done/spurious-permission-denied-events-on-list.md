@@ -1,7 +1,7 @@
 ## Spurious user_permission_denied incidents from list endpoints that return 200
 
 **Type**: bug
-**Status**: planned
+**Status**: resolved
 **Date**: 2026-04-25
 **Severity**: medium
 
@@ -213,3 +213,49 @@ All tests use `Event.objects.filter(uid=opts.user_id, category=...)` to assert e
 - `docs/django_developer/incident/` (or wherever event categories live) — add the seven category names and what they mean.
 - `docs/web_developer/` — note in the relevant errors/responses page that 401 is now returned for unauthenticated requests at perm-gated endpoints (was 403 in the rare middleware-bypass case).
 - `CHANGELOG.md` — entry: "Permission events now emit only when the request actually responds 401/403. Recovery paths (Group list fallback, owner/group-filtered list, `MOJO_REST_LIST_PERM_DENY=False`) no longer log false-positive incidents. New event categories: `feature_disabled` (CAN_*=False rejections), `fk_attach_denied` (silent FK-attach skips). Unauthenticated requests at perm-gated handlers now return HTTP 401 instead of 403."
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-04-25
+
+### What Was Built
+
+Refactored permission-denial event emission so the REST dispatcher in `mojo/decorators/http.py` is the single source of truth. `MojoModel.rest_check_permission` is now a pure boolean predicate; new `rest_check_permission_or_raise` raises `PermissionDeniedException` with structured metadata (`branch`, `perms`, `permission_keys`, `model_name`, `instance`, `event_type`, `status`). All framework 403 sites raise instead of returning a JsonResponse. The dispatcher catches the exception, emits exactly one categorized incident, and serializes the response (honoring `MOJO_APP_STATUS_200_ON_ERROR`). Recovery paths that recover into 200 (Group list fallback, owner/group-filtered, `MOJO_REST_LIST_PERM_DENY=False`) now correctly emit zero events. Unauthenticated requests at perm-gated handlers return 401 (was 403). FK-attach silent-skip preserves its audit trail explicitly via `_report_fk_attach_denied` → `event_type="fk_attach_denied"`. CAN_*=False rejections raise with `event_type="feature_disabled"` and a distinguishable `branch`.
+
+### Files Changed
+
+- `mojo/errors.py` — `PermissionDeniedException` now carries metadata kwargs.
+- `mojo/decorators/http.py` — specialized `MojoException` handler emits `PermissionDeniedException` events with metadata; `MOJO_APP_STATUS_200_ON_ERROR` honored uniformly.
+- `mojo/models/rest.py` — `_evaluate_permission` factored helper; `rest_check_permission` pure predicate; new `rest_check_permission_or_raise`; framework 403 sites raise; FK-attach emits `fk_attach_denied` explicitly.
+- `mojo/apps/account/models/group.py` — `Group.on_rest_handle_list` raises (401 for unauth, 403 for forbidden) instead of returning JsonResponse.
+- `mojo/apps/account/rest/group.py` — `group/<pk>/member` endpoint raises on missing group.
+
+### Tests
+
+- `tests/test_account/test_group_list_no_perms.py` — 4 tests covering noperm/no-membership empty list, noperm/with-membership scoped list, with-perm full list, anonymous → 401 + `unauthenticated` event.
+- `tests/test_models/permission_events.py` — 4 tests: GET-instance `view_permission_denied`, POST `user_permission_denied`, DELETE denial, recovery path no event.
+- `tests/test_models/feature_disabled_events.py` — 4 tests: CAN_UPDATE/CAN_DELETE/CAN_CREATE/CAN_BATCH=False each raise with `feature_disabled`.
+- `tests/test_models/fk_attach_audit.py` — 2 tests: FK silent-skip emits `fk_attach_denied` with `field_name`/`related_model`/`related_id`; `NO_FK_VIEW_CHECK_FIELDS` opt-out emits none.
+- `tests/test_models/status_200_on_error.py` — 3 tests: default flag → 403 wire / flag-on → 200 wire for both 403 and 401, body always carries real code.
+- `tests/test_models/can_update_gate.py` — updated 4 tests that asserted on JsonResponse to expect raised `PermissionDeniedException`.
+- `tests/test_assistant/28_test_fk_perm_check.py` — updated event-category filter from `__contains="permission_denied"` to `="fk_attach_denied"`.
+- Run: `bin/run_tests --agent -t test_models -t test_account` → 72/72 pass. Full suite: only pre-existing flaky `ws_manager_online_status` (Redis state leak between parallel modules) — unrelated.
+
+### Docs Updated
+
+- `docs/django_developer/core/mojo_model.md` — predicate vs raiser split, exception metadata table, full event-category table.
+- `docs/django_developer/rest/permissions.md` — FK-attach paragraph rewritten + CAN_*=False `feature_disabled` note.
+- `docs/django_developer/logging/incidents.md` — full event-category table including `feature_disabled` and `fk_attach_denied`.
+- `docs/web_developer/core/request_response.md` — 401 vs 403 client-side guidance.
+- `CHANGELOG.md` — `## Unreleased` section with Fixed + Changed entries.
+
+### Security Review
+
+No auth bypasses, audit gaps, or data leaks. Two INFO notes (both pre-existing, neither introduced by this commit):
+- Unauthenticated request with `request.group` populated would categorize as `group_member_permission_denied`/403 instead of `unauthenticated`/401 — misleading category, no security consequence.
+- Operators currently filtering on `category="user_permission_denied"` lose visibility into CAN_*=False rejections; those now flow under `feature_disabled` (strictly better than prior state of no event at all).
+
+### Follow-up
+
+None.

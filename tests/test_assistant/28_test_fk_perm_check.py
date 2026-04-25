@@ -171,15 +171,15 @@ def test_denied_assignment_records_incident(opts):
     from mojo.apps.assistant.models import Skill
     from mojo.apps.incident.models import Event
 
-    before = Event.objects.filter(category__contains="permission_denied").count()
+    before = Event.objects.filter(category="fk_attach_denied").count()
 
     skill = Skill(tier="user", name="fkperm_incident")
     request = _build_synthetic_request(opts.nopriv)
     skill.on_rest_save(request, {"name": "fkperm_incident", "tier": "user", "group": opts.group.pk})
 
-    after = Event.objects.filter(category__contains="permission_denied").count()
+    after = Event.objects.filter(category="fk_attach_denied").count()
     assert after > before, \
-        f"Silent FK denial should still report an incident event, before={before} after={after}"
+        f"Silent FK denial should still report an fk_attach_denied incident event, before={before} after={after}"
 
     skill.refresh_from_db()
     skill.delete()

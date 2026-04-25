@@ -219,16 +219,55 @@ def on_publish(request):
 
 ## Permission Flow
 
-`rest_check_permission` evaluates in this exact order:
+`rest_check_permission` is a **pure boolean predicate** — it evaluates permissions and returns `True` or `False` with no side effects (no event emission):
 
 1. If `"all"` in perms → allow unauthenticated
-2. If user is not authenticated → deny + report incident
+2. If user is not authenticated → return False
 3. If instance provided and has `check_view_permission` or `check_edit_permission` → delegate
 4. If `"owner"` in perms and `instance.user.id == request.user.id` → allow
 5. If `request.group` set and model has `group` field → check group membership perms
 6. Otherwise → check `request.user.has_permission(perms)`
 
-Any denial is automatically reported to the incident system.
+Use `rest_check_permission` directly when you need a boolean test with no action on denial (for example, list fallbacks that return a scoped result instead of a 403).
+
+### `rest_check_permission_or_raise`
+
+For framework handlers that must respond with 401 or 403 on denial, use `rest_check_permission_or_raise(request, permission_keys, instance=None)`. It runs the same evaluation logic and raises `PermissionDeniedException` on any False branch, carrying structured metadata for the dispatcher:
+
+```python
+# raises PermissionDeniedException on denial — never returns False
+MyModel.rest_check_permission_or_raise(request, MyModel.RestMeta.VIEW_PERMS, instance)
+```
+
+### `PermissionDeniedException` metadata
+
+`PermissionDeniedException` carries optional kwargs that the REST dispatcher reads to build the incident:
+
+| Kwarg | Description |
+|---|---|
+| `branch` | Which check failed (e.g., `user.has_permission`, `instance.check_view_permission`) |
+| `perms` | Resolved permission list |
+| `permission_keys` | Raw `VIEW_PERMS` / `SAVE_PERMS` keys |
+| `model_name` | Model class name |
+| `instance` | The specific instance that denied (if any) |
+| `event_type` | Incident category string (default: `"user_permission_denied"`) |
+| `status` | HTTP response code (default 403; pass 401 for unauthenticated) |
+
+The REST dispatcher in `mojo/decorators/http.py` is the **single emission site** for all denial events. It catches `PermissionDeniedException`, builds the incident from the exception's metadata, and honors `MOJO_APP_STATUS_200_ON_ERROR` uniformly. Application code should raise instead of calling `class_report_incident` manually on denial paths.
+
+### Event categories emitted
+
+| Category | HTTP | Trigger |
+|---|---|---|
+| `unauthenticated` | 401 | Unauth request hit a perm-gated endpoint |
+| `user_permission_denied` | 403 | User lacks system-level perms |
+| `view_permission_denied` | 403 | `instance.check_view_permission` rejected |
+| `edit_permission_denied` | 403 | `instance.check_edit_permission` rejected |
+| `group_member_permission_denied` | 403 | Group-scoped perm check failed |
+| `feature_disabled` | 403 | `CAN_UPDATE/CAN_DELETE/CAN_CREATE/CAN_BATCH = False` |
+| `fk_attach_denied` | n/a | FK save silently skipped — field unchanged, no HTTP error |
+
+**Recovery paths emit no events.** When a list endpoint returns HTTP 200 with a scoped or empty result (Group list fallback, owner/group-filtered list, `MOJO_REST_LIST_PERM_DENY=False`), no denial event is recorded — the request succeeded.
 
 ## Lifecycle Hooks
 

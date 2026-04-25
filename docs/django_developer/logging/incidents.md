@@ -264,15 +264,23 @@ MyModel.class_report_incident(
 
 ### Automatically — permission denials
 
-Every permission denial issued by `MojoModel`'s permission system is automatically reported as an event. Categories include:
+Every permission denial issued by `MojoModel`'s permission system is automatically reported as an event. The REST dispatcher in `mojo/decorators/http.py` is the single emission site — events are only recorded when the request actually responds 401 or 403, never on recovery paths that return 200.
 
-- `unauthenticated`
-- `view_permission_denied`
-- `edit_permission_denied`
-- `group_member_permission_denied`
-- `user_permission_denied`
+| Category | HTTP | Trigger |
+|---|---|---|
+| `unauthenticated` | 401 | Unauth request hit a perm-gated endpoint |
+| `user_permission_denied` | 403 | User lacks system-level perms |
+| `view_permission_denied` | 403 | `instance.check_view_permission` rejected |
+| `edit_permission_denied` | 403 | `instance.check_edit_permission` rejected |
+| `group_member_permission_denied` | 403 | Group-scoped perm check failed |
+| `feature_disabled` | 403 | `CAN_UPDATE/CAN_DELETE/CAN_CREATE/CAN_BATCH = False` on the model |
+| `fk_attach_denied` | n/a | FK field silently skipped during save — no HTTP error, parent save still returns 200 |
 
-No extra code required.
+**Recovery paths emit no events.** When a list endpoint returns HTTP 200 with a scoped or empty result (Group list fallback, owner/group-filtered list, `MOJO_REST_LIST_PERM_DENY=False` branch), no denial event is recorded.
+
+**`fk_attach_denied` metadata fields:** `field_name`, `related_model`, `related_id`, `branch`. These can be matched by Rules to alert when users attempt to attach records they cannot view.
+
+No extra code required — the dispatcher handles this automatically for all framework 401/403 paths.
 
 ---
 

@@ -72,10 +72,12 @@ Every response is wrapped in a standard envelope.
 |---|---|
 | 200 | Success |
 | 400 | Bad request / validation error |
-| 401 | Not authenticated |
+| 401 | Not authenticated — request reached a permission-gated endpoint with no valid session |
 | 403 | Authenticated but permission denied |
 | 404 | Resource not found |
 | 500 | Server error |
+
+**401 vs 403:** Permission-gated endpoints return **401** for unauthenticated requests and **403** for authenticated requests that lack the required permission. Both include `"is_authenticated": false` or `true` respectively in the error envelope. Clients should redirect to login on 401 and show a "not authorized" message on 403.
 
 ## Dates
 

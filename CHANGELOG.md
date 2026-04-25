@@ -1,5 +1,18 @@
 ## v1.1.0 - (current)
 
+## Unreleased
+
+### Fixed
+- **Spurious permission_denied events on list endpoints** — Recovery paths in `on_rest_handle_list` (Group's empty-list fallback, `MOJO_REST_LIST_PERM_DENY=False` branch, owner/group-filtered fallbacks) previously emitted a `user_permission_denied` / `view_permission_denied` / `group_member_permission_denied` event even though the request returned HTTP 200. This filled security logs with false-positive denials that masked real ones. The REST dispatcher (`mojo/decorators/http.py`) is now the single emission site — events are recorded only when the request actually responds 401 or 403.
+
+### Changed
+- **`MojoModel.rest_check_permission` is now a pure boolean predicate** with no side effects. New `MojoModel.rest_check_permission_or_raise` raises `PermissionDeniedException` with structured metadata (`branch`, `perms`, `permission_keys`, `model_name`, `instance`, `event_type`) for handlers that respond 401/403.
+- **New incident event categories:**
+  - `feature_disabled` — raised when `CAN_UPDATE/CAN_DELETE/CAN_CREATE/CAN_BATCH = False` rejects a request. Distinguishable from per-user denials; still 403, still audited.
+  - `fk_attach_denied` — emitted by `on_rest_save_related_field` when a FK assignment is silently skipped due to missing VIEW_PERMS on the related instance. Carries `field_name`, `related_model`, `related_id`, `branch`. No HTTP error — the parent save still returns 200.
+- **Unauthenticated requests at permission-gated REST handlers now return HTTP 401** (previously returned 403). Authenticated-but-forbidden continues to return 403. Incident category for unauthenticated paths is `unauthenticated`.
+- **`MOJO_APP_STATUS_200_ON_ERROR` is now honored uniformly** for both raise-based 401/403 responses and the existing `rest_error_response` paths.
+
 ## v1.1.32 - April 25, 2026
 
 shortlink support

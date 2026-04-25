@@ -51,7 +51,7 @@ class RestMeta:
     CAN_DELETE = False
 ```
 
-On denial the REST layer returns `403` with `error = "UPDATE not allowed: <ModelName>"` — a distinct message so operators can tell the block is policy, not a permission shortfall.
+On denial the REST layer returns `403` with `error = "UPDATE not allowed: <ModelName>"` and emits a `feature_disabled` incident event — a distinct category so operators can tell the block is policy, not a per-user permission shortfall. `CAN_DELETE=False`, `CAN_CREATE=False`, and `CAN_BATCH=False` use the same `feature_disabled` category, each with a distinguishable `branch` (`can_update_false`, `can_delete_false`, `can_create_false`, `can_batch_false`).
 
 ### `CAN_SAVE` is deprecated
 
@@ -255,7 +255,9 @@ For list endpoints, the framework uses `"list"` graph if it exists, otherwise `"
 
 ## FK Assignment During Save
 
-When a save payload assigns a ForeignKey field by primary key — e.g. `data={"group": 5}` — the framework looks up the target via `field.related_model.objects.get(pk=value)` and then runs `field.related_model.rest_check_permission(request, "VIEW_PERMS", related_instance)` before assigning. On denial the assignment is silently skipped (the parent save proceeds with the field unchanged) and an incident event is recorded by `rest_check_permission`.
+When a save payload assigns a ForeignKey field by primary key — e.g. `data={"group": 5}` — the framework looks up the target via `field.related_model.objects.get(pk=value)` and then runs `field.related_model.rest_check_permission(request, "VIEW_PERMS", related_instance)` before assigning. On denial the assignment is silently skipped (the parent save proceeds with the field unchanged) and a `fk_attach_denied` incident event is emitted directly by `on_rest_save_related_field` via `_report_fk_attach_denied`.
+
+The event carries these metadata fields: `field_name`, `related_model`, `related_id`, `branch`. It is not a 403 response — the request still returns 200 with the field left at its previous value.
 
 This prevents cross-model privilege escalation: a user with SAVE_PERMS on model A but no view access to model B cannot attach B records to A. The same gate has always applied when the value is a dict (which triggers a cascading save and additionally requires SAVE_PERMS on the target).
 
