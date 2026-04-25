@@ -3676,10 +3676,21 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#renditions" class="md-nav__link">
+  <a href="#post_save_actions-on-filerendition" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Renditions
+        POST_SAVE_ACTIONS on FileRendition
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#short-urls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Short URLs
       
     </span>
   </a>
@@ -3691,6 +3702,17 @@
     <span class="md-ellipsis">
       
         Storage deletion
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#renditions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Renditions
       
     </span>
   </a>
@@ -3757,6 +3779,7 @@
 <li><a href="file/">file.md</a> — File model, upload flow, storage backends</li>
 <li><a href="file_manager/">file_manager.md</a> — FileManager configuration and backends</li>
 <li><a href="renditions/">renditions.md</a> — Async rendition pipeline: handlers, channel, idempotency, adding roles.</li>
+<li><a href="shortlinks/">shortlinks.md</a> — Short URLs for File/Rendition, tier-1 auto + tier-2 share, opt-out toggles.</li>
 </ul>
 <h2 id="models">Models<a class="headerlink" href="#models" title="Permanent link">&para;</a></h2>
 <table>
@@ -3815,6 +3838,11 @@
 <td>File CRUD</td>
 </tr>
 <tr>
+<td>GET</td>
+<td><code>/api/fileman/rendition[/&lt;pk&gt;]</code></td>
+<td>Read-only rendition list / detail (supports the <code>share</code> action)</td>
+</tr>
+<tr>
 <td>POST</td>
 <td><code>/api/fileman/upload/initiate</code></td>
 <td>Initiate an upload (returns File + <code>upload_url</code>)</td>
@@ -3831,35 +3859,57 @@
 </tr>
 </tbody>
 </table>
-<p><code>FileRendition</code> has no REST endpoint — renditions are derived and managed by the renderer + the <code>regenerate_renditions</code> action on <code>File</code>.</p>
+<p><code>FileRendition</code> supports read and the <code>share</code> action via REST. Create/delete are blocked — renditions are derived and managed through the parent <code>File</code>.</p>
 <h2 id="post_save_actions-on-file">POST_SAVE_ACTIONS on File<a class="headerlink" href="#post_save_actions-on-file" title="Permanent link">&para;</a></h2>
-<p><code>File.RestMeta.POST_SAVE_ACTIONS = ["action"]</code>. Dispatched by <code>on_action_action</code>:</p>
+<p><code>File.RestMeta.POST_SAVE_ACTIONS = ["action", "regenerate_renditions", "share"]</code>.</p>
 <table>
 <thead>
 <tr>
-<th><code>action</code> value</th>
+<th>Body</th>
+<th>Handler</th>
 <th>Effect</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>"mark_as_completed"</code></td>
-<td>Run <code>mark_as_completed(commit=True)</code> — flips to completed and enqueues rendition job</td>
+<td><code>{"action": "mark_as_completed"}</code></td>
+<td><code>on_action_action</code> (legacy)</td>
+<td>Flips to completed, enqueues rendition job</td>
 </tr>
 <tr>
-<td><code>"mark_as_failed"</code></td>
-<td>Run <code>mark_as_failed(commit=True)</code></td>
+<td><code>{"action": "mark_as_failed"}</code></td>
+<td><code>on_action_action</code> (legacy)</td>
+<td>Marks failed</td>
 </tr>
 <tr>
-<td><code>"mark_as_uploading"</code></td>
-<td>Run <code>mark_as_uploading(commit=True)</code></td>
+<td><code>{"action": "mark_as_uploading"}</code></td>
+<td><code>on_action_action</code> (legacy)</td>
+<td>Marks uploading</td>
 </tr>
 <tr>
-<td><code>"regenerate_renditions"</code></td>
-<td>Publish a regenerate job; optional <code>roles: [...]</code> in the same body to scope it</td>
+<td><code>{"regenerate_renditions": true}</code></td>
+<td><code>on_action_regenerate_renditions</code></td>
+<td>Enqueue regenerate of all default roles</td>
+</tr>
+<tr>
+<td><code>{"regenerate_renditions": ["thumbnail", …]}</code></td>
+<td><code>on_action_regenerate_renditions</code></td>
+<td>Enqueue regenerate of specific roles only</td>
+</tr>
+<tr>
+<td><code>{"share": true \| {...}}</code></td>
+<td><code>on_action_share</code></td>
+<td>Mint a tier-2 share shortlink; see <code>shortlinks.md</code></td>
 </tr>
 </tbody>
 </table>
+<p><strong>Note</strong>: the <code>action</code> key only supports the three legacy <code>mark_as_*</code> verbs. Do not extend it with new verbs — add a discrete POST_SAVE_ACTIONS key with its own <code>on_action_&lt;name&gt;</code> handler instead (see <code>docs/django_developer/core/mojo_model.md</code>).</p>
+<h2 id="post_save_actions-on-filerendition">POST_SAVE_ACTIONS on FileRendition<a class="headerlink" href="#post_save_actions-on-filerendition" title="Permanent link">&para;</a></h2>
+<p><code>FileRendition.RestMeta.POST_SAVE_ACTIONS = ["share"]</code>. Only the share action is exposed; renditions have no lifecycle transitions.</p>
+<h2 id="short-urls">Short URLs<a class="headerlink" href="#short-urls" title="Permanent link">&para;</a></h2>
+<p>By default, <code>File.generate_download_url()</code> and <code>FileRendition.generate_download_url()</code> return a short URL (<code>/s/&lt;code&gt;</code>) backed by <code>mojo.apps.shortlink</code>. See <a href="shortlinks/">shortlinks.md</a> for the full pipeline, opt-out toggles, and the tier-1/tier-2 distinction.</p>
+<h2 id="storage-deletion">Storage deletion<a class="headerlink" href="#storage-deletion" title="Permanent link">&para;</a></h2>
+<p><code>File.on_rest_pre_delete()</code> iterates <code>file_renditions</code>, deletes each rendition's storage object, deletes the original storage object, then removes auto-generated shortlink rows (<code>source__in=["fileman", "fileman-share"]</code>). Human-created shortlinks pointing at the file (other <code>source</code> values) are preserved — their <code>file</code> FK goes NULL via <code>SET_NULL</code>.</p>
 <h2 id="renditions">Renditions<a class="headerlink" href="#renditions" title="Permanent link">&para;</a></h2>
 <p>See <a href="renditions/">renditions.md</a>.</p>
 <p>The short version:</p>
@@ -3869,8 +3919,6 @@
 <li>The asyncjob calls <code>renderer.create_all_renditions(file)</code>, which creates every role defined in the matching renderer's <code>default_renditions</code>.</li>
 <li>Regeneration goes through <code>mojo.apps.fileman.asyncjobs.regenerate_renditions</code>.</li>
 </ul>
-<h2 id="storage-deletion">Storage deletion<a class="headerlink" href="#storage-deletion" title="Permanent link">&para;</a></h2>
-<p><code>File.on_rest_pre_delete()</code> removes both the primary storage object and the rendition folder synchronously on DELETE — keep this in mind for models that cascade.</p>
 <h2 id="scheduled-cleanup">Scheduled cleanup<a class="headerlink" href="#scheduled-cleanup" title="Permanent link">&para;</a></h2>
 <p><code>fileman/cronjobs.py</code> schedules <code>cleanup_expired_files</code> daily, which deletes files whose <code>metadata.expires_at</code> has passed.</p>
 <h2 id="adding-a-new-storage-backend">Adding a new storage backend<a class="headerlink" href="#adding-a-new-storage-backend" title="Permanent link">&para;</a></h2>

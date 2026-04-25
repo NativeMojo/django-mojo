@@ -3662,6 +3662,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="FileManager Settings">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#shortlink-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Shortlink settings
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -3792,6 +3809,41 @@
 <a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="n">is_pub</span> <span class="o">=</span> <span class="n">fm</span><span class="o">.</span><span class="n">is_public</span>                             <span class="c1"># Whether files are publicly accessible</span>
 <a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="n">root</span> <span class="o">=</span> <span class="n">fm</span><span class="o">.</span><span class="n">root_path</span>                               <span class="c1"># Storage root path/bucket</span>
 </code></pre></div>
+<h3 id="shortlink-settings">Shortlink settings<a class="headerlink" href="#shortlink-settings" title="Permanent link">&para;</a></h3>
+<p>Three optional keys control shortlink behavior for files and renditions in this manager:</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>use_shortlinks</code></td>
+<td><code>None</code> (inherit global)</td>
+<td>Force-on (<code>True</code>) or force-off (<code>False</code>) shortlink wrapping for this manager. <code>None</code> defers to the global <code>FILEMAN_USE_SHORTLINKS</code> setting (default <code>True</code>).</td>
+</tr>
+<tr>
+<td><code>shortlink_track_clicks</code></td>
+<td><code>False</code></td>
+<td>When <code>True</code>, tier-1 shortlinks (auto-generated display URLs) log each click as a <code>ShortLinkClick</code> record.</td>
+</tr>
+<tr>
+<td><code>shortlink_expire_days</code></td>
+<td><code>0</code> (never)</td>
+<td>Lifetime in days for tier-1 shortlinks. <code>0</code> means the shortlink never expires.</td>
+</tr>
+</tbody>
+</table>
+<p>These settings apply only to tier-1 (auto-generated) links. Tier-2 share links set their own <code>expire_days</code> and <code>track_clicks</code> per call and do not consult these settings.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">fm</span><span class="o">.</span><span class="n">set_setting</span><span class="p">(</span><span class="s2">&quot;use_shortlinks&quot;</span><span class="p">,</span> <span class="kc">False</span><span class="p">)</span>          <span class="c1"># disable short URLs for this manager</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">fm</span><span class="o">.</span><span class="n">set_setting</span><span class="p">(</span><span class="s2">&quot;shortlink_track_clicks&quot;</span><span class="p">,</span> <span class="kc">True</span><span class="p">)</span>   <span class="c1"># log clicks on display URLs</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="n">fm</span><span class="o">.</span><span class="n">set_setting</span><span class="p">(</span><span class="s2">&quot;shortlink_expire_days&quot;</span><span class="p">,</span> <span class="mi">90</span><span class="p">)</span>      <span class="c1"># expire tier-1 links after 90 days</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="n">fm</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
+</code></pre></div>
+<p>See <a href="../shortlinks/">shortlinks.md</a> for the full shortlink pipeline and opt-out behavior.</p>
 <h2 id="storage-backends">Storage Backends<a class="headerlink" href="#storage-backends" title="Permanent link">&para;</a></h2>
 <h3 id="local-backend">Local Backend<a class="headerlink" href="#local-backend" title="Permanent link">&para;</a></h3>
 <p>Files stored on local filesystem. No presigned URLs — uses the framework's upload endpoint.</p>
@@ -3801,35 +3853,35 @@
 - Presigned download URLs with configurable TTL
 - Public bucket support</p>
 <p>Configure via FileManager settings or in <code>settings.py</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">AWS_ACCESS_KEY_ID</span> <span class="o">=</span> <span class="s2">&quot;...&quot;</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">AWS_SECRET_ACCESS_KEY</span> <span class="o">=</span> <span class="s2">&quot;...&quot;</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="n">AWS_STORAGE_BUCKET_NAME</span> <span class="o">=</span> <span class="s2">&quot;my-bucket&quot;</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="n">AWS_S3_REGION_NAME</span> <span class="o">=</span> <span class="s2">&quot;us-east-1&quot;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">AWS_ACCESS_KEY_ID</span> <span class="o">=</span> <span class="s2">&quot;...&quot;</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">AWS_SECRET_ACCESS_KEY</span> <span class="o">=</span> <span class="s2">&quot;...&quot;</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="n">AWS_STORAGE_BUCKET_NAME</span> <span class="o">=</span> <span class="s2">&quot;my-bucket&quot;</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="n">AWS_S3_REGION_NAME</span> <span class="o">=</span> <span class="s2">&quot;us-east-1&quot;</span>
 </code></pre></div>
 <h3 id="backend-interface-downloadfile_path-local_path">Backend interface — <code>download(file_path, local_path)</code><a class="headerlink" href="#backend-interface-downloadfile_path-local_path" title="Permanent link">&para;</a></h3>
 <p>All backends used by the renderer pipeline (image, video, audio, document) must implement:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">download</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">file_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">local_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Copy the stored file at file_path to a local filesystem path.&quot;&quot;&quot;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">download</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">file_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">local_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Copy the stored file at file_path to a local filesystem path.&quot;&quot;&quot;</span>
 </code></pre></div>
 <p>The renderers download the original file to a temp path before processing. The local backend (<code>FileSystemStorageBackend</code>) and the S3 backend both implement this. If you write a custom backend, implement <code>download()</code> or rendition generation will fail for that backend's files.</p>
 <p>See <code>mojo/apps/fileman/backends/</code> — each backend inherits <code>BaseStorageBackend</code>.</p>
 <h2 id="direct-upload-flow-s3">Direct Upload Flow (S3)<a class="headerlink" href="#direct-upload-flow-s3" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># 1. Create File record</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="n">file</span> <span class="o">=</span> <span class="n">File</span><span class="p">(</span><span class="n">filename</span><span class="o">=</span><span class="s2">&quot;report.pdf&quot;</span><span class="p">,</span> <span class="n">file_size</span><span class="o">=</span><span class="mi">102400</span><span class="p">,</span> <span class="n">content_type</span><span class="o">=</span><span class="s2">&quot;application/pdf&quot;</span><span class="p">)</span>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="n">file</span><span class="o">.</span><span class="n">file_manager</span> <span class="o">=</span> <span class="n">FileManager</span><span class="o">.</span><span class="n">get_from_request</span><span class="p">(</span><span class="n">request</span><span class="p">)</span>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="n">file</span><span class="o">.</span><span class="n">on_rest_pre_save</span><span class="p">({},</span> <span class="kc">True</span><span class="p">)</span>
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="n">file</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
-<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>
-<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="c1"># 2. Get presigned upload URL</span>
-<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="n">upload_url</span> <span class="o">=</span> <span class="n">file</span><span class="o">.</span><span class="n">request_upload_url</span><span class="p">()</span>
-<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="c1"># Return upload_url to the client</span>
-<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>
-<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="c1"># 3. Client uploads directly to S3</span>
-<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a><span class="c1"># 4. Client confirms: POST /api/fileman/file/&lt;id&gt; with action=mark_as_completed</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># 1. Create File record</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="n">file</span> <span class="o">=</span> <span class="n">File</span><span class="p">(</span><span class="n">filename</span><span class="o">=</span><span class="s2">&quot;report.pdf&quot;</span><span class="p">,</span> <span class="n">file_size</span><span class="o">=</span><span class="mi">102400</span><span class="p">,</span> <span class="n">content_type</span><span class="o">=</span><span class="s2">&quot;application/pdf&quot;</span><span class="p">)</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">file</span><span class="o">.</span><span class="n">file_manager</span> <span class="o">=</span> <span class="n">FileManager</span><span class="o">.</span><span class="n">get_from_request</span><span class="p">(</span><span class="n">request</span><span class="p">)</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="n">file</span><span class="o">.</span><span class="n">on_rest_pre_save</span><span class="p">({},</span> <span class="kc">True</span><span class="p">)</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="n">file</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="c1"># 2. Get presigned upload URL</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="n">upload_url</span> <span class="o">=</span> <span class="n">file</span><span class="o">.</span><span class="n">request_upload_url</span><span class="p">()</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="c1"># Return upload_url to the client</span>
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="c1"># 3. Client uploads directly to S3</span>
+<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a><span class="c1"># 4. Client confirms: POST /api/fileman/file/&lt;id&gt; with action=mark_as_completed</span>
 </code></pre></div>
 <h2 id="multiple-filemanagers-per-group">Multiple FileManagers per Group<a class="headerlink" href="#multiple-filemanagers-per-group" title="Permanent link">&para;</a></h2>
 <p>A group can have multiple named FileManagers (e.g., <code>"avatars"</code>, <code>"documents"</code>). Specify by name:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">fm</span> <span class="o">=</span> <span class="n">FileManager</span><span class="o">.</span><span class="n">get_for_user_group</span><span class="p">(</span><span class="n">user</span><span class="p">,</span> <span class="n">group</span><span class="p">,</span> <span class="n">use</span><span class="o">=</span><span class="s2">&quot;avatars&quot;</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="n">fm</span> <span class="o">=</span> <span class="n">FileManager</span><span class="o">.</span><span class="n">get_for_user_group</span><span class="p">(</span><span class="n">user</span><span class="p">,</span> <span class="n">group</span><span class="p">,</span> <span class="n">use</span><span class="o">=</span><span class="s2">&quot;avatars&quot;</span><span class="p">)</span>
 </code></pre></div>
 <p>REST clients pass <code>?use=avatars</code> to select a specific manager.</p>
 <h2 id="auto-provisioning">Auto-Provisioning<a class="headerlink" href="#auto-provisioning" title="Permanent link">&para;</a></h2>

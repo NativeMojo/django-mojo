@@ -3643,6 +3643,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#urls-are-short-urls-by-default" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        URLs are short URLs by default
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#get-file" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3720,6 +3731,45 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#sharing-a-file-per-share-audit-trail" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sharing a file (per-share audit trail)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Sharing a file (per-share audit trail)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#listing-existing-shares-for-a-file" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Listing existing shares for a file
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#revoking-a-share" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Revoking a share
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -3785,12 +3835,27 @@
 <tr>
 <td>POST/PUT</td>
 <td><code>/api/fileman/file/&lt;id&gt;</code></td>
-<td>Update file metadata</td>
+<td>Update file metadata / dispatch action</td>
 </tr>
 <tr>
 <td>DELETE</td>
 <td><code>/api/fileman/file/&lt;id&gt;</code></td>
 <td>Delete file</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/api/fileman/rendition</code></td>
+<td>List renditions</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/api/fileman/rendition/&lt;id&gt;</code></td>
+<td>Get rendition</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/api/fileman/rendition/&lt;id&gt;</code></td>
+<td>Dispatch action (share)</td>
 </tr>
 </tbody>
 </table>
@@ -3798,6 +3863,14 @@
 <ul>
 <li><code>view_fileman</code> or <code>manage_files</code></li>
 </ul>
+<h2 id="urls-are-short-urls-by-default">URLs are short URLs by default<a class="headerlink" href="#urls-are-short-urls-by-default" title="Permanent link">&para;</a></h2>
+<p>The <code>url</code> and <code>thumbnail</code> fields on File, and the <code>url</code> field on each rendition, return a short URL (e.g. <code>https://app.example.com/s/Xk9mR2p</code>) that redirects to the underlying backend URL. This is intentional:</p>
+<ul>
+<li><strong>S3 presigns stay fresh.</strong> Clicking the short URL regenerates the presigned URL server-side — no expired-link pain on long-lived UIs.</li>
+<li><strong>One stable URL per resource.</strong> You can embed, log, or share the short URL and it does not rotate across renders.</li>
+</ul>
+<p>For the normal case — <code>&lt;img src={file.thumbnail}&gt;</code>, <code>&lt;a href={file.url}&gt;Download&lt;/a&gt;</code> — no client-side change is needed. Browsers follow the redirect transparently.</p>
+<p>If a deployment has shortlinks disabled (global <code>FILEMAN_USE_SHORTLINKS=False</code> or per-FileManager override), <code>url</code> will be the direct backend URL with no wrapping. Treat both forms as opaque.</p>
 <h2 id="get-file">Get File<a class="headerlink" href="#get-file" title="Permanent link">&para;</a></h2>
 <p><strong>GET</strong> <code>/api/fileman/file/123</code></p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="p">{</span>
@@ -3879,18 +3952,57 @@
 <a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="p">}</span>
 </code></pre></div>
 <h3 id="regenerating-renditions">Regenerating renditions<a class="headerlink" href="#regenerating-renditions" title="Permanent link">&para;</a></h3>
-<p>To rebuild renditions (e.g., after changing FileManager settings), POST to the file with the <code>regenerate_renditions</code> action.</p>
+<p>To rebuild renditions (e.g., after changing FileManager settings), POST to the file with the <code>regenerate_renditions</code> action. <strong>The field name is the action name</strong> — do not wrap it in <code>{"action": "..."}</code>.</p>
 <p><strong>POST</strong> <code>/api/fileman/file/123</code></p>
 <p>Regenerate all default renditions:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;action&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;regenerate_renditions&quot;</span><span class="w"> </span><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;regenerate_renditions&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
 <p>Regenerate only specific roles:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">&quot;action&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;regenerate_renditions&quot;</span><span class="p">,</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="nt">&quot;roles&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;thumbnail&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;preview&quot;</span><span class="p">]</span>
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;regenerate_renditions&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;thumbnail&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;preview&quot;</span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
-<p>The call returns immediately; the actual work runs on the background worker. Only the named roles (or all, if <code>roles</code> is omitted) are replaced.</p>
+<p>The call returns immediately; the actual work runs on the background worker. Only the named roles (or all, if the value is <code>true</code>) are replaced.</p>
+<h3 id="sharing-a-file-per-share-audit-trail">Sharing a file (per-share audit trail)<a class="headerlink" href="#sharing-a-file-per-share-audit-trail" title="Permanent link">&para;</a></h3>
+<p>Every call to the <code>share</code> action mints a <strong>new</strong> shortlink attributed to the current user, enabling "whose link got used" audit.</p>
+<p><strong>POST</strong> <code>/api/fileman/file/123</code></p>
+<p>Simplest form — never-expire, no click tracking:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;share&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="w"> </span><span class="p">}</span>
+</code></pre></div>
+<p>With options:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p">{</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span><span class="nt">&quot;share&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">    </span><span class="nt">&quot;expire_days&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">30</span><span class="p">,</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">    </span><span class="nt">&quot;track_clicks&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">    </span><span class="nt">&quot;note&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;for the Q3 review call&quot;</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="p">}</span>
+</code></pre></div>
+<p>Response:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="p">{</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span><span class="nt">&quot;url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://app.example.com/s/Xk9mR2p&quot;</span><span class="p">,</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">  </span><span class="nt">&quot;shortlink_code&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Xk9mR2p&quot;</span><span class="p">,</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">  </span><span class="nt">&quot;expires_at&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-05-23T18:00:00+00:00&quot;</span><span class="p">,</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="w">  </span><span class="nt">&quot;track_clicks&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="w">  </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">200</span><span class="p">,</span>
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="w">  </span><span class="nt">&quot;server&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;host1&quot;</span>
+<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="p">}</span>
+</code></pre></div>
+<p>Fields:
+- <code>url</code> — the short URL to distribute.
+- <code>shortlink_code</code> — the 7-character code (useful for revocation).
+- <code>expires_at</code> — ISO 8601 timestamp, or <code>null</code> if the link never expires.
+- <code>track_clicks</code> — echoes whether per-click audit is enabled for this share.</p>
+<p><code>expire_days</code> is clamped to 3650. <code>note</code> is truncated to 512 characters.</p>
+<p>Renditions support the same action at <code>POST /api/fileman/rendition/&lt;id&gt;</code> with <code>{"share": ...}</code>.</p>
+<h4 id="listing-existing-shares-for-a-file">Listing existing shares for a file<a class="headerlink" href="#listing-existing-shares-for-a-file" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>GET /api/shortlink/shortlink?source=fileman-share&amp;file=123
+</code></pre></div>
+<p>Each row carries <code>user</code> (the sharer), <code>hit_count</code>, <code>expires_at</code>, <code>track_clicks</code>, and <code>metadata.note</code>. Per-click detail lives in the <code>ShortLinkClick</code> table (when <code>track_clicks=True</code>).</p>
+<h4 id="revoking-a-share">Revoking a share<a class="headerlink" href="#revoking-a-share" title="Permanent link">&para;</a></h4>
+<p>Set <code>is_active=false</code> on the shortlink row:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>POST /api/shortlink/shortlink/&lt;id&gt;
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>{ &quot;is_active&quot;: false }
+</code></pre></div>
+<p>Revoked short URLs return a 404/gone at the redirect endpoint. The share is audit-preserved — the row is not deleted.</p>
 <h2 id="upload-token-direct-endpoint">Upload Token Direct Endpoint<a class="headerlink" href="#upload-token-direct-endpoint" title="Permanent link">&para;</a></h2>
 <p>For non-S3 backends, the framework provides a token-based upload endpoint:</p>
 <p><strong>POST</strong> <code>/api/fileman/upload/&lt;upload_token&gt;</code></p>
