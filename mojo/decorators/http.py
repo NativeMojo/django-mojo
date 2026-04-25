@@ -39,6 +39,33 @@ def _events_on_errors():
     return settings.get("EVENTS_ON_ERRORS", True)
 
 
+def _status_200_on_error():
+    return settings.get("MOJO_APP_STATUS_200_ON_ERROR", False)
+
+
+_PERMISSION_DENIED_LEVELS = {
+    "unauthenticated": 3,
+    "feature_disabled": 3,
+}
+
+
+def _emit_permission_denied_event(err, request):
+    """Report a PermissionDeniedException with full metadata to the incident system."""
+    level = _PERMISSION_DENIED_LEVELS.get(err.event_type, 4)
+    rest.MojoModel.class_report_incident_for_user(
+        details=f"Permission denied: {err.reason}",
+        event_type=err.event_type or "user_permission_denied",
+        request=request,
+        level=level,
+        branch=err.branch,
+        perms=err.perms,
+        permission_keys=err.permission_keys,
+        model_name=err.model_name,
+        instance=err.instance,
+        request_path=getattr(request, "path", None),
+    )
+
+
 def dispatcher(request, *args, **kwargs):
     """
     Dispatches incoming requests to the appropriate registered URL method.
@@ -93,20 +120,26 @@ def dispatch_error_handler(func):
                 return JsonResponse({"status": True, "code": 200, "data": resp})
             return resp
         except mojo.errors.MojoException as err:
+            is_perm_denied = isinstance(err, mojo.errors.PermissionDeniedException)
+            metric_key = "api_denied" if is_perm_denied else "api_errors"
             if _api_metrics_enabled():
-                metrics.record("api_errors", category="mojo_api", min_granularity=_api_metrics_granularity())
+                metrics.record(metric_key, category="mojo_api", min_granularity=_api_metrics_granularity())
             if _events_on_errors():
-                rest.MojoModel.class_report_incident_for_user(
-                    details=f"Rest Mojo Error: {err.reason}",
-                    event_type="mojo_rest_error",
-                    request_data=request.DATA,
-                    request=request,
-                    level=5,
-                    request_path=getattr(request, "path", None),
-                    error_code=err.code,
-                    stack_trace=traceback.format_exc(),
-                )
-            return JsonResponse({"error": err.reason, "code": err.code, "status": False }, status=err.status)
+                if is_perm_denied:
+                    _emit_permission_denied_event(err, request)
+                else:
+                    rest.MojoModel.class_report_incident_for_user(
+                        details=f"Rest Mojo Error: {err.reason}",
+                        event_type="mojo_rest_error",
+                        request_data=request.DATA,
+                        request=request,
+                        level=5,
+                        request_path=getattr(request, "path", None),
+                        error_code=err.code,
+                        stack_trace=traceback.format_exc(),
+                    )
+            wire_status = 200 if _status_200_on_error() else err.status
+            return JsonResponse({"error": err.reason, "code": err.code, "status": False }, status=wire_status)
         except PermissionError as err:
             if _api_metrics_enabled():
                 metrics.record("api_denied", category="mojo_api", min_granularity=_api_metrics_granularity())

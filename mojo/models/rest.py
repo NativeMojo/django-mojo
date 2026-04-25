@@ -190,38 +190,39 @@ class MojoModel:
         return cls.objects.filter(pk=request.DATA.get(field_name)).last()
 
     @classmethod
-    def rest_check_permission(cls, request, permission_keys, instance=None):
+    def _evaluate_permission(cls, request, permission_keys, instance=None):
         """
-        Check permissions for a given request. Reports granular denied feedback to incident/event system.
+        Evaluate the permission for a request without side effects on the
+        incident system.
 
-        Args:
-            request: Django HTTP request object.
-            permission_keys: Keys to check for permissions.
-            instance: Optional instance to check instance-specific permissions.
+        Returns a tuple ``(allowed, denial)``:
+          - allowed: bool — True if the request has the necessary permissions.
+          - denial: objict|None — None when allowed; otherwise an objict with
+            ``branch``, ``event_type``, ``status`` so callers (e.g. the raiser)
+            can build a PermissionDeniedException with full context. The
+            ``perms`` and ``permission_keys`` from the call are caller-known
+            and are NOT duplicated here — the raiser stitches them in.
 
-        Returns:
-            True if the request has the necessary permissions, otherwise False.
+        Side effects: when ``instance`` is provided and exposes ``.group``
+        and the predicate falls through to the group-permission branch,
+        ``request.group`` is set to ``instance.group``. This mirrors the
+        legacy behavior used by downstream handlers and is harmless for
+        callers that recover from a False return.
         """
         perms = cls.get_rest_meta_prop(permission_keys, [])
         if perms is None or len(perms) == 0:
-            return True
+            return True, None
 
         if "all" not in perms:
             if request.user is None or not request.user.is_authenticated:
-                cls.class_report_incident(
-                    details="Permission denied: unauthenticated user",
-                    event_type="unauthenticated",
-                    request=request,
-                    perms=perms,
-                    permission_keys=permission_keys,
+                return False, objict.objict(
                     branch="unauthenticated",
-                    instance=repr(instance) if instance else None,
-                    request_path=getattr(request, "path", None),
+                    event_type="unauthenticated",
+                    status=401,
                 )
-                return False
 
         if "authenticated" in perms:
-            return True
+            return True, None
 
         if instance is not None:
             is_view = isinstance(permission_keys, list) and "VIEW_PERMS" in permission_keys
@@ -230,77 +231,134 @@ class MojoModel:
             if is_view:
                 if hasattr(instance, "check_view_permission"):
                     allowed = instance.check_view_permission(perms, request)
-                    if not allowed:
-                        cls.class_report_incident(
-                            details="Permission denied: view_permission_denied",
-                            event_type="view_permission_denied",
-                            request=request,
-                            perms=perms,
-                            permission_keys=permission_keys,
-                            branch="instance.check_view_permission",
-                            instance=repr(instance),
-                            request_path=getattr(request, "path", None),
-                        )
-                    return allowed
+                    if allowed:
+                        return True, None
+                    return False, objict.objict(
+                        branch="instance.check_view_permission",
+                        event_type="view_permission_denied",
+                        status=403,
+                    )
 
             if hasattr(instance, "check_edit_permission"):
                 allowed = instance.check_edit_permission(perms, request)
-                if not allowed:
-                    cls.class_report_incident(
-                        details="Permission denied: edit_permission_denied",
-                        event_type="edit_permission_denied",
-                        request=request,
-                        perms=perms,
-                        permission_keys=permission_keys,
-                        branch="instance.check_edit_permission",
-                        instance=repr(instance),
-                        request_path=getattr(request, "path", None),
-                    )
-                return allowed
+                if allowed:
+                    return True, None
+                return False, objict.objict(
+                    branch="instance.check_edit_permission",
+                    event_type="edit_permission_denied",
+                    status=403,
+                )
 
             if "owner" in perms:
                 owner_field = instance.get_rest_meta_prop("OWNER_FIELD", "user")
                 owner = getattr(instance, owner_field, None)
                 if hasattr(request.user, "is_request_user"):
                     if owner is not None and owner.id == request.user.id:
-                        return True
+                        return True, None
             if hasattr(instance, "group"):
                 request.group = getattr(instance, "group", None)
 
         if request.group and hasattr(cls, "group"):
             if hasattr(request, 'api_key') and request.api_key:
-                return request.api_key.has_permission(perms)
-            allowed = request.group.user_has_permission(request.user, perms)
-            if not allowed:
-                cls.class_report_incident(
-                    details="Permission denied: group_member_permission_denied",
+                allowed = request.api_key.has_permission(perms)
+                if allowed:
+                    return True, None
+                return False, objict.objict(
+                    branch="api_key.has_permission",
                     event_type="group_member_permission_denied",
-                    request=request,
-                    perms=perms,
-                    permission_keys=permission_keys,
-                    group=getattr(request, "group", None),
-                    branch="group.user_has_permission",
-                    instance=repr(instance) if instance else None,
-                    request_path=getattr(request, "path", None),
+                    status=403,
                 )
-            return allowed
-        elif hasattr(request, 'api_key') and request.api_key:
-            return request.api_key.has_permission(perms)
-        if request.user is None or not request.user.is_authenticated:
-            return False
-        allowed = request.user.has_permission(perms)
-        if not allowed:
-            cls.class_report_incident(
-                details="Permission denied: user_permission_denied",
-                event_type="user_permission_denied",
-                request=request,
-                perms=perms,
-                permission_keys=permission_keys,
-                branch="user.has_permission",
-                instance=repr(instance) if instance else None,
-                request_path=getattr(request, "path", None),
+            allowed = request.group.user_has_permission(request.user, perms)
+            if allowed:
+                return True, None
+            return False, objict.objict(
+                branch="group.user_has_permission",
+                event_type="group_member_permission_denied",
+                status=403,
             )
+        elif hasattr(request, 'api_key') and request.api_key:
+            allowed = request.api_key.has_permission(perms)
+            if allowed:
+                return True, None
+            return False, objict.objict(
+                branch="api_key.has_permission",
+                event_type="user_permission_denied",
+                status=403,
+            )
+        if request.user is None or not request.user.is_authenticated:
+            return False, objict.objict(
+                branch="unauthenticated",
+                event_type="unauthenticated",
+                status=401,
+            )
+        allowed = request.user.has_permission(perms)
+        if allowed:
+            return True, None
+        return False, objict.objict(
+            branch="user.has_permission",
+            event_type="user_permission_denied",
+            status=403,
+        )
+
+    @classmethod
+    def rest_check_permission(cls, request, permission_keys, instance=None):
+        """
+        Pure boolean predicate — returns True/False with no event emission.
+
+        Use this when the caller wants to recover gracefully from a denial
+        (e.g. fall through to a scoped/empty list, silently skip an FK
+        attach). For HTTP handlers that should respond 401/403 on denial,
+        use :meth:`rest_check_permission_or_raise` instead so the dispatcher
+        emits a single, properly-categorized incident event.
+
+        Args:
+            request: Django HTTP request object.
+            permission_keys: RestMeta key(s) (e.g. "VIEW_PERMS", or
+                ["SAVE_PERMS", "VIEW_PERMS"]) whose perm lists are checked.
+            instance: Optional instance for instance-level checks
+                (check_view_permission / check_edit_permission, owner match).
+
+        Side effects: see :meth:`_evaluate_permission` for the
+        ``request.group`` write that may occur when ``instance`` exposes
+        ``.group``.
+
+        Returns:
+            True when allowed, False otherwise.
+        """
+        allowed, _ = cls._evaluate_permission(request, permission_keys, instance)
         return allowed
+
+    @classmethod
+    def rest_check_permission_or_raise(cls, request, permission_keys, instance=None):
+        """
+        Permission predicate that raises on denial.
+
+        Like :meth:`rest_check_permission`, but raises
+        ``PermissionDeniedException`` with full metadata
+        (``branch``, ``perms``, ``permission_keys``, ``model_name``,
+        ``instance``, ``event_type``, ``status``) when the predicate
+        returns False. The dispatcher in mojo/decorators/http.py catches
+        the exception, emits exactly one incident event, and serializes
+        the JSON response.
+
+        Returns True on allow.
+        """
+        allowed, denial = cls._evaluate_permission(request, permission_keys, instance)
+        if allowed:
+            return True
+        perms = cls.get_rest_meta_prop(permission_keys, [])
+        reason = f"Permission denied: {denial.event_type}"
+        raise me.PermissionDeniedException(
+            reason=reason,
+            status=denial.status,
+            code=denial.status,
+            branch=denial.branch,
+            perms=list(perms) if perms else None,
+            permission_keys=permission_keys,
+            model_name=cls.__name__,
+            instance=repr(instance) if instance is not None else None,
+            event_type=denial.event_type,
+        )
 
     @classmethod
     def on_rest_handle_get(cls, request, instance):
@@ -314,9 +372,8 @@ class MojoModel:
         Returns:
             JsonResponse representing the result of the GET request.
         """
-        if cls.rest_check_permission(request, "VIEW_PERMS", instance):
-            return instance.on_rest_get(request)
-        return cls.rest_error_response(request, 403, error=f"GET permission denied: {cls.__name__}")
+        cls.rest_check_permission_or_raise(request, "VIEW_PERMS", instance)
+        return instance.on_rest_get(request)
 
     @classmethod
     def on_rest_handle_save(cls, request, instance):
@@ -344,11 +401,15 @@ class MojoModel:
             else:
                 can_update = True
         if not can_update:
-            return cls.rest_error_response(request, 403, error=f"UPDATE not allowed: {cls.__name__}")
+            raise me.PermissionDeniedException(
+                reason=f"UPDATE not allowed: {cls.__name__}",
+                model_name=cls.__name__,
+                event_type="feature_disabled",
+                branch="can_update_false",
+            )
 
-        if cls.rest_check_permission(request, ["SAVE_PERMS", "VIEW_PERMS"], instance):
-            return instance.on_rest_save_and_respond(request)
-        return cls.rest_error_response(request, 403, error=f"{request.method} permission denied: {cls.__name__}")
+        cls.rest_check_permission_or_raise(request, ["SAVE_PERMS", "VIEW_PERMS"], instance)
+        return instance.on_rest_save_and_respond(request)
 
     @classmethod
     def on_rest_handle_delete(cls, request, instance):
@@ -363,11 +424,15 @@ class MojoModel:
             JsonResponse representing the result of the delete operation.
         """
         if not cls.get_rest_meta_prop("CAN_DELETE", False):
-            return cls.rest_error_response(request, 403, error=f"DELETE not allowed: {cls.__name__}")
+            raise me.PermissionDeniedException(
+                reason=f"DELETE not allowed: {cls.__name__}",
+                model_name=cls.__name__,
+                event_type="feature_disabled",
+                branch="can_delete_false",
+            )
 
-        if cls.rest_check_permission(request, ["DELETE_PERMS", "SAVE_PERMS", "VIEW_PERMS"], instance):
-            return instance.on_rest_delete(request)
-        return cls.rest_error_response(request, 403, error=f"DELETE permission denied: {cls.__name__}")
+        cls.rest_check_permission_or_raise(request, ["DELETE_PERMS", "SAVE_PERMS", "VIEW_PERMS"], instance)
+        return instance.on_rest_delete(request)
 
     @classmethod
     def on_rest_handle_list(cls, request):
@@ -407,7 +472,14 @@ class MojoModel:
                 return cls.on_rest_list(request, cls.objects.filter(**q))
 
         if MOJO_REST_LIST_PERM_DENY:
-            return cls.rest_error_response(request, 403, error=f"GET permission denied: {cls.__name__}")
+            raise me.PermissionDeniedException(
+                reason=f"GET permission denied: {cls.__name__}",
+                model_name=cls.__name__,
+                perms=list(perms) if perms else None,
+                permission_keys="VIEW_PERMS",
+                branch="list_perm_deny",
+                event_type="user_permission_denied",
+            )
         return cls.on_rest_list_response(request, cls.objects.none())
 
     def update_from_dict(self, dict_data):
@@ -445,12 +517,16 @@ class MojoModel:
             JsonResponse representing the result of the create operation.
         """
         if not cls.get_rest_meta_prop("CAN_CREATE", True):
-            return cls.rest_error_response(request, 403, error=f"CREATE not allowed: {cls.__name__}")
+            raise me.PermissionDeniedException(
+                reason=f"CREATE not allowed: {cls.__name__}",
+                model_name=cls.__name__,
+                event_type="feature_disabled",
+                branch="can_create_false",
+            )
 
-        if cls.rest_check_permission(request, ["CREATE_PERMS", "SAVE_PERMS", "VIEW_PERMS"]):
-            instance = cls.create_from_request(request)
-            return instance.on_rest_get(request)
-        return cls.rest_error_response(request, 403, error=f"CREATE permission denied: {cls.__name__}")
+        cls.rest_check_permission_or_raise(request, ["CREATE_PERMS", "SAVE_PERMS", "VIEW_PERMS"])
+        instance = cls.create_from_request(request)
+        return instance.on_rest_get(request)
 
     @classmethod
     def on_handle_list_or_create(cls, request):
@@ -485,10 +561,14 @@ class MojoModel:
         Returns a JSON response with serialized results and optional errors.
         """
         if not cls.get_rest_meta_prop("CAN_BATCH", False):
-            return cls.rest_error_response(request, 403, error=f"BATCH not allowed: {cls.__name__}")
+            raise me.PermissionDeniedException(
+                reason=f"BATCH not allowed: {cls.__name__}",
+                model_name=cls.__name__,
+                event_type="feature_disabled",
+                branch="can_batch_false",
+            )
 
-        if not cls.rest_check_permission(request, ["SAVE_PERMS", "VIEW_PERMS"]):
-            return cls.rest_error_response(request, 403, error=f"BATCH permission denied: {cls.__name__}")
+        cls.rest_check_permission_or_raise(request, ["SAVE_PERMS", "VIEW_PERMS"])
 
         batched = request.DATA.get("batched")
         if not isinstance(batched, list):
@@ -1105,6 +1185,30 @@ class MojoModel:
             return self.on_rest_get(request)
         return JsonResponse(resp)
 
+    def _report_fk_attach_denied(self, field, related_instance, request, branch):
+        """
+        Emit an `fk_attach_denied` incident when an FK assignment is silently
+        skipped because the requester lacks VIEW_PERMS on the related model.
+        Replaces the previous side-effect reporting that lived inside
+        rest_check_permission.
+        """
+        try:
+            self.__class__.class_report_incident_for_user(
+                details=f"FK attach denied: {field.name} on {self.__class__.__name__}",
+                event_type="fk_attach_denied",
+                level=2,
+                request=request,
+                branch=branch,
+                field_name=field.name,
+                related_model=field.related_model.__name__,
+                related_id=getattr(related_instance, "id", None),
+                model_name=self.__class__.__name__,
+                request_path=getattr(request, "path", None),
+            )
+        except Exception:
+            # Audit reporting must never block a save flow.
+            pass
+
     def on_rest_save_related_field(self, field, field_value, request):
         if isinstance(field_value, dict):
             # we want to check if we have an existing field and if so we will update it after security
@@ -1116,6 +1220,8 @@ class MojoModel:
             if hasattr(field.related_model, "rest_check_permission"):
                 if field.related_model.rest_check_permission(request, ["SAVE_PERMS", "VIEW_PERMS"], related_instance):
                     related_instance.on_rest_save(request, field_value)
+                else:
+                    self._report_fk_attach_denied(field, related_instance, request, branch="related_dict_save")
             return
         if hasattr(field.related_model, "on_rest_related_save"):
             related_instance = getattr(self, field.name)
@@ -1138,8 +1244,9 @@ class MojoModel:
             # Gate the assignment by VIEW_PERMS on the related instance —
             # otherwise a user with SAVE_PERMS on this model could attach FKs
             # to records they cannot otherwise see. Mirrors the dict-value
-            # branch's perm check above. Silent skip on denial; the existing
-            # incident-event reporting in rest_check_permission carries audit.
+            # branch's perm check above. Silent skip on denial, with an
+            # explicit `fk_attach_denied` incident event so the audit trail
+            # survives now that rest_check_permission is event-free.
             #
             # Models can exempt specific FK fields from this check by listing
             # them in RestMeta.NO_FK_VIEW_CHECK_FIELDS — use this when the
@@ -1150,6 +1257,7 @@ class MojoModel:
                 if not field.related_model.rest_check_permission(
                     request, "VIEW_PERMS", related_instance,
                 ):
+                    self._report_fk_attach_denied(field, related_instance, request, branch="related_pk_assign")
                     return
             old_value = getattr(self, field.name, None)
             self._set_field_change(field.name, old_value, related_instance)

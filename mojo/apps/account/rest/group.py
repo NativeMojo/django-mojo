@@ -36,7 +36,12 @@ def on_group_invite_member(request):
 def on_group_me_member(request, pk=None):
     request.group = Group.objects.filter(pk=pk).last()
     if request.group is None:
-        return Group.rest_error_response(request, 403, error="GET permission denied: Group")
+        raise merrors.PermissionDeniedException(
+            reason="GET permission denied: Group",
+            model_name="Group",
+            branch="group_member_endpoint_unknown_group",
+            event_type="user_permission_denied",
+        )
     request.group.touch()
     member = request.group.get_member_for_user(request.user, check_parents=True)
     if member is None:

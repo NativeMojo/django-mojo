@@ -74,18 +74,22 @@ def _build_request(user, method="PUT", data=None):
 @th.django_unit_test()
 def test_can_update_false_blocks_update(opts):
     from mojo.apps.incident.models import RuleSet
+    from mojo.errors import PermissionDeniedException
     _clear_flags(RuleSet)
     setattr(RuleSet.RestMeta, "CAN_UPDATE", False)
     try:
         req = _build_request(opts.admin, data={"description": "should not stick"})
-        response = RuleSet.on_rest_handle_save(req, opts.ruleset)
-        assert response.status_code == 403, (
-            f"Expected 403 with CAN_UPDATE=False, got {response.status_code}"
-        )
-        body = json.loads(response.content)
-        assert "UPDATE not allowed" in body.get("error", ""), (
-            f"Expected distinct 'UPDATE not allowed' message, got: {body}"
-        )
+        try:
+            RuleSet.on_rest_handle_save(req, opts.ruleset)
+            assert False, "Expected PermissionDeniedException with CAN_UPDATE=False"
+        except PermissionDeniedException as err:
+            assert err.status == 403, f"Expected status 403, got {err.status}"
+            assert "UPDATE not allowed" in err.reason, (
+                f"Expected 'UPDATE not allowed' in reason, got: {err.reason}"
+            )
+            assert err.event_type == "feature_disabled", (
+                f"Expected event_type=feature_disabled, got {err.event_type}"
+            )
     finally:
         _clear_flags(RuleSet)
 
@@ -127,15 +131,19 @@ def test_flag_unset_defaults_to_allowed(opts):
 @th.django_unit_test()
 def test_can_save_false_still_blocks_update(opts):
     from mojo.apps.incident.models import RuleSet
+    from mojo.errors import PermissionDeniedException
     _clear_flags(RuleSet)
     _reset_dedup_set()
     setattr(RuleSet.RestMeta, "CAN_SAVE", False)
     try:
         req = _build_request(opts.admin, data={"description": "should not stick"})
-        response = RuleSet.on_rest_handle_save(req, opts.ruleset)
-        assert response.status_code == 403, (
-            f"CAN_SAVE=False must still block (deprecated alias), got {response.status_code}"
-        )
+        raised = False
+        try:
+            RuleSet.on_rest_handle_save(req, opts.ruleset)
+        except PermissionDeniedException as err:
+            raised = True
+            assert err.status == 403, f"Expected 403, got {err.status}"
+        assert raised, "CAN_SAVE=False must still raise PermissionDeniedException (deprecated alias)"
     finally:
         _clear_flags(RuleSet)
 
@@ -146,14 +154,17 @@ def test_can_save_deprecation_dedupes_per_class(opts):
     from mojo.apps.incident.models import RuleSet
     from mojo.models import rest
 
+    from mojo.errors import PermissionDeniedException
     _clear_flags(RuleSet)
     _reset_dedup_set()
     setattr(RuleSet.RestMeta, "CAN_SAVE", False)
     try:
         req = _build_request(opts.admin, data={"description": "hit 1"})
-        RuleSet.on_rest_handle_save(req, opts.ruleset)
-        RuleSet.on_rest_handle_save(req, opts.ruleset)
-        RuleSet.on_rest_handle_save(req, opts.ruleset)
+        for _ in range(3):
+            try:
+                RuleSet.on_rest_handle_save(req, opts.ruleset)
+            except PermissionDeniedException:
+                pass
         warned = rest._DEPRECATED_CAN_SAVE_WARNED
         assert "RuleSet" in warned, (
             f"RuleSet should be in warned set, got: {warned}"
@@ -217,21 +228,24 @@ def test_can_update_false_does_not_affect_delete_gate(opts):
     not the UPDATE gate — proves they are independent.
     """
     from mojo.apps.incident.models import RuleSet
+    from mojo.errors import PermissionDeniedException
     _clear_flags(RuleSet)
     setattr(RuleSet.RestMeta, "CAN_UPDATE", False)
     original_can_delete = getattr(RuleSet.RestMeta, "CAN_DELETE", None)
     setattr(RuleSet.RestMeta, "CAN_DELETE", False)
     try:
         req = _build_request(opts.admin, method="DELETE")
-        response = RuleSet.on_rest_handle_delete(req, opts.ruleset)
-        assert response.status_code == 403, (
-            f"CAN_DELETE=False should block delete, got {response.status_code}"
-        )
-        body = json.loads(response.content)
-        error_msg = body.get("error", "")
-        assert "DELETE not allowed" in error_msg, (
-            f"Error must cite DELETE gate, not UPDATE gate: {error_msg}"
-        )
+        try:
+            RuleSet.on_rest_handle_delete(req, opts.ruleset)
+            assert False, "Expected PermissionDeniedException with CAN_DELETE=False"
+        except PermissionDeniedException as err:
+            assert err.status == 403, f"Expected 403, got {err.status}"
+            assert "DELETE not allowed" in err.reason, (
+                f"Error must cite DELETE gate, not UPDATE gate: {err.reason}"
+            )
+            assert err.event_type == "feature_disabled", (
+                f"Expected feature_disabled, got {err.event_type}"
+            )
     finally:
         _clear_flags(RuleSet)
         if original_can_delete is None:

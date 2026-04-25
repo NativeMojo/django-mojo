@@ -603,5 +603,18 @@ class Group(MojoSecrets, MojoModel):
                 return cls.on_rest_list(request, cls.objects.none())
 
         if MOJO_REST_LIST_PERM_DENY:
-            return cls.rest_error_response(request, 403, error=f"GET permission denied: {cls.__name__}")
+            from mojo.errors import PermissionDeniedException
+            view_perms = cls.get_rest_meta_prop("VIEW_PERMS", [])
+            event_type = "unauthenticated" if not request.user.is_authenticated else "user_permission_denied"
+            status = 401 if event_type == "unauthenticated" else 403
+            raise PermissionDeniedException(
+                reason=f"GET permission denied: {cls.__name__}",
+                status=status,
+                code=status,
+                model_name=cls.__name__,
+                perms=list(view_perms) if view_perms else None,
+                permission_keys="VIEW_PERMS",
+                branch="list_perm_deny_group",
+                event_type=event_type,
+            )
         return cls.on_rest_list(request, cls.objects.none())
