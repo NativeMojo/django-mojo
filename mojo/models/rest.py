@@ -1396,12 +1396,24 @@ class MojoModel:
 
     def report_incident(self, details, event_type="info", level=1, request=None, scope=None, **context):
         """
-        Instance-level audit/event reporting. Automatically includes model+id.
+        Instance-level audit/event reporting. Automatically includes model+id
+        and stamps ``group`` from ``self.group`` when the model exposes that
+        relationship — instance group beats request group, matching the
+        precedence documented in mojo/apps/incident/reporter.py.
+        Caller-supplied ``group=`` (including explicit ``None``) wins.
         """
         context = dict(context)
         context.setdefault("model_name", self.__class__.get_model_string())
         if hasattr(self, 'id') and self.id is not None:
             context.setdefault("model_id", self.id)
+        if "group" not in context:
+            instance_group = getattr(self, "group", None)
+            try:
+                from mojo.apps.account.models import Group
+                if isinstance(instance_group, Group):
+                    context["group"] = instance_group
+            except Exception:
+                pass
         self.__class__.class_report_incident(
             details, event_type=event_type, level=level, request=request, scope=scope, **context
         )
@@ -1410,6 +1422,11 @@ class MojoModel:
     def class_report_incident_for_user(cls, details, event_type="info", level=1, request=None, scope=None, **context):
         """
         Class-level audit/event reporting for a specific user.
+
+        Auto-stamps ``group`` from ``request.group`` when the request
+        carries one and the caller did not supply ``group=`` explicitly.
+        Caller-supplied ``group=`` (including ``None``) always wins.
+
         details: Human description.
         event_type: Category/kind (e.g. "permission_denied", "security_alert").
         level: Numeric severity.
@@ -1418,6 +1435,14 @@ class MojoModel:
         """
         if request is None:
             request = ACTIVE_REQUEST.get()
+        if "group" not in context and request is not None:
+            req_group = getattr(request, "group", None)
+            try:
+                from mojo.apps.account.models import Group
+                if isinstance(req_group, Group):
+                    context["group"] = req_group
+            except Exception:
+                pass
         if request and request.user.is_authenticated:
             return request.user.report_incident(details, event_type=event_type, level=level, request=request, scope=scope, **context)
         return cls.class_report_incident(details, event_type=event_type, level=level, request=request, scope=scope, **context)
@@ -1425,7 +1450,10 @@ class MojoModel:
     @classmethod
     def class_report_incident(cls, details, event_type="info", level=1, request=None, scope=None, **context):
         """
-        Class-level audit/event reporting.
+        Class-level audit/event reporting. Auto-stamps ``group`` from
+        ``request.group`` when the request carries one and the caller
+        did not supply ``group=`` explicitly.
+
         details: Human description.
         event_type: Category/kind (e.g. "permission_denied", "security_alert").
         level: Numeric severity.
@@ -1437,6 +1465,14 @@ class MojoModel:
         context.setdefault("model_name", cls.__name__)
         if request is None:
             request = ACTIVE_REQUEST.get()
+        if "group" not in context and request is not None:
+            req_group = getattr(request, "group", None)
+            try:
+                from mojo.apps.account.models import Group
+                if isinstance(req_group, Group):
+                    context["group"] = req_group
+            except Exception:
+                pass
         if scope is None:
             if hasattr(cls, "_meta"):
                 scope = cls._meta.app_config.label

@@ -25,6 +25,12 @@ class Incident(models.Model, MojoModel):
     model_name = models.TextField(default=None, null=True, db_index=True)
     model_id = models.IntegerField(default=None, null=True, db_index=True)
 
+    # Originating group, inherited from the seed event. Null when the
+    # bundled events span multiple groups (see Event.link_to_incident,
+    # which also stamps metadata.group_mismatch=True in that case).
+    group = models.ForeignKey("account.Group", null=True, default=None, db_index=True,
+        related_name="+", on_delete=models.SET_NULL)
+
     # the
     source_ip = models.CharField(max_length=16, null=True, default=None, db_index=True)
     hostname = models.CharField(max_length=16, null=True, default=None, db_index=True)
@@ -47,12 +53,14 @@ class Incident(models.Model, MojoModel):
             "default": {
                 "graphs": {
                     "rule_set": "basic",
+                    "group": "basic",
                 },
             },
             "detailed": {
                 "extra": ["ip_info"],
                 "graphs": {
                     "rule_set": "basic",
+                    "group": "basic",
                 },
             },
         }

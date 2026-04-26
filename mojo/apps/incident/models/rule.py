@@ -20,6 +20,10 @@ class BundleBy:
     SOURCE_IP_AND_MODEL_NAME = 7
     SOURCE_IP_AND_MODEL_NAME_AND_ID = 8
     SOURCE_IP_AND_HOSTNAME = 9
+    GROUP_ID = 10
+    GROUP_AND_MODEL_NAME = 11
+    GROUP_AND_MODEL_NAME_AND_ID = 12
+    GROUP_AND_SOURCE_IP = 13
 
     CHOICES = [
         (NONE, "Don't bundle - each event creates new incident"),
@@ -32,6 +36,10 @@ class BundleBy:
         (SOURCE_IP_AND_MODEL_NAME, "Bundle by IP + model type"),
         (SOURCE_IP_AND_MODEL_NAME_AND_ID, "Bundle by IP + specific model"),
         (SOURCE_IP_AND_HOSTNAME, "Bundle by IP + hostname"),
+        (GROUP_ID, "Bundle by group"),
+        (GROUP_AND_MODEL_NAME, "Bundle by group + model type"),
+        (GROUP_AND_MODEL_NAME_AND_ID, "Bundle by group + specific model"),
+        (GROUP_AND_SOURCE_IP, "Bundle by group + source IP"),
     ]
 
 

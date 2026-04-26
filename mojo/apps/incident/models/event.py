@@ -38,6 +38,13 @@ class Event(models.Model, MojoModel):
     model_name = models.TextField(default=None, null=True, db_index=True)
     model_id = models.IntegerField(default=None, null=True, db_index=True)
 
+    # Originating group for the event (auto-derived from instance.group or
+    # request.group by mojo/apps/incident/reporter.py). Nullable; many
+    # events have no group context. SET_NULL preserves audit history if
+    # the group is deleted.
+    group = models.ForeignKey("account.Group", null=True, default=None, db_index=True,
+        related_name="+", on_delete=models.SET_NULL)
+
     incident = models.ForeignKey("incident.Incident", null=True, related_name="events",
         default=None, on_delete=models.CASCADE)
 
@@ -54,6 +61,7 @@ class Event(models.Model, MojoModel):
                 "graphs": {
                     "incident": "basic",
                     "geo_ip": "basic",
+                    "group": "basic",
                 }
             },
             "security": {
@@ -80,6 +88,8 @@ class Event(models.Model, MojoModel):
                 "details",
                 "model_name",
                 "model_id",
+                "metadata.group_id",
+                "metadata.group_name",
                 "metadata.text",
                 "metadata.request_ip",
                 "metadata.source_ip",
@@ -144,7 +154,13 @@ class Event(models.Model, MojoModel):
             'title': self.title,
             'details': self.details,
             'model_name': self.model_name,
-            'model_id': self.model_id        }
+            'model_id': self.model_id,
+        }
+        # Snapshot group context as metadata so audit survives group rename
+        # or deletion. The group FK on the row tracks the live reference.
+        if self.group_id is not None:
+            field_values['group_id'] = self.group_id
+            field_values['group_name'] = getattr(self.group, 'name', None)
 
         if not self.country_code and self.geo_ip:
             self.country_code = self.geo_ip.country_code
@@ -341,7 +357,8 @@ class Event(models.Model, MojoModel):
                 hostname=self.hostname,
                 model_name=self.model_name,
                 model_id=self.model_id,
-                source_ip=self.source_ip
+                source_ip=self.source_ip,
+                group=self.group,
             )
             self.save()
             incident.metadata.update(self.metadata)
@@ -399,14 +416,49 @@ class Event(models.Model, MojoModel):
                 bundle_criteria['model_id'] = self.model_id
 
         if rule_set.bundle_by in [BundleBy.SOURCE_IP, BundleBy.SOURCE_IP_AND_MODEL_NAME,
-                                   BundleBy.SOURCE_IP_AND_MODEL_NAME_AND_ID, BundleBy.SOURCE_IP_AND_HOSTNAME]:
+                                   BundleBy.SOURCE_IP_AND_MODEL_NAME_AND_ID, BundleBy.SOURCE_IP_AND_HOSTNAME,
+                                   BundleBy.GROUP_AND_SOURCE_IP]:
             bundle_criteria['source_ip'] = self.source_ip
+
+        if rule_set.bundle_by in [BundleBy.GROUP_ID, BundleBy.GROUP_AND_MODEL_NAME,
+                                   BundleBy.GROUP_AND_MODEL_NAME_AND_ID, BundleBy.GROUP_AND_SOURCE_IP]:
+            bundle_criteria['group_id'] = self.group_id
+            if rule_set.bundle_by in [BundleBy.GROUP_AND_MODEL_NAME, BundleBy.GROUP_AND_MODEL_NAME_AND_ID]:
+                bundle_criteria['model_name'] = self.model_name
+                if rule_set.bundle_by == BundleBy.GROUP_AND_MODEL_NAME_AND_ID:
+                    bundle_criteria['model_id'] = self.model_id
 
         return bundle_criteria
 
     def link_to_incident(self, incident):
         """
         Links the event to an incident and saves the event.
+
+        Also reconciles the incident's group context: if the incident has
+        no group yet, inherit from the event; if the incident's group
+        differs from the event's group, downgrade the incident to no
+        group and stamp ``metadata.group_mismatch`` so operators can spot
+        cross-group bundles.
         """
         self.incident = incident
         self.save()
+
+        try:
+            event_gid = self.group_id
+            inc_gid = incident.group_id
+            mismatched = bool((incident.metadata or {}).get("group_mismatch"))
+            if event_gid is not None and inc_gid is None and not mismatched:
+                # First event ever to set the incident's group context.
+                incident.group_id = event_gid
+                incident.save(update_fields=["group"])
+            elif event_gid is not None and inc_gid is not None and event_gid != inc_gid:
+                # Heterogeneous mix — flag and downgrade. Audit-stable: once
+                # set, the flag is never cleared even if a later event would
+                # match the original group.
+                meta = dict(incident.metadata or {})
+                meta["group_mismatch"] = True
+                incident.metadata = meta
+                incident.group = None
+                incident.save(update_fields=["group", "metadata"])
+        except Exception:
+            logger.exception("Error reconciling incident group on link (incident=%s)", incident.pk)
