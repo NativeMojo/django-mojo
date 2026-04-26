@@ -10,9 +10,14 @@ Message types (client → server):
 
 Response types (server → client, via realtime publish):
   - assistant_thinking:   Processing has started
+  - assistant_text:       Intermediate assistant prose from a turn that also
+                          calls tools (fires before assistant_tool_call events
+                          for that turn). Payload: {conversation_id, text, blocks}
   - assistant_tool_call:  A tool was called (sent per tool)
-  - assistant_response:   Final LLM response
-  - assistant_error:      Something went wrong
+  - assistant_plan:       Task plan created by the assistant
+  - assistant_plan_update: A plan step status changed
+  - assistant_response:   Final LLM response (terminal event)
+  - assistant_error:      Something went wrong (terminal event)
 
 Reliability guarantees:
   - The user ALWAYS receives either assistant_response or assistant_error.

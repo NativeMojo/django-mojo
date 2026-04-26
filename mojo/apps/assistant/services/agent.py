@@ -1105,8 +1105,23 @@ def run_assistant(user, message, conversation_id=None, on_event=None, request=No
                     "duration_ms": duration_ms,
                 }
 
-            # Process tool calls — parallel when multiple non-meta tools
+            # Split content into text vs tool_use; persist text on the
+            # assistant turn and keep tool_calls clean (only tool_use blocks).
+            # Intermediate text fires `assistant_text` over WS so the live UI
+            # sees the model's reasoning before tool calls execute.
+            text_blocks = [b for b in result["content"] if b.get("type") == "text"]
             tool_blocks = [b for b in result["content"] if b.get("type") == "tool_use"]
+
+            raw_text = "\n".join(b["text"] for b in text_blocks if b.get("text"))
+            interim_text, interim_blocks = _parse_blocks(raw_text) if raw_text else ("", [])
+
+            if interim_text and on_event:
+                on_event("text", {
+                    "text": interim_text,
+                    "blocks": interim_blocks or None,
+                })
+
+            # Process tool calls — parallel when multiple non-meta tools
             tool_results = _execute_tools(
                 tool_blocks, registry, user, conversation, tools, on_event, tool_calls_made,
                 request_meta=request_meta,
@@ -1116,8 +1131,9 @@ def run_assistant(user, message, conversation_id=None, on_event=None, request=No
             Message.objects.create(
                 conversation=conversation,
                 role="assistant",
-                content="",
-                tool_calls=result["content"],
+                content=interim_text,
+                blocks=interim_blocks or None,
+                tool_calls=tool_blocks or None,
             )
             Message.objects.create(
                 conversation=conversation,
@@ -1281,14 +1297,29 @@ def run_assistant_ws(user, message, conversation_id, on_event=None):
                     "duration_ms": duration_ms,
                 }
 
-            # Process tool calls — parallel when multiple non-meta tools
+            # Split content into text vs tool_use; emit intermediate text
+            # over WS so users see the model's reasoning before tool calls fire.
+            text_blocks = [b for b in result["content"] if b.get("type") == "text"]
             tool_blocks = [b for b in result["content"] if b.get("type") == "tool_use"]
+
+            raw_text = "\n".join(b["text"] for b in text_blocks if b.get("text"))
+            interim_text, interim_blocks = _parse_blocks(raw_text) if raw_text else ("", [])
+
+            if interim_text and on_event:
+                on_event("text", {
+                    "text": interim_text,
+                    "blocks": interim_blocks or None,
+                })
+
+            # Process tool calls — parallel when multiple non-meta tools
             tool_results = _execute_tools(
                 tool_blocks, registry, user, conversation, tools, on_event, tool_calls_made,
             )
 
             Message.objects.create(
-                conversation=conversation, role="assistant", content="", tool_calls=result["content"],
+                conversation=conversation, role="assistant",
+                content=interim_text, blocks=interim_blocks or None,
+                tool_calls=tool_blocks or None,
             )
             Message.objects.create(
                 conversation=conversation, role="tool_result", content="", tool_calls=tool_results,

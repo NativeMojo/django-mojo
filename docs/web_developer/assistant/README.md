@@ -764,11 +764,22 @@ The server publishes events to the user's WebSocket topic as the assistant proce
 | Event | When | Payload |
 |---|---|---|
 | `assistant_thinking` | Immediately after message received | `{conversation_id}` |
+| `assistant_text` | Intermediate prose from a turn that also calls tools (fires before the `assistant_tool_call` events for that same turn) | `{conversation_id, text, blocks}` |
 | `assistant_tool_call` | Each time a tool is called | `{conversation_id, tool, input}` |
 | `assistant_plan` | After the assistant creates a task plan | `{conversation_id, plan}` |
 | `assistant_plan_update` | After each plan step status changes | `{conversation_id, plan_id, step_id, status, summary}` |
-| `assistant_response` | Final LLM response | `{conversation_id, message_id, created, response, tool_calls_made, blocks}` |
-| `assistant_error` | On failure | `{conversation_id, error}` |
+| `assistant_response` | Final LLM response (terminal event) | `{conversation_id, message_id, created, response, tool_calls_made, blocks}` |
+| `assistant_error` | On failure (terminal event) | `{conversation_id, error}` |
+
+**`assistant_text` payload fields**:
+
+| Field | Type | Description |
+|---|---|---|
+| `conversation_id` | integer | Conversation the message belongs to |
+| `text` | string | Intermediate narrative with `assistant_block` fences already stripped |
+| `blocks` | array or null | Parsed structured-data blocks from any fences in the text. `null` when none present. |
+
+`assistant_text` events fire when the model produces prose alongside `tool_use` blocks in the same turn (e.g., "I see four matching incidents — going to merge them now" followed by a `merge_incidents` tool call). Render each `assistant_text` event as a new assistant bubble in the conversation, then continue rendering the subsequent `assistant_tool_call` events. The terminal `assistant_response` is what re-enables the input field and clears the thinking indicator — it is the only signal that the turn is complete.
 
 **`assistant_response` payload fields**:
 
@@ -824,6 +835,13 @@ ws.on('assistant_thinking', (data) => {
     showThinkingIndicator(data.conversation_id);
 });
 
+ws.on('assistant_text', (data) => {
+    // Intermediate prose from a turn that also calls tools.
+    // Append a new assistant bubble; subsequent assistant_tool_call events
+    // for this same turn will follow.
+    appendAssistantBubble(data.conversation_id, data.text, data.blocks);
+});
+
 ws.on('assistant_tool_call', (data) => {
     showToolCallStatus(data.tool, data.input);
 });
@@ -858,8 +876,11 @@ ws.on('assistant_error', (data) => {
 1. Client sends `assistant_message` or `assistant_action` via WebSocket
 2. Server validates permissions, stores the user message, returns `assistant_thinking` immediately
 3. A background thread runs the LLM agent (tool-calling loop may take seconds)
-4. During processing, `assistant_tool_call` events are published per tool; if the LLM creates a plan, `assistant_plan` fires once, then `assistant_plan_update` fires per step change
-5. When done, `assistant_response` (or `assistant_error`) is published
+4. During processing, the agent emits per-turn events:
+   - `assistant_text` — model prose from a turn that also calls tools (fires before that turn's `assistant_tool_call` events)
+   - `assistant_tool_call` — once per tool invocation
+   - `assistant_plan` / `assistant_plan_update` — when the LLM creates and progresses a task plan
+5. When done, `assistant_response` (or `assistant_error`) is published — this is the terminal event and is the signal to clear the thinking indicator and re-enable input
 
 All events arrive as `{"type": "assistant_*", ...}` directly on the WebSocket. There is no `{"type": "message", "data": ...}` wrapper.
 

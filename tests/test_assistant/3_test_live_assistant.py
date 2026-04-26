@@ -54,6 +54,8 @@ def _ws_collect_assistant_events(ws, timeout=60.0):
 
     Returns (tool_calls, final_event) where tool_calls is a list of
     tool_call event dicts and final_event is the response or error dict.
+    Intermediate `assistant_text` events are silently consumed so they
+    don't prematurely terminate the loop or leave the socket buffer dirty.
     """
     tool_calls = []
     deadline = time.time() + timeout
@@ -61,12 +63,20 @@ def _ws_collect_assistant_events(ws, timeout=60.0):
         remaining = max(1.0, deadline - time.time())
         try:
             msg = ws.wait_for_types(
-                {"assistant_tool_call", "assistant_response", "assistant_error"},
+                {
+                    "assistant_text",
+                    "assistant_tool_call",
+                    "assistant_response",
+                    "assistant_error",
+                },
                 timeout=remaining,
             )
             msg_type = msg.data.get("type")
             if msg_type == "assistant_tool_call":
                 tool_calls.append(msg.data)
+            elif msg_type == "assistant_text":
+                # Intermediate prose between tool calls — consume and continue.
+                continue
             elif msg_type in ("assistant_response", "assistant_error"):
                 return tool_calls, msg.data
         except TimeoutError:
