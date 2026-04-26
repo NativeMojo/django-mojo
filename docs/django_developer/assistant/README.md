@@ -940,7 +940,7 @@ This is enforced via the system prompt, not code. Override `LLM_ADMIN_SYSTEM_PRO
 ### Block Types
 
 - **`table`** — `{type, title, columns, rows}` — query results, comparisons
-- **`chart`** — `{type, chart_type, title, labels, series}` — line/bar/pie/area for trends
+- **`chart`** — `{type, chart_type, title, labels, series}` — line/bar/pie/area for trends. Optional render hints: `stacked`, `grouped`, `crosshair_tracking` (line/area), `cutout`, `show_labels`, `show_percentages` (pie), `colors` (palette), per-series `color`, `show_legend`, `legend_position`
 - **`stat`** — `{type, items: [{label, value}]}` — dashboard key metrics
 - **`action`** — `{type, title, description, actions: [{label, value}], action_id}` — user confirmation dialogs for mutating operations
 - **`list`** — `{type, title, items: [{label, value}]}` — single-record key/value summaries
@@ -955,6 +955,7 @@ This is enforced via the system prompt, not code. Override `LLM_ADMIN_SYSTEM_PRO
 | `action` | `actions` must be a non-empty list. The block is tagged with a unique `action_id` (UUID string) on parse. |
 | `alert` | `level` must be one of `info`, `success`, `warning`, `error`. `message` must be non-empty. |
 | `list` | `items` must be a non-empty list. |
+| `chart` | `chart_type` must be one of `line`, `bar`, `pie`, `area`. `labels` must be a non-empty list. `series` must be a non-empty list of `{name, values}` dicts; every `series[i].values` length must equal `len(labels)`. Recoverable fields are coerced rather than dropping the chart: `cutout` is clamped to `[0, 1]`; `stacked` is stripped if not in `{True, False, "auto"}`; `crosshair_tracking` is coerced to `bool`; `colors` is stripped if non-list and non-null. Unknown top-level fields pass through unchanged for forward compatibility. |
 | `progress` | No extra validation beyond type membership. |
 
 ### `action` Block

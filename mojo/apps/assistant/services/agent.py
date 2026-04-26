@@ -160,6 +160,57 @@ VALID_BLOCK_TYPES = {"table", "chart", "stat", "action", "list", "alert", "progr
 
 VALID_ALERT_LEVELS = {"info", "success", "warning", "error"}
 
+VALID_CHART_TYPES = {"line", "bar", "pie", "area"}
+
+VALID_STACKED_VALUES = (True, False, "auto")
+
+
+def _validate_chart_block(block):
+    """
+    Validate a chart block: enforce structural rules that would break the
+    renderer; clamp / coerce soft fields rather than dropping the block.
+
+    Returns True if the chart should render, False to drop it entirely.
+    """
+    if block.get("chart_type") not in VALID_CHART_TYPES:
+        return False
+
+    labels = block.get("labels")
+    if not isinstance(labels, list) or not labels:
+        return False
+    label_count = len(labels)
+
+    series = block.get("series")
+    if not isinstance(series, list) or not series:
+        return False
+    for s in series:
+        if not isinstance(s, dict):
+            return False
+        if not isinstance(s.get("name"), str) or not s["name"]:
+            return False
+        values = s.get("values")
+        if not isinstance(values, list) or len(values) != label_count:
+            return False
+
+    # Recoverable fields — clamp / strip rather than drop the chart.
+    if "cutout" in block:
+        cutout = block["cutout"]
+        if isinstance(cutout, bool) or not isinstance(cutout, (int, float)):
+            block.pop("cutout", None)
+        else:
+            block["cutout"] = max(0.0, min(1.0, float(cutout)))
+
+    if "stacked" in block and block["stacked"] not in VALID_STACKED_VALUES:
+        block.pop("stacked", None)
+
+    if "crosshair_tracking" in block:
+        block["crosshair_tracking"] = bool(block["crosshair_tracking"])
+
+    if "colors" in block and block["colors"] is not None and not isinstance(block["colors"], list):
+        block.pop("colors", None)
+
+    return True
+
 
 def _validate_block(block):
     """
@@ -188,6 +239,9 @@ def _validate_block(block):
             return False
     elif block_type == "file":
         if not block.get("url") or not block.get("filename"):
+            return False
+    elif block_type == "chart":
+        if not _validate_chart_block(block):
             return False
     return True
 
@@ -409,9 +463,20 @@ The blocks are extracted and rendered as rich visual components by the frontend 
 
 **chart** — for time-series, trends, distributions:
 ```assistant_block
-{"type": "chart", "chart_type": "line", "title": "Events (24h)", "labels": ["00:00", "06:00", "12:00", "18:00"], "series": [{"name": "events", "values": [12, 45, 32, 18]}]}
+{"type": "chart", "chart_type": "bar", "title": "Events by Severity (7d)", "labels": ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"], "series": [{"name": "low", "values": [12,15,9,18,22,7,11]}, {"name": "medium", "values": [4,6,3,7,9,2,5]}, {"name": "high", "values": [1,2,0,1,3,0,1]}]}
 ```
-Supported chart_type values: line, bar, pie, area.
+Supported `chart_type` values: `line`, `bar`, `pie`, `area`. Bar charts are stacked by default — pass `"stacked": false` (or `"grouped": true`) for grouped bars.
+
+Optional chart fields:
+- `stacked`: `true` / `false` / `"auto"` — bar stacking mode (default `"auto"` → stacked).
+- `grouped`: `true` — convenience alias for `"stacked": false`.
+- `crosshair_tracking`: `true` — on `line`/`area` charts with 2+ series, lets the user read all series values at any X position by hovering the plot area (not just dots).
+- `cutout`: `0..1` — pie doughnut depth. `0` is solid pie, `0.55` is doughnut.
+- `show_labels`: `true` — pie slice-edge labels (default `false`).
+- `show_percentages`: `true|false` — append `%` to slice labels (default `true`).
+- `colors`: `["#22c55e", "#f59e0b", "#ef4444"]` — chart-level palette override.
+- Per-series `color`: on each `series` entry — always wins over `colors`.
+- `show_legend`: `true|false` (default `true`); `legend_position`: `"top"|"bottom"|"left"|"right"` for line/bar/area, `"right"|"bottom"|"none"` for pie.
 
 **stat** — for single key metrics, counts, rates:
 ```assistant_block
@@ -448,6 +513,10 @@ Use when a tool generates a downloadable file. The frontend renders this as a do
 - Use list blocks for single-record details — never use a table with 1 row.
 - Use stat blocks for dashboard-style overviews (system health, summaries).
 - Use chart blocks when the user asks about trends or when time-series data is available.
+- Use `crosshair_tracking: true` on `line` and `area` charts with 2+ series — it lets the user read all series values at any X position by hovering, instead of having to land on a specific dot.
+- Use `cutout: 0.5` on `pie` charts when the slice count is small (≤4) and the title benefits from a center-callout look.
+- Use `colors` (chart-level) when the data has natural categorical meaning where specific colors matter (status: success=green / warning=yellow / error=red; severity: low/medium/high). For arbitrary categories, omit `colors` and let the framework's palette pick.
+- Pass `stacked: false` (or `grouped: true`) on bar charts only when the user is comparing magnitudes between categories at the same time-bucket. Otherwise, the default stacked view shows totals more clearly.
 - Use action blocks for confirmations — never ask "type yes to confirm" when an action block is appropriate.
 - Use alert blocks sparingly — only for genuinely important warnings, errors, or status changes.
 - Keep table rows bounded — show the most relevant 20 rows max, mention the total if there are more.

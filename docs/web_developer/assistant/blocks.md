@@ -7,12 +7,90 @@ Implementation guide for rendering all assistant block types in the frontend. Bl
 | Type | Purpose | Key Fields |
 |---|---|---|
 | `table` | Query results, record lists | `title`, `columns`, `rows` |
-| `chart` | Time-series, trends | `chart_type`, `title`, `labels`, `series` |
+| `chart` | Time-series, trends | `chart_type`, `title`, `labels`, `series`, plus optional render hints (see [Chart Block](#chart--seriesschart--piechart-options) below) |
 | `stat` | Dashboard key metrics | `items` (label/value pairs) |
 | `action` | Confirmation cards with buttons | `action_id`, `title`, `description`, `actions` |
 | `list` | Single-record key/value detail | `title`, `items` (label/value pairs) |
 | `alert` | Severity-colored status banners | `level`, `title`, `message` |
 | `progress` | Multi-step plan tracker | `plan_id`, `title`, `steps` |
+
+---
+
+## `chart` — SeriesChart / PieChart Options
+
+The base shape (`type`, `chart_type`, `title`, `labels`, `series`) renders a basic chart. The following optional fields let the LLM pick the right rendering for the data.
+
+### Schema
+
+```json
+{
+    "type": "chart",
+    "chart_type": "bar",
+    "title": "Events by Severity (7d)",
+    "labels": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+    "series": [
+        {"name": "low", "values": [12, 15, 9, 18, 22, 7, 11], "color": "#22c55e"},
+        {"name": "medium", "values": [4, 6, 3, 7, 9, 2, 5]},
+        {"name": "high", "values": [1, 2, 0, 1, 3, 0, 1]}
+    ],
+    "stacked": "auto",
+    "colors": ["#22c55e", "#f59e0b", "#ef4444"],
+    "show_legend": true,
+    "legend_position": "bottom"
+}
+```
+
+### Field Reference
+
+**Common to all chart types:**
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `colors` | array or null | palette | Chart-level color palette override. `null` falls back to the framework palette. |
+| `show_legend` | bool | `true` | Whether to render the legend at all. |
+| `legend_position` | string | `"top"` (line/bar/area) / `"right"` (pie) | Legend placement. Line/bar/area: `top`/`bottom`/`left`/`right`. Pie: `right`/`bottom`/`none`. |
+
+**Per-series fields** (on each `series` entry):
+
+| Field | Type | Description |
+|---|---|---|
+| `color` | string | Per-series color override — wins over chart-level `colors`. |
+| `fill` | bool | Line/area only — fill area under the line. |
+| `smoothing` | number | Line/area only — curve smoothing factor. |
+
+**Bar charts** (`chart_type: "bar"`):
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `stacked` | `true` / `false` / `"auto"` | `"auto"` (resolves to `true`) | Stack mode. Stacked is the new default. |
+| `grouped` | bool | — | Convenience alias for `stacked: false`. |
+
+**Line / area charts** (`chart_type: "line" | "area"`):
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `crosshair_tracking` | bool | `false` | Floating crosshair + per-dataset ghost dot + multi-row tooltip that follows the cursor anywhere over the plot. Best for charts with 2+ series. |
+
+**Pie charts** (`chart_type: "pie"`):
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `cutout` | number `0..1` | `0` | Doughnut depth. `0` is solid pie, `0.55` is doughnut. Server clamps out-of-range values. |
+| `show_labels` | bool | `false` | Slice-edge labels. |
+| `show_percentages` | bool | `true` | Append `%` next to slice labels. |
+
+### Server-side Validation
+
+The server validates chart blocks before they reach the client (`_validate_block` in `mojo/apps/assistant/services/agent.py`):
+
+- **Drops the block** if `chart_type` is not in `{line, bar, pie, area}`, if `labels` or `series` is empty/non-list, if any series entry lacks `name: str` or `values: list`, or if any `series[i].values` length does not match `len(labels)`.
+- **Clamps `cutout`** to `[0, 1]`. Non-numeric values are stripped.
+- **Strips `stacked`** if it is not in `{true, false, "auto"}` (chart still renders).
+- **Coerces `crosshair_tracking`** to bool.
+- **Strips `colors`** if non-list and non-null.
+- **Unknown top-level fields pass through** unchanged. Future server schema additions don't require renderer changes; future renderer additions don't require server changes.
+
+The renderer can rely on the shape being well-formed for the validated fields.
 
 ---
 
