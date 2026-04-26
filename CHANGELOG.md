@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## v1.1.33 - April 26, 2026
+
+ai assistant fixes, new group bundling and group event support
+
+
 ## Unreleased
 
 ### Added
