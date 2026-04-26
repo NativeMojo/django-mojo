@@ -994,6 +994,8 @@ For time-series, trends, distributions.
 | `labels` | string[] | X-axis labels (or pie slice labels) |
 | `series` | object[] | Data series, each with `name` and `values` array |
 
+Optional render-hint fields (`stacked`, `grouped`, `crosshair_tracking`, `cutout`, `show_labels`, `show_percentages`, `colors`, `show_legend`, `legend_position`, per-series `color`/`fill`/`smoothing`) are documented with full field reference and server-side validation rules in [blocks.md](blocks.md#chart--serieschart--piechart-options).
+
 #### `stat`
 
 For dashboard-style key metrics.
