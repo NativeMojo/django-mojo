@@ -4683,9 +4683,33 @@
 <td>Same IP + server</td>
 <td>IP causing problems on a specific instance (distributed attack targeting one node).</td>
 </tr>
+<tr>
+<td><code>10</code></td>
+<td>GROUP_ID</td>
+<td>Same tenant group</td>
+<td>Multi-tenant noise isolation — one tenant's flood does not drown out another's signal.</td>
+</tr>
+<tr>
+<td><code>11</code></td>
+<td>GROUP_AND_MODEL_NAME</td>
+<td>Same tenant + model</td>
+<td>Per-tenant model activity (e.g. all <code>Order</code> denials inside tenant X).</td>
+</tr>
+<tr>
+<td><code>12</code></td>
+<td>GROUP_AND_MODEL_NAME_AND_ID</td>
+<td>Same tenant + model instance</td>
+<td>Per-tenant activity on a specific record.</td>
+</tr>
+<tr>
+<td><code>13</code></td>
+<td>GROUP_AND_SOURCE_IP</td>
+<td>Same tenant + source IP</td>
+<td>Per-tenant attack patterns — recommended default for multi-tenant deployments where one IP could be hammering one tenant while others operate normally.</td>
+</tr>
 </tbody>
 </table>
-<p>For most security rules, <code>bundle_by=4</code> (SOURCE_IP) is the right choice.</p>
+<p>For single-tenant deployments, <code>bundle_by=4</code> (SOURCE_IP) is the right default. For multi-tenant deployments, prefer <code>bundle_by=13</code> (GROUP_AND_SOURCE_IP) so per-tenant attack signal stays separated. GROUP_* modes require an <code>Event.group</code> to bundle on; events without a group fall together into a single "no group" bucket per category.</p>
 <h3 id="trigger_count-trigger_window-suppress-until-threshold">trigger_count + trigger_window: Suppress Until Threshold<a class="headerlink" href="#trigger_count-trigger_window-suppress-until-threshold" title="Permanent link">&para;</a></h3>
 <p>Without <code>trigger_count</code>, the handler fires on the very first event. That's right for critical one-off alerts, but creates noise for gradual attacks. Use <code>trigger_count</code> to suppress until you're sure something is real:</p>
 <p><strong>How it works:</strong>

@@ -4023,7 +4023,7 @@
 </tr>
 <tr>
 <td>401</td>
-<td>Not authenticated</td>
+<td>Not authenticated — request reached a permission-gated endpoint with no valid session</td>
 </tr>
 <tr>
 <td>403</td>
@@ -4039,6 +4039,7 @@
 </tr>
 </tbody>
 </table>
+<p><strong>401 vs 403:</strong> Permission-gated endpoints return <strong>401</strong> for unauthenticated requests and <strong>403</strong> for authenticated requests that lack the required permission. Both include <code>"is_authenticated": false</code> or <code>true</code> respectively in the error envelope. Clients should redirect to login on 401 and show a "not authorized" message on 403.</p>
 <h2 id="dates">Dates<a class="headerlink" href="#dates" title="Permanent link">&para;</a></h2>
 <p>All datetimes are returned in ISO 8601 UTC format: <code>"2024-01-15T10:30:00Z"</code></p>
 <p>When sending dates, ISO 8601 format is accepted: <code>"2024-01-15"</code> or <code>"2024-01-15T10:30:00Z"</code></p>
