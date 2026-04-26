@@ -862,7 +862,7 @@ A single message in a conversation.
 | `conversation` | FK(Conversation) | Parent conversation |
 | `role` | CharField | `user`, `assistant`, `tool_use`, or `tool_result` |
 | `content` | TextField | Message text content (block fences stripped for assistant messages) |
-| `tool_calls` | JSONField | Tool call details (for assistant/tool_result messages) |
+| `tool_calls` | JSONField | For `assistant` role: only `tool_use` blocks (`null` when none). For `tool_result` role: tool result payloads. `null` for user messages. |
 | `blocks` | JSONField | Pre-parsed structured data blocks extracted at write time. `null` when none present. |
 | `created` | DateTimeField | When the message was created |
 
@@ -880,9 +880,12 @@ Client sends WS message {type: "assistant_message", message: "...", conversation
   → Handler validates, stores message, returns {type: "assistant_thinking"} immediately
   → Background job runs run_assistant_ws() with on_event callback
   → Callback publishes WS events back to the user:
+      assistant_text       (intermediate prose from a turn that also calls tools)
       assistant_tool_call  (per tool)
-      assistant_response   (final answer)
-      assistant_error      (on failure)
+      assistant_plan       (when LLM creates a task plan)
+      assistant_plan_update (per plan step status change)
+      assistant_response   (final answer, terminal)
+      assistant_error      (on failure, terminal)
 ```
 
 ### Key Files
