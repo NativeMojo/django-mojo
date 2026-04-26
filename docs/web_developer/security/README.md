@@ -292,8 +292,12 @@ Rules (the conditions within a ruleset) are managed at `/api/incident/event/rule
 | `7` | SOURCE_IP_AND_MODEL_NAME | Same IP + model | IP attacking a specific model type. |
 | `8` | SOURCE_IP_AND_MODEL_NAME_AND_ID | Same IP + model instance | IP targeting a specific record. |
 | `9` | SOURCE_IP_AND_HOSTNAME | Same IP + server | IP causing problems on a specific instance (distributed attack targeting one node). |
+| `10` | GROUP_ID | Same tenant group | Multi-tenant noise isolation — one tenant's flood does not drown out another's signal. |
+| `11` | GROUP_AND_MODEL_NAME | Same tenant + model | Per-tenant model activity (e.g. all `Order` denials inside tenant X). |
+| `12` | GROUP_AND_MODEL_NAME_AND_ID | Same tenant + model instance | Per-tenant activity on a specific record. |
+| `13` | GROUP_AND_SOURCE_IP | Same tenant + source IP | Per-tenant attack patterns — recommended default for multi-tenant deployments where one IP could be hammering one tenant while others operate normally. |
 
-For most security rules, `bundle_by=4` (SOURCE_IP) is the right choice.
+For single-tenant deployments, `bundle_by=4` (SOURCE_IP) is the right default. For multi-tenant deployments, prefer `bundle_by=13` (GROUP_AND_SOURCE_IP) so per-tenant attack signal stays separated. GROUP_* modes require an `Event.group` to bundle on; events without a group fall together into a single "no group" bucket per category.
 
 ### trigger_count + trigger_window: Suppress Until Threshold
 

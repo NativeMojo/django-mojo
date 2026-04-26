@@ -458,15 +458,15 @@ Bundling controls how related events are collapsed into a single incident rather
 | `MODEL_NAME` | 2 | Same model type |
 | `MODEL_NAME_AND_ID` | 3 | Same model instance |
 | `SOURCE_IP` | 4 | Same source IP |
-| `SOURCE_IP_AND_HOSTNAME` | 5 | Same IP + server |
-| `SOURCE_IP_AND_MODEL_NAME` | 6 | Same IP + model type |
-| `SOURCE_IP_AND_MODEL_NAME_AND_ID` | 7 | Same IP + model instance |
-| `HOSTNAME_AND_MODEL_NAME` | 8 | Same server + model type |
-| `HOSTNAME_AND_MODEL_NAME_AND_ID` | 9 | Same server + model instance |
-| `GROUP_ID` | 10 | Same group |
+| `HOSTNAME_AND_MODEL_NAME` | 5 | Same server + model type |
+| `HOSTNAME_AND_MODEL_NAME_AND_ID` | 6 | Same server + model instance |
+| `SOURCE_IP_AND_MODEL_NAME` | 7 | Same IP + model type |
+| `SOURCE_IP_AND_MODEL_NAME_AND_ID` | 8 | Same IP + model instance |
+| `SOURCE_IP_AND_HOSTNAME` | 9 | Same IP + server |
+| `GROUP_ID` | 10 | Same group (tenant) — recommended for multi-tenant noise isolation |
 | `GROUP_AND_MODEL_NAME` | 11 | Same group + model type |
 | `GROUP_AND_MODEL_NAME_AND_ID` | 12 | Same group + model instance |
-| `GROUP_AND_SOURCE_IP` | 13 | Same group + source IP |
+| `GROUP_AND_SOURCE_IP` | 13 | Same group + source IP — recommended default for multi-tenant attack-pattern detection |
 
 ### Thresholds (trigger_count)
 

@@ -124,7 +124,30 @@ def _tool_get_ruleset(params, user):
                     "required": ["field", "comparator", "value"],
                 },
             },
-            "bundle_by": {"type": "integer", "description": "How to group events: 0=none, 4=source_ip, 2=model_name. Default 4.", "default": 4},
+            "bundle_by": {
+                "type": "integer",
+                "description": (
+                    "How to group events into one incident. "
+                    "0=none (each event = own incident), "
+                    "1=hostname, "
+                    "2=model_name, "
+                    "3=model_name+id, "
+                    "4=source_ip, "
+                    "5=hostname+model_name, "
+                    "6=hostname+model_name+id, "
+                    "7=source_ip+model_name, "
+                    "8=source_ip+model_name+id, "
+                    "9=source_ip+hostname, "
+                    "10=group (per-tenant), "
+                    "11=group+model_name, "
+                    "12=group+model_name+id, "
+                    "13=group+source_ip (multi-tenant attack patterns). "
+                    "For multi-tenant deployments use 13 so one tenant's flood "
+                    "does not drown out signal from another. Otherwise 4 is the "
+                    "default for security rules. Default 4."
+                ),
+                "default": 4,
+            },
             "bundle_minutes": {"type": "integer", "description": "Time window for bundling (default 30 min)", "default": 30},
             "min_count": {"type": "integer", "description": "Minimum events before triggering (optional)"},
             "window_minutes": {"type": "integer", "description": "Time window for threshold counting (optional)"},
@@ -224,7 +247,19 @@ def _tool_add_rule_condition(params, user):
             "ruleset_id": {"type": "integer", "description": "The rule set ID to update"},
             "name": {"type": "string", "description": "New name"},
             "handler": {"type": "string", "description": "New handler chain"},
-            "bundle_by": {"type": "integer", "description": "New bundle_by value (0=none, 4=source_ip, etc.)"},
+            "bundle_by": {
+                "type": "integer",
+                "description": (
+                    "New bundle_by value. "
+                    "0=none, 1=hostname, 2=model_name, 3=model_name+id, "
+                    "4=source_ip, 5=hostname+model_name, 6=hostname+model_name+id, "
+                    "7=source_ip+model_name, 8=source_ip+model_name+id, "
+                    "9=source_ip+hostname, "
+                    "10=group, 11=group+model_name, 12=group+model_name+id, "
+                    "13=group+source_ip. Use a GROUP_* mode (10-13) for "
+                    "multi-tenant deployments so per-tenant signal stays separated."
+                ),
+            },
             "bundle_minutes": {"type": "integer", "description": "New bundle time window in minutes"},
             "match_by": {"type": "integer", "description": "Rule matching mode (0=ALL must match, 1=ANY can match)"},
             "trigger_count": {"type": "integer", "description": "Event count threshold for handler execution"},

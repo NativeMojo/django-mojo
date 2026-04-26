@@ -1,7 +1,7 @@
 # Group context on incident events and incidents
 
 **Type**: request
-**Status**: planned
+**Status**: resolved
 **Date**: 2026-04-25
 **Priority**: medium
 
@@ -233,3 +233,45 @@ Capture the originating group on every `Event` and `Incident` via a nullable ind
 - `docs/django_developer/rest/permissions.md` — note that the seven denial event categories from the previous fix now also carry `group` automatically when the request or instance has one.
 - `docs/web_developer/` — Event and Incident response shape gains a `group` field (basic graph: id + name).
 - `CHANGELOG.md` — Added: `Event.group` and `Incident.group` FK with auto-derivation; `BundleBy.GROUP_*` modes; per-group bundling; metadata `group_mismatch` flag for heterogeneous bundles.
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-04-25
+
+### What Was Built
+
+Added group context to incident events and incidents via a nullable indexed `group` FK (`SET_NULL`) on both `Event` and `Incident`, auto-derived from `request.group` (reporter level) and `self.group` / `request.group` (MojoModel `report_incident` and class-level helpers). Group identity is also snapshotted into `event.metadata` (`group_id`, `group_name`) at creation time so audit records survive group rename or deletion. Four new `BundleBy` modes (`GROUP_ID`, `GROUP_AND_MODEL_NAME`, `GROUP_AND_MODEL_NAME_AND_ID`, `GROUP_AND_SOURCE_IP`, IDs 10-13) enable per-group bundling. `Incident.group` is seeded from the seed event and reconciled on link: heterogeneous bundles set `Incident.group=None` and stamp an audit-stable `metadata.group_mismatch=True`. REST graphs expose a scalar `group_id` (not a nested Group, to avoid cross-tenant leakage).
+
+### Files Changed
+
+- `mojo/apps/incident/models/event.py` — `group` FK, `sync_metadata` snapshot, seed-from-event in `get_or_create_incident`, group reconcile in `link_to_incident`, four new bundle branches in `determine_bundle_criteria`, scalar `group_id` in REST graph, `metadata.group_id`/`metadata.group_name` in CSV format.
+- `mojo/apps/incident/models/incident.py` — `group` FK, scalar `group_id` in default + detailed graphs.
+- `mojo/apps/incident/models/rule.py` — four new `BundleBy.GROUP_*` constants and choice entries (IDs 10-13).
+- `mojo/apps/incident/reporter.py` — `_resolve_event_group` precedence resolver with `isinstance(Group)` guard; populates `event_data["group"]` and mirrors `group_id`/`group_name` into metadata.
+- `mojo/models/rest.py` — `report_incident` auto-stamps `self.group`; `class_report_incident` and `class_report_incident_for_user` auto-stamp `request.group`; all use `setdefault` so caller-supplied `group=None` is preserved.
+- `mojo/apps/incident/migrations/0027_event_group_incident_group_alter_ruleset_bundle_by.py` — adds both FKs (nullable, `SET_NULL`) and updates `RuleSet.bundle_by` choices.
+
+### Tests
+
+- `tests/test_incident/test_event_group.py` — 6 tests: reporter precedence (caller / request / none), `group=None` suppression, isinstance guard rejecting non-Group values, metadata snapshot survives group deletion.
+- `tests/test_incident/test_bundle_by_group.py` — 5 tests: `GROUP_ID` bundles same-group / separates different-group, `GROUP_AND_MODEL_NAME_AND_ID` requires both, `GROUP_AND_SOURCE_IP` requires both, regression on existing `MODEL_NAME_AND_ID`.
+- `tests/test_incident/test_incident_group_inherit.py` — 5 tests: seed inheritance, no-seed null, same-group stable, heterogeneous downgrade with flag, audit-stable flag (never clears).
+- `tests/test_models/report_incident_group.py` — 5 tests: instance auto-stamp from `self.group`, no-attr fallthrough, `class_report_incident_for_user` auto-stamp from request, explicit `group=None` suppression, `class_report_incident` with request.
+- Run: `bin/run_tests --agent -t test_incident -t test_models -t test_account` → 274/274 pass. Full suite: 1801/1891, 34 pre-existing parallel-execution flakes (test_auth login race, test_assistant FK race, test_aws perm leak — all unrelated, all pass in isolation).
+
+### Docs Updated
+
+- `docs/django_developer/logging/incidents.md` — Group context section (FK + auto-derivation + metadata snapshot + heterogeneous bundle behavior); Event Fields table updated with `group`; bundle-modes table extended with the four new `GROUP_*` modes.
+- `docs/django_developer/core/mojo_model.md` — Group auto-stamping subsection under Incident Reporting.
+- `docs/web_developer/logging/incidents.md` — scalar `group_id` field, metadata snapshot keys, `group_mismatch` audit-stable flag, HTML-escape note on `metadata.group_name`, full bundle_by table.
+- `CHANGELOG.md` — `## Unreleased` entries: FK columns, auto-derivation, four new bundle modes, audit-stable mismatch flag, scalar `group_id` in REST graph (with security rationale).
+
+### Security Review
+
+One real WARNING surfaced and fixed in commit 91f87a7: the original commit (4f69245) included `"group": "basic"` in the default REST graphs, which the simple serializer would have expanded to a nested Group object without gating on the requester's group permissions — a cross-tenant leak of group name, kind, is_active, and last_activity to anyone with system-wide `view_security`. Replaced with a scalar `group_id` field; consumers needing the group's name look it up through `/api/group/<id>` (which respects per-group view perms). All other review items (mismatch reset behavior, isinstance guard, migration safety, metadata XSS responsibility, BundleBy.GROUP_ID null-handling, auto-stamp leakage) checked out clean.
+
+### Follow-up
+
+- Operators rendering `metadata.group_name` in a security console UI must HTML-escape the value (group name is user-controlled text). Documented in `docs/web_developer/logging/incidents.md`.
+- The simple serializer has a more general gap (nested FK graphs are not permission-gated) — out of scope for this request, but worth a separate audit at some point.
