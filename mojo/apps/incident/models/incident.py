@@ -51,16 +51,22 @@ class Incident(models.Model, MojoModel):
         CAN_DELETE = True
         GRAPHS = {
             "default": {
+                # Group context surfaced via scalar group_id only.
+                # See Event.RestMeta.GRAPHS for the rationale — the
+                # simple serializer does not gate nested FK graphs on
+                # requester perms, so a "group: basic" entry would
+                # leak cross-tenant Group fields. Operators read the
+                # group via the scalar id, joining out-of-band when
+                # they have permission.
+                "extra": ["group_id"],
                 "graphs": {
                     "rule_set": "basic",
-                    "group": "basic",
                 },
             },
             "detailed": {
-                "extra": ["ip_info"],
+                "extra": ["ip_info", "group_id"],
                 "graphs": {
                     "rule_set": "basic",
-                    "group": "basic",
                 },
             },
         }

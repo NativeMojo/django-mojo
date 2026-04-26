@@ -51,13 +51,39 @@ GET /api/incident/incident?status=new&sort=-created&size=20
       "source_ip": "1.2.3.4",
       "hostname": "web-01",
       "title": "Failed login attempts",
+      "group_id": 7,
       "metadata": {
-        "username": "unknown_user"
+        "username": "unknown_user",
+        "group_id": 7,
+        "group_name": "Acme Corp"
       }
     }
   ]
 }
 ```
+
+## Group Context on Events and Incidents
+
+Both `Event` and `Incident` responses include a scalar `group_id` field (the originating group's primary key, or `null` when no group was associated). The full group object is intentionally **not** nested into the response — the security console must look up the group separately, gated by the requester's group permissions, to avoid cross-tenant leakage.
+
+```json
+"group_id": 7
+```
+
+The event's `metadata` carries a stable snapshot of the group at event-creation time, captured under the requester's permission context:
+
+| Key | Description |
+|---|---|
+| `metadata.group_id` | Group PK at the time the event was created |
+| `metadata.group_name` | Group name at the time the event was created |
+
+These values persist even if the group is later renamed or deleted (the `group` FK becomes `null` on deletion, but `metadata` is preserved).
+
+> **UI note**: `metadata.group_name` may contain user-controlled text. Always HTML-escape it when rendering in a console.
+
+When an incident has aggregated events from more than one group, `metadata.group_mismatch` will be `true` on the incident and `incident.group_id` will be `null`. This flag is set once and never cleared — it is an audit marker, not a transient state.
+
+---
 
 ## Incident Status Lifecycle
 
@@ -310,6 +336,25 @@ When reading or writing rules via `/api/incident/event/ruleset`, these fields co
 | `retrigger_every` | int or null | Re-fire the handler every N additional events after the initial trigger. `null` = fire once only. |
 | `metadata.delete_on_resolution` | bool | When `true`, incidents created by this RuleSet are auto-deleted the moment they transition to `resolved` or `closed`. Intended for noise patterns (bot scanners, brute-force probes) where the incident has no long-term value. Overridden per-incident by `metadata.do_not_delete`. |
 
+### `bundle_by` values
+
+| Value | ID | Groups events by |
+|---|---|---|
+| `NONE` | 0 | Each event creates its own incident |
+| `HOSTNAME` | 1 | Same server |
+| `MODEL_NAME` | 2 | Same model type |
+| `MODEL_NAME_AND_ID` | 3 | Same model instance |
+| `SOURCE_IP` | 4 | Same source IP |
+| `SOURCE_IP_AND_HOSTNAME` | 5 | Same IP + server |
+| `SOURCE_IP_AND_MODEL_NAME` | 6 | Same IP + model type |
+| `SOURCE_IP_AND_MODEL_NAME_AND_ID` | 7 | Same IP + model instance |
+| `HOSTNAME_AND_MODEL_NAME` | 8 | Same server + model type |
+| `HOSTNAME_AND_MODEL_NAME_AND_ID` | 9 | Same server + model instance |
+| `GROUP_ID` | 10 | Same group |
+| `GROUP_AND_MODEL_NAME` | 11 | Same group + model type |
+| `GROUP_AND_MODEL_NAME_AND_ID` | 12 | Same group + model instance |
+| `GROUP_AND_SOURCE_IP` | 13 | Same group + source IP |
+
 **Example — block after 10 failed logins in 10 minutes, re-alert every 20 more:**
 
 ```
@@ -338,5 +383,6 @@ Incidents stay at `pending` until `trigger_count` is reached, then transition to
 | `scope` | Events, Incidents | App scope (e.g., `account`, `system`) |
 | `source_ip` | Events, Incidents | Source IP address |
 | `hostname` | Events, Incidents | Server hostname |
+| `group` | Events, Incidents | Group ID |
 | `dr_start`, `dr_end` | All | Date range |
 | `parent` | History, TicketNotes | Parent incident/ticket ID |

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Added
+- **`Event.group` and `Incident.group`** — nullable FK to `account.Group` (`on_delete=SET_NULL`, `db_index=True`). Auto-derived from caller `group=` kwarg → `request.group` precedence in `incident.report_event()`. Deletion of the group sets the FK to `null` but `metadata.group_id` and `metadata.group_name` snapshots in the event record are preserved, so audit history survives group rename or deletion.
+- **`MojoModel` incident methods auto-stamp group** — `instance.report_incident()` reads `self.group`; `class_report_incident()` and `class_report_incident_for_user()` read `request.group`. All use `setdefault` semantics so caller-supplied `group=None` is preserved.
+- **Four new `BundleBy` modes** (IDs 10–13, existing 0–9 unchanged):
+  - `GROUP_ID` (10) — bundle by group
+  - `GROUP_AND_MODEL_NAME` (11) — bundle by group + model type
+  - `GROUP_AND_MODEL_NAME_AND_ID` (12) — bundle by group + model instance
+  - `GROUP_AND_SOURCE_IP` (13) — bundle by group + source IP
+- **`metadata.group_mismatch` audit flag** — when events from different groups are bundled into the same incident, `Incident.group` is set to `null` and `metadata.group_mismatch=True` is stamped. This flag is set once and never cleared — it is an audit-stable marker, not a transient state.
+- **`Event` and `Incident` REST graphs now include `group_id`** — the default response shape includes a scalar `group_id` on both models. The full `Group` object is intentionally NOT nested into the response: the simple serializer does not gate nested object graphs on the requester's permissions, so embedding the live group would leak cross-tenant fields (name, kind, last_activity) to anyone with system-wide `view_security`. Consumers should look up the group by id through the standard `/api/group/<id>` endpoint, which respects per-group view permissions. The `metadata.group_id` and `metadata.group_name` snapshot remain available for audit display (the snapshot is captured at event creation time under the requester's context).
+
 ### Fixed
 - **Spurious permission_denied events on list endpoints** — Recovery paths in `on_rest_handle_list` (Group's empty-list fallback, `MOJO_REST_LIST_PERM_DENY=False` branch, owner/group-filtered fallbacks) previously emitted a `user_permission_denied` / `view_permission_denied` / `group_member_permission_denied` event even though the request returned HTTP 200. This filled security logs with false-positive denials that masked real ones. The REST dispatcher (`mojo/decorators/http.py`) is now the single emission site — events are recorded only when the request actually responds 401 or 403.
 

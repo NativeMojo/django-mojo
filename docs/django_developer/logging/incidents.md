@@ -206,6 +206,67 @@ A weekly cron job (Sunday 3:00 AM) calls `refresh_ipsets`, which iterates all en
 
 ---
 
+## Group Context
+
+Every `Event` and `Incident` carries an optional reference to the `account.Group` that originated the signal.
+
+### Fields
+
+Both `Event` and `Incident` have:
+
+```
+group  — nullable FK to account.Group (on_delete=SET_NULL, db_index=True)
+```
+
+The FK is `SET_NULL`, so deleting a group does not lose the event. Group identity is also snapshotted into `event.metadata` at creation time (see below), so audit records survive group renames and deletions.
+
+### Auto-derivation in `report_event()`
+
+`incident.report_event(...)` resolves the group via this precedence:
+
+1. Caller-supplied `group=` kwarg — including explicit `group=None` which suppresses derivation
+2. `request.group` — the group resolved from the current request context
+
+`isinstance(Group, ...)` is enforced so plain IDs or strings are never set as the FK value.
+
+Both `group_id` and `group_name` are mirrored into `event.metadata` at creation time. This snapshot survives group deletion (`SET_NULL` drops the FK, but metadata persists) and group renames (name is copied at event-creation time).
+
+### Auto-stamping from `MojoModel`
+
+`MojoModel.report_incident` and the class-level methods also auto-stamp group context:
+
+| Method | Group source |
+|---|---|
+| `instance.report_incident(...)` | `self.group` when the instance has a `.group` attr that is a `Group` instance |
+| `MyModel.class_report_incident(...)` | `request.group` |
+| `MyModel.class_report_incident_for_user(...)` | `request.group` |
+
+All three use `setdefault("group", ...)` so a caller-supplied `group=None` is never overwritten.
+
+### Incident inheritance
+
+When events are bundled into an incident via `Event.get_or_create_incident` and `Event.link_to_incident`:
+
+- **New incident** — `Incident.group` is seeded from the first (seed) event's group.
+- **Existing incident** — group is reconciled as events link in:
+  - If the incident has no group yet and has not previously had a mismatch, it inherits the event's group.
+  - If the incident's group differs from the event's group, the incident's group is set to `None` and `metadata.group_mismatch=True` is stamped on the incident.
+
+`group_mismatch` is audit-stable — it is set once and never cleared, even if later events share the same group. It indicates that the incident aggregated activity from more than one group.
+
+### Metadata snapshot
+
+At event-creation time, `event.metadata` is populated with:
+
+| Key | Value |
+|---|---|
+| `group_id` | `group.pk` |
+| `group_name` | `group.name` (at time of event) |
+
+These are written unconditionally when a group is resolved. Audit records remain readable even after the group is deleted.
+
+---
+
 ## Core Models
 
 | Model | Purpose |
@@ -241,8 +302,11 @@ incident.report_event(
 
 `report_event` is the primary API. It:
 1. Creates an `Event` record with all fields and metadata populated
-2. Calls `event.sync_metadata()` to enrich with geo-IP data
-3. Calls `event.publish()` to run rule matching and incident creation
+2. Resolves `group` via caller `group=` kwarg → `request.group` and snapshots `group_id`/`group_name` into metadata
+3. Calls `event.sync_metadata()` to enrich with geo-IP data
+4. Calls `event.publish()` to run rule matching and incident creation
+
+To suppress group derivation even when `request.group` is set, pass `group=None` explicitly.
 
 ### From a MojoModel instance
 
@@ -299,7 +363,8 @@ No extra code required — the dispatcher handles this automatically for all fra
 | `details` | Full description, stack trace, or structured message |
 | `model_name` | Related model (e.g., `"account.User"`) |
 | `model_id` | Related model instance PK |
-| `metadata` | JSON bag of arbitrary context — also used by Rules for field matching |
+| `group` | Nullable FK to `account.Group` — auto-derived from request or caller context (see [Group Context](#group-context)) |
+| `metadata` | JSON bag of arbitrary context — also used by Rules for field matching. Always includes `group_id` and `group_name` snapshots when a group is resolved. |
 
 ### Custom metadata — pass anything as keyword arguments
 
@@ -386,18 +451,22 @@ Rules operate on `event.metadata`. Since `report_event` syncs all standard field
 
 Bundling controls how related events are collapsed into a single incident rather than creating a new one for each event.
 
-| `bundle_by` value | Groups events by |
-|---|---|
-| `NONE` | Each event creates its own incident |
-| `HOSTNAME` | Same server |
-| `MODEL_NAME` | Same model type |
-| `MODEL_NAME_AND_ID` | Same model instance |
-| `SOURCE_IP` | Same source IP |
-| `SOURCE_IP_AND_HOSTNAME` | Same IP + server |
-| `SOURCE_IP_AND_MODEL_NAME` | Same IP + model type |
-| `SOURCE_IP_AND_MODEL_NAME_AND_ID` | Same IP + model instance |
-| `HOSTNAME_AND_MODEL_NAME` | Same server + model type |
-| `HOSTNAME_AND_MODEL_NAME_AND_ID` | Same server + model instance |
+| `bundle_by` value | ID | Groups events by |
+|---|---|---|
+| `NONE` | 0 | Each event creates its own incident |
+| `HOSTNAME` | 1 | Same server |
+| `MODEL_NAME` | 2 | Same model type |
+| `MODEL_NAME_AND_ID` | 3 | Same model instance |
+| `SOURCE_IP` | 4 | Same source IP |
+| `SOURCE_IP_AND_HOSTNAME` | 5 | Same IP + server |
+| `SOURCE_IP_AND_MODEL_NAME` | 6 | Same IP + model type |
+| `SOURCE_IP_AND_MODEL_NAME_AND_ID` | 7 | Same IP + model instance |
+| `HOSTNAME_AND_MODEL_NAME` | 8 | Same server + model type |
+| `HOSTNAME_AND_MODEL_NAME_AND_ID` | 9 | Same server + model instance |
+| `GROUP_ID` | 10 | Same group |
+| `GROUP_AND_MODEL_NAME` | 11 | Same group + model type |
+| `GROUP_AND_MODEL_NAME_AND_ID` | 12 | Same group + model instance |
+| `GROUP_AND_SOURCE_IP` | 13 | Same group + source IP |
 
 ### Thresholds (trigger_count)
 

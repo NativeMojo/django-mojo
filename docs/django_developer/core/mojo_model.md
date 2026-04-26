@@ -510,6 +510,18 @@ self.report_incident("Suspicious edit attempt", event_type="security_alert", lev
 Book.class_report_incident("Unauthorized list attempt", event_type="permission_denied", request=request)
 ```
 
+### Group auto-stamping
+
+All three incident-reporting methods automatically resolve `group` context so events and incidents carry the right group FK without any extra code:
+
+| Method | Group source |
+|---|---|
+| `instance.report_incident(...)` | `self.group` when the instance has a `.group` attribute that is a `Group` instance |
+| `MyModel.class_report_incident(...)` | `request.group` |
+| `MyModel.class_report_incident_for_user(...)` | `request.group` |
+
+`setdefault` semantics are used — passing `group=None` explicitly in the kwargs suppresses the auto-stamp and overrides any derived value. This preserves the caller's intent when the event should deliberately carry no group.
+
 ## MojoSecrets
 
 For models requiring encrypted storage:

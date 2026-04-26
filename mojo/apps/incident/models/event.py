@@ -58,10 +58,20 @@ class Event(models.Model, MojoModel):
         SAVE_PERMS = ["manage_security", "security"]
         GRAPHS = {
             "default": {
+                # Group context is intentionally surfaced via the
+                # metadata snapshot (group_id / group_name), NOT via a
+                # nested FK graph. The simple serializer does not gate
+                # nested object graphs on the requester's permissions,
+                # so a "group: basic" entry here would leak the target
+                # group's name / is_active / last_activity to any user
+                # with view_security on a different group. The
+                # snapshotted metadata fields are written at event
+                # creation time (Event.sync_metadata) and travel with
+                # the event without the leakage risk.
+                "extra": ["group_id"],
                 "graphs": {
                     "incident": "basic",
                     "geo_ip": "basic",
-                    "group": "basic",
                 }
             },
             "security": {
