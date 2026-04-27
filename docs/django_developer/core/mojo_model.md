@@ -133,6 +133,97 @@ Pagination request params (all optional):
 GET /api/myapp/book?start=20&size=10&graph=list
 ```
 
+### Aggregation modes
+
+Every list endpoint also accepts a `_mode` query parameter that
+swaps the paged-records response for an aggregation. Aggregation
+runs over the **same permission-scoped, group-scoped, and
+filter-scoped queryset** that `_mode=list` would produce — there is
+no separate code path for permissions or scoping.
+
+| `_mode` | Returns |
+|---|---|
+| `list` (default — equivalent to omitting the param) | Paged records (above) |
+| `count` | `{count: N}` only |
+| `top` | Top-N grouped by `_field`, sorted by `value` desc |
+| `distinct` | All distinct values of `_field`, sorted alpha by key (server cap 1000) |
+| `summary` | Scalar `{value, min, max, n}` for an aggregate over `_agg_field` |
+| `histogram` | Time-bucketed counts `[{ts, value}]` over a datetime `_field` |
+
+The full client-facing contract — every parameter, every response
+shape, every error — is documented in
+[../../web_developer/core/aggregation.md](../../web_developer/core/aggregation.md).
+
+#### Reserved query-param prefix
+
+The `_*` namespace is reserved by the framework. Any query
+parameter starting with `_` is consumed by the aggregation surface
+(or other framework features) and skipped by the list-endpoint
+field-filter parser. Models with a column named `mode`, `field`, or
+`size` remain filterable through the bare param; only the
+aggregation params take the `_` prefix.
+
+The existing reserved bare params (`size`, `start`, `sort`,
+`dr_start`, `dr_end`, `graph`, `search`, `download_format`,
+`limit`, `offset`) keep their current names — only the
+new aggregation surface uses `_`.
+
+#### Field validation guards
+
+The aggregation layer rejects `_field` values that would leak data
+or break the database (HTTP 400):
+
+| Reject | Reason |
+|---|---|
+| Relation FK without `__id` (e.g. `_field=group`) | Forces explicit `<relation>__id` to disambiguate. |
+| Non-relation field with `__` (e.g. `_field=metadata__rule_id`) | Blocks JSON-path drilling. |
+| `TextField`, `JSONField`, `EmailField` | Unbounded cardinality / PII risk. |
+| Field listed in `RestMeta.SENSITIVE_FIELDS` | Honors the model author's existing convention. |
+| Field outside `RestMeta.AGGREGATION_FIELDS` (when defined) | Opt-in stricter allow-list per model. |
+
+Models can opt into a stricter allow-list by setting
+`AGGREGATION_FIELDS` on `RestMeta`:
+
+```python
+class Event(models.Model, MojoModel):
+    class RestMeta:
+        VIEW_PERMS = ["view_security", "security"]
+        # Restrict aggregation to these columns regardless of type.
+        AGGREGATION_FIELDS = ["category", "source_ip", "level", "country_code"]
+```
+
+Without `AGGREGATION_FIELDS`, every column passing the type-based
+guards above is aggregatable.
+
+#### Index-friendliness
+
+Aggregation generates `GROUP BY` queries against the model table.
+Group on indexed columns whenever possible — `category`,
+`source_ip`, `status`, `is_blocked` etc. are typically `db_index=True`.
+Aggregating on an unindexed column on a large table is the same
+risk as filtering on one: a full scan. Document indexed fields in
+the model so dashboard authors know what to pick.
+
+#### Response timing
+
+Every aggregation response includes `took_ms` (rounded to the
+nearest 10ms) for performance budgets. The rounding is intentional:
+exposing wall-clock time at sub-10ms resolution can act as a
+timing oracle for filter-match counts.
+
+#### Server-side caps
+
+Three settings cap aggregation work to keep the database safe:
+
+| Setting | Default | Mode |
+|---|---|---|
+| `MOJO_REST_AGG_TOP_CAP` | `100` | `top` `_size` clamps to this |
+| `MOJO_REST_AGG_DISTINCT_CAP` | `1000` | `distinct` cardinality > cap → 400 |
+| `MOJO_REST_AGG_HISTOGRAM_CAP` | `10000` | `histogram` bucket count > cap → 400 |
+
+Override via Django settings if a deployment needs different
+ceilings.
+
 ### Single object response
 
 `GET /api/myapp/book/1` returns:

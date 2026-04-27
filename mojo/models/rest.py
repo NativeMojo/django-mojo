@@ -632,6 +632,10 @@ class MojoModel:
                 queryset = queryset.filter(**q)
         queryset = cls.on_rest_list_filter(request, queryset)
         queryset = cls.on_rest_list_date_range_filter(request, queryset)
+        mode = request.DATA.get("_mode")
+        if mode and mode != "list":
+            from mojo.models.rest_aggregation import on_rest_list_aggregate
+            return on_rest_list_aggregate(cls, request, queryset)
         queryset = cls.on_rest_list_sort(request, queryset)
         return cls.on_rest_list_response(request, queryset)
 
@@ -771,6 +775,11 @@ class MojoModel:
             cls.__rest_field_names__ = [f.name for f in cls._meta.get_fields()]
 
         for key, value in request.QUERY_PARAMS.items():
+            # Framework-reserved namespace: every `_`-prefixed key is
+            # consumed by the aggregation surface (or other framework
+            # features). Never confuse with a model field.
+            if key.startswith("_"):
+                continue
             # Split key to check for foreign key relationships
             if "." in key:
                 key = key.replace(".", "__")
