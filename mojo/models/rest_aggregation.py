@@ -169,16 +169,19 @@ def _agg_distinct(cls, request, queryset):
     group_field = _validate_field(cls, field)
     min_count = _resolve_int(request.DATA.get("_min_count"), default=1, cap=None)
 
+    # DB-level slice to DISTINCT_CAP+1 — bounds the DB's group-by work
+    # so a malicious caller can't force unbounded materialization just
+    # to be told the response is over the cap.
     rows = list(
         queryset.values(group_field)
         .annotate(value=Count("id"))
         .filter(value__gte=min_count)
-        .order_by(group_field)
+        .order_by(group_field)[: DISTINCT_CAP + 1]
     )
 
     if len(rows) > DISTINCT_CAP:
         raise me.ValueException(
-            f"distinct cardinality {len(rows)} exceeds cap {DISTINCT_CAP}; "
+            f"distinct cardinality exceeds cap {DISTINCT_CAP}; "
             f"narrow the queryset with filters",
         )
 
@@ -330,6 +333,21 @@ def _validate_field(cls, name):
     Raises 400 on relation without `__id`, JSON-path drilling,
     text/JSON/email types, sensitive fields, or anything outside an
     `AGGREGATION_FIELDS` allow-list when the model defines one.
+
+    Precedence (each gate fires independently — `AGGREGATION_FIELDS`
+    is an *additional* restriction, not an override):
+      1. Field exists on model.
+      2. Relation fields require `__id` (else 400).
+      3. Non-relation fields cannot use `__` (else 400).
+      4. Type-based reject: TextField, JSONField, EmailField (else 400).
+      5. `RestMeta.SENSITIVE_FIELDS` reject (else 400).
+      6. `RestMeta.AGGREGATION_FIELDS` allow-list (when defined; else 400).
+
+    A model author cannot use `AGGREGATION_FIELDS` to *grant* access
+    to a TextField — gate (4) fires first. The allow-list narrows the
+    set of aggregatable fields below the type-based default; it does
+    not widen it.
+
     Returns the (possibly relation `__id`-suffixed) ORM lookup path.
     """
     if not hasattr(cls, "__rest_field_names__"):
