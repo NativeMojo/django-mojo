@@ -179,7 +179,7 @@ def dispatch_error_handler(func):
                     event_type="rest_error",
                     request_data=request.DATA,
                     request=request,
-                    level=9,
+                    level=12,
                     stack_trace=traceback.format_exc(),
                     request_path=getattr(request, "path", None),
                 )

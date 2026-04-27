@@ -1,7 +1,7 @@
 # List endpoint aggregation modes (`_mode=count|top|distinct|summary|histogram`)
 
 **Type**: request
-**Status**: planned
+**Status**: resolved
 **Date**: 2026-04-27
 **Originating client**: web-mojo Security Dashboard build (`planning/requests/security-dashboard.md`)
 
@@ -317,22 +317,126 @@ tiles all collapse onto this one consistent surface.
 
 ---
 
-<!-- Fill in when the request is resolved, then move the file to planning/done/ -->
 ## Resolution
-**Status**: Resolved — YYYY-MM-DD
 
-**Files changed**:
-- `mojo/...`
+**Status**: Resolved — 2026-04-26
+**Commit**: `66d78aa`
 
-**Tests run**:
-- `...`
+### What Was Built
 
-**Docs updated**:
-- `docs/web_developer/...`
+A generic `_mode=count|top|distinct|summary|histogram` aggregation
+surface on every MojoModel list endpoint. The aggregation runs over
+the same permission-scoped, group-scoped, and filter-scoped queryset
+that `_mode=list` would produce — no new permission plumbing, no new
+endpoint surface. Existing list behavior is unchanged when `_mode`
+is absent.
 
-**Validation**:
-[How the contract was verified — list the curl examples that should
-return the documented shapes for each `_mode`]
+The `_*` query-param prefix is now reserved by the framework. Every
+key starting with `_` is consumed by the aggregation layer (or other
+framework features) and skipped by the field-filter parser, so a
+model with a column named `mode`, `field`, or `size` can never
+collide with an aggregation param.
+
+### Files Changed
+
+- `mojo/models/rest_aggregation.py` — NEW. Contains the public entry
+  point `on_rest_list_aggregate(cls, request, queryset)` and the five
+  mode handlers (`_agg_count`, `_agg_top`, `_agg_distinct`,
+  `_agg_summary`, `_agg_histogram`), plus shared helpers
+  (`_validate_field`, `_resolve_agg`, `_first_datetime_field`,
+  `_stringify_key`, bucket math).
+- `mojo/models/rest.py` — added the `_mode` branch in `on_rest_list`
+  and the `_*`-prefix skip in `on_rest_list_filter`. Two surgical
+  edits, ~7 lines total.
+- `docs/web_developer/core/aggregation.md` — NEW. Full client-facing
+  contract.
+- `docs/web_developer/core/README.md` — index entry.
+- `docs/django_developer/core/mojo_model.md` — new "Aggregation
+  modes" section under "List response" covering field-validation
+  guards, index-friendliness, server-side caps, took_ms rounding,
+  and the `RestMeta.AGGREGATION_FIELDS` / `SENSITIVE_FIELDS` opt-in
+  hooks.
+- `CHANGELOG.md` — Unreleased entry under Added.
+
+### Tests
+
+- `tests/test_incident/test_event_aggregation.py` — 19 tests covering
+  every mode, every guard, the distinct cap, the bucket fill, the
+  took_ms rounding, and the regression path (default list shape
+  unchanged).
+- `tests/test_incident/test_incident_aggregation.py` — 3 tests for
+  the dashboard distribution-donut and KPI count-tile paths.
+- `tests/test_account/test_geolocated_ip_aggregation.py` — 1 test
+  for the firewall block-count KPI tile.
+- `tests/test_account/test_aggregation_permissions.py` — 2 tests
+  confirming aggregation inherits the same per-row scoping
+  (group-scope, no-perm).
+- Run: `bin/run_tests --agent -t test_incident.test_event_aggregation
+  -t test_incident.test_incident_aggregation
+  -t test_account.test_geolocated_ip_aggregation
+  -t test_account.test_aggregation_permissions`
+- Full `test_incident` + `test_account` suites (269 tests) pass.
+
+### Docs Updated
+
+- `docs/web_developer/core/aggregation.md` — NEW client contract
+- `docs/web_developer/core/README.md` — index entry
+- `docs/django_developer/core/mojo_model.md` — aggregation modes
+  section
+- `CHANGELOG.md` — under "Unreleased (post v1.1.33)" → Added
+
+### Security Review
+
+Designed in with: queryset already permission-scoped at the branch
+point; `_*` prefix wholly skipped by the field-filter parser;
+`_field` rejects relation-without-`__id`, JSON-path drilling
+(`metadata__rule_id`), TextField/JSONField/EmailField, fields in
+`RestMeta.SENSITIVE_FIELDS`, and anything outside
+`RestMeta.AGGREGATION_FIELDS` when defined; numeric aggregations
+require numeric `_agg_field`; histogram requires datetime field;
+`took_ms` rounded to 10ms to dampen timing-oracle inference;
+server-side caps on top size, distinct cardinality, histogram
+bucket count.
+
+### Validation
+
+```
+# count — replaces ?size=0 hack
+GET /api/incident/incident?_mode=count&status=new
+→ {"status": true, "count": N, "took_ms": 0}
+
+# top — Security Dashboard top sources panel
+GET /api/incident/event?_mode=top&_field=source_ip&_size=10
+→ {"status": true, "graph": "top", "field": "source_ip", "agg": "count",
+   "size": 10, "data": [{"key":"...","value":N,"first_seen":...,"last_seen":...}, ...],
+   "took_ms": ...}
+
+# distinct — filter dropdown population
+GET /api/incident/event?_mode=distinct&_field=category
+→ {"status": true, "graph": "distinct", "field": "category",
+   "data": [{"key":"...","value":N}, ...], "took_ms": ...}
+
+# summary — average priority
+GET /api/incident/incident?_mode=summary&_field=priority&_agg=avg&_agg_field=priority
+→ {"status": true, "graph": "summary", "field": "priority", "agg": "avg",
+   "value": V, "min": M, "max": X, "n": N, "took_ms": ...}
+
+# histogram — events-per-day sparkline (gap-filled)
+GET /api/incident/event?_mode=histogram&_field=created&_bucket=day&dr_start=...&dr_end=...
+→ {"status": true, "graph": "histogram", "field": "created", "bucket": "day",
+   "agg": "count", "data": [{"ts": EPOCH, "value": N}, ...], "took_ms": ...}
+```
+
+### Follow-up
+
+- Stretch features deferred to follow-up requests: `_format=csv` for
+  one-shot exports, `_having` post-aggregation filter, multi-field
+  `_field` for composite keys.
+- Update `planning/requests/security-dashboard.md` to mark Top
+  Sources / Top Categories / KPI count tiles unblocked and reference
+  this commit.
+- Migrate the existing `?size=0` count-hack callers in the dashboard
+  KPI strip to `_mode=count`.
 
 ---
 

@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## v1.1.34 - April 26, 2026
+
+new CRUD '_mode' support for aggretating'
+
+
 ## Unreleased (post v1.1.33)
 
 ### Added
