@@ -19,6 +19,44 @@ def on_incident_history(request, pk=None):
 def on_event(request, pk=None):
     return Event.on_rest_request(request, pk)
 
+
+@md.GET('health/summary')
+@md.requires_perms("view_security", "security")
+def on_health_summary(request):
+    """
+    Return the most recent Event per ``system:health:*`` category (or any
+    other namespaced category root via the ``prefix`` query param).
+
+    One row per distinct category — used by the portal Security Dashboard's
+    Health Strip so it can render an indicator per subsystem without
+    hard-coding the category list or making N round-trips.
+    """
+    prefix = request.DATA.get("prefix", "system:health:")
+    categories = (
+        Event.objects
+        .filter(category__startswith=prefix)
+        .values_list("category", flat=True)
+        .distinct()
+    )
+    data = []
+    for category in categories:
+        latest = Event.objects.filter(category=category).order_by("-created").first()
+        if latest is None:
+            continue
+        data.append({
+            "category": category,
+            "level": latest.level,
+            "last_seen": latest.created.isoformat() if latest.created else None,
+            "title": latest.title,
+            "details": latest.details,
+            "hostname": latest.hostname,
+            "source_ip": latest.source_ip,
+            "incident_id": latest.incident_id,
+        })
+    # Stable ordering for the UI — by category name.
+    data.sort(key=lambda row: row["category"])
+    return JsonResponse(dict(status=True, data=data))
+
 @md.URL('event/ruleset')
 @md.URL('event/ruleset/<int:pk>')
 def on_event_ruleset(request, pk=None):
