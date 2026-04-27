@@ -6904,7 +6904,7 @@
 <h3 id="block-types">Block Types<a class="headerlink" href="#block-types" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong><code>table</code></strong> — <code>{type, title, columns, rows}</code> — query results, comparisons</li>
-<li><strong><code>chart</code></strong> — <code>{type, chart_type, title, labels, series}</code> — line/bar/pie/area for trends</li>
+<li><strong><code>chart</code></strong> — <code>{type, chart_type, title, labels, series}</code> — line/bar/pie/area for trends. Optional render hints: <code>stacked</code>, <code>grouped</code>, <code>crosshair_tracking</code> (line/area), <code>cutout</code>, <code>show_labels</code>, <code>show_percentages</code> (pie), <code>colors</code> (palette), per-series <code>color</code>, <code>show_legend</code>, <code>legend_position</code></li>
 <li><strong><code>stat</code></strong> — <code>{type, items: [{label, value}]}</code> — dashboard key metrics</li>
 <li><strong><code>action</code></strong> — <code>{type, title, description, actions: [{label, value}], action_id}</code> — user confirmation dialogs for mutating operations</li>
 <li><strong><code>list</code></strong> — <code>{type, title, items: [{label, value}]}</code> — single-record key/value summaries</li>
@@ -6931,6 +6931,10 @@
 <tr>
 <td><code>list</code></td>
 <td><code>items</code> must be a non-empty list.</td>
+</tr>
+<tr>
+<td><code>chart</code></td>
+<td><code>chart_type</code> must be one of <code>line</code>, <code>bar</code>, <code>pie</code>, <code>area</code>. <code>labels</code> must be a non-empty list. <code>series</code> must be a non-empty list of <code>{name, values}</code> dicts; every <code>series[i].values</code> length must equal <code>len(labels)</code>. Recoverable fields are coerced rather than dropping the chart: <code>cutout</code> is clamped to <code>[0, 1]</code>; <code>stacked</code> is stripped if not in <code>{True, False, "auto"}</code>; <code>crosshair_tracking</code> is coerced to <code>bool</code>; <code>colors</code> is stripped if non-list and non-null. Unknown top-level fields pass through unchanged for forward compatibility.</td>
 </tr>
 <tr>
 <td><code>progress</code></td>

@@ -3688,10 +3688,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#3-firewall-status" class="md-nav__link">
+  <a href="#3-health-summary-strip" class="md-nav__link">
     <span class="md-ellipsis">
       
-        3. Firewall Status
+        3. Health Summary Strip
       
     </span>
   </a>
@@ -3699,10 +3699,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#4-bouncer-status" class="md-nav__link">
+  <a href="#4-firewall-status" class="md-nav__link">
     <span class="md-ellipsis">
       
-        4. Bouncer Status
+        4. Firewall Status
       
     </span>
   </a>
@@ -3710,10 +3710,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#5-metrics-dashboards" class="md-nav__link">
+  <a href="#5-bouncer-status" class="md-nav__link">
     <span class="md-ellipsis">
       
-        5. Metrics Dashboards
+        5. Bouncer Status
       
     </span>
   </a>
@@ -3721,10 +3721,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#6-ticket-management" class="md-nav__link">
+  <a href="#6-metrics-dashboards" class="md-nav__link">
     <span class="md-ellipsis">
       
-        6. Ticket Management
+        6. Metrics Dashboards
       
     </span>
   </a>
@@ -3732,10 +3732,21 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#7-event-reporting-client-side" class="md-nav__link">
+  <a href="#7-ticket-management" class="md-nav__link">
     <span class="md-ellipsis">
       
-        7. Event Reporting (Client-Side)
+        7. Ticket Management
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#8-event-reporting-client-side" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Event Reporting (Client-Side)
       
     </span>
   </a>
@@ -4119,6 +4130,11 @@
 <td>Audit trail for each incident</td>
 </tr>
 <tr>
+<td>Health Summary</td>
+<td><code>/api/incident/health/summary</code></td>
+<td>Latest event per <code>system:health:*</code> category — one row per subsystem</td>
+</tr>
+<tr>
 <td>Tickets</td>
 <td><code>/api/incident/ticket</code></td>
 <td>Human review items, LLM conversation threads</td>
@@ -4241,10 +4257,46 @@
 <a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>GET /api/incident/event?incident=301&amp;sort=-created
 </code></pre></div>
 <p>The history shows the full timeline: creation, handler execution, LLM assessments, admin edits, merges.</p>
-<h3 id="3-firewall-status">3. Firewall Status<a class="headerlink" href="#3-firewall-status" title="Permanent link">&para;</a></h3>
+<h3 id="3-health-summary-strip">3. Health Summary Strip<a class="headerlink" href="#3-health-summary-strip" title="Permanent link">&para;</a></h3>
+<p>A single endpoint returns the most recent event for each <code>system:health:*</code> category. Use it to render a row of per-subsystem health indicators without making N separate queries.</p>
+<p><strong>Permission:</strong> <code>view_security</code> / <code>security</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>GET /api/incident/health/summary
+</code></pre></div>
+<p><strong>Response:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">    </span><span class="p">{</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">      </span><span class="nt">&quot;category&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;system:health:cpu&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">      </span><span class="nt">&quot;level&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">8</span><span class="p">,</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">      </span><span class="nt">&quot;last_seen&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-04-26T14:55:00&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">      </span><span class="nt">&quot;title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;CPU threshold exceeded&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">      </span><span class="nt">&quot;details&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;CPU at 94% on web-03&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="w">      </span><span class="nt">&quot;hostname&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;web-03&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="w">      </span><span class="nt">&quot;source_ip&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span>
+<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a><span class="w">      </span><span class="nt">&quot;incident_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">142</span>
+<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="w">    </span><span class="p">},</span>
+<a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a><span class="w">    </span><span class="p">{</span>
+<a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a><span class="w">      </span><span class="nt">&quot;category&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;system:health:runner&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a><span class="w">      </span><span class="nt">&quot;level&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">10</span><span class="p">,</span>
+<a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a><span class="w">      </span><span class="nt">&quot;last_seen&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-04-26T14:40:00&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-18" name="__codelineno-4-18" href="#__codelineno-4-18"></a><span class="w">      </span><span class="nt">&quot;title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Dead job runner detected&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-19" name="__codelineno-4-19" href="#__codelineno-4-19"></a><span class="w">      </span><span class="nt">&quot;details&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Runner on worker-02 not responding&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-20" name="__codelineno-4-20" href="#__codelineno-4-20"></a><span class="w">      </span><span class="nt">&quot;hostname&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;worker-02&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-21" name="__codelineno-4-21" href="#__codelineno-4-21"></a><span class="w">      </span><span class="nt">&quot;source_ip&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span>
+<a id="__codelineno-4-22" name="__codelineno-4-22" href="#__codelineno-4-22"></a><span class="w">      </span><span class="nt">&quot;incident_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">139</span>
+<a id="__codelineno-4-23" name="__codelineno-4-23" href="#__codelineno-4-23"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-4-24" name="__codelineno-4-24" href="#__codelineno-4-24"></a><span class="w">  </span><span class="p">]</span>
+<a id="__codelineno-4-25" name="__codelineno-4-25" href="#__codelineno-4-25"></a><span class="p">}</span>
+</code></pre></div>
+<p>Rows are sorted by <code>category</code>. Only subsystems that have ever fired a health event appear — the list is self-discovering. An empty <code>data</code> array means no health events have been recorded yet.</p>
+<p><strong>Optional <code>?prefix=</code> param</strong> — defaults to <code>system:health:</code>. Pass a different prefix to query other namespaced category roots:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>GET /api/incident/health/summary?prefix=custom:health:
+</code></pre></div>
+<h3 id="4-firewall-status">4. Firewall Status<a class="headerlink" href="#4-firewall-status" title="Permanent link">&para;</a></h3>
 <p>Show currently blocked IPs and recent firewall activity:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>GET /api/system/geoip?is_blocked=true&amp;sort=-blocked_at
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>GET /api/logs?kind=firewall:block&amp;sort=-created&amp;size=20
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>GET /api/system/geoip?is_blocked=true&amp;sort=-blocked_at
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>GET /api/logs?kind=firewall:block&amp;sort=-created&amp;size=20
 </code></pre></div>
 <p><strong>Firewall log <code>kind</code> values:</strong></p>
 <table>
@@ -4278,37 +4330,43 @@
 </tbody>
 </table>
 <p>All firewall logs include structured <code>payload</code> JSON with <code>ip</code>, <code>reason</code>, <code>trigger</code>, and action-specific fields. Parse <code>payload</code> for dashboard cards.</p>
-<h3 id="4-bouncer-status">4. Bouncer Status<a class="headerlink" href="#4-bouncer-status" title="Permanent link">&para;</a></h3>
+<h3 id="5-bouncer-status">5. Bouncer Status<a class="headerlink" href="#5-bouncer-status" title="Permanent link">&para;</a></h3>
 <p>Show bot detection activity and device reputation:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>GET /api/account/bouncer/signal?decision=block&amp;sort=-created&amp;graph=list&amp;size=20
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>GET /api/account/bouncer/device?risk_tier=blocked&amp;sort=-block_count&amp;size=20
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>GET /api/account/bouncer/signature?is_active=true&amp;sort=-hit_count&amp;size=20
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>GET /api/account/bouncer/signal?decision=block&amp;sort=-created&amp;graph=list&amp;size=20
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>GET /api/account/bouncer/device?risk_tier=blocked&amp;sort=-block_count&amp;size=20
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>GET /api/account/bouncer/signature?is_active=true&amp;sort=-hit_count&amp;size=20
 </code></pre></div>
 <p>Bouncer events also create incidents — query them alongside other security incidents:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>GET /api/incident/incident?category__startswith=security:bouncer&amp;sort=-created
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>GET /api/incident/incident?category__startswith=security:bouncer&amp;sort=-created
 </code></pre></div>
 <p>See <a href="../account/bouncer/#admin-visibility-apis">Bouncer Admin APIs</a> for full endpoint reference, signal payloads, and dashboard patterns.</p>
-<h3 id="5-metrics-dashboards">5. Metrics Dashboards<a class="headerlink" href="#5-metrics-dashboards" title="Permanent link">&para;</a></h3>
+<h3 id="6-metrics-dashboards">6. Metrics Dashboards<a class="headerlink" href="#6-metrics-dashboards" title="Permanent link">&para;</a></h3>
 <p>Fetch time-series data for charts:</p>
 <p><strong>Firewall metrics:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>GET /api/metrics/fetch?slug=firewall:blocks&amp;granularity=hours&amp;dr_start=2026-03-20
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>GET /api/metrics/fetch?slug=firewall:auto_blocks&amp;granularity=hours&amp;dr_start=2026-03-20
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>GET /api/metrics/fetch?category=firewall&amp;granularity=days
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>GET /api/metrics/fetch?slug=firewall:blocks&amp;granularity=hours&amp;dr_start=2026-03-20
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>GET /api/metrics/fetch?slug=firewall:auto_blocks&amp;granularity=hours&amp;dr_start=2026-03-20
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>GET /api/metrics/fetch?category=firewall&amp;granularity=days
 </code></pre></div>
 <p><strong>Bouncer metrics:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>GET /api/metrics/fetch?slug=bouncer:blocks&amp;granularity=hours&amp;dr_start=2026-03-20
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>GET /api/metrics/fetch?slug=bouncer:pre_screen_blocks&amp;granularity=hours&amp;dr_start=2026-03-20
-<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>GET /api/metrics/fetch?category=bouncer&amp;granularity=days
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>GET /api/metrics/fetch?slug=bouncer:blocks&amp;granularity=hours&amp;dr_start=2026-03-20
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>GET /api/metrics/fetch?slug=bouncer:pre_screen_blocks&amp;granularity=hours&amp;dr_start=2026-03-20
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>GET /api/metrics/fetch?category=bouncer&amp;granularity=days
 </code></pre></div>
 <p><strong>Incident metrics:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>GET /api/metrics/fetch?slug=incidents&amp;account=incident&amp;granularity=hours&amp;dr_start=2026-03-20
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>GET /api/metrics/fetch?slug=incidents:escalated&amp;account=incident&amp;granularity=hours
-<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>GET /api/metrics/fetch?slug=incidents:resolved&amp;account=incident&amp;granularity=hours
-<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>GET /api/metrics/fetch?slug=incidents:threshold_reached&amp;account=incident&amp;granularity=hours
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>GET /api/metrics/fetch?slug=incidents&amp;account=incident&amp;granularity=hours&amp;dr_start=2026-03-20
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>GET /api/metrics/fetch?slug=incidents:escalated&amp;account=incident&amp;granularity=hours
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>GET /api/metrics/fetch?slug=incidents:resolved&amp;account=incident&amp;granularity=hours
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>GET /api/metrics/fetch?slug=incidents:threshold_reached&amp;account=incident&amp;granularity=hours
 </code></pre></div>
 <p><strong>Event volume:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>GET /api/metrics/fetch?slug=incident_events&amp;account=incident&amp;granularity=hours
-<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>GET /api/metrics/fetch?category=incident_events_by_country&amp;account=incident&amp;granularity=days
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>GET /api/metrics/fetch?slug=incident_events&amp;account=incident&amp;granularity=hours
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>GET /api/metrics/fetch?category=incident_events_by_country&amp;account=incident&amp;granularity=days
+</code></pre></div>
+<p><strong>Auth failures (failed logins, MFA failures, passkey failures):</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>GET /api/metrics/fetch?slug=auth:failures&amp;account=incident&amp;granularity=hours
+</code></pre></div>
+<p>Use <code>with_delta=true</code> on <code>/api/metrics/series</code> to get the current value plus a comparison to the previous bucket — useful for KPI tiles showing "+X% vs last hour":</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>GET /api/metrics/series?slugs=auth:failures&amp;account=incident&amp;granularity=hours&amp;with_delta=true
 </code></pre></div>
 <p><strong>Available metric slugs:</strong></p>
 <table>
@@ -4410,36 +4468,41 @@
 <td>incident_events_by_country</td>
 <td>Events by country</td>
 </tr>
+<tr>
+<td><code>auth:failures</code></td>
+<td>auth</td>
+<td>Aggregate auth failure counter (invalid password, unknown login, TOTP and passkey failures)</td>
+</tr>
 </tbody>
 </table>
-<h3 id="6-ticket-management">6. Ticket Management<a class="headerlink" href="#6-ticket-management" title="Permanent link">&para;</a></h3>
+<h3 id="7-ticket-management">7. Ticket Management<a class="headerlink" href="#7-ticket-management" title="Permanent link">&para;</a></h3>
 <p>Tickets are how the LLM agent communicates with humans:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>GET /api/incident/ticket?status=open&amp;sort=-priority
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>GET /api/incident/ticket?status=open&amp;sort=-priority
 </code></pre></div>
 <p>Tickets with <code>metadata.llm_linked=true</code> are part of an LLM conversation. When you post a note, the LLM reads it and responds:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>POST /api/incident/ticket/note
-<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>{
-<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>  &quot;parent&quot;: 10,
-<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>  &quot;note&quot;: &quot;Approved. Enable the rule with threshold 10.&quot;
-<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>}
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>POST /api/incident/ticket/note
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>{
+<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>  &quot;parent&quot;: 10,
+<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a>  &quot;note&quot;: &quot;Approved. Enable the rule with threshold 10.&quot;
+<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a>}
 </code></pre></div>
 <p>The LLM will post a follow-up note automatically. Check <code>ticketnote?parent=10&amp;sort=created</code> to see the conversation.</p>
-<h3 id="7-event-reporting-client-side">7. Event Reporting (Client-Side)<a class="headerlink" href="#7-event-reporting-client-side" title="Permanent link">&para;</a></h3>
+<h3 id="8-event-reporting-client-side">8. Event Reporting (Client-Side)<a class="headerlink" href="#8-event-reporting-client-side" title="Permanent link">&para;</a></h3>
 <p>Report security events from your frontend:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="nx">fetch</span><span class="p">(</span><span class="s1">&#39;/api/incident/event&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="w">  </span><span class="nx">method</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;POST&#39;</span><span class="p">,</span>
-<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">  </span><span class="nx">headers</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="s1">&#39;Content-Type&#39;</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;application/json&#39;</span><span class="w"> </span><span class="p">},</span>
-<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="w">  </span><span class="nx">body</span><span class="o">:</span><span class="w"> </span><span class="nb">JSON</span><span class="p">.</span><span class="nx">stringify</span><span class="p">({</span>
-<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="w">    </span><span class="nx">category</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;xss:attempt&#39;</span><span class="p">,</span>
-<a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a><span class="w">    </span><span class="nx">level</span><span class="o">:</span><span class="w"> </span><span class="mf">8</span><span class="p">,</span>
-<a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a><span class="w">    </span><span class="nx">details</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;Script tag detected in comment field&#39;</span><span class="p">,</span>
-<a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a><span class="w">    </span><span class="nx">metadata</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a><span class="w">      </span><span class="nx">field</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;comment&#39;</span><span class="p">,</span>
-<a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a><span class="w">      </span><span class="nx">input</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;&lt;script&gt;...&#39;</span><span class="p">,</span>
-<a id="__codelineno-12-11" name="__codelineno-12-11" href="#__codelineno-12-11"></a><span class="w">      </span><span class="nx">page</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;/posts/new&#39;</span>
-<a id="__codelineno-12-12" name="__codelineno-12-12" href="#__codelineno-12-12"></a><span class="w">    </span><span class="p">}</span>
-<a id="__codelineno-12-13" name="__codelineno-12-13" href="#__codelineno-12-13"></a><span class="w">  </span><span class="p">})</span>
-<a id="__codelineno-12-14" name="__codelineno-12-14" href="#__codelineno-12-14"></a><span class="p">});</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="nx">fetch</span><span class="p">(</span><span class="s1">&#39;/api/incident/event&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="w">  </span><span class="nx">method</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;POST&#39;</span><span class="p">,</span>
+<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a><span class="w">  </span><span class="nx">headers</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="s1">&#39;Content-Type&#39;</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;application/json&#39;</span><span class="w"> </span><span class="p">},</span>
+<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a><span class="w">  </span><span class="nx">body</span><span class="o">:</span><span class="w"> </span><span class="nb">JSON</span><span class="p">.</span><span class="nx">stringify</span><span class="p">({</span>
+<a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a><span class="w">    </span><span class="nx">category</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;xss:attempt&#39;</span><span class="p">,</span>
+<a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a><span class="w">    </span><span class="nx">level</span><span class="o">:</span><span class="w"> </span><span class="mf">8</span><span class="p">,</span>
+<a id="__codelineno-17-7" name="__codelineno-17-7" href="#__codelineno-17-7"></a><span class="w">    </span><span class="nx">details</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;Script tag detected in comment field&#39;</span><span class="p">,</span>
+<a id="__codelineno-17-8" name="__codelineno-17-8" href="#__codelineno-17-8"></a><span class="w">    </span><span class="nx">metadata</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-17-9" name="__codelineno-17-9" href="#__codelineno-17-9"></a><span class="w">      </span><span class="nx">field</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;comment&#39;</span><span class="p">,</span>
+<a id="__codelineno-17-10" name="__codelineno-17-10" href="#__codelineno-17-10"></a><span class="w">      </span><span class="nx">input</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;&lt;script&gt;...&#39;</span><span class="p">,</span>
+<a id="__codelineno-17-11" name="__codelineno-17-11" href="#__codelineno-17-11"></a><span class="w">      </span><span class="nx">page</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;/posts/new&#39;</span>
+<a id="__codelineno-17-12" name="__codelineno-17-12" href="#__codelineno-17-12"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-17-13" name="__codelineno-17-13" href="#__codelineno-17-13"></a><span class="w">  </span><span class="p">})</span>
+<a id="__codelineno-17-14" name="__codelineno-17-14" href="#__codelineno-17-14"></a><span class="p">});</span>
 </code></pre></div>
 <p>Events with <code>level &gt;= 7</code> automatically create incidents. See <a href="../logging/reporting_events/">Reporting Events</a> for full field reference.</p>
 <h2 id="event-sources">Event Sources<a class="headerlink" href="#event-sources" title="Permanent link">&para;</a></h2>
@@ -4718,35 +4781,35 @@
 3. The <code>pending</code> incident is invisible in the main admin queue — it only surfaces when it becomes <code>new</code></p>
 <p><code>trigger_window</code> scopes the count to recent events only. Events on the incident older than <code>trigger_window</code> minutes don't count toward the threshold.</p>
 <p><strong>Example — block after 10 failed logins in 5 minutes:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>POST /api/incident/event/ruleset
-<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>{
-<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>  &quot;name&quot;: &quot;Brute Force Detection&quot;,
-<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>  &quot;category&quot;: &quot;auth:failed&quot;,
-<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a>  &quot;priority&quot;: 5,
-<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a>  &quot;match_by&quot;: 0,
-<a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a>  &quot;bundle_by&quot;: 4,
-<a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a>  &quot;bundle_minutes&quot;: 30,
-<a id="__codelineno-13-9" name="__codelineno-13-9" href="#__codelineno-13-9"></a>  &quot;trigger_count&quot;: 10,
-<a id="__codelineno-13-10" name="__codelineno-13-10" href="#__codelineno-13-10"></a>  &quot;trigger_window&quot;: 5,
-<a id="__codelineno-13-11" name="__codelineno-13-11" href="#__codelineno-13-11"></a>  &quot;handler&quot;: &quot;block://?ttl=3600&quot;
-<a id="__codelineno-13-12" name="__codelineno-13-12" href="#__codelineno-13-12"></a>}
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>POST /api/incident/event/ruleset
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>{
+<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a>  &quot;name&quot;: &quot;Brute Force Detection&quot;,
+<a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a>  &quot;category&quot;: &quot;auth:failed&quot;,
+<a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a>  &quot;priority&quot;: 5,
+<a id="__codelineno-18-6" name="__codelineno-18-6" href="#__codelineno-18-6"></a>  &quot;match_by&quot;: 0,
+<a id="__codelineno-18-7" name="__codelineno-18-7" href="#__codelineno-18-7"></a>  &quot;bundle_by&quot;: 4,
+<a id="__codelineno-18-8" name="__codelineno-18-8" href="#__codelineno-18-8"></a>  &quot;bundle_minutes&quot;: 30,
+<a id="__codelineno-18-9" name="__codelineno-18-9" href="#__codelineno-18-9"></a>  &quot;trigger_count&quot;: 10,
+<a id="__codelineno-18-10" name="__codelineno-18-10" href="#__codelineno-18-10"></a>  &quot;trigger_window&quot;: 5,
+<a id="__codelineno-18-11" name="__codelineno-18-11" href="#__codelineno-18-11"></a>  &quot;handler&quot;: &quot;block://?ttl=3600&quot;
+<a id="__codelineno-18-12" name="__codelineno-18-12" href="#__codelineno-18-12"></a>}
 </code></pre></div>
 <p>Events 1–9 from the same IP sit quietly at <code>pending</code>. Event 10 trips the threshold → incident goes <code>new</code> → IP gets blocked fleet-wide.</p>
 <h3 id="retrigger_every-keep-alerting-as-things-escalate">retrigger_every: Keep Alerting as Things Escalate<a class="headerlink" href="#retrigger_every-keep-alerting-as-things-escalate" title="Permanent link">&para;</a></h3>
 <p>Sometimes you want the handler to fire again if the attack keeps going. <code>retrigger_every</code> re-fires the handler every N additional events after the initial trigger, as long as the incident is still active (<code>new</code>, <code>open</code>, or <code>investigating</code>).</p>
 <p><strong>Example — ticket at 5 payment failures, then escalate every 10 more:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>POST /api/incident/event/ruleset
-<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>{
-<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>  &quot;name&quot;: &quot;Payment Failure Escalation&quot;,
-<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>  &quot;category&quot;: &quot;payment:declined&quot;,
-<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a>  &quot;priority&quot;: 10,
-<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a>  &quot;match_by&quot;: 0,
-<a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a>  &quot;bundle_by&quot;: 4,
-<a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a>  &quot;bundle_minutes&quot;: 60,
-<a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a>  &quot;trigger_count&quot;: 5,
-<a id="__codelineno-14-10" name="__codelineno-14-10" href="#__codelineno-14-10"></a>  &quot;retrigger_every&quot;: 10,
-<a id="__codelineno-14-11" name="__codelineno-14-11" href="#__codelineno-14-11"></a>  &quot;handler&quot;: &quot;ticket://?priority=7,email://perm@manage_security&quot;
-<a id="__codelineno-14-12" name="__codelineno-14-12" href="#__codelineno-14-12"></a>}
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>POST /api/incident/event/ruleset
+<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a>{
+<a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a>  &quot;name&quot;: &quot;Payment Failure Escalation&quot;,
+<a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a>  &quot;category&quot;: &quot;payment:declined&quot;,
+<a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a>  &quot;priority&quot;: 10,
+<a id="__codelineno-19-6" name="__codelineno-19-6" href="#__codelineno-19-6"></a>  &quot;match_by&quot;: 0,
+<a id="__codelineno-19-7" name="__codelineno-19-7" href="#__codelineno-19-7"></a>  &quot;bundle_by&quot;: 4,
+<a id="__codelineno-19-8" name="__codelineno-19-8" href="#__codelineno-19-8"></a>  &quot;bundle_minutes&quot;: 60,
+<a id="__codelineno-19-9" name="__codelineno-19-9" href="#__codelineno-19-9"></a>  &quot;trigger_count&quot;: 5,
+<a id="__codelineno-19-10" name="__codelineno-19-10" href="#__codelineno-19-10"></a>  &quot;retrigger_every&quot;: 10,
+<a id="__codelineno-19-11" name="__codelineno-19-11" href="#__codelineno-19-11"></a>  &quot;handler&quot;: &quot;ticket://?priority=7,email://perm@manage_security&quot;
+<a id="__codelineno-19-12" name="__codelineno-19-12" href="#__codelineno-19-12"></a>}
 </code></pre></div>
 <ul>
 <li>5 failures → ticket created + email sent (initial trigger)</li>
@@ -4757,7 +4820,7 @@
 <p>Re-triggers add a <code>handler_retriggered</code> history entry on the incident so you can see the escalation trail.</p>
 <h3 id="handler-chains">Handler Chains<a class="headerlink" href="#handler-chains" title="Permanent link">&para;</a></h3>
 <p>Multiple handlers are chained with commas:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>block://?ttl=3600,ticket://?priority=9,email://perm@manage_security
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>block://?ttl=3600,ticket://?priority=9,email://perm@manage_security
 </code></pre></div>
 <p><strong>Block handler parameters:</strong></p>
 <table>
@@ -4904,15 +4967,15 @@
 </table>
 <h3 id="rule-conditions">Rule Conditions<a class="headerlink" href="#rule-conditions" title="Permanent link">&para;</a></h3>
 <p>Each ruleset can have zero or more <code>Rule</code> records that filter which events it applies to. Create them at <code>/api/incident/event/ruleset/rule</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>POST /api/incident/event/ruleset/rule
-<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>{
-<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>  &quot;parent&quot;: 42,
-<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a>  &quot;name&quot;: &quot;Level &gt;= 7&quot;,
-<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a>  &quot;field_name&quot;: &quot;level&quot;,
-<a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a>  &quot;comparator&quot;: &quot;&gt;=&quot;,
-<a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a>  &quot;value&quot;: &quot;7&quot;,
-<a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a>  &quot;value_type&quot;: &quot;int&quot;
-<a id="__codelineno-16-9" name="__codelineno-16-9" href="#__codelineno-16-9"></a>}
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>POST /api/incident/event/ruleset/rule
+<a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a>{
+<a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a>  &quot;parent&quot;: 42,
+<a id="__codelineno-21-4" name="__codelineno-21-4" href="#__codelineno-21-4"></a>  &quot;name&quot;: &quot;Level &gt;= 7&quot;,
+<a id="__codelineno-21-5" name="__codelineno-21-5" href="#__codelineno-21-5"></a>  &quot;field_name&quot;: &quot;level&quot;,
+<a id="__codelineno-21-6" name="__codelineno-21-6" href="#__codelineno-21-6"></a>  &quot;comparator&quot;: &quot;&gt;=&quot;,
+<a id="__codelineno-21-7" name="__codelineno-21-7" href="#__codelineno-21-7"></a>  &quot;value&quot;: &quot;7&quot;,
+<a id="__codelineno-21-8" name="__codelineno-21-8" href="#__codelineno-21-8"></a>  &quot;value_type&quot;: &quot;int&quot;
+<a id="__codelineno-21-9" name="__codelineno-21-9" href="#__codelineno-21-9"></a>}
 </code></pre></div>
 <p><strong>Comparators</strong>: <code>==</code>, <code>&gt;</code>, <code>&gt;=</code>, <code>&lt;</code>, <code>&lt;=</code>, <code>contains</code>, <code>regex</code></p>
 <p><strong>value_type</strong>: <code>str</code>, <code>int</code>, <code>float</code>, <code>bool</code></p>
@@ -4983,8 +5046,8 @@
 <p>The LLM creates rules in a <strong>disabled</strong> state and opens a ticket for human approval. Respond to the ticket to approve, modify, or reject the proposed rule.</p>
 <h3 id="on-demand-deep-analysis">On-Demand Deep Analysis<a class="headerlink" href="#on-demand-deep-analysis" title="Permanent link">&para;</a></h3>
 <p>Admins can request a deeper analysis of any incident at any time. This is separate from the automatic triage — it runs a more thorough investigation designed to clean up related open incidents and propose rules.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>POST /api/incident/incident/&lt;id&gt;
-<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>{&quot;analyze&quot;: 1}
+<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>POST /api/incident/incident/&lt;id&gt;
+<a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a>{&quot;analyze&quot;: 1}
 </code></pre></div>
 <p><strong>Requires:</strong> <code>manage_security</code></p>
 <p>The call returns immediately. The agent runs in the background and:
@@ -5290,78 +5353,78 @@
 </tbody>
 </table>
 <p><strong>Example — sync after manual CIDR edit:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>POST /api/incident/ipset/3
-<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>{&quot;sync&quot;: 1}
+<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>POST /api/incident/ipset/3
+<a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>{&quot;sync&quot;: 1}
 </code></pre></div>
 <p><strong>Example — disable a country block:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>POST /api/incident/ipset/3
-<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a>{&quot;disable&quot;: 1}
+<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>POST /api/incident/ipset/3
+<a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a>{&quot;disable&quot;: 1}
 </code></pre></div>
 <h3 id="workflow-block-a-country">Workflow: Block a Country<a class="headerlink" href="#workflow-block-a-country" title="Permanent link">&para;</a></h3>
 <p>Block all traffic from China (<code>cn</code>):</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>POST /api/incident/ipset
-<a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a>{
-<a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a>  &quot;name&quot;: &quot;country_cn&quot;,
-<a id="__codelineno-20-4" name="__codelineno-20-4" href="#__codelineno-20-4"></a>  &quot;kind&quot;: &quot;country&quot;,
-<a id="__codelineno-20-5" name="__codelineno-20-5" href="#__codelineno-20-5"></a>  &quot;description&quot;: &quot;Block country: CN&quot;,
-<a id="__codelineno-20-6" name="__codelineno-20-6" href="#__codelineno-20-6"></a>  &quot;source&quot;: &quot;ipdeny&quot;,
-<a id="__codelineno-20-7" name="__codelineno-20-7" href="#__codelineno-20-7"></a>  &quot;source_url&quot;: &quot;https://www.ipdeny.com/ipblocks/data/countries/cn.zone&quot;,
-<a id="__codelineno-20-8" name="__codelineno-20-8" href="#__codelineno-20-8"></a>  &quot;is_enabled&quot;: true
-<a id="__codelineno-20-9" name="__codelineno-20-9" href="#__codelineno-20-9"></a>}
+<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>POST /api/incident/ipset
+<a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a>{
+<a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a>  &quot;name&quot;: &quot;country_cn&quot;,
+<a id="__codelineno-25-4" name="__codelineno-25-4" href="#__codelineno-25-4"></a>  &quot;kind&quot;: &quot;country&quot;,
+<a id="__codelineno-25-5" name="__codelineno-25-5" href="#__codelineno-25-5"></a>  &quot;description&quot;: &quot;Block country: CN&quot;,
+<a id="__codelineno-25-6" name="__codelineno-25-6" href="#__codelineno-25-6"></a>  &quot;source&quot;: &quot;ipdeny&quot;,
+<a id="__codelineno-25-7" name="__codelineno-25-7" href="#__codelineno-25-7"></a>  &quot;source_url&quot;: &quot;https://www.ipdeny.com/ipblocks/data/countries/cn.zone&quot;,
+<a id="__codelineno-25-8" name="__codelineno-25-8" href="#__codelineno-25-8"></a>  &quot;is_enabled&quot;: true
+<a id="__codelineno-25-9" name="__codelineno-25-9" href="#__codelineno-25-9"></a>}
 </code></pre></div>
 <p>Then fetch the latest CIDRs and load them onto all instances:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>POST /api/incident/ipset/&lt;id&gt;
-<a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a>{&quot;refresh_source&quot;: 1}
+<div class="highlight"><pre><span></span><code><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a>POST /api/incident/ipset/&lt;id&gt;
+<a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a>{&quot;refresh_source&quot;: 1}
 </code></pre></div>
 <p><code>refresh_source</code> fetches the zone file, stores the CIDRs in <code>data</code>, and immediately syncs to all instances. A weekly cron also runs <code>refresh_source</code> automatically on all enabled IPSets.</p>
 <p>Common country codes: <code>cn</code> (China), <code>ru</code> (Russia), <code>ir</code> (Iran), <code>kp</code> (North Korea).</p>
 <h3 id="workflow-block-abuse-ips-via-abuseipdb">Workflow: Block Abuse IPs via AbuseIPDB<a class="headerlink" href="#workflow-block-abuse-ips-via-abuseipdb" title="Permanent link">&para;</a></h3>
 <p>Block IPs with 100% confidence score from <a href="https://www.abuseipdb.com/">AbuseIPDB</a>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>POST /api/incident/ipset
-<a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a>{
-<a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a>  &quot;name&quot;: &quot;abuse_ips&quot;,
-<a id="__codelineno-22-4" name="__codelineno-22-4" href="#__codelineno-22-4"></a>  &quot;kind&quot;: &quot;abuse&quot;,
-<a id="__codelineno-22-5" name="__codelineno-22-5" href="#__codelineno-22-5"></a>  &quot;description&quot;: &quot;AbuseIPDB blacklist (confidence 100%)&quot;,
-<a id="__codelineno-22-6" name="__codelineno-22-6" href="#__codelineno-22-6"></a>  &quot;source&quot;: &quot;abuseipdb&quot;,
-<a id="__codelineno-22-7" name="__codelineno-22-7" href="#__codelineno-22-7"></a>  &quot;source_key&quot;: &quot;&lt;your-abuseipdb-api-key&gt;&quot;,
-<a id="__codelineno-22-8" name="__codelineno-22-8" href="#__codelineno-22-8"></a>  &quot;is_enabled&quot;: true
-<a id="__codelineno-22-9" name="__codelineno-22-9" href="#__codelineno-22-9"></a>}
+<div class="highlight"><pre><span></span><code><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a>POST /api/incident/ipset
+<a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a>{
+<a id="__codelineno-27-3" name="__codelineno-27-3" href="#__codelineno-27-3"></a>  &quot;name&quot;: &quot;abuse_ips&quot;,
+<a id="__codelineno-27-4" name="__codelineno-27-4" href="#__codelineno-27-4"></a>  &quot;kind&quot;: &quot;abuse&quot;,
+<a id="__codelineno-27-5" name="__codelineno-27-5" href="#__codelineno-27-5"></a>  &quot;description&quot;: &quot;AbuseIPDB blacklist (confidence 100%)&quot;,
+<a id="__codelineno-27-6" name="__codelineno-27-6" href="#__codelineno-27-6"></a>  &quot;source&quot;: &quot;abuseipdb&quot;,
+<a id="__codelineno-27-7" name="__codelineno-27-7" href="#__codelineno-27-7"></a>  &quot;source_key&quot;: &quot;&lt;your-abuseipdb-api-key&gt;&quot;,
+<a id="__codelineno-27-8" name="__codelineno-27-8" href="#__codelineno-27-8"></a>  &quot;is_enabled&quot;: true
+<a id="__codelineno-27-9" name="__codelineno-27-9" href="#__codelineno-27-9"></a>}
 </code></pre></div>
 <p>Then load the current blacklist:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>POST /api/incident/ipset/&lt;id&gt;
-<a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>{&quot;refresh_source&quot;: 1}
+<div class="highlight"><pre><span></span><code><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a>POST /api/incident/ipset/&lt;id&gt;
+<a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a>{&quot;refresh_source&quot;: 1}
 </code></pre></div>
 <p>This fetches up to 10,000 IPv4 addresses with confidence ≥ 100% and syncs them fleet-wide. The weekly cron refreshes this automatically.</p>
 <h3 id="workflow-manual-cidr-list">Workflow: Manual CIDR List<a class="headerlink" href="#workflow-manual-cidr-list" title="Permanent link">&para;</a></h3>
 <p>For custom ranges (e.g., a specific datacenter or known attacker range):</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>POST /api/incident/ipset
-<a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a>{
-<a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a>  &quot;name&quot;: &quot;custom_block&quot;,
-<a id="__codelineno-24-4" name="__codelineno-24-4" href="#__codelineno-24-4"></a>  &quot;kind&quot;: &quot;custom&quot;,
-<a id="__codelineno-24-5" name="__codelineno-24-5" href="#__codelineno-24-5"></a>  &quot;description&quot;: &quot;Blocked datacenter ranges&quot;,
-<a id="__codelineno-24-6" name="__codelineno-24-6" href="#__codelineno-24-6"></a>  &quot;source&quot;: &quot;manual&quot;,
-<a id="__codelineno-24-7" name="__codelineno-24-7" href="#__codelineno-24-7"></a>  &quot;is_enabled&quot;: true
-<a id="__codelineno-24-8" name="__codelineno-24-8" href="#__codelineno-24-8"></a>}
+<div class="highlight"><pre><span></span><code><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a>POST /api/incident/ipset
+<a id="__codelineno-29-2" name="__codelineno-29-2" href="#__codelineno-29-2"></a>{
+<a id="__codelineno-29-3" name="__codelineno-29-3" href="#__codelineno-29-3"></a>  &quot;name&quot;: &quot;custom_block&quot;,
+<a id="__codelineno-29-4" name="__codelineno-29-4" href="#__codelineno-29-4"></a>  &quot;kind&quot;: &quot;custom&quot;,
+<a id="__codelineno-29-5" name="__codelineno-29-5" href="#__codelineno-29-5"></a>  &quot;description&quot;: &quot;Blocked datacenter ranges&quot;,
+<a id="__codelineno-29-6" name="__codelineno-29-6" href="#__codelineno-29-6"></a>  &quot;source&quot;: &quot;manual&quot;,
+<a id="__codelineno-29-7" name="__codelineno-29-7" href="#__codelineno-29-7"></a>  &quot;is_enabled&quot;: true
+<a id="__codelineno-29-8" name="__codelineno-29-8" href="#__codelineno-29-8"></a>}
 </code></pre></div>
 <p>Then update with <code>graph=detailed</code> to set the CIDR data:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>POST /api/incident/ipset/&lt;id&gt;?graph=detailed
-<a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a>{
-<a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a>  &quot;data&quot;: &quot;192.0.2.0/24\n198.51.100.0/24\n203.0.113.0/24&quot;
-<a id="__codelineno-25-4" name="__codelineno-25-4" href="#__codelineno-25-4"></a>}
+<div class="highlight"><pre><span></span><code><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a>POST /api/incident/ipset/&lt;id&gt;?graph=detailed
+<a id="__codelineno-30-2" name="__codelineno-30-2" href="#__codelineno-30-2"></a>{
+<a id="__codelineno-30-3" name="__codelineno-30-3" href="#__codelineno-30-3"></a>  &quot;data&quot;: &quot;192.0.2.0/24\n198.51.100.0/24\n203.0.113.0/24&quot;
+<a id="__codelineno-30-4" name="__codelineno-30-4" href="#__codelineno-30-4"></a>}
 </code></pre></div>
 <p>Then sync to load onto all instances:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a>POST /api/incident/ipset/&lt;id&gt;
-<a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a>{&quot;sync&quot;: 1}
+<div class="highlight"><pre><span></span><code><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a>POST /api/incident/ipset/&lt;id&gt;
+<a id="__codelineno-31-2" name="__codelineno-31-2" href="#__codelineno-31-2"></a>{&quot;sync&quot;: 1}
 </code></pre></div>
 <p>The <code>data</code> field is plain text, one CIDR per line. Lines starting with <code>#</code> are treated as comments and ignored.</p>
 <h3 id="listing-and-filtering">Listing and Filtering<a class="headerlink" href="#listing-and-filtering" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a>GET /api/incident/ipset
-<a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a>GET /api/incident/ipset?kind=country
-<a id="__codelineno-27-3" name="__codelineno-27-3" href="#__codelineno-27-3"></a>GET /api/incident/ipset?is_enabled=true
-<a id="__codelineno-27-4" name="__codelineno-27-4" href="#__codelineno-27-4"></a>GET /api/incident/ipset?search=abuse
+<div class="highlight"><pre><span></span><code><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a>GET /api/incident/ipset
+<a id="__codelineno-32-2" name="__codelineno-32-2" href="#__codelineno-32-2"></a>GET /api/incident/ipset?kind=country
+<a id="__codelineno-32-3" name="__codelineno-32-3" href="#__codelineno-32-3"></a>GET /api/incident/ipset?is_enabled=true
+<a id="__codelineno-32-4" name="__codelineno-32-4" href="#__codelineno-32-4"></a>GET /api/incident/ipset?search=abuse
 </code></pre></div>
 <p>Standard sort and pagination apply:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a>GET /api/incident/ipset?sort=-cidr_count&amp;size=20
+<div class="highlight"><pre><span></span><code><a id="__codelineno-33-1" name="__codelineno-33-1" href="#__codelineno-33-1"></a>GET /api/incident/ipset?sort=-cidr_count&amp;size=20
 </code></pre></div>
 
 

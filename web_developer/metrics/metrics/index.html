@@ -3490,6 +3490,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#fetch-point-in-time-values-with-delta-apimetricsseries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fetch Point-in-Time Values with Delta (/api/metrics/series)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#fetch-by-category" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3811,6 +3822,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#fetch-point-in-time-values-with-delta-apimetricsseries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fetch Point-in-Time Values with Delta (/api/metrics/series)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#fetch-by-category" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3875,6 +3897,11 @@
 </tr>
 <tr>
 <td>GET</td>
+<td><code>/api/metrics/series</code></td>
+<td>Fetch current values for multiple slugs (alias: <code>/api/metrics/value/get</code>)</td>
+</tr>
+<tr>
+<td>GET</td>
 <td><code>/api/metrics/value/get</code></td>
 <td>Fetch current values for slugs</td>
 </tr>
@@ -3882,11 +3909,6 @@
 <td>GET</td>
 <td><code>/api/metrics/categories</code></td>
 <td>List metric categories</td>
-</tr>
-<tr>
-<td>GET</td>
-<td><code>/api/metrics/categories</code></td>
-<td>List categories</td>
 </tr>
 </tbody>
 </table>
@@ -3972,8 +3994,83 @@
 <a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">  </span><span class="p">}</span>
 <a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="p">}</span>
 </code></pre></div>
+<h2 id="fetch-point-in-time-values-with-delta-apimetricsseries">Fetch Point-in-Time Values with Delta (<code>/api/metrics/series</code>)<a class="headerlink" href="#fetch-point-in-time-values-with-delta-apimetricsseries" title="Permanent link">&para;</a></h2>
+<p><strong>GET</strong> <code>/api/metrics/series</code></p>
+<p>Returns the current-bucket value for one or more slugs. Optionally includes the previous bucket's value and a per-slug delta map for KPI tiles.</p>
+<table>
+<thead>
+<tr>
+<th>Param</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>slugs</code></td>
+<td>required</td>
+<td>Comma-separated slug names</td>
+</tr>
+<tr>
+<td><code>when</code></td>
+<td>current time</td>
+<td>Point in time (ISO 8601 datetime)</td>
+</tr>
+<tr>
+<td><code>granularity</code></td>
+<td><code>hours</code></td>
+<td>Bucket size — see Granularity Reference</td>
+</tr>
+<tr>
+<td><code>account</code></td>
+<td><code>public</code></td>
+<td>Account namespace</td>
+</tr>
+<tr>
+<td><code>with_delta</code></td>
+<td><code>false</code></td>
+<td>When <code>true</code>, include <code>prev_data</code>, <code>prev_when</code>, and <code>deltas</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Request without delta (default):</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>GET /api/metrics/series?slugs=page_views,signups&amp;granularity=hours
+</code></pre></div>
+<p><strong>Response:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;page_views&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">47</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;signups&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">},</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span><span class="nt">&quot;slugs&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;page_views&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;signups&quot;</span><span class="p">],</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span><span class="nt">&quot;when&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-04-26T15:00:00&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">  </span><span class="nt">&quot;granularity&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;hours&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">  </span><span class="nt">&quot;account&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;public&quot;</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="p">}</span>
+</code></pre></div>
+<p><strong>Request with delta (KPI tile use-case):</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>GET /api/metrics/series?slugs=page_views,signups&amp;granularity=hours&amp;with_delta=true
+</code></pre></div>
+<p><strong>Response:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p">{</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;page_views&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">47</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;signups&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">},</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">  </span><span class="nt">&quot;slugs&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;page_views&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;signups&quot;</span><span class="p">],</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">  </span><span class="nt">&quot;when&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-04-26T15:00:00&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="w">  </span><span class="nt">&quot;granularity&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;hours&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="w">  </span><span class="nt">&quot;account&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;public&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="w">  </span><span class="nt">&quot;prev_data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;page_views&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">20</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;signups&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">},</span>
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="w">  </span><span class="nt">&quot;prev_when&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-04-26T14:00:00&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="w">  </span><span class="nt">&quot;deltas&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="w">    </span><span class="nt">&quot;page_views&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;delta&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">27</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;delta_pct&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">135.0</span><span class="p">},</span>
+<a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a><span class="w">    </span><span class="nt">&quot;signups&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;delta&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">}</span>
+<a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-8-14" name="__codelineno-8-14" href="#__codelineno-8-14"></a><span class="p">}</span>
+</code></pre></div>
+<p>Notes:
+- <code>delta_pct</code> is omitted when <code>prev_value</code> is 0 (avoids Infinity).
+- The response shape is identical to the non-delta response when <code>with_delta</code> is absent or <code>false</code> — fully backwards compatible.
+- <code>prev_when</code> is one bucket back from <code>when</code> at the given granularity.</p>
 <h2 id="fetch-by-category">Fetch by Category<a class="headerlink" href="#fetch-by-category" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>GET /api/metrics/fetch?category=auth&amp;granularity=days&amp;with_labels=true
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>GET /api/metrics/fetch?category=auth&amp;granularity=days&amp;with_labels=true
 </code></pre></div>
 <h2 id="granularity-reference">Granularity Reference<a class="headerlink" href="#granularity-reference" title="Permanent link">&para;</a></h2>
 <table>

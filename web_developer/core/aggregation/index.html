@@ -10,13 +10,9 @@
       
       
       
-        <link rel="canonical" href="https://NativeMojo.github.io/django-mojo/web_developer/core/filtering/">
+        <link rel="canonical" href="https://NativeMojo.github.io/django-mojo/web_developer/core/aggregation/">
       
       
-        <link rel="prev" href="../request_response/">
-      
-      
-        <link rel="next" href="../pagination/">
       
       
         
@@ -27,7 +23,7 @@
     
     
       
-        <title>Filtering - Django-MOJO</title>
+        <title>Aggregation — REST API Reference - Django-MOJO</title>
       
     
     
@@ -78,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#filtering-searching-sorting-rest-api-reference" class="md-skip">
+        <a href="#aggregation-rest-api-reference" class="md-skip">
           Skip to content
         </a>
       
@@ -112,7 +108,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Filtering
+              Aggregation — REST API Reference
             
           </span>
         </div>
@@ -262,12 +258,10 @@
   
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
+      <li class="md-tabs__item">
         <a href="../../" class="md-tabs__link">
           
   
@@ -2207,31 +2201,28 @@
       
   
   
-    
   
   
-  
     
     
     
     
-      
-        
-        
       
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
         
           
-          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
             
   
   
@@ -2249,7 +2240,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             
@@ -2292,31 +2283,28 @@
                 
   
   
-    
   
   
-  
     
     
     
     
       
       
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
         
           
-          
         
-      
-    
-    
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_2" checked>
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_2" >
         
           
-          <label class="md-nav__link" for="__nav_3_2" id="__nav_3_2_label" tabindex="">
+          <label class="md-nav__link" for="__nav_3_2" id="__nav_3_2_label" tabindex="0">
             
   
   
@@ -2334,7 +2322,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_2_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_2_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3_2">
             <span class="md-nav__icon md-icon"></span>
             
@@ -2433,37 +2421,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Filtering
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../filtering/" class="md-nav__link">
         
   
   
@@ -2479,137 +2440,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#field-filters" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Field Filters
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Field Filters">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#filter-operators" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Filter Operators
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#null-values" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Null Values
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#relation-foreign-key-filters" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Relation / Foreign Key Filters
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#date-range-filter" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Date Range Filter
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#text-search" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Text Search
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Text Search">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#advanced-search-syntax" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Advanced Search Syntax
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#sorting" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Sorting
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#combining-parameters" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Combining Parameters
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -2692,13 +2522,10 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
@@ -2707,7 +2534,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_3" >
         
           
-          <label class="md-nav__link" for="__nav_3_3" id="__nav_3_3_label" tabindex="">
+          <label class="md-nav__link" for="__nav_3_3" id="__nav_3_3_label" tabindex="0">
             
   
   
@@ -2925,13 +2752,10 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
@@ -2940,7 +2764,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_4" >
         
           
-          <label class="md-nav__link" for="__nav_3_4" id="__nav_3_4_label" tabindex="">
+          <label class="md-nav__link" for="__nav_3_4" id="__nav_3_4_label" tabindex="0">
             
   
   
@@ -3074,13 +2898,10 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
@@ -3089,7 +2910,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_5" >
         
           
-          <label class="md-nav__link" for="__nav_3_5" id="__nav_3_5_label" tabindex="">
+          <label class="md-nav__link" for="__nav_3_5" id="__nav_3_5_label" tabindex="0">
             
   
   
@@ -3223,13 +3044,10 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
@@ -3238,7 +3056,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_6" >
         
           
-          <label class="md-nav__link" for="__nav_3_6" id="__nav_3_6_label" tabindex="">
+          <label class="md-nav__link" for="__nav_3_6" id="__nav_3_6_label" tabindex="0">
             
   
   
@@ -3344,13 +3162,10 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
@@ -3359,7 +3174,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_7" >
         
           
-          <label class="md-nav__link" for="__nav_3_7" id="__nav_3_7_label" tabindex="">
+          <label class="md-nav__link" for="__nav_3_7" id="__nav_3_7_label" tabindex="0">
             
   
   
@@ -3465,13 +3280,10 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
@@ -3480,7 +3292,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_8" >
         
           
-          <label class="md-nav__link" for="__nav_3_8" id="__nav_3_8_label" tabindex="">
+          <label class="md-nav__link" for="__nav_3_8" id="__nav_3_8_label" tabindex="0">
             
   
   
@@ -3586,13 +3398,10 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
@@ -3601,7 +3410,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_9" >
         
           
-          <label class="md-nav__link" for="__nav_3_9" id="__nav_3_9_label" tabindex="">
+          <label class="md-nav__link" for="__nav_3_9" id="__nav_3_9_label" tabindex="0">
             
   
   
@@ -3812,22 +3621,44 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#field-filters" class="md-nav__link">
+  <a href="#modes-at-a-glance" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Field Filters
+        Modes at a glance
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Field Filters">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#request-parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Request parameters
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#response-shapes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Response shapes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Response shapes">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#filter-operators" class="md-nav__link">
+  <a href="#_modecount" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Filter Operators
+        _mode=count
       
     </span>
   </a>
@@ -3835,10 +3666,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#null-values" class="md-nav__link">
+  <a href="#_modetop" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Null Values
+        _mode=top
       
     </span>
   </a>
@@ -3846,10 +3677,32 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#relation-foreign-key-filters" class="md-nav__link">
+  <a href="#_modedistinct" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Relation / Foreign Key Filters
+        _mode=distinct
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_modesummary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        _mode=summary
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_modehistogram" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        _mode=histogram
       
     </span>
   </a>
@@ -3862,10 +3715,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#date-range-filter" class="md-nav__link">
+  <a href="#_size-vs-size" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Date Range Filter
+        _size vs size
       
     </span>
   </a>
@@ -3873,38 +3726,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#text-search" class="md-nav__link">
+  <a href="#field-validation" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Text Search
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Text Search">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#advanced-search-syntax" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Advanced Search Syntax
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#sorting" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Sorting
+        Field validation
       
     </span>
   </a>
@@ -3912,10 +3737,21 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#combining-parameters" class="md-nav__link">
+  <a href="#concrete-examples" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Combining Parameters
+        Concrete examples
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#permission-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Permission model
       
     </span>
   </a>
@@ -3942,143 +3778,264 @@
   
 
 
-<h1 id="filtering-searching-sorting-rest-api-reference">Filtering, Searching &amp; Sorting — REST API Reference<a class="headerlink" href="#filtering-searching-sorting-rest-api-reference" title="Permanent link">&para;</a></h1>
-<p>All list endpoints support these query parameters.</p>
+<h1 id="aggregation-rest-api-reference">Aggregation — REST API Reference<a class="headerlink" href="#aggregation-rest-api-reference" title="Permanent link">&para;</a></h1>
+<p>Every list endpoint exposes a generic aggregation surface via the
+<code>_mode</code> query parameter. The same URL that returns paged records also
+returns <code>count</code>, top-N grouped rows, distinct values, scalar
+summaries, or time-bucketed histograms — same filters, same
+permissions, different output shape.</p>
+<p>When <code>_mode</code> is <strong>omitted</strong>, the endpoint behaves identically to
+before — paged records keyed by <code>data</code> / <code>count</code> / <code>size</code> / <code>start</code>.
+Add <code>_mode=...</code> to switch to one of the aggregation responses below.</p>
 <blockquote>
-<p><strong>Reserved prefix.</strong> Query parameters starting with <code>_</code> are reserved for the framework (aggregation, pagination controls, etc.) and are silently skipped by the field-filter parser. Use the bare param name without <code>_</code> for field filters. See <a href="../aggregation/">Aggregation</a> for the full <code>_mode</code> surface.</p>
+<p><strong>Reserved namespace.</strong> Every query parameter starting with <code>_</code> is
+reserved for the framework. Do not invent your own <code>_*</code> filters —
+they will be silently ignored by the field-filter parser.</p>
 </blockquote>
-<h2 id="field-filters">Field Filters<a class="headerlink" href="#field-filters" title="Permanent link">&para;</a></h2>
-<p>Filter by exact field value:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>GET /api/myapp/book?status=published
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>GET /api/myapp/book?author=5
-</code></pre></div>
-<h3 id="filter-operators">Filter Operators<a class="headerlink" href="#filter-operators" title="Permanent link">&para;</a></h3>
-<p>Append an operator suffix to the field name:</p>
+<h2 id="modes-at-a-glance">Modes at a glance<a class="headerlink" href="#modes-at-a-glance" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
 <tr>
-<th>Suffix</th>
-<th>Example</th>
-<th>Behavior</th>
+<th><code>_mode</code></th>
+<th>Returns</th>
+<th>Replaces</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><em>(none)</em></td>
-<td><code>?status=active</code></td>
-<td>Exact match</td>
+<td><code>list</code> (default)</td>
+<td>Current paged-records response</td>
+<td>(no change)</td>
 </tr>
 <tr>
-<td><code>__in</code></td>
-<td><code>?status__in=active,pending</code></td>
-<td>Matches any value in comma-separated list</td>
+<td><code>count</code></td>
+<td><code>{count: N}</code> only — no rows, no <code>data</code></td>
+<td>The legacy <code>?size=0</code> "give me the count" hack</td>
 </tr>
 <tr>
-<td><code>__not</code></td>
-<td><code>?status__not=deleted</code></td>
-<td>Excludes this value</td>
+<td><code>top</code></td>
+<td><code>[{key, value, ...}]</code> — top-N grouped by <code>_field</code>, sorted by <code>value</code> desc</td>
+<td>"top X by Y" patterns</td>
 </tr>
 <tr>
-<td><code>__not_in</code></td>
-<td><code>?status__not_in=deleted,archived</code></td>
-<td>Excludes all values in list</td>
+<td><code>distinct</code></td>
+<td><code>[{key, value}]</code> for ALL distinct values of <code>_field</code></td>
+<td>Filter dropdown population</td>
 </tr>
 <tr>
-<td><code>__isnull</code></td>
-<td><code>?author__isnull=true</code></td>
-<td>NULL check</td>
+<td><code>summary</code></td>
+<td>A scalar object — <code>{value, min, max, n}</code> for an aggregate over <code>_agg_field</code></td>
+<td>"Average X", "Total Y"</td>
+</tr>
+<tr>
+<td><code>histogram</code></td>
+<td>Time-bucketed counts — <code>[{ts, value}]</code></td>
+<td>Activity sparklines, KPI tile trails</td>
 </tr>
 </tbody>
 </table>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>GET /api/myapp/book?status__in=published,draft
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>GET /api/myapp/book?author__isnull=false
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>GET /api/myapp/book?status__not=deleted
-</code></pre></div>
-<h3 id="null-values">Null Values<a class="headerlink" href="#null-values" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>GET /api/myapp/book?author=null
-</code></pre></div>
-<h3 id="relation-foreign-key-filters">Relation / Foreign Key Filters<a class="headerlink" href="#relation-foreign-key-filters" title="Permanent link">&para;</a></h3>
-<p>Filter through related fields using <code>__</code> notation:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>GET /api/myapp/book?author__id=5
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>GET /api/myapp/book?author__username=alice
-</code></pre></div>
-<h2 id="date-range-filter">Date Range Filter<a class="headerlink" href="#date-range-filter" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>GET /api/myapp/book?dr_start=2024-01-01&amp;dr_end=2024-12-31
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>GET /api/myapp/book?dr_field=modified&amp;dr_start=2024-06-01
-</code></pre></div>
+<h2 id="request-parameters">Request parameters<a class="headerlink" href="#request-parameters" title="Permanent link">&para;</a></h2>
+<p>All filter parameters that work on <code>_mode=list</code> (e.g. <code>category=foo</code>,
+<code>status__in=new,open</code>, <code>priority__gte=8</code>, <code>dr_start=...</code>) compose with
+every aggregation mode. Aggregation runs <em>after</em> filtering, so a
+single round-trip can pre-filter and aggregate at the same time.</p>
 <table>
 <thead>
 <tr>
 <th>Param</th>
+<th>Type</th>
+<th>Used by</th>
 <th>Description</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>dr_field</code></td>
-<td>Field to filter on (default: <code>created</code>)</td>
+<td><code>_mode</code></td>
+<td>enum</td>
+<td>all</td>
+<td>Switches response shape. Required to enable aggregation.</td>
 </tr>
 <tr>
-<td><code>dr_start</code></td>
-<td>Start datetime (inclusive)</td>
+<td><code>_field</code></td>
+<td>string</td>
+<td><code>top</code>, <code>distinct</code>, <code>summary</code>, <code>histogram</code></td>
+<td>Column to group/aggregate on.</td>
 </tr>
 <tr>
-<td><code>dr_end</code></td>
-<td>End datetime (inclusive)</td>
+<td><code>_agg</code></td>
+<td>enum: <code>count</code> (default) / <code>sum</code> / <code>avg</code> / <code>min</code> / <code>max</code></td>
+<td><code>top</code>, <code>summary</code></td>
+<td>Aggregation function applied per group.</td>
+</tr>
+<tr>
+<td><code>_agg_field</code></td>
+<td>string</td>
+<td><code>top</code> (when <code>_agg</code> ≠ <code>count</code>), <code>summary</code> (always when <code>_agg</code> ≠ <code>count</code>)</td>
+<td>Numeric field the agg function operates on. Ignored for <code>_agg=count</code>.</td>
+</tr>
+<tr>
+<td><code>_bucket</code></td>
+<td>enum: <code>minute</code> / <code>hour</code> / <code>day</code> / <code>week</code> / <code>month</code></td>
+<td><code>histogram</code></td>
+<td>Bucket size for time-series aggregation.</td>
+</tr>
+<tr>
+<td><code>_size</code></td>
+<td>int (default 10, hard cap 100)</td>
+<td><code>top</code></td>
+<td>Max rows. Bare <code>size</code> stays for <code>_mode=list</code>.</td>
+</tr>
+<tr>
+<td><code>_min_count</code></td>
+<td>int (default 1)</td>
+<td><code>top</code>, <code>distinct</code></td>
+<td>Drop rows whose <code>value</code> is below this. Filters long-tail noise.</td>
 </tr>
 </tbody>
 </table>
-<p>Dates accept ISO 8601: <code>2024-01-01</code> or <code>2024-01-01T00:00:00Z</code></p>
-<h2 id="text-search">Text Search<a class="headerlink" href="#text-search" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>GET /api/myapp/book?search=django
+<h2 id="response-shapes">Response shapes<a class="headerlink" href="#response-shapes" title="Permanent link">&para;</a></h2>
+<p>Every aggregation response carries a <code>took_ms</code> field (rounded to the
+nearest 10ms) for performance budgets. Every response also carries
+<code>status: true</code> and the standard <code>code</code>/<code>server</code> envelope fields.</p>
+<h3 id="_modecount"><code>_mode=count</code><a class="headerlink" href="#_modecount" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="p">{</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">    </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span><span class="nt">&quot;count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">151</span><span class="p">,</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">    </span><span class="nt">&quot;took_ms&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="p">}</span>
 </code></pre></div>
-<h3 id="advanced-search-syntax">Advanced Search Syntax<a class="headerlink" href="#advanced-search-syntax" title="Permanent link">&para;</a></h3>
-<table>
-<thead>
-<tr>
-<th>Syntax</th>
-<th>Example</th>
-<th>Behavior</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Single term</td>
-<td><code>search=django</code></td>
-<td>Matches any search field containing "django"</td>
-</tr>
-<tr>
-<td>Multiple terms</td>
-<td><code>search=django rest</code></td>
-<td>AND: both terms must match</td>
-</tr>
-<tr>
-<td>Quoted phrase</td>
-<td><code>search="django rest"</code></td>
-<td>Exact phrase match</td>
-</tr>
-<tr>
-<td>Exclusion</td>
-<td><code>search=django -python</code></td>
-<td>Contains "django" but not "python"</td>
-</tr>
-<tr>
-<td>Field-specific</td>
-<td><code>search=title:django</code></td>
-<td>Search only in <code>title</code> field</td>
-</tr>
-</tbody>
-</table>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>GET /api/myapp/book?search=&quot;machine learning&quot; -python author:alice
+<p>No <code>data</code>, no <code>size</code>, no <code>start</code>. Pure scalar.</p>
+<h3 id="_modetop"><code>_mode=top</code><a class="headerlink" href="#_modetop" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">    </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">    </span><span class="nt">&quot;graph&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;top&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">    </span><span class="nt">&quot;field&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;source_ip&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">    </span><span class="nt">&quot;agg&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;count&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">    </span><span class="nt">&quot;size&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">10</span><span class="p">,</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">    </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">        </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;185.220.101.7&quot;</span><span class="p">,</span><span class="w">  </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">84</span><span class="p">,</span><span class="w">  </span><span class="nt">&quot;first_seen&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1777200000</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;last_seen&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1777267000</span><span class="w"> </span><span class="p">},</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">        </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;45.155.205.233&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">62</span><span class="p">,</span><span class="w">  </span><span class="nt">&quot;first_seen&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1777180000</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;last_seen&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1777260000</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">    </span><span class="p">],</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">    </span><span class="nt">&quot;took_ms&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">10</span>
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="p">}</span>
 </code></pre></div>
-<h2 id="sorting">Sorting<a class="headerlink" href="#sorting" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>GET /api/myapp/book?sort=title
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>GET /api/myapp/book?sort=-created    # descending (prefix with -)
+<ul>
+<li><code>value</code> (not <code>count</code>) so the shape is identical across <code>_agg=count</code>/<code>sum</code>/<code>avg</code>/<code>min</code>/<code>max</code>.</li>
+<li><code>data</code> sorted descending by <code>value</code>.</li>
+<li><code>key</code> is <strong>always a string</strong> (numeric/datetime fields stringified) so clients can use it as a <code>&lt;select&gt;</code> value or URL filter param without typecasting.</li>
+<li><code>first_seen</code> / <code>last_seen</code> (unix seconds) appear when the model has a datetime column (<code>created</code> is preferred). Skipped entirely when the model has no datetime to surface.</li>
+<li>NULL keys appear as <code>key: "null"</code> (string).</li>
+</ul>
+<h3 id="_modedistinct"><code>_mode=distinct</code><a class="headerlink" href="#_modedistinct" title="Permanent link">&para;</a></h3>
+<p>Same shape as <code>top</code> but:</p>
+<ul>
+<li>Sorted alphabetically by <code>key</code>.</li>
+<li>No <code>_size</code> cap — returns every distinct value.</li>
+<li>Hard server cap of 1000. <strong>Cardinality &gt; 1000 returns 400</strong> (not silent truncation). Add filters to narrow the set.</li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="nt">&quot;graph&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;distinct&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span><span class="nt">&quot;field&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;category&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">        </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;invalid_password&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">41</span><span class="w"> </span><span class="p">},</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">        </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;lockout&quot;</span><span class="p">,</span><span class="w">          </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w">  </span><span class="mi">9</span><span class="w"> </span><span class="p">},</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">        </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;login:unknown&quot;</span><span class="p">,</span><span class="w">    </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w">  </span><span class="mi">8</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">    </span><span class="p">],</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">    </span><span class="nt">&quot;took_ms&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span>
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="p">}</span>
 </code></pre></div>
-<p>Default sort is <code>-id</code> (newest first) unless the model specifies otherwise.</p>
-<h2 id="combining-parameters">Combining Parameters<a class="headerlink" href="#combining-parameters" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>GET /api/myapp/book?status=published&amp;sort=-created&amp;search=django&amp;dr_start=2024-01-01&amp;start=0&amp;size=20
+<h3 id="_modesummary"><code>_mode=summary</code><a class="headerlink" href="#_modesummary" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">    </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span><span class="nt">&quot;graph&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;summary&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">    </span><span class="nt">&quot;field&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;priority&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">    </span><span class="nt">&quot;agg&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;avg&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">    </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">6.34</span><span class="p">,</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">    </span><span class="nt">&quot;min&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">    </span><span class="nt">&quot;max&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span>
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">    </span><span class="nt">&quot;n&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">151</span><span class="p">,</span>
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="w">    </span><span class="nt">&quot;took_ms&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span>
+<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="p">}</span>
 </code></pre></div>
+<ul>
+<li><code>value</code> is the result of <code>_agg</code> over <code>_agg_field</code> (or <code>_field</code> if <code>_agg_field</code> is omitted).</li>
+<li><code>min</code> / <code>max</code> accompany numeric aggregates; <code>n</code> is always the row count of the filtered set (not the result of <code>_agg=count</code>).</li>
+</ul>
+<h3 id="_modehistogram"><code>_mode=histogram</code><a class="headerlink" href="#_modehistogram" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">    </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">    </span><span class="nt">&quot;graph&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;histogram&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">    </span><span class="nt">&quot;field&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;created&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">    </span><span class="nt">&quot;bucket&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;day&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">    </span><span class="nt">&quot;agg&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;count&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">    </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">        </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;ts&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1777094400</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="w"> </span><span class="p">},</span>
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">        </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;ts&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1777180800</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">},</span>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="w">        </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;ts&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1777267200</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">9</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="w">    </span><span class="p">],</span>
+<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a><span class="w">    </span><span class="nt">&quot;took_ms&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">10</span>
+<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="p">}</span>
+</code></pre></div>
+<ul>
+<li><code>ts</code> is the UTC bucket-start in unix-seconds.</li>
+<li>Empty buckets in the window are present with <code>value: 0</code>. Clients never have to fill gaps client-side.</li>
+<li>Bucket alignment is UTC. Local-timezone alignment is not currently configurable.</li>
+<li>Request must include either explicit <code>dr_start</code>/<code>dr_end</code> or have a non-empty queryset; otherwise <code>data: []</code>.</li>
+<li>Window-relative cap: requests whose computed bucket count exceeds 10000 return 400. Pick a coarser <code>_bucket</code> and retry.</li>
+</ul>
+<h2 id="_size-vs-size"><code>_size</code> vs <code>size</code><a class="headerlink" href="#_size-vs-size" title="Permanent link">&para;</a></h2>
+<p><code>_size</code> (with leading underscore) only applies to <code>_mode=top</code>. The
+bare <code>size</code> only applies to <code>_mode=list</code>. They never collide — the
+server picks the relevant one based on <code>_mode</code>. Sending both is not
+an error.</p>
+<h2 id="field-validation">Field validation<a class="headerlink" href="#field-validation" title="Permanent link">&para;</a></h2>
+<p>The server rejects aggregation requests that point at fields likely
+to leak data or break the database with HTTP 400:</p>
+<ul>
+<li><code>_field</code> referencing a relation FK without <code>__id</code> (use <code>incident__id</code>, not <code>incident</code>).</li>
+<li><code>_field</code> containing <code>__</code> for non-relation fields (blocks JSON-path drilling like <code>metadata__rule_id</code>).</li>
+<li><code>_field</code> of type <code>TextField</code>, <code>JSONField</code>, or <code>EmailField</code> (unbounded cardinality, PII risk).</li>
+<li><code>_field</code> listed in the model's <code>RestMeta.SENSITIVE_FIELDS</code>.</li>
+<li><code>_field</code> not in the model's <code>RestMeta.AGGREGATION_FIELDS</code> allow-list, when the model defines one.</li>
+<li><code>_agg=avg</code> (or <code>sum</code>/<code>min</code>/<code>max</code>) on a non-numeric <code>_agg_field</code>.</li>
+<li><code>_mode=histogram</code> on a non-datetime field.</li>
+</ul>
+<h2 id="concrete-examples">Concrete examples<a class="headerlink" href="#concrete-examples" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a># Top source IPs in the last 7d
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>GET /api/incident/event?_mode=top&amp;_field=source_ip&amp;_size=10&amp;dr_start=...
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a># Top auth-failure source IPs — pre-filter then group
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>GET /api/incident/event?_mode=top&amp;_field=source_ip&amp;_size=10
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>  &amp;category__in=invalid_password,login:unknown,totp:login_failed
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>  &amp;dr_start=...
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a># New incidents count (replaces ?size=0)
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>GET /api/incident/incident?_mode=count&amp;status=new
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>
+<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a># Active firewall blocks
+<a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a>GET /api/system/geoip?_mode=count&amp;is_blocked=true
+<a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a>
+<a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a># Status distribution donut
+<a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a>GET /api/incident/incident?_mode=top&amp;_field=status&amp;_size=20
+<a id="__codelineno-5-17" name="__codelineno-5-17" href="#__codelineno-5-17"></a>
+<a id="__codelineno-5-18" name="__codelineno-5-18" href="#__codelineno-5-18"></a># Filter dropdown options
+<a id="__codelineno-5-19" name="__codelineno-5-19" href="#__codelineno-5-19"></a>GET /api/incident/event?_mode=distinct&amp;_field=category
+<a id="__codelineno-5-20" name="__codelineno-5-20" href="#__codelineno-5-20"></a>
+<a id="__codelineno-5-21" name="__codelineno-5-21" href="#__codelineno-5-21"></a># Average incident priority (numeric summary)
+<a id="__codelineno-5-22" name="__codelineno-5-22" href="#__codelineno-5-22"></a>GET /api/incident/incident?_mode=summary&amp;_field=priority&amp;_agg=avg&amp;_agg_field=priority
+<a id="__codelineno-5-23" name="__codelineno-5-23" href="#__codelineno-5-23"></a>
+<a id="__codelineno-5-24" name="__codelineno-5-24" href="#__codelineno-5-24"></a># Events-per-day sparkline
+<a id="__codelineno-5-25" name="__codelineno-5-25" href="#__codelineno-5-25"></a>GET /api/incident/event?_mode=histogram&amp;_field=created&amp;_bucket=day
+<a id="__codelineno-5-26" name="__codelineno-5-26" href="#__codelineno-5-26"></a>  &amp;dr_start=2026-01-01&amp;dr_end=2026-01-31
+</code></pre></div>
+<h2 id="permission-model">Permission model<a class="headerlink" href="#permission-model" title="Permanent link">&para;</a></h2>
+<p>Aggregation inherits the <em>exact</em> same permissions and per-row scoping
+as <code>_mode=list</code>. There are no new permission tables, no new scopes,
+and no new endpoints. A user who can only see their own incidents
+gets aggregations over their own incidents — never the global set.
+A user with no view permission on the resource gets the same denial
+they would see on the list path.</p>
 
 
 

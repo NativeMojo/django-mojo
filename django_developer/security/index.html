@@ -4242,6 +4242,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#auth-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Auth Metrics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#bouncer-metrics" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4786,6 +4797,26 @@
 <td><code>api_error</code></td>
 <td>App</td>
 <td>Application error (default category)</td>
+</tr>
+<tr>
+<td><code>invalid_password</code></td>
+<td>Auth</td>
+<td>Wrong password for known user</td>
+</tr>
+<tr>
+<td><code>totp:login_failed</code></td>
+<td>Auth</td>
+<td>TOTP MFA failure</td>
+</tr>
+<tr>
+<td><code>totp:login_unknown</code></td>
+<td>Auth</td>
+<td>TOTP attempt for unknown user</td>
+</tr>
+<tr>
+<td><code>passkey:login_failed</code></td>
+<td>Auth</td>
+<td>Passkey authentication failure</td>
 </tr>
 </tbody>
 </table>
@@ -5567,6 +5598,31 @@
 <a id="__codelineno-17-10" name="__codelineno-17-10" href="#__codelineno-17-10"></a>            → report_event(category=&quot;security:bouncer:campaign&quot;, level=10)
 <a id="__codelineno-17-11" name="__codelineno-17-11" href="#__codelineno-17-11"></a>                → When 5+ blocks share same signal pattern
 </code></pre></div>
+<h3 id="auth-metrics">Auth Metrics<a class="headerlink" href="#auth-metrics" title="Permanent link">&para;</a></h3>
+<p>One aggregate counter is recorded for all authentication failure events:</p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Account</th>
+<th>Category</th>
+<th>When</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>auth:failures</code></td>
+<td><code>incident</code></td>
+<td><code>auth</code></td>
+<td>Any event whose category is <code>invalid_password</code>, <code>login:unknown</code>, <code>totp:login_failed</code>, <code>totp:login_unknown</code>, or <code>passkey:login_failed</code></td>
+</tr>
+</tbody>
+</table>
+<p>Bumped automatically by <code>Event.save()</code> when <code>INCIDENT_EVENT_METRICS</code> is enabled. The category set is defined in <code>AUTH_FAILURE_CATEGORIES</code> (a <code>frozenset</code> in <code>mojo/apps/incident/models/event.py</code>) — add new failure categories there without touching the recording logic.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="c1"># Fetch the current hour&#39;s auth failure count</span>
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="n">result</span> <span class="o">=</span> <span class="n">metrics</span><span class="o">.</span><span class="n">fetch_values</span><span class="p">([</span><span class="s2">&quot;auth:failures&quot;</span><span class="p">],</span> <span class="n">account</span><span class="o">=</span><span class="s2">&quot;incident&quot;</span><span class="p">,</span> <span class="n">granularity</span><span class="o">=</span><span class="s2">&quot;hours&quot;</span><span class="p">)</span>
+<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="n">count</span> <span class="o">=</span> <span class="n">result</span><span class="p">[</span><span class="s2">&quot;data&quot;</span><span class="p">][</span><span class="s2">&quot;auth:failures&quot;</span><span class="p">]</span>
+</code></pre></div>
 <h3 id="bouncer-metrics">Bouncer Metrics<a class="headerlink" href="#bouncer-metrics" title="Permanent link">&para;</a></h3>
 <p>8 metrics are recorded for monitoring:</p>
 <table>
@@ -5659,11 +5715,11 @@
 <li>Default rules handle common OSSEC patterns (bot scanners, SSH brute force, web attacks)</li>
 </ol>
 <h3 id="alert-flow">Alert Flow<a class="headerlink" href="#alert-flow" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>OSSEC → POST /api/incident/ossec/alert
-<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>    → Validates secret
-<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a>    → Normalizes alert fields (rule_id, level, description, source_ip)
-<a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a>    → report_event(category=&quot;ossec:alert&quot;, level=ossec_level, metadata={rule_id, ...})
-<a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a>    → Rule engine matches on rule_id field
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>OSSEC → POST /api/incident/ossec/alert
+<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a>    → Validates secret
+<a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a>    → Normalizes alert fields (rule_id, level, description, source_ip)
+<a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a>    → report_event(category=&quot;ossec:alert&quot;, level=ossec_level, metadata={rule_id, ...})
+<a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a>    → Rule engine matches on rule_id field
 </code></pre></div>
 <h2 id="10-health-monitoring">10. Health Monitoring<a class="headerlink" href="#10-health-monitoring" title="Permanent link">&para;</a></h2>
 <p>The health monitoring system runs every 3 minutes (when enabled) and reports infrastructure events.</p>
@@ -5717,8 +5773,8 @@
 </tbody>
 </table>
 <h3 id="enable-health-monitoring">Enable Health Monitoring<a class="headerlink" href="#enable-health-monitoring" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="c1"># In Django settings</span>
-<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a><span class="n">HEALTH_MONITORING_ENABLED</span> <span class="o">=</span> <span class="kc">True</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="c1"># In Django settings</span>
+<a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a><span class="n">HEALTH_MONITORING_ENABLED</span> <span class="o">=</span> <span class="kc">True</span>
 </code></pre></div>
 <p>Default health rules are auto-created on first health check run. They send notifications and create tickets — they never block IPs (health issues are not attacks).</p>
 <h2 id="11-cronjobs-background-jobs">11. Cronjobs &amp; Background Jobs<a class="headerlink" href="#11-cronjobs-background-jobs" title="Permanent link">&para;</a></h2>
