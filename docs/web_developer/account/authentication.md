@@ -154,7 +154,7 @@ minted at the auth origin. The handoff is an authorization-code flow:
 ```
 
 The auth-page JS does this automatically when `?redirect=` points to a different
-origin — apps usually don't call it directly.
+origin — apps usually don't call it directly. Rate-limited to 30 requests/IP.
 
 **Step 2 — Exchange the code (app origin, public)**
 

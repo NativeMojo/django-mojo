@@ -125,8 +125,8 @@ The flow:
 
 1. Auth page completes login (password / OAuth / passkey / magic link / MFA).
 2. `_mat.redirect()` parses `redirect` and detects a different origin.
-3. The page POSTs `/api/auth/handoff` with the just-issued JWT and gets back a
-   `code`.
+3. The page POSTs `/api/auth/handoff` (authenticated via `Authorization: Bearer`
+   header) and gets back a `code`.
 4. The browser navigates to `<redirect>?auth_code=<code>`.
 5. The app calls `MojoAuth.handleAuthCodeFromURL()` on bootstrap — it strips
    the param, POSTs `/api/auth/exchange`, and stores the resulting access +

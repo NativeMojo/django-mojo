@@ -126,7 +126,7 @@ phonehub.send_sms(user.phone_number, f"Your login token: {token}")
 
 Tokens are single-use and expire after `MAGIC_LOGIN_TOKEN_TTL` seconds (default 3600). The channel is stored encrypted in `mojo_secrets` and cleared on consume.
 
-See the [Magic Login REST API](../../../web_developer/account/magic_login.md) for the full client-facing flow.
+See the [Magic Login REST API](../../web_developer/account/magic_login.md) for the full client-facing flow.
 
 ## Cross-Origin Auth Handoff
 
@@ -147,10 +147,11 @@ data = auth_handoff.consume_handoff_code(code)  # {"uid": <id>, "ip": "..."} or 
 
 Codes are 32-hex random strings stored under Redis key `auth:handoff:<code>`,
 with a TTL controlled by the `AUTH_HANDOFF_CODE_TTL` setting (default `60`
-seconds). Single-use is enforced by `GET`+`DELETE` on consume. The exchange
-endpoint reuses `jwt_login(request, user, source="handoff")`, so the standard
-login-event tracking, last-login bump, and webapp-URL metadata all fire on the
-handoff exchange.
+seconds). Single-use is enforced atomically via Redis `GETDEL`, so concurrent
+exchange attempts cannot both win. The exchange endpoint reuses
+`jwt_login(request, user, source="handoff")`, so the standard login-event
+tracking, last-login bump, and webapp-URL metadata all fire on the handoff
+exchange.
 
 | Setting | Default | Purpose |
 |---|---|---|
@@ -162,7 +163,7 @@ opened by an already-signed-in user will hand a JWT to `evil` after
 auto-session-resume. Deployments needing tighter control should layer their
 own allowlist over the `?redirect=` param before the bouncer.
 
-See [Auth Pages — Cross-Origin Redirect Handoff](../../../web_developer/account/auth_pages.md#cross-origin-redirect-handoff)
+See [Auth Pages — Cross-Origin Redirect Handoff](../../web_developer/account/auth_pages.md#cross-origin-redirect-handoff)
 for the end-to-end client-side flow.
 
 ## API Keys

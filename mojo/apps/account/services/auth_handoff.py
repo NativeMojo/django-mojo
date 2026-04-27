@@ -46,14 +46,11 @@ def consume_handoff_code(code):
     Validate and consume (delete) a handoff code.
 
     Returns the stored data dict on success, None if invalid/expired.
-    Single-use — deleted immediately on retrieval.
+    Single-use — atomic GETDEL guarantees only one concurrent caller wins.
     """
-    if not code:
+    if not code or not isinstance(code, str) or len(code) != 32 or not code.isalnum():
         return None
-    r = get_connection()
-    key = f"{_KEY_PREFIX}{code}"
-    raw = r.get(key)
+    raw = get_connection().getdel(f"{_KEY_PREFIX}{code}")
     if not raw:
         return None
-    r.delete(key)
     return json.loads(raw)
