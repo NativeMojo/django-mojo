@@ -13,6 +13,18 @@ INCIDENT_LEVEL_THRESHOLD = settings.get_static('INCIDENT_LEVEL_THRESHOLD', 7)
 INCIDENT_METRICS_MIN_GRANULARITY = settings.get_static("INCIDENT_METRICS_MIN_GRANULARITY", "hours")
 LLM_API_KEY = settings.get_static("LLM_HANDLER_API_KEY", None)
 
+# Event categories that should bump the aggregate ``auth:failures`` counter.
+# Used by the portal Security Dashboard so a single fetch replaces the
+# composite "incident_events filter + per-category event count" path.
+# Add new failure categories here as they are introduced.
+AUTH_FAILURE_CATEGORIES = frozenset({
+    "invalid_password",
+    "login:unknown",
+    "totp:login_failed",
+    "totp:login_unknown",
+    "passkey:login_failed",
+})
+
 class Event(models.Model, MojoModel):
     id = models.BigAutoField(primary_key=True)
     """
@@ -314,6 +326,10 @@ class Event(models.Model, MojoModel):
                 metrics.record(f'incident_events:country:{self.country_code}',
                     account="incident",
                     category="incident_events_by_country",
+                    min_granularity=INCIDENT_METRICS_MIN_GRANULARITY)
+            if self.category in AUTH_FAILURE_CATEGORIES:
+                metrics.record('auth:failures', account="incident",
+                    category="auth",
                     min_granularity=INCIDENT_METRICS_MIN_GRANULARITY)
 
     def record_incident_metrics(self):
