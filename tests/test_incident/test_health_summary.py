@@ -118,3 +118,30 @@ def test_health_summary_requires_view_security(opts):
     assert opts.client.login(opts.outsider_name, opts.pword), "outsider login failed"
     resp = opts.client.get("/api/incident/health/summary")
     assert resp.status_code in (401, 403), f"expected auth failure, got {resp.status_code}: {resp.body}"
+
+
+@th.django_unit_test()
+def test_health_summary_rejects_non_namespace_prefix(opts):
+    """An empty or non-colon-suffixed prefix must be rejected as a 400.
+
+    Without this guard, a `view_security` user could pass `prefix=` or
+    `prefix=invalid_password` and use the endpoint as an open-ended
+    category discovery oracle — broader than the namespace-strip intent.
+    """
+    from mojo.apps.incident.models import Event
+
+    Event.objects.create(category="invalid_password", level=8, title="ip", details="…")
+
+    assert opts.client.login(opts.admin_name, opts.pword), "admin login failed"
+
+    # Empty prefix → 400
+    resp = opts.client.get("/api/incident/health/summary", params=dict(prefix=""))
+    assert resp.status_code == 400, f"empty prefix expected 400, got {resp.status_code}: {resp.body}"
+
+    # Non-namespace prefix (no trailing colon) → 400
+    resp = opts.client.get("/api/incident/health/summary", params=dict(prefix="invalid_password"))
+    assert resp.status_code == 400, f"non-namespace prefix expected 400, got {resp.status_code}: {resp.body}"
+
+    # Valid namespace prefix → 200 (sanity check that the guard isn't over-strict)
+    resp = opts.client.get("/api/incident/health/summary", params=dict(prefix="system:health:"))
+    assert resp.status_code == 200, f"valid prefix expected 200, got {resp.status_code}: {resp.body}"

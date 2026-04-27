@@ -30,8 +30,19 @@ def on_health_summary(request):
     One row per distinct category — used by the portal Security Dashboard's
     Health Strip so it can render an indicator per subsystem without
     hard-coding the category list or making N round-trips.
+
+    The ``prefix`` parameter must be a namespace prefix — non-empty and
+    colon-suffixed (``foo:bar:``). This bounds the endpoint to enumerating
+    a single namespace root rather than acting as an open-ended category
+    discovery oracle for any caller with view_security.
     """
+    from mojo.errors import ValueException
     prefix = request.DATA.get("prefix", "system:health:")
+    if not isinstance(prefix, str) or not prefix or not prefix.endswith(":"):
+        raise ValueException(
+            "prefix must be a non-empty namespace prefix ending in ':' (e.g. 'system:health:')",
+            400,
+        )
     categories = (
         Event.objects
         .filter(category__startswith=prefix)
