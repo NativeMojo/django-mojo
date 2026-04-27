@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## Unreleased (post v1.1.34)
+
+### Added
+- **Cross-origin auth handoff (authorization-code style)** — when the auth page redirects to a different origin after login, it mints a one-time code via `POST /api/auth/handoff` (authenticated) and appends it as `?auth_code=<code>` on the redirect URL. The consuming app calls `POST /api/auth/exchange` (public, single-use, rate-limited 20/min/IP) to swap the code for access + refresh tokens. New helpers in `mojo-auth.js`: `requestHandoffCode()`, `exchangeAuthCode(code)`, `handleAuthCodeFromURL()`. New service `mojo/apps/account/services/auth_handoff.py` (Redis-backed, key prefix `auth:handoff:`, single-use via `GET`+`DELETE`). New setting `AUTH_HANDOFF_CODE_TTL` (default `60`). Same-origin redirects are unchanged. Reuses `jwt_login(..., source="handoff")` so login-event tracking, last-login bump, and webapp-URL metadata fire on exchange. Redirect destinations are intentionally not allowlisted — see `docs/django_developer/account/auth.md` for the security trade-off.
+
 ## v1.1.34 - April 26, 2026
 
 new CRUD '_mode' support for aggretating'

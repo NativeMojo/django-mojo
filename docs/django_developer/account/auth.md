@@ -128,6 +128,43 @@ Tokens are single-use and expire after `MAGIC_LOGIN_TOKEN_TTL` seconds (default 
 
 See the [Magic Login REST API](../../../web_developer/account/magic_login.md) for the full client-facing flow.
 
+## Cross-Origin Auth Handoff
+
+When the auth page (`/auth`) and the consuming app live on different origins,
+`localStorage` is partitioned, so the destination cannot read tokens minted at
+the auth origin. The handoff service mints a short-lived, single-use code that
+the auth page appends to the redirect URL; the app exchanges it for a JWT.
+
+```python
+from mojo.apps.account.services import auth_handoff
+
+# Issued from the authenticated POST /api/auth/handoff handler
+code = auth_handoff.create_handoff_code(request.user, ip=request.ip)
+
+# Consumed by the public POST /api/auth/exchange handler
+data = auth_handoff.consume_handoff_code(code)  # {"uid": <id>, "ip": "..."} or None
+```
+
+Codes are 32-hex random strings stored under Redis key `auth:handoff:<code>`,
+with a TTL controlled by the `AUTH_HANDOFF_CODE_TTL` setting (default `60`
+seconds). Single-use is enforced by `GET`+`DELETE` on consume. The exchange
+endpoint reuses `jwt_login(request, user, source="handoff")`, so the standard
+login-event tracking, last-login bump, and webapp-URL metadata all fire on the
+handoff exchange.
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `AUTH_HANDOFF_CODE_TTL` | `60` | Seconds before a handoff code expires |
+
+**Security trade-off.** The redirect destination is **not** allowlisted — by
+design, per the request scope. A malicious `?redirect=evil.example.com` link
+opened by an already-signed-in user will hand a JWT to `evil` after
+auto-session-resume. Deployments needing tighter control should layer their
+own allowlist over the `?redirect=` param before the bouncer.
+
+See [Auth Pages — Cross-Origin Redirect Handoff](../../../web_developer/account/auth_pages.md#cross-origin-redirect-handoff)
+for the end-to-end client-side flow.
+
 ## API Keys
 
 Long-lived JWTs restricted by IP allowlist.

@@ -108,10 +108,37 @@
             hideOverlay: function () {
                 $("mat-overlay").classList.remove("is-visible");
             },
-            redirect: function () { window.location.href = redirectTo; },
+            redirect: function () {
+                // Same-origin (or relative) redirects don't need a handoff \u2014
+                // tokens already live in localStorage on the destination origin.
+                var target = redirectTo;
+                var isCrossOrigin = false;
+                try {
+                    var resolved = new URL(target, window.location.href);
+                    isCrossOrigin = resolved.origin !== window.location.origin;
+                    target = resolved.href;
+                } catch (e) { /* malformed URL \u2014 fall back to direct nav */ }
+
+                if (!isCrossOrigin || !MojoAuth.isAuthenticated()) {
+                    window.location.href = target;
+                    return;
+                }
+
+                MojoAuth.requestHandoffCode()
+                    .then(function (d) {
+                        var sep = target.indexOf('?') === -1 ? '?' : '&';
+                        window.location.href = target + sep + 'auth_code=' + encodeURIComponent(d.code);
+                    })
+                    .catch(function () {
+                        // Best-effort: if handoff issuance fails, fall back to a
+                        // plain redirect \u2014 the app may still loop back, but no
+                        // worse than today's behaviour.
+                        window.location.href = target;
+                    });
+            },
             onAuthSuccess: function () {
                 window._mat.showOverlay("Signed in!", "Taking you there now\u2026");
-                setTimeout(window._mat.redirect, 800);
+                setTimeout(function () { window._mat.redirect(); }, 800);
             },
         };
 
@@ -132,7 +159,7 @@
                 MojoAuth.refreshToken()
                     .then(function () {
                         window._mat.showOverlay("Signed in!", "Taking you there now\u2026");
-                        setTimeout(window._mat.redirect, 800);
+                        setTimeout(function () { window._mat.redirect(); }, 800);
                     })
                     .catch(function () {
                         MojoAuth.logout();

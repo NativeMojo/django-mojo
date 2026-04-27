@@ -107,6 +107,69 @@ From your application, link to the login and registration pages:
 
 ---
 
+## Cross-Origin Redirect Handoff
+
+When `?redirect=` points to the **same origin** as the auth page, the JWT in
+`localStorage` is shared with the destination — no extra step is needed. When
+the redirect target is on a **different origin** (e.g. auth at
+`auth.example.com`, app at `app.example.com`), `localStorage` is partitioned by
+origin so the destination cannot read the tokens minted by the auth page. To
+avoid the infinite "no JWT → bounce to auth" loop, the auth page issues a
+short-lived, single-use **handoff code** and appends it to the redirect URL:
+
+```
+https://app.example.com/portal?auth_code=<32-hex>
+```
+
+The flow:
+
+1. Auth page completes login (password / OAuth / passkey / magic link / MFA).
+2. `_mat.redirect()` parses `redirect` and detects a different origin.
+3. The page POSTs `/api/auth/handoff` with the just-issued JWT and gets back a
+   `code`.
+4. The browser navigates to `<redirect>?auth_code=<code>`.
+5. The app calls `MojoAuth.handleAuthCodeFromURL()` on bootstrap — it strips
+   the param, POSTs `/api/auth/exchange`, and stores the resulting access +
+   refresh tokens in its own `localStorage`.
+
+Codes are 32-hex random strings, single-use, and expire after
+`AUTH_HANDOFF_CODE_TTL` seconds (default 60). The exchange endpoint is
+public (so the app can reach it before it has a JWT) and rate-limited to
+20 attempts/min/IP.
+
+### App bootstrap snippet
+
+```html
+<script src="https://auth.example.com/api/account/static/mojo-auth.js"></script>
+<script>
+  // baseURL must point at the auth origin so /api/auth/exchange resolves
+  MojoAuth.init({ baseURL: 'https://auth.example.com' });
+
+  MojoAuth.handleAuthCodeFromURL()
+    .then(function (data) {
+      if (data) {
+        // Tokens are stored — boot the app
+        bootApp();
+      } else if (MojoAuth.isAuthenticated()) {
+        bootApp();
+      } else {
+        window.location.href = 'https://auth.example.com/auth?redirect=' +
+          encodeURIComponent(window.location.href);
+      }
+    });
+</script>
+```
+
+### Security note
+
+There is no allowlist on the redirect destination. A malicious
+`?redirect=evil.example.com` link, opened by an already-signed-in user, will
+hand a JWT to `evil` after auto-session-resume. Deployments that need stricter
+control should layer their own allowlist (e.g. `ALLOWED_REDIRECT_URLS`) over
+the `?redirect=` param.
+
+---
+
 ## Customization
 
 ### Branding — via admin portal

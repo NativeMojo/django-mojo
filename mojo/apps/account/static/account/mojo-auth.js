@@ -52,7 +52,9 @@
         oauthBegin:         '/api/auth/oauth/{provider}/begin',
         oauthComplete:      '/api/auth/oauth/{provider}/complete',
         register:           '/api/auth/register',
-        refreshToken:       '/api/refresh_token'
+        refreshToken:       '/api/refresh_token',
+        handoff:            '/api/auth/handoff',
+        exchange:           '/api/auth/exchange'
     };
 
     // -------------------------------------------------------------------------
@@ -592,6 +594,61 @@
             var refreshToken = localStorage.getItem(KEYS.refresh);
             if (!refreshToken) return Promise.reject(new Error('No refresh token stored'));
             return post(ep('refreshToken'), { refresh_token: refreshToken }).then(saveTokens);
+        },
+
+        // -----------------------------------------------------------------------
+        // Cross-origin auth handoff
+        //
+        // The auth-origin page calls requestHandoffCode() to mint a short-lived,
+        // single-use code, appends ?auth_code=<code> to the redirect URL, and the
+        // consuming app calls handleAuthCodeFromURL() (or exchangeAuthCode()) on
+        // bootstrap to swap the code for a JWT.
+        // -----------------------------------------------------------------------
+
+        /**
+         * Mint a short-lived handoff code on behalf of the current authenticated
+         * session. Requires a stored access token — sends it as Bearer auth.
+         * @returns {Promise<{code: string, expires_in: number}>}
+         */
+        requestHandoffCode: function () {
+            var authHeader = MojoAuth.getAuthHeader();
+            if (!authHeader) return Promise.reject(new Error('Not authenticated'));
+            return post(ep('handoff'), {}, { 'Authorization': authHeader })
+                .then(function (resp) {
+                    var d = (resp && resp.data) ? resp.data : resp;
+                    if (!d || !d.code) throw new Error('No code in handoff response');
+                    return d;
+                });
+        },
+
+        /**
+         * Exchange a handoff code for access + refresh tokens. Stores them on success.
+         * @param {string} code  - opaque code from ?auth_code=
+         * @returns {Promise<object>}
+         */
+        exchangeAuthCode: function (code) {
+            if (!code) return Promise.reject(new Error('No code provided'));
+            return post(ep('exchange'), { code: code }).then(saveTokens);
+        },
+
+        /**
+         * Convenience: read ?auth_code= from current URL and exchange it for a JWT.
+         * Cleans the param from the URL after reading. Resolves to null if no
+         * auth_code is present.
+         * @returns {Promise<object|null>}
+         */
+        handleAuthCodeFromURL: function () {
+            var params = new URLSearchParams(window.location.search);
+            var code = params.get('auth_code');
+            if (!code) return Promise.resolve(null);
+
+            params.delete('auth_code');
+            var newUrl = params.toString()
+                ? window.location.pathname + '?' + params.toString()
+                : window.location.pathname;
+            window.history.replaceState({}, '', newUrl);
+
+            return MojoAuth.exchangeAuthCode(code);
         },
 
         // -----------------------------------------------------------------------

@@ -124,6 +124,70 @@ if (!me.ok) {
 return loggedIn(me.data);
 ```
 
+## Cross-Origin Auth Handoff
+
+Used when the auth page and the consuming app live on **different origins** —
+`localStorage` is partitioned by origin, so the destination can't read tokens
+minted at the auth origin. The handoff is an authorization-code flow:
+
+1. Auth page mints a one-time code and appends it to the redirect URL.
+2. App page reads the code from the URL and exchanges it for tokens.
+
+**Step 1 — Mint a code (auth origin, authenticated)**
+
+**POST** `/api/auth/handoff`
+
+```json
+{}
+```
+
+**Response:**
+
+```json
+{
+  "status": true,
+  "data": {
+    "code": "f9a4...e2",
+    "expires_in": 60
+  }
+}
+```
+
+The auth-page JS does this automatically when `?redirect=` points to a different
+origin — apps usually don't call it directly.
+
+**Step 2 — Exchange the code (app origin, public)**
+
+**POST** `/api/auth/exchange`
+
+```json
+{
+  "code": "f9a4...e2"
+}
+```
+
+Returns the same `data` shape as `/api/login` (access/refresh tokens, user
+dict). Codes are single-use and expire after `AUTH_HANDOFF_CODE_TTL` seconds
+(default 60). Rate-limited to 20 attempts/min/IP.
+
+**Bootstrap helper**
+
+```javascript
+MojoAuth.init({ baseURL: 'https://auth.example.com' });
+MojoAuth.handleAuthCodeFromURL().then(function (data) {
+  if (data) {
+    // tokens stored, URL scrubbed of ?auth_code=
+  }
+});
+```
+
+`handleAuthCodeFromURL()` reads `?auth_code=` from `location.search`, calls
+`/api/auth/exchange`, stores the tokens, and replaces the URL with the param
+removed. Resolves to `null` if no `auth_code` is present.
+
+See [Auth Pages — Cross-Origin Redirect Handoff](auth_pages.md#cross-origin-redirect-handoff)
+for end-to-end flow and security trade-offs.
+
 ## Logout
 
 On logout, always remove both tokens:

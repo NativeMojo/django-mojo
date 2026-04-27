@@ -85,6 +85,51 @@ def on_user_login(request):
     return jwt_login(request, user, "account/jwt/login" in request.path, source=source)
 
 
+# -----------------------------------------------------------------
+# Cross-origin auth handoff (authorization-code style)
+# -----------------------------------------------------------------
+
+@md.POST("auth/handoff")
+@md.requires_auth()
+@md.rate_limit("auth_handoff", ip_limit=30)
+def on_auth_handoff(request):
+    """
+    Issue a short-lived, single-use handoff code for the authenticated user.
+    The auth-origin page calls this when redirecting to a different-origin app
+    so the app can exchange the code for a JWT without the JWT touching the URL.
+    """
+    from mojo.apps.account.services import auth_handoff
+    code = auth_handoff.create_handoff_code(request.user, ip=request.ip)
+    return JsonResponse({
+        "status": True,
+        "data": {
+            "code": code,
+            "expires_in": auth_handoff.get_ttl(),
+        },
+    })
+
+
+@md.POST("auth/exchange")
+@md.public_endpoint()
+@md.strict_rate_limit("auth_exchange", ip_limit=20, ip_window=60)
+@md.requires_params("code")
+def on_auth_exchange(request):
+    """
+    Exchange a handoff code for an access + refresh token pair. Public so the
+    consuming app can call it without an existing JWT, single-use, rate-limited.
+    """
+    from mojo.apps.account.services import auth_handoff
+    data = auth_handoff.consume_handoff_code(request.DATA.get("code"))
+    if not data:
+        raise merrors.PermissionDeniedException("Invalid or expired handoff code", 401, 401)
+    user = User.objects.filter(pk=data.get("uid")).first()
+    if user is None:
+        raise merrors.PermissionDeniedException("Invalid or expired handoff code", 401, 401)
+    if not user.is_active:
+        raise merrors.PermissionDeniedException("Account is disabled", 403, 403)
+    return jwt_login(request, user, source="handoff")
+
+
 @md.POST("auth/register")
 @md.public_endpoint()
 @md.strict_rate_limit("register", ip_limit=5, ip_window=300)
