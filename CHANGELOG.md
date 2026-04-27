@@ -1,5 +1,12 @@
 ## v1.1.0 - (current)
 
+## Unreleased (post v1.1.33)
+
+### Added
+- **`with_delta=true` on `/api/metrics/series`** — opt-in flag that returns `prev_data`, `prev_when`, and a `deltas` map (`{delta, delta_pct}` per slug; `delta_pct` omitted when prev value is 0). Backwards compatible — response is unchanged when flag is absent. Also fixes a bug where passing `?when=` to this endpoint would 500 due to missing datetime coercion.
+- **`GET /api/incident/health/summary`** — returns the most recent `Event` per `system:health:*` category in a single call, sorted by category. Replaces N round-trips for the Security Dashboard health strip. Accepts optional `?prefix=` to query other namespaced roots. Requires `view_security` / `security` permission.
+- **`auth:failures` metric slug** — aggregate counter bumped once per auth-failure event (`invalid_password`, `login:unknown`, `totp:login_failed`, `totp:login_unknown`, `passkey:login_failed`). Recorded under `account=incident`, `category=auth`. Requires `INCIDENT_EVENT_METRICS=True`.
+
 ## v1.1.33 - April 26, 2026
 
 ai assistant fixes, new group bundling and group event support

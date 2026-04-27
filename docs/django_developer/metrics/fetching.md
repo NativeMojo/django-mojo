@@ -58,6 +58,27 @@ result = metrics.fetch_values(
 # result == {"data": {"page_views": 1500, "user_signups": 42}, "slugs": [...], "when": "...", ...}
 ```
 
+### with_delta option
+
+Pass `with_delta=True` to also fetch the previous bucket's values and compute per-slug deltas. Used by the REST `/api/metrics/series` endpoint for KPI tiles.
+
+```python
+result = metrics.fetch_values(
+    ["page_views", "signups"],
+    when=datetime(2024, 1, 15, 15),
+    granularity="hours",
+    with_delta=True
+)
+# result["prev_data"]  == {"page_views": 20, "signups": 0}
+# result["prev_when"]  == "2024-01-15T14:00:00"
+# result["deltas"]     == {
+#     "page_views": {"delta": 27, "delta_pct": 135.0},
+#     "signups":    {"delta": 3}          # delta_pct omitted when prev==0
+# }
+```
+
+`delta_pct` is only included when `prev_value > 0` — avoids Infinity in JSON output. The base response keys (`data`, `slugs`, `when`, `granularity`, `account`) are always present regardless of `with_delta`.
+
 ## Category Fetch
 
 Fetch all slugs in a category:

@@ -113,6 +113,10 @@ Categories are hierarchical strings using `:` as separator. The rule engine matc
 | `system:health:memory` | Health | Memory threshold exceeded |
 | `system:health:disk` | Health | Disk threshold exceeded |
 | `api_error` | App | Application error (default category) |
+| `invalid_password` | Auth | Wrong password for known user |
+| `totp:login_failed` | Auth | TOTP MFA failure |
+| `totp:login_unknown` | Auth | TOTP attempt for unknown user |
+| `passkey:login_failed` | Auth | Passkey authentication failure |
 
 ### Event Levels
 
@@ -633,6 +637,22 @@ Bouncer assess → risk_score ≥ block threshold
     └─→ Learner job runs → signatures learned
             → report_event(category="security:bouncer:campaign", level=10)
                 → When 5+ blocks share same signal pattern
+```
+
+### Auth Metrics
+
+One aggregate counter is recorded for all authentication failure events:
+
+| Metric | Account | Category | When |
+|--------|---------|----------|------|
+| `auth:failures` | `incident` | `auth` | Any event whose category is `invalid_password`, `login:unknown`, `totp:login_failed`, `totp:login_unknown`, or `passkey:login_failed` |
+
+Bumped automatically by `Event.save()` when `INCIDENT_EVENT_METRICS` is enabled. The category set is defined in `AUTH_FAILURE_CATEGORIES` (a `frozenset` in `mojo/apps/incident/models/event.py`) — add new failure categories there without touching the recording logic.
+
+```python
+# Fetch the current hour's auth failure count
+result = metrics.fetch_values(["auth:failures"], account="incident", granularity="hours")
+count = result["data"]["auth:failures"]
 ```
 
 ### Bouncer Metrics

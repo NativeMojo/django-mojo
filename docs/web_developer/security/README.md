@@ -31,6 +31,7 @@ Detection → Event → Rules → Incident → Handlers → Enforcement
 | Incidents | `/api/incident/incident` | Security incidents with status, priority, category |
 | Events | `/api/incident/event` | Raw security events that feed into incidents |
 | History | `/api/incident/incident/history` | Audit trail for each incident |
+| Health Summary | `/api/incident/health/summary` | Latest event per `system:health:*` category — one row per subsystem |
 | Tickets | `/api/incident/ticket` | Human review items, LLM conversation threads |
 | Ticket Notes | `/api/incident/ticket/note` | Ticket conversation (human + LLM) |
 | RuleSets | `/api/incident/event/ruleset` | Rule engine configuration — categories, bundling, trigger thresholds, handlers |
@@ -91,7 +92,55 @@ GET /api/incident/event?incident=301&sort=-created
 
 The history shows the full timeline: creation, handler execution, LLM assessments, admin edits, merges.
 
-### 3. Firewall Status
+### 3. Health Summary Strip
+
+A single endpoint returns the most recent event for each `system:health:*` category. Use it to render a row of per-subsystem health indicators without making N separate queries.
+
+**Permission:** `view_security` / `security`
+
+```
+GET /api/incident/health/summary
+```
+
+**Response:**
+
+```json
+{
+  "status": true,
+  "data": [
+    {
+      "category": "system:health:cpu",
+      "level": 8,
+      "last_seen": "2026-04-26T14:55:00",
+      "title": "CPU threshold exceeded",
+      "details": "CPU at 94% on web-03",
+      "hostname": "web-03",
+      "source_ip": null,
+      "incident_id": 142
+    },
+    {
+      "category": "system:health:runner",
+      "level": 10,
+      "last_seen": "2026-04-26T14:40:00",
+      "title": "Dead job runner detected",
+      "details": "Runner on worker-02 not responding",
+      "hostname": "worker-02",
+      "source_ip": null,
+      "incident_id": 139
+    }
+  ]
+}
+```
+
+Rows are sorted by `category`. Only subsystems that have ever fired a health event appear — the list is self-discovering. An empty `data` array means no health events have been recorded yet.
+
+**Optional `?prefix=` param** — defaults to `system:health:`. Pass a different prefix to query other namespaced category roots:
+
+```
+GET /api/incident/health/summary?prefix=custom:health:
+```
+
+### 4. Firewall Status
 
 Show currently blocked IPs and recent firewall activity:
 
@@ -112,7 +161,7 @@ GET /api/logs?kind=firewall:block&sort=-created&size=20
 
 All firewall logs include structured `payload` JSON with `ip`, `reason`, `trigger`, and action-specific fields. Parse `payload` for dashboard cards.
 
-### 4. Bouncer Status
+### 5. Bouncer Status
 
 Show bot detection activity and device reputation:
 
@@ -130,7 +179,7 @@ GET /api/incident/incident?category__startswith=security:bouncer&sort=-created
 
 See [Bouncer Admin APIs](../account/bouncer.md#admin-visibility-apis) for full endpoint reference, signal payloads, and dashboard patterns.
 
-### 5. Metrics Dashboards
+### 6. Metrics Dashboards
 
 Fetch time-series data for charts:
 
@@ -166,6 +215,18 @@ GET /api/metrics/fetch?slug=incident_events&account=incident&granularity=hours
 GET /api/metrics/fetch?category=incident_events_by_country&account=incident&granularity=days
 ```
 
+**Auth failures (failed logins, MFA failures, passkey failures):**
+
+```
+GET /api/metrics/fetch?slug=auth:failures&account=incident&granularity=hours
+```
+
+Use `with_delta=true` on `/api/metrics/series` to get the current value plus a comparison to the previous bucket — useful for KPI tiles showing "+X% vs last hour":
+
+```
+GET /api/metrics/series?slugs=auth:failures&account=incident&granularity=hours&with_delta=true
+```
+
 **Available metric slugs:**
 
 | Slug | Category | What it tracks |
@@ -188,8 +249,9 @@ GET /api/metrics/fetch?category=incident_events_by_country&account=incident&gran
 | `bouncer:campaigns` | bouncer | Coordinated bot campaign detections |
 | `incident_events` | — | Total events |
 | `incident_events:country:{CC}` | incident_events_by_country | Events by country |
+| `auth:failures` | auth | Aggregate auth failure counter (invalid password, unknown login, TOTP and passkey failures) |
 
-### 6. Ticket Management
+### 7. Ticket Management
 
 Tickets are how the LLM agent communicates with humans:
 
@@ -209,7 +271,7 @@ POST /api/incident/ticket/note
 
 The LLM will post a follow-up note automatically. Check `ticketnote?parent=10&sort=created` to see the conversation.
 
-### 7. Event Reporting (Client-Side)
+### 8. Event Reporting (Client-Side)
 
 Report security events from your frontend:
 

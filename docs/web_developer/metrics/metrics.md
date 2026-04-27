@@ -10,9 +10,9 @@
 | Method | Path | Description |
 |---|---|---|
 | GET | `/api/metrics/fetch` | Fetch time-series data |
+| GET | `/api/metrics/series` | Fetch current values for multiple slugs (alias: `/api/metrics/value/get`) |
 | GET | `/api/metrics/value/get` | Fetch current values for slugs |
 | GET | `/api/metrics/categories` | List metric categories |
-| GET | `/api/metrics/categories` | List categories |
 
 ## Fetch Time-Series
 
@@ -79,6 +79,69 @@ GET /api/metrics/value/get?slugs=page_views,user_signups&granularity=hours
   }
 }
 ```
+
+## Fetch Point-in-Time Values with Delta (`/api/metrics/series`)
+
+**GET** `/api/metrics/series`
+
+Returns the current-bucket value for one or more slugs. Optionally includes the previous bucket's value and a per-slug delta map for KPI tiles.
+
+| Param | Default | Description |
+|---|---|---|
+| `slugs` | required | Comma-separated slug names |
+| `when` | current time | Point in time (ISO 8601 datetime) |
+| `granularity` | `hours` | Bucket size — see Granularity Reference |
+| `account` | `public` | Account namespace |
+| `with_delta` | `false` | When `true`, include `prev_data`, `prev_when`, and `deltas` |
+
+**Request without delta (default):**
+
+```
+GET /api/metrics/series?slugs=page_views,signups&granularity=hours
+```
+
+**Response:**
+
+```json
+{
+  "status": true,
+  "data": {"page_views": 47, "signups": 3},
+  "slugs": ["page_views", "signups"],
+  "when": "2026-04-26T15:00:00",
+  "granularity": "hours",
+  "account": "public"
+}
+```
+
+**Request with delta (KPI tile use-case):**
+
+```
+GET /api/metrics/series?slugs=page_views,signups&granularity=hours&with_delta=true
+```
+
+**Response:**
+
+```json
+{
+  "status": true,
+  "data": {"page_views": 47, "signups": 3},
+  "slugs": ["page_views", "signups"],
+  "when": "2026-04-26T15:00:00",
+  "granularity": "hours",
+  "account": "public",
+  "prev_data": {"page_views": 20, "signups": 0},
+  "prev_when": "2026-04-26T14:00:00",
+  "deltas": {
+    "page_views": {"delta": 27, "delta_pct": 135.0},
+    "signups": {"delta": 3}
+  }
+}
+```
+
+Notes:
+- `delta_pct` is omitted when `prev_value` is 0 (avoids Infinity).
+- The response shape is identical to the non-delta response when `with_delta` is absent or `false` — fully backwards compatible.
+- `prev_when` is one bucket back from `when` at the given granularity.
 
 ## Fetch by Category
 
