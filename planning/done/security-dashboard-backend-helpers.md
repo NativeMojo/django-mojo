@@ -147,10 +147,10 @@ Full suite: 1,868 passed, 0 failed, 56 skipped (`--full` opt-ins). No regression
 
 One actionable finding from `security-review` agent: `?prefix=` on `/api/incident/health/summary` is unvalidated — a `view_security` user can pass an empty prefix or a non-namespace string (e.g. `prefix=invalid_password`) and enumerate the latest event per category for any category root, beyond the intended `system:health:*` namespace. Permission is unchanged (`view_security`/`security`), so the disclosure is to users who already have full event-list access — but the param widens what they can ask for in a single call.
 
-**Follow-up**: validate that `prefix` ends with `:` (i.e., is a namespace prefix) and is non-empty. Flagged as a follow-up patch — not bundled with this commit because of the "confirm before drastic changes" rule and because the gap requires the caller to already have `view_security`.
+**Resolved** in commit `e1e6d03`: `prefix` must be non-empty and end with `:`. Non-namespace prefixes return 400. Test `test_health_summary_rejects_non_namespace_prefix` covers empty prefix, no-trailing-colon prefix, and a positive case.
 
 ### Follow-up
 
-- [ ] Tighten `prefix=` validation on `/api/incident/health/summary` (security agent finding).
+- [x] Tighten `prefix=` validation on `/api/incident/health/summary` — landed in commit `e1e6d03`.
 - [ ] If the dashboard ends up needing per-category breakdowns of `auth:failures`, consider exporting individual category counters too — for now the aggregate is enough.
 - [ ] If the deferred `group_by` on `/api/incident/event` becomes a real bottleneck once the dashboard is live, revisit with a scoped `event/group` endpoint instead of touching the generic `on_rest_list` pipeline.
