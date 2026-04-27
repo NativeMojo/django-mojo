@@ -401,6 +401,33 @@ def test_metrics_series_api_with_delta(opts):
 
 
 @th.unit_test()
+def test_fetch_and_series_accept_singular_slug(opts):
+    """Both /api/metrics/fetch and /api/metrics/series should accept singular ``slug``
+    in addition to the plural ``slugs`` so single-metric callers don't have to remember
+    the plural form."""
+    # Seed via the public record endpoint.
+    resp = opts.client.post("/api/metrics/record", dict(slug="single_kpi"))
+    assert resp.status_code == 200, f"seed expected 200, got {resp.status_code}: {resp.body}"
+
+    # /api/metrics/fetch with singular `slug`
+    resp = opts.client.get("/api/metrics/fetch", params=dict(slug="single_kpi", with_labels=True))
+    assert resp.status_code == 200, f"fetch?slug expected 200, got {resp.status_code}: {resp.body}"
+    data = resp.response.data
+    assert "single_kpi" in data.data, f"single_kpi missing from fetch?slug response: {data}"
+
+    # /api/metrics/series with singular `slug`
+    resp = opts.client.get("/api/metrics/series", params=dict(slug="single_kpi", granularity="hours"))
+    assert resp.status_code == 200, f"series?slug expected 200, got {resp.status_code}: {resp.body}"
+    body = resp.response
+    assert "single_kpi" in body["data"], f"single_kpi missing from series?slug response: {body}"
+
+    # Missing both slug and slugs → 400-style error
+    resp = opts.client.get("/api/metrics/series", params=dict(granularity="hours"))
+    assert resp.status_code in (400, 422, 500), \
+        f"series with no slug/slugs should error, got {resp.status_code}: {resp.body}"
+
+
+@th.unit_test()
 def test_metrics_user_account_permissions(opts):
     from mojo.apps.account.models import User
 

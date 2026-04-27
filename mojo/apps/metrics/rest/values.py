@@ -192,18 +192,21 @@ VALUE_GET_DOCS = {
 # Time-series metrics endpoints
 @md.GET('series', docs=SERIES_GET_DOCS)
 @md.custom_security("protected by metrics permissions")
-@md.requires_params("slugs")
 def on_metrics_series(request):
     """
     Get time-series values for multiple slugs at a single point in time.
 
+    Accepts either ``slugs`` (comma-separated list) or singular ``slug``
+    so callers don't have to remember the plural just to fetch one metric.
     Pass ``with_delta=true`` to additionally receive the previous bucket's
     values and per-slug deltas (KPI tile use-case).
     """
     when = request.DATA.get_typed("when", typed=datetime.datetime)
     account = request.DATA.get("account", "public")
     granularity = request.DATA.get("granularity", "hours")
-    slugs = request.DATA.get("slugs")
+    slugs = request.DATA.get("slugs") or request.DATA.get("slug")
+    if not slugs:
+        raise mojo.errors.ValueException("missing required parameter: slug or slugs")
     with_delta = request.DATA.get_typed("with_delta", typed=bool, default=False)
 
     check_view_permissions(request, account)
@@ -217,7 +220,6 @@ def on_metrics_series(request):
 
 @md.POST('series', docs=SERIES_POST_DOCS)
 @md.custom_security("protected by metrics permissions")
-@md.requires_params("slugs")
 def on_metrics_series_post(request):
     """
     POST version of the series endpoint - same functionality as GET.

@@ -132,14 +132,19 @@ def on_metrics_data(request):
     check_view_permissions(request, account)
 
     category = request.DATA.get("category", None)
+    # Accept either `slugs` (list / comma-string) or singular `slug` so callers
+    # don't have to remember the plural just to fetch one metric.
     if "slugs" in request.DATA:
         allow_empty = request.DATA.get_typed("allow_empty", typed=bool, default=True)
         slugs = request.DATA.get_typed("slugs", typed=list)
+    elif "slug" in request.DATA:
+        allow_empty = request.DATA.get_typed("allow_empty", typed=bool, default=True)
+        slugs = request.DATA.get_typed("slug", typed=list)
     elif category:
         allow_empty = request.DATA.get_typed("allow_empty", typed=bool, default=False)
         slugs = list(metrics.get_category_slugs(category, account=account))
     else:
-        raise mojo.errors.ValueException("missing required parameter")
+        raise mojo.errors.ValueException("missing required parameter: slug, slugs, or category")
     if len(slugs) == 1:
         slugs = slugs[0]
     records = metrics.fetch(slugs, dt_start=dt_start, dt_end=dt_end,
