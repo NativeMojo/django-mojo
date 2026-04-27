@@ -139,9 +139,14 @@ def fetch(slug, dt_start=None, dt_end=None, granularity="hours",
     return nobjict(labels=utils.periods_from_dr_slugs(dr_slugs), data={trunc_slug: values})
 
 
-def fetch_values(slugs, when=None, granularity="hours", redis_con=None, account="global", timezone=None):
+def fetch_values(slugs, when=None, granularity="hours", redis_con=None, account="global", timezone=None, with_delta=False):
     """
     Fetch multiple slugs at a single point in time. Uses cluster-safe MGET.
+
+    When ``with_delta=True``, also fetch the previous bucket's value for each
+    slug and return ``prev_data`` plus a ``deltas`` map. The deltas map carries
+    ``{delta, delta_pct}`` per slug; ``delta_pct`` is only included when the
+    previous value is non-zero (avoids divide-by-zero / Infinity in JSON).
     """
     if redis_con is None:
         redis_con = redis.get_connection()
@@ -161,13 +166,34 @@ def fetch_values(slugs, when=None, granularity="hours", redis_con=None, account=
         v = raw[i]
         data[s] = int(v) if v is not None else 0
 
-    return {
+    response = {
         'data': data,
         'slugs': slugs,
         'when': when.isoformat() if hasattr(when, 'isoformat') else str(when),
         'granularity': granularity,
         'account': account
     }
+
+    if with_delta:
+        prev_when = utils.previous_bucket(when, granularity)
+        prev_keys = [utils.generate_slug(s, prev_when, granularity, account) for s in slugs]
+        prev_raw = mget_any(redis_con, tkeys(account, prev_keys))
+        prev_data = {}
+        deltas = {}
+        for i, s in enumerate(slugs):
+            v = prev_raw[i]
+            prev_val = int(v) if v is not None else 0
+            prev_data[s] = prev_val
+            cur_val = data[s]
+            delta_entry = {'delta': cur_val - prev_val}
+            if prev_val > 0:
+                delta_entry['delta_pct'] = round(((cur_val - prev_val) / prev_val) * 100.0, 2)
+            deltas[s] = delta_entry
+        response['prev_data'] = prev_data
+        response['prev_when'] = prev_when.isoformat() if hasattr(prev_when, 'isoformat') else str(prev_when)
+        response['deltas'] = deltas
+
+    return response
 
 
 # ===========

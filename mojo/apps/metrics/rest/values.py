@@ -196,16 +196,20 @@ VALUE_GET_DOCS = {
 def on_metrics_series(request):
     """
     Get time-series values for multiple slugs at a single point in time.
+
+    Pass ``with_delta=true`` to additionally receive the previous bucket's
+    values and per-slug deltas (KPI tile use-case).
     """
-    when = request.DATA.get_typed("when")
+    when = request.DATA.get_typed("when", typed=datetime.datetime)
     account = request.DATA.get("account", "public")
     granularity = request.DATA.get("granularity", "hours")
     slugs = request.DATA.get("slugs")
+    with_delta = request.DATA.get_typed("with_delta", typed=bool, default=False)
 
     check_view_permissions(request, account)
 
     # Fetch the values using our new method
-    result = metrics.fetch_values(slugs, when, granularity, account=account)
+    result = metrics.fetch_values(slugs, when, granularity, account=account, with_delta=with_delta)
     result['status'] = True
 
     return JsonResponse(result)

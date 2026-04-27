@@ -299,6 +299,32 @@ def normalize_datetime(when, timezone=None):
     return dates.get_local_time(timezone, when)
 
 
+def previous_bucket(when, granularity):
+    """
+    Return the datetime one bucket back from ``when`` at the given granularity.
+
+    Used by ``fetch_values(with_delta=True)`` to compute prev_value/delta
+    without an extra round-trip from the caller.
+    """
+    when = normalize_datetime(when)
+    if granularity == "minutes":
+        return when - timedelta(minutes=1)
+    if granularity == "hours":
+        return when - timedelta(hours=1)
+    if granularity == "days":
+        return when - timedelta(days=1)
+    if granularity == "weeks":
+        return when - timedelta(weeks=1)
+    if granularity == "months":
+        # Step back to the previous month, keeping day=1 to avoid month-length edge cases.
+        # The slug for months only encodes year-month (e.g. "mon:2025-04"), so day is irrelevant.
+        first = when.replace(day=1)
+        return first - timedelta(days=1)
+    if granularity == "years":
+        return when.replace(year=when.year - 1)
+    raise ValueError(f"Invalid granularity: {granularity}")
+
+
 def get_date_range(dt_start, dt_end, granularity):
     if dt_start is None and dt_end is None:
         dt_end = normalize_datetime(None)

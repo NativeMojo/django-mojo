@@ -295,6 +295,111 @@ def test_metrics_api(opts):
     assert len(data["data"]["c3"]) == len(data["labels"]), "number of labels vs values is wrong"
 
 
+@th.django_unit_test()
+def test_fetch_values_with_delta(opts):
+    from mojo.apps import metrics
+    from mojo.apps.metrics import utils
+    import datetime
+
+    account = "delta_test"
+
+    # Anchor at a fixed past hour so the previous bucket is also a past hour.
+    # Using two consecutive UTC hours keeps timezone normalization deterministic.
+    now = datetime.datetime(year=2025, month=5, day=2, hour=12, minute=0)
+    prev = utils.previous_bucket(now, "hours")
+
+    # Clear and seed: prev hour gets 4, current hour gets 10
+    metrics.delete_metrics_slug("delta_a", account=account)
+    metrics.delete_metrics_slug("delta_b", account=account)
+    metrics.delete_metrics_slug("delta_c", account=account)
+    for _ in range(4):
+        metrics.record("delta_a", when=prev, account=account, min_granularity="hours")
+    for _ in range(10):
+        metrics.record("delta_a", when=now, account=account, min_granularity="hours")
+    # delta_b: prev=0, current=5 — no delta_pct
+    for _ in range(5):
+        metrics.record("delta_b", when=now, account=account, min_granularity="hours")
+    # delta_c: prev=8, current=2 — negative delta
+    for _ in range(8):
+        metrics.record("delta_c", when=prev, account=account, min_granularity="hours")
+    for _ in range(2):
+        metrics.record("delta_c", when=now, account=account, min_granularity="hours")
+
+    # Backwards-compat: with_delta off
+    plain = metrics.fetch_values(
+        ["delta_a", "delta_b", "delta_c"], when=now, granularity="hours", account=account
+    )
+    assert "prev_data" not in plain, "prev_data should not appear when with_delta=False"
+    assert "deltas" not in plain, "deltas should not appear when with_delta=False"
+    assert plain["data"]["delta_a"] == 10, f"delta_a current expected 10, got {plain['data']['delta_a']}"
+
+    # with_delta=True
+    out = metrics.fetch_values(
+        ["delta_a", "delta_b", "delta_c"], when=now, granularity="hours",
+        account=account, with_delta=True,
+    )
+    assert out["data"]["delta_a"] == 10, f"delta_a current expected 10, got {out['data']['delta_a']}"
+    assert out["prev_data"]["delta_a"] == 4, f"delta_a prev expected 4, got {out['prev_data']['delta_a']}"
+    assert out["deltas"]["delta_a"]["delta"] == 6, f"delta_a delta expected 6, got {out['deltas']['delta_a']['delta']}"
+    assert out["deltas"]["delta_a"]["delta_pct"] == 150.0, \
+        f"delta_a delta_pct expected 150.0, got {out['deltas']['delta_a'].get('delta_pct')}"
+
+    # delta_b: prev_value == 0 — delta_pct must be omitted (no Infinity in JSON)
+    assert out["prev_data"]["delta_b"] == 0, f"delta_b prev expected 0, got {out['prev_data']['delta_b']}"
+    assert out["deltas"]["delta_b"]["delta"] == 5, f"delta_b delta expected 5, got {out['deltas']['delta_b']['delta']}"
+    assert "delta_pct" not in out["deltas"]["delta_b"], \
+        f"delta_b should not include delta_pct when prev=0, got {out['deltas']['delta_b']}"
+
+    # delta_c: negative delta
+    assert out["deltas"]["delta_c"]["delta"] == -6, f"delta_c delta expected -6, got {out['deltas']['delta_c']['delta']}"
+    assert out["deltas"]["delta_c"]["delta_pct"] == -75.0, \
+        f"delta_c delta_pct expected -75.0, got {out['deltas']['delta_c'].get('delta_pct')}"
+
+    # prev_when must be present and one bucket back
+    assert out["prev_when"] == prev.isoformat() if hasattr(prev, "isoformat") else str(prev), \
+        f"prev_when mismatch: {out['prev_when']}"
+
+
+@th.unit_test()
+def test_metrics_series_api_with_delta(opts):
+    from mojo.apps import metrics
+    from mojo.apps.metrics import utils
+    import datetime
+
+    # Seed via the public record endpoint so it lives in the public account
+    metrics.delete_metrics_slug("delta_api", account="public")
+    now = datetime.datetime(year=2025, month=5, day=2, hour=12, minute=0)
+    prev = utils.previous_bucket(now, "hours")
+    for _ in range(3):
+        metrics.record("delta_api", when=prev, account="public", min_granularity="hours")
+    for _ in range(9):
+        metrics.record("delta_api", when=now, account="public", min_granularity="hours")
+
+    # Default (no with_delta) — response shape unchanged
+    resp = opts.client.get(
+        "/api/metrics/series",
+        params=dict(slugs="delta_api", when=now.isoformat(), granularity="hours"),
+    )
+    assert resp.status_code == 200, f"series default expected 200, got {resp.status_code}: {resp.body}"
+    body = resp.response
+    assert "prev_data" not in body, f"prev_data must be absent without with_delta: {body}"
+    assert "deltas" not in body, f"deltas must be absent without with_delta: {body}"
+    assert body["data"]["delta_api"] == 9, f"current expected 9, got {body['data']['delta_api']}"
+
+    # with_delta=true — prev_data and deltas appear
+    resp = opts.client.get(
+        "/api/metrics/series",
+        params=dict(slugs="delta_api", when=now.isoformat(), granularity="hours", with_delta=True),
+    )
+    assert resp.status_code == 200, f"series with_delta expected 200, got {resp.status_code}: {resp.body}"
+    body = resp.response
+    assert body["data"]["delta_api"] == 9, f"current expected 9, got {body['data']['delta_api']}"
+    assert body["prev_data"]["delta_api"] == 3, f"prev expected 3, got {body['prev_data']['delta_api']}"
+    assert body["deltas"]["delta_api"]["delta"] == 6, f"delta expected 6, got {body['deltas']['delta_api']['delta']}"
+    assert body["deltas"]["delta_api"]["delta_pct"] == 200.0, \
+        f"delta_pct expected 200.0, got {body['deltas']['delta_api'].get('delta_pct')}"
+
+
 @th.unit_test()
 def test_metrics_user_account_permissions(opts):
     from mojo.apps.account.models import User
