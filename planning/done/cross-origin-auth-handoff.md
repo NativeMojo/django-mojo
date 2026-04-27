@@ -1,10 +1,11 @@
 # Cross-Origin Auth Token Handoff
 
 **Type**: request
-**Status**: planned
+**Status**: resolved
 **Date**: 2026-04-13
 **Priority**: low
 **Deferred**: 2026-04-19 — not needed right now; revisit when a deployment actually hits the cross-origin loop in production.
+**Resolved**: 2026-04-27
 
 ## Description
 
@@ -167,3 +168,56 @@ Authorization-code style token handoff so a fully authenticated user on the auth
 - `docs/web_developer/account/auth_pages.md` — new "Cross-Origin Redirect Handoff" section: behaviour of `_mat.redirect` and the `?auth_code=` param.
 - `docs/web_developer/account/authentication.md` — add `POST /api/account/auth/handoff` and `POST /api/account/auth/exchange` to the endpoint reference, plus `MojoAuth.handleAuthCodeFromURL()` example for app bootstrap.
 - `CHANGELOG.md` — unreleased entry.
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-04-27
+**Commits**: cd83949 (feature) + d538e2c (security hardening)
+
+### What Was Built
+
+Authorization-code-style handoff: the auth-origin page mints a single-use code via `POST /api/auth/handoff`, appends `?auth_code=<code>` to a cross-origin redirect URL, and the consuming app calls `POST /api/auth/exchange` to swap the code for an access + refresh token pair. Same-origin redirects unchanged.
+
+### Files Changed
+
+- `mojo/apps/account/services/auth_handoff.py` *(new)* — Redis-backed service. Atomic `GETDEL` for single-use, 32-hex-alphanumeric code validation, TTL from `AUTH_HANDOFF_CODE_TTL` (default 60).
+- `mojo/apps/account/rest/user.py` — added `on_auth_handoff` (auth'd, `rate_limit("auth_handoff", ip_limit=30)`) and `on_auth_exchange` (`public_endpoint`, `strict_rate_limit("auth_exchange", ip_limit=20, ip_window=60)`). Exchange handler raises 401 on invalid/missing code, 403 on inactive user, otherwise calls `jwt_login(request, user, source="handoff")`.
+- `mojo/apps/account/static/account/mojo-auth.js` — added `requestHandoffCode`, `exchangeAuthCode`, `handleAuthCodeFromURL`. `DEFAULT_ENDPOINTS` extended with `handoff` + `exchange`.
+- `mojo/apps/account/templates/account/auth_base.html` — `_mat.redirect` now async-aware: same-origin → direct nav (unchanged), cross-origin + authenticated → `requestHandoffCode` + `?auth_code=` append, fallback to plain redirect on issuance failure. The two `setTimeout(_mat.redirect, …)` call sites were wrapped in lambdas so the async path runs.
+- `tests/test_auth/handoff.py` *(new)* — 12 tests covering service round-trip, single-use, expiry/invalidation, endpoint auth, JWT round-trip, inactive-user rejection, and rate-limit trip.
+- `docs/django_developer/account/auth.md`, `docs/web_developer/account/auth_pages.md`, `docs/web_developer/account/authentication.md` — handoff sections, security trade-off, bootstrap snippet.
+- `CHANGELOG.md` — entry under "Unreleased (post v1.1.34)".
+
+### Tests
+
+- `tests/test_auth/handoff.py` — service-layer + endpoint coverage.
+- Run: `bin/run_tests --agent -t test_auth.handoff` → 12/12 pass.
+- Full suite: `bin/run_tests --agent` → 1905 pass / 1 fail / 56 skip. The single failure is a pre-existing race in `test_incident.rule_engine_comprehensive::bundling_time_window` (FK to a deleted RuleSet) and is unrelated to this work.
+
+### Docs Updated
+
+- `docs/django_developer/account/auth.md` — new "Cross-Origin Auth Handoff" section, `AUTH_HANDOFF_CODE_TTL` setting table, security note.
+- `docs/web_developer/account/auth_pages.md` — new "Cross-Origin Redirect Handoff" section with bootstrap snippet.
+- `docs/web_developer/account/authentication.md` — endpoint reference for both `/api/auth/handoff` (30/IP rate limit) and `/api/auth/exchange` (20/min/IP single-use, public).
+- `CHANGELOG.md` — unreleased entry.
+
+### Security Review
+
+Findings actioned in commit d538e2c:
+
+- **HIGH — Race on GET+DELETE consume path.** Replaced with atomic `GETDEL`. Two concurrent calls can no longer both win.
+- **LOW — Unbounded `code` parameter could trigger oversized Redis key reads.** Added 32-char alphanumeric validation in `consume_handoff_code` before the lookup.
+
+Findings acknowledged but not actioned (consistent with the planned design):
+
+- **MEDIUM — `ip_limit=30` per-IP cap on issuance with no per-user cap.** Per-IP limit was the chosen trade-off; per-user caps would break legitimate multi-tab flows. Documented limitation.
+- **MEDIUM — `auth_code` is briefly visible in `window.location.search` before `replaceState` runs.** Matches the existing `handleMagicTokenFromURL` pattern; same trade-off applies. With a 60s TTL and single-use enforcement, blast radius is bounded.
+- **LOW — Silent fallback to plain redirect on issuance failure.** Documented behaviour — best-effort handoff is preferable to a hard error that strands the user.
+
+The intentional non-allowlist on redirect destinations remains an acknowledged trade-off, documented in `docs/django_developer/account/auth.md` and the changelog.
+
+### Follow-up
+
+- Consider adding `ALLOWED_REDIRECT_URLS` (or per-group `allowed_redirect_urls`) enforcement on the bouncer redirect param if a deployment surfaces a need. The OAuth allowlist helper at `mojo/apps/account/rest/oauth.py:48` is a ready template.
+- Pre-existing `test_incident.rule_engine_comprehensive::bundling_time_window` flake exposed by the full-suite run — unrelated to this work but worth opening separately.
