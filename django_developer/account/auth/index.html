@@ -1328,6 +1328,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#cross-origin-auth-handoff" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cross-Origin Auth Handoff
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#api-keys" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4108,6 +4119,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#cross-origin-auth-handoff" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cross-Origin Auth Handoff
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#api-keys" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4353,7 +4375,50 @@
 </code></pre></div>
 <p><code>verify_magic_login_token(token)</code> returns <code>(user, channel)</code> — the channel is whichever was passed to <code>generate_magic_login_token</code>. On success the framework automatically marks <code>is_email_verified</code> or <code>is_phone_verified</code> depending on the channel.</p>
 <p>Tokens are single-use and expire after <code>MAGIC_LOGIN_TOKEN_TTL</code> seconds (default 3600). The channel is stored encrypted in <code>mojo_secrets</code> and cleared on consume.</p>
-<p>See the <a href="../../../web_developer/account/magic_login.md">Magic Login REST API</a> for the full client-facing flow.</p>
+<p>See the <a href="../../../web_developer/account/magic_login/">Magic Login REST API</a> for the full client-facing flow.</p>
+<h2 id="cross-origin-auth-handoff">Cross-Origin Auth Handoff<a class="headerlink" href="#cross-origin-auth-handoff" title="Permanent link">&para;</a></h2>
+<p>When the auth page (<code>/auth</code>) and the consuming app live on different origins,
+<code>localStorage</code> is partitioned, so the destination cannot read tokens minted at
+the auth origin. The handoff service mints a short-lived, single-use code that
+the auth page appends to the redirect URL; the app exchanges it for a JWT.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.services</span><span class="w"> </span><span class="kn">import</span> <span class="n">auth_handoff</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="c1"># Issued from the authenticated POST /api/auth/handoff handler</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="n">code</span> <span class="o">=</span> <span class="n">auth_handoff</span><span class="o">.</span><span class="n">create_handoff_code</span><span class="p">(</span><span class="n">request</span><span class="o">.</span><span class="n">user</span><span class="p">,</span> <span class="n">ip</span><span class="o">=</span><span class="n">request</span><span class="o">.</span><span class="n">ip</span><span class="p">)</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="c1"># Consumed by the public POST /api/auth/exchange handler</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="n">data</span> <span class="o">=</span> <span class="n">auth_handoff</span><span class="o">.</span><span class="n">consume_handoff_code</span><span class="p">(</span><span class="n">code</span><span class="p">)</span>  <span class="c1"># {&quot;uid&quot;: &lt;id&gt;, &quot;ip&quot;: &quot;...&quot;} or None</span>
+</code></pre></div>
+<p>Codes are 32-hex random strings stored under Redis key <code>auth:handoff:&lt;code&gt;</code>,
+with a TTL controlled by the <code>AUTH_HANDOFF_CODE_TTL</code> setting (default <code>60</code>
+seconds). Single-use is enforced atomically via Redis <code>GETDEL</code>, so concurrent
+exchange attempts cannot both win. The exchange endpoint reuses
+<code>jwt_login(request, user, source="handoff")</code>, so the standard login-event
+tracking, last-login bump, and webapp-URL metadata all fire on the handoff
+exchange.</p>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Default</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>AUTH_HANDOFF_CODE_TTL</code></td>
+<td><code>60</code></td>
+<td>Seconds before a handoff code expires</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Security trade-off.</strong> The redirect destination is <strong>not</strong> allowlisted — by
+design, per the request scope. A malicious <code>?redirect=evil.example.com</code> link
+opened by an already-signed-in user will hand a JWT to <code>evil</code> after
+auto-session-resume. Deployments needing tighter control should layer their
+own allowlist over the <code>?redirect=</code> param before the bouncer.</p>
+<p>See <a href="../../../web_developer/account/auth_pages/#cross-origin-redirect-handoff">Auth Pages — Cross-Origin Redirect Handoff</a>
+for the end-to-end client-side flow.</p>
 <h2 id="api-keys">API Keys<a class="headerlink" href="#api-keys" title="Permanent link">&para;</a></h2>
 <p>Long-lived JWTs restricted by IP allowlist.</p>
 <p><strong>Generate own key:</strong> <code>POST /api/auth/generate_api_key</code>
@@ -4374,17 +4439,17 @@
 </ol>
 <h2 id="custom-bearer-handlers">Custom Bearer Handlers<a class="headerlink" href="#custom-bearer-handlers" title="Permanent link">&para;</a></h2>
 <p>Register additional token types via settings:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># settings.py</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="n">MOJO_BEARER_HANDLERS</span> <span class="o">=</span> <span class="p">{</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>    <span class="s2">&quot;ApiKey&quot;</span><span class="p">:</span> <span class="s2">&quot;myapp.auth.validate_api_key&quot;</span><span class="p">,</span>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># settings.py</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="n">MOJO_BEARER_HANDLERS</span> <span class="o">=</span> <span class="p">{</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>    <span class="s2">&quot;ApiKey&quot;</span><span class="p">:</span> <span class="s2">&quot;myapp.auth.validate_api_key&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="p">}</span>
 </code></pre></div>
 <p>The handler receives the raw token string and must return <code>(user_or_None, error_or_None)</code>.</p>
 <h2 id="user-crud-endpoint">User CRUD Endpoint<a class="headerlink" href="#user-crud-endpoint" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;user&#39;</span><span class="p">)</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;user/&lt;int:pk&gt;&#39;</span><span class="p">)</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_user</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">pk</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>    <span class="k">return</span> <span class="n">User</span><span class="o">.</span><span class="n">on_rest_request</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">pk</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;user&#39;</span><span class="p">)</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;user/&lt;int:pk&gt;&#39;</span><span class="p">)</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_user</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">pk</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>    <span class="k">return</span> <span class="n">User</span><span class="o">.</span><span class="n">on_rest_request</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">pk</span><span class="p">)</span>
 </code></pre></div>
 <ul>
 <li><strong>List:</strong> requires <code>view_users</code> or <code>manage_users</code></li>
@@ -4396,8 +4461,8 @@
 <h3 id="built-in-registration">Built-in Registration<a class="headerlink" href="#built-in-registration" title="Permanent link">&para;</a></h3>
 <p>The framework provides a built-in registration endpoint gated by the <code>ALLOW_USER_REGISTRATION</code> setting (default <code>False</code>).</p>
 <p><strong>Enable it:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># settings.py</span>
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="n">ALLOW_USER_REGISTRATION</span> <span class="o">=</span> <span class="kc">True</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># settings.py</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="n">ALLOW_USER_REGISTRATION</span> <span class="o">=</span> <span class="kc">True</span>
 </code></pre></div>
 <p><strong>Endpoint:</strong> <code>POST /api/auth/register</code></p>
 <table>
@@ -4447,38 +4512,38 @@
 </ul>
 <h3 id="pattern-a-invite-only">Pattern A — Invite-only<a class="headerlink" href="#pattern-a-invite-only" title="Permanent link">&para;</a></h3>
 <p>For projects that need tighter control, create accounts server-side and send invite links. The user sets their password on first visit.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># In your project&#39;s admin, management command, or REST endpoint:</span>
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">User</span>
-<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>
-<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="n">user</span> <span class="o">=</span> <span class="n">User</span><span class="p">(</span><span class="n">email</span><span class="o">=</span><span class="s2">&quot;alice@example.com&quot;</span><span class="p">)</span>
-<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="n">user</span><span class="o">.</span><span class="n">username</span> <span class="o">=</span> <span class="n">user</span><span class="o">.</span><span class="n">generate_username_from_email</span><span class="p">()</span>
-<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="n">user</span><span class="o">.</span><span class="n">set_unusable_password</span><span class="p">()</span>
-<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="n">user</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
-<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="n">user</span><span class="o">.</span><span class="n">send_invite</span><span class="p">()</span>  <span class="c1"># builds token URL, sends invite email</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># In your project&#39;s admin, management command, or REST endpoint:</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">User</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="n">user</span> <span class="o">=</span> <span class="n">User</span><span class="p">(</span><span class="n">email</span><span class="o">=</span><span class="s2">&quot;alice@example.com&quot;</span><span class="p">)</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="n">user</span><span class="o">.</span><span class="n">username</span> <span class="o">=</span> <span class="n">user</span><span class="o">.</span><span class="n">generate_username_from_email</span><span class="p">()</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="n">user</span><span class="o">.</span><span class="n">set_unusable_password</span><span class="p">()</span>
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="n">user</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
+<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="n">user</span><span class="o">.</span><span class="n">send_invite</span><span class="p">()</span>  <span class="c1"># builds token URL, sends invite email</span>
 </code></pre></div>
 <p><code>send_invite()</code> accepts an optional <code>request</code> kwarg for multi-tenant URL resolution (see <a href="#token-urls">Token URLs</a> below).</p>
 <p>User clicks the link → <code>POST /api/auth/invite/accept</code> with the token → JWT issued, email verified.</p>
 <h3 id="pattern-b-custom-registration">Pattern B — Custom registration<a class="headerlink" href="#pattern-b-custom-registration" title="Permanent link">&para;</a></h3>
 <p>For projects that need registration logic beyond the built-in endpoint (domain restriction, approval queues, CAPTCHA, etc.), add your own endpoint:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># In your project&#39;s REST layer:</span>
-<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="nd">@md</span><span class="o">.</span><span class="n">POST</span><span class="p">(</span><span class="s2">&quot;auth/register&quot;</span><span class="p">)</span>
-<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="nd">@md</span><span class="o">.</span><span class="n">public_endpoint</span><span class="p">()</span>
-<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="nd">@md</span><span class="o">.</span><span class="n">strict_rate_limit</span><span class="p">(</span><span class="s2">&quot;register&quot;</span><span class="p">,</span> <span class="n">ip_limit</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> <span class="n">ip_window</span><span class="o">=</span><span class="mi">300</span><span class="p">)</span>
-<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="nd">@md</span><span class="o">.</span><span class="n">requires_params</span><span class="p">(</span><span class="s2">&quot;email&quot;</span><span class="p">,</span> <span class="s2">&quot;password&quot;</span><span class="p">)</span>
-<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_register</span><span class="p">(</span><span class="n">request</span><span class="p">):</span>
-<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>    <span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">User</span>
-<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a>    <span class="kn">from</span><span class="w"> </span><span class="nn">mojo</span><span class="w"> </span><span class="kn">import</span> <span class="n">errors</span> <span class="k">as</span> <span class="n">merrors</span>
-<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a>
-<a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a>    <span class="n">email</span> <span class="o">=</span> <span class="n">request</span><span class="o">.</span><span class="n">DATA</span><span class="o">.</span><span class="n">email</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span>
-<a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a>    <span class="k">if</span> <span class="n">User</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">email</span><span class="o">=</span><span class="n">email</span><span class="p">)</span><span class="o">.</span><span class="n">exists</span><span class="p">():</span>
-<a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a>        <span class="k">raise</span> <span class="n">merrors</span><span class="o">.</span><span class="n">ValueException</span><span class="p">(</span><span class="s2">&quot;Email already registered&quot;</span><span class="p">)</span>
-<a id="__codelineno-9-13" name="__codelineno-9-13" href="#__codelineno-9-13"></a>    <span class="n">user</span> <span class="o">=</span> <span class="n">User</span><span class="p">(</span><span class="n">email</span><span class="o">=</span><span class="n">email</span><span class="p">)</span>
-<a id="__codelineno-9-14" name="__codelineno-9-14" href="#__codelineno-9-14"></a>    <span class="n">user</span><span class="o">.</span><span class="n">username</span> <span class="o">=</span> <span class="n">user</span><span class="o">.</span><span class="n">generate_username_from_email</span><span class="p">()</span>
-<a id="__codelineno-9-15" name="__codelineno-9-15" href="#__codelineno-9-15"></a>    <span class="n">user</span><span class="o">.</span><span class="n">set_new_password</span><span class="p">(</span><span class="n">request</span><span class="o">.</span><span class="n">DATA</span><span class="o">.</span><span class="n">password</span><span class="p">)</span>
-<a id="__codelineno-9-16" name="__codelineno-9-16" href="#__codelineno-9-16"></a>    <span class="n">user</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
-<a id="__codelineno-9-17" name="__codelineno-9-17" href="#__codelineno-9-17"></a>    <span class="c1"># Trigger the framework&#39;s verify-send flow via internal call or redirect</span>
-<a id="__codelineno-9-18" name="__codelineno-9-18" href="#__codelineno-9-18"></a>    <span class="c1"># user.send_template_email(&quot;email_verify_link&quot;, ...) or POST to /api/auth/email/verify/send</span>
-<a id="__codelineno-9-19" name="__codelineno-9-19" href="#__codelineno-9-19"></a>    <span class="k">return</span> <span class="n">JsonResponse</span><span class="p">({</span><span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span> <span class="s2">&quot;message&quot;</span><span class="p">:</span> <span class="s2">&quot;Check your email to verify your account.&quot;</span><span class="p">})</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># In your project&#39;s REST layer:</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="nd">@md</span><span class="o">.</span><span class="n">POST</span><span class="p">(</span><span class="s2">&quot;auth/register&quot;</span><span class="p">)</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="nd">@md</span><span class="o">.</span><span class="n">public_endpoint</span><span class="p">()</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="nd">@md</span><span class="o">.</span><span class="n">strict_rate_limit</span><span class="p">(</span><span class="s2">&quot;register&quot;</span><span class="p">,</span> <span class="n">ip_limit</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> <span class="n">ip_window</span><span class="o">=</span><span class="mi">300</span><span class="p">)</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="nd">@md</span><span class="o">.</span><span class="n">requires_params</span><span class="p">(</span><span class="s2">&quot;email&quot;</span><span class="p">,</span> <span class="s2">&quot;password&quot;</span><span class="p">)</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_register</span><span class="p">(</span><span class="n">request</span><span class="p">):</span>
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a>    <span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">User</span>
+<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a>    <span class="kn">from</span><span class="w"> </span><span class="nn">mojo</span><span class="w"> </span><span class="kn">import</span> <span class="n">errors</span> <span class="k">as</span> <span class="n">merrors</span>
+<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a>
+<a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a>    <span class="n">email</span> <span class="o">=</span> <span class="n">request</span><span class="o">.</span><span class="n">DATA</span><span class="o">.</span><span class="n">email</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span>
+<a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a>    <span class="k">if</span> <span class="n">User</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">email</span><span class="o">=</span><span class="n">email</span><span class="p">)</span><span class="o">.</span><span class="n">exists</span><span class="p">():</span>
+<a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a>        <span class="k">raise</span> <span class="n">merrors</span><span class="o">.</span><span class="n">ValueException</span><span class="p">(</span><span class="s2">&quot;Email already registered&quot;</span><span class="p">)</span>
+<a id="__codelineno-10-13" name="__codelineno-10-13" href="#__codelineno-10-13"></a>    <span class="n">user</span> <span class="o">=</span> <span class="n">User</span><span class="p">(</span><span class="n">email</span><span class="o">=</span><span class="n">email</span><span class="p">)</span>
+<a id="__codelineno-10-14" name="__codelineno-10-14" href="#__codelineno-10-14"></a>    <span class="n">user</span><span class="o">.</span><span class="n">username</span> <span class="o">=</span> <span class="n">user</span><span class="o">.</span><span class="n">generate_username_from_email</span><span class="p">()</span>
+<a id="__codelineno-10-15" name="__codelineno-10-15" href="#__codelineno-10-15"></a>    <span class="n">user</span><span class="o">.</span><span class="n">set_new_password</span><span class="p">(</span><span class="n">request</span><span class="o">.</span><span class="n">DATA</span><span class="o">.</span><span class="n">password</span><span class="p">)</span>
+<a id="__codelineno-10-16" name="__codelineno-10-16" href="#__codelineno-10-16"></a>    <span class="n">user</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
+<a id="__codelineno-10-17" name="__codelineno-10-17" href="#__codelineno-10-17"></a>    <span class="c1"># Trigger the framework&#39;s verify-send flow via internal call or redirect</span>
+<a id="__codelineno-10-18" name="__codelineno-10-18" href="#__codelineno-10-18"></a>    <span class="c1"># user.send_template_email(&quot;email_verify_link&quot;, ...) or POST to /api/auth/email/verify/send</span>
+<a id="__codelineno-10-19" name="__codelineno-10-19" href="#__codelineno-10-19"></a>    <span class="k">return</span> <span class="n">JsonResponse</span><span class="p">({</span><span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span> <span class="s2">&quot;message&quot;</span><span class="p">:</span> <span class="s2">&quot;Check your email to verify your account.&quot;</span><span class="p">})</span>
 </code></pre></div>
 <p>With <code>REQUIRE_VERIFIED_EMAIL = True</code>, the user cannot log in until they click the verification link — no additional gate logic needed.</p>
 <h3 id="framework-primitives-available">Framework primitives available<a class="headerlink" href="#framework-primitives-available" title="Permanent link">&para;</a></h3>
@@ -4531,7 +4596,7 @@
 <hr />
 <h2 id="token-urls">Token URLs<a class="headerlink" href="#token-urls" title="Permanent link">&para;</a></h2>
 <p>Transactional token links (invite, magic login, password reset, email verify) are built as:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>{base_url}{auth_path}?flow={flow}&amp;token={token}
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>{base_url}{auth_path}?flow={flow}&amp;token={token}
 </code></pre></div>
 <p>The frontend dispatches on <code>flow=</code> so only one auth path needs to be configured per tenant.</p>
 <p><strong>Resolution order</strong> (first non-empty wins):</p>
@@ -4546,9 +4611,9 @@
 </ol>
 <p>Auth path follows the same precedence with <code>group.metadata["webapp_auth_path"]</code> and <code>WEBAPP_AUTH_PATH</code> (default <code>"/auth"</code>).</p>
 <p>Configure per tenant without a deploy:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="n">group</span><span class="o">.</span><span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;webapp_base_url&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;https://app.acme.com&quot;</span>
-<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="n">group</span><span class="o">.</span><span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;webapp_auth_path&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;/login&quot;</span>  <span class="c1"># optional, default /auth</span>
-<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="n">group</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="n">group</span><span class="o">.</span><span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;webapp_base_url&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;https://app.acme.com&quot;</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="n">group</span><span class="o">.</span><span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;webapp_auth_path&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;/login&quot;</span>  <span class="c1"># optional, default /auth</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="n">group</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
 </code></pre></div>
 <h2 id="incident-reporting">Incident Reporting<a class="headerlink" href="#incident-reporting" title="Permanent link">&para;</a></h2>
 <p>Failed login attempts, unknown usernames, and invalid password resets are automatically reported to the incident system with appropriate severity levels.</p>
