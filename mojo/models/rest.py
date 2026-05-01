@@ -471,6 +471,18 @@ class MojoModel:
                 q = {f"{group_field}__in": groups_with_perms}
                 return cls.on_rest_list(request, cls.objects.filter(**q))
 
+        if not request.user.is_authenticated:
+            raise me.PermissionDeniedException(
+                reason=f"GET permission denied: {cls.__name__}",
+                status=401,
+                code=401,
+                model_name=cls.__name__,
+                perms=list(perms) if perms else None,
+                permission_keys="VIEW_PERMS",
+                branch="list_unauthenticated",
+                event_type="unauthenticated",
+            )
+
         if MOJO_REST_LIST_PERM_DENY:
             raise me.PermissionDeniedException(
                 reason=f"GET permission denied: {cls.__name__}",

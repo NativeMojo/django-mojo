@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## v1.1.35 - May 01, 2026
+
+BUGFIX non auth return 200 on lists
+
+
 ## Unreleased (post v1.1.34)
 
 ### Added
