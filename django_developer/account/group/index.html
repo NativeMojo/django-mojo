@@ -4216,13 +4216,13 @@ via the <code>Setting</code> model with the <code>group</code> argument:</p>
 </code></pre></div>
 <p>Settings resolve with parent-chain fallback: group → parent group → global.</p>
 <h3 id="challenge-page-branding-opt-in">Challenge page branding (opt-in)<a class="headerlink" href="#challenge-page-branding-opt-in" title="Permanent link">&para;</a></h3>
-<p>By default, the bouncer challenge page always uses MojoVerify branding. To
+<p>By default, the bouncer challenge page always uses REDACTED branding. To
 override it for a specific group:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">settings</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="s1">&#39;BOUNCER_CHALLENGE_LOGO_URL&#39;</span><span class="p">,</span> <span class="s1">&#39;https://cdn.client.com/logo.svg&#39;</span><span class="p">,</span> <span class="n">group</span><span class="o">=</span><span class="n">group</span><span class="p">)</span>
 <a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="n">settings</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="s1">&#39;BOUNCER_CHALLENGE_BRAND&#39;</span><span class="p">,</span> <span class="s1">&#39;CLIENT BRAND&#39;</span><span class="p">,</span> <span class="n">group</span><span class="o">=</span><span class="n">group</span><span class="p">)</span>
 </code></pre></div>
 <p>These settings are intentionally not global — they only take effect when a
-group is detected. This preserves MojoVerify branding for the default flow.</p>
+group is detected. This preserves REDACTED branding for the default flow.</p>
 <h2 id="restmeta">RestMeta<a class="headerlink" href="#restmeta" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">RestMeta</span><span class="p">:</span>
 <a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>    <span class="n">LOG_CHANGES</span> <span class="o">=</span> <span class="kc">True</span>
