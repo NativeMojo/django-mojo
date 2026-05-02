@@ -276,6 +276,35 @@ pool.clear()              # remove all items
 pool.destroy_pool()       # delete Redis keys entirely
 ```
 
+#### Conditional checkout — `skip_predicate`
+
+`RedisBasePool` accepts an optional `skip_predicate` callable that is consulted on every checkout. Use it to mark a pool member as temporarily ineligible (cooldowns, maintenance flags) without removing it from the pool.
+
+```python
+from mojo.helpers.redis import get_connection
+from mojo.helpers.redis.pool import RedisBasePool
+
+r = get_connection()
+
+def in_cooldown(str_id):
+    return bool(r.exists(f"cooldown:{str_id}"))
+
+pool = RedisBasePool("my_pool", skip_predicate=in_cooldown)
+pool.add("worker-1")
+pool.add("worker-2")
+
+# After checkin, set a cooldown TTL so worker-1 is skipped for 30s
+r.setex("cooldown:worker-1", 30, "1")
+
+with pool.checkout_item(timeout=10) as item:
+    # Yields worker-2 first; worker-1 is skipped while its cooldown key is alive
+    ...
+```
+
+Signature: `(str_id) -> bool`. Returning `True` means "skip this one for now." The skipped id is `lpush`ed back to the head of the list so other items (at the tail) are tried first by `brpop`. Skip retries are bounded by the current pool size — if every member is ineligible, `get_next_available` returns `None` rather than blocking. Predicate exceptions are caught, logged via `logit.exception`, and treated as skip (conservative default — a buggy predicate cannot return a poisoned id).
+
+`checkout_specific_item` bypasses the predicate by design — explicit checkouts of a known id always succeed.
+
 ### RedisModelPool — Django Model Pool
 
 Manages a pool of Django model instances by primary key. Useful for distributing work across a set of model records (e.g. API keys, worker configs, external accounts).
@@ -318,6 +347,36 @@ pool.list_checked_out_instances()  # returns queryset of checked-out models
 ```
 
 The model pool validates instances on checkout — if a record was deleted or no longer matches `query_dict`, it is silently removed and the next available item is returned.
+
+#### Conditional checkout — `skip_predicate`
+
+`RedisModelPool` accepts an optional `skip_predicate` callable applied to the loaded instance after the `query_dict` recheck. Use it to mark instances as temporarily ineligible without removing them from the pool.
+
+```python
+from mojo.helpers.redis import get_connection
+from mojo.helpers.redis.pool import RedisModelPool
+
+r = get_connection()
+
+pool = RedisModelPool(
+    model_cls=ApiKey,
+    query_dict={"status": "active"},
+    pool_key="apikey_pool",
+    skip_predicate=lambda key: bool(r.exists(f"cooldown:apikey:{key.pk}")),
+)
+
+with pool.checkout_instance(timeout=10) as key:
+    # Skipped while its per-pk cooldown TTL key is alive
+    ...
+    # On checkin, mark a 30s cooldown so other workers prefer different keys
+    r.setex(f"cooldown:apikey:{key.pk}", 30, "1")
+```
+
+Signature: `(instance) -> bool`. Returning `True` skips that instance — the pk is `lpush`ed back to the head of the available list and the next candidate is tried, bounded by the current pool size. If every member is ineligible, `get_next_instance` returns `None` after one full sweep. Predicate exceptions are caught, logged, and treated as skip.
+
+`get_specific_instance` and `checkout_specific_instance` bypass the predicate by design — admin or non-customer paths can force access to a specific instance regardless of its eligibility state.
+
+> **Ordering note:** skipped items move to the head of the list, so they are tried last after every other available member. This is a small shift away from strict FIFO — relevant only if your consumer relies on insertion order.
 
 ---
 

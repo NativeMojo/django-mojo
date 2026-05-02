@@ -36,7 +36,8 @@ def setup_redis_pools(opts):
             'test_edge_cases*',
             'test_performance*',
             'test_shared_connection*',
-            'test_init_pool*'
+            'test_init_pool*',
+            'test_skip_predicate*'
         ]
 
         keys_cleaned = 0
@@ -498,6 +499,231 @@ def test_redis_model_pool_with_init_pool(opts):
 
     available_items = pool.list_available()
     assert len(available_items) == 3, f"Expected 3 available items after init, got {len(available_items)}: {available_items}"
+
+    pool.clear()
+
+
+@th.django_unit_test()
+def test_redis_base_pool_skip_predicate(opts):
+    """skip_predicate hides eligible items until the predicate flips."""
+    from mojo.helpers.redis.pool import RedisBasePool
+
+    skipped = {'item2'}
+
+    def predicate(str_id):
+        return str_id in skipped
+
+    pool = RedisBasePool('test_skip_predicate_base', skip_predicate=predicate)
+    pool.clear()
+    pool.add('item1')
+    pool.add('item2')
+    pool.add('item3')
+
+    seen = []
+    for _ in range(2):
+        item = pool.get_next_available(timeout=1)
+        assert item is not None, "Expected non-None item while two non-skipped items are in pool"
+        seen.append(item)
+        pool.checkin(item)
+
+    assert 'item2' not in seen, f"item2 should have been skipped, got: {seen}"
+    assert set(seen) <= {'item1', 'item3'}, f"Only non-skipped items should surface, got: {seen}"
+
+    skipped.clear()
+    item = pool.get_next_available(timeout=1)
+    assert item is not None, "After clearing skip set, predicate should allow an item"
+
+    pool.clear()
+
+
+@th.django_unit_test()
+def test_redis_base_pool_skip_predicate_all_skipped_returns_none(opts):
+    """When predicate skips every member, get_next_available returns None bounded by scard."""
+    from mojo.helpers.redis.pool import RedisBasePool
+
+    pool = RedisBasePool('test_skip_predicate_all', skip_predicate=lambda x: True)
+    pool.clear()
+    pool.add('a')
+    pool.add('b')
+    pool.add('c')
+
+    start = time.time()
+    item = pool.get_next_available(timeout=1)
+    elapsed = time.time() - start
+
+    assert item is None, f"All-skipped pool should return None, got: {item}"
+    assert elapsed < 5.0, f"Bounded skip retries should not block long, took {elapsed:.2f}s"
+    available = pool.list_available()
+    assert len(available) == 3, f"All items should remain in pool after skip cycle, got: {available}"
+
+    pool.clear()
+
+
+@th.django_unit_test()
+def test_redis_base_pool_skip_predicate_raises(opts):
+    """A raising predicate is treated as skip, never poisons the pool."""
+    from mojo.helpers.redis.pool import RedisBasePool
+
+    call_count = {'n': 0}
+
+    def boom(str_id):
+        call_count['n'] += 1
+        raise RuntimeError("boom")
+
+    pool = RedisBasePool('test_skip_predicate_raises', skip_predicate=boom)
+    pool.clear()
+    pool.add('alpha')
+    pool.add('beta')
+
+    item = pool.get_next_available(timeout=1)
+    assert item is None, f"Raising predicate should drain budget and return None, got: {item}"
+    assert call_count['n'] >= 2, f"Predicate should have been invoked for each item, got {call_count['n']}"
+
+    available = pool.list_available()
+    assert len(available) == 2, f"All items should remain after raising predicate, got: {available}"
+
+    pool.clear()
+
+
+@th.django_unit_test()
+def test_redis_base_pool_skip_predicate_default_none_no_change(opts):
+    """skip_predicate=None preserves original FIFO behaviour exactly."""
+    from mojo.helpers.redis.pool import RedisBasePool
+
+    pool = RedisBasePool('test_skip_predicate_none')
+    pool.clear()
+    assert pool.skip_predicate is None, "Default skip_predicate should be None"
+
+    pool.add('one')
+    pool.add('two')
+    pool.add('three')
+
+    fetched = []
+    for _ in range(3):
+        item = pool.get_next_available(timeout=1)
+        assert item is not None, "Default pool should yield each added item"
+        fetched.append(item)
+
+    assert set(fetched) == {'one', 'two', 'three'}, f"All items should surface, got: {fetched}"
+
+    pool.clear()
+
+
+def _seed_model_pool(pool, pks):
+    """Directly seed pool with specific pks (avoids init_pool's broad filter)."""
+    pool.clear()
+    for pk in pks:
+        pool.redis_client.sadd(pool.all_items_set_key, str(pk))
+        pool.redis_client.lpush(pool.available_list_key, str(pk))
+
+
+@th.django_unit_test()
+def test_redis_model_pool_skip_predicate(opts):
+    """Instance-level skip_predicate honored by get_next_instance."""
+    from mojo.helpers.redis.pool import RedisModelPool
+    from mojo.apps.account.models import Group
+
+    skip_pks = {2}
+
+    def predicate(instance):
+        return instance.pk in skip_pks
+
+    pool = RedisModelPool(
+        Group,
+        {'is_active': True},
+        'test_skip_predicate_model',
+        skip_predicate=predicate,
+    )
+    _seed_model_pool(pool, [1, 2, 3])
+
+    seen_pks = []
+    for _ in range(2):
+        instance = pool.get_next_instance(timeout=1)
+        assert instance is not None, "Expected an eligible instance when 2 of 3 are eligible"
+        seen_pks.append(instance.pk)
+        pool.return_instance(instance)
+
+    assert 2 not in seen_pks, f"pk=2 was marked skip, should not have surfaced; got {seen_pks}"
+    assert set(seen_pks) <= {1, 3}, f"Only eligible pks should surface, got {seen_pks}"
+
+    pool.clear()
+
+
+@th.django_unit_test()
+def test_redis_model_pool_skip_predicate_blocks_all(opts):
+    """When every instance is skipped, get_next_instance returns None within scard sweep."""
+    from mojo.helpers.redis.pool import RedisModelPool
+    from mojo.apps.account.models import Group
+
+    pool = RedisModelPool(
+        Group,
+        {'is_active': True},
+        'test_skip_predicate_model_all',
+        skip_predicate=lambda i: True,
+    )
+    _seed_model_pool(pool, [1, 2, 3])
+
+    start = time.time()
+    instance = pool.get_next_instance(timeout=1)
+    elapsed = time.time() - start
+
+    assert instance is None, f"All-skipped pool should return None, got: {instance}"
+    assert elapsed < 5.0, f"Bounded sweep should not block long, took {elapsed:.2f}s"
+
+    available = pool.list_available()
+    assert len(available) == 3, f"All instances should remain in pool, got: {available}"
+
+    pool.clear()
+
+
+@th.django_unit_test()
+def test_redis_model_pool_skip_predicate_specific_bypasses(opts):
+    """get_specific_instance and checkout_specific_instance ignore the predicate."""
+    from mojo.helpers.redis.pool import RedisModelPool
+    from mojo.apps.account.models import Group
+
+    pool = RedisModelPool(
+        Group,
+        {'is_active': True},
+        'test_skip_predicate_model_specific',
+        skip_predicate=lambda i: True,
+    )
+    _seed_model_pool(pool, [1, 2, 3])
+
+    target = Group.objects.get(pk=1)
+    assert pool.get_specific_instance(target) is True, "get_specific_instance must bypass predicate"
+    pool.return_instance(target)
+
+    with pool.checkout_specific_instance(target) as inst:
+        assert inst.pk == 1, f"checkout_specific_instance must bypass predicate; got {inst.pk}"
+
+    pool.clear()
+
+
+@th.django_unit_test()
+def test_redis_model_pool_skip_predicate_default_none(opts):
+    """No predicate configured = identical behaviour to today (regression guard)."""
+    from mojo.helpers.redis.pool import RedisModelPool
+    from mojo.apps.account.models import Group
+
+    pool = RedisModelPool(
+        Group,
+        {'is_active': True},
+        'test_skip_predicate_model_default',
+    )
+    _seed_model_pool(pool, [1, 2, 3])
+
+    assert pool.instance_skip_predicate is None, "Default instance_skip_predicate should be None"
+    assert pool.skip_predicate is None, "Base skip_predicate should remain None for model pool"
+
+    seen = []
+    for _ in range(3):
+        instance = pool.get_next_instance(timeout=1)
+        assert instance is not None, "Expected each pool member to surface"
+        seen.append(instance.pk)
+        pool.return_instance(instance)
+
+    assert set(seen) == {1, 2, 3}, f"All pks should surface without predicate, got: {seen}"
 
     pool.clear()
 

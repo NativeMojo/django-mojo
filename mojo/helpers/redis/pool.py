@@ -4,21 +4,28 @@ from django.db import models
 import redis.exceptions
 from .client import get_connection
 from ...errors import TimeoutException
+from .. import logit
 
 
 class RedisBasePool:
     """Simple Redis pool using atomic Redis operations."""
 
-    def __init__(self, pool_key: str, default_timeout: int = 30):
+    def __init__(self, pool_key: str, default_timeout: int = 30, skip_predicate=None):
         """
         Initialize the Redis pool.
 
         Args:
             pool_key: Unique identifier for this pool
             default_timeout: Default timeout in seconds for blocking operations
+            skip_predicate: Optional callable (str_id) -> bool. Returning True
+                marks the candidate as temporarily ineligible — the pool
+                returns it to the head of the available list and tries the
+                next candidate, bounded by the number of items in the pool.
+                Predicate exceptions are caught and treated as skip.
         """
         self.pool_key = pool_key
         self.default_timeout = default_timeout
+        self.skip_predicate = skip_predicate
         self.redis_client = get_connection()
 
         self.available_list_key = f"{pool_key}:list"
@@ -159,17 +166,48 @@ class RedisBasePool:
 
         return duplicates_removed
 
-    def get_next_available(self, timeout: Optional[int] = None) -> Optional[str]:
-        """Get the next available item from the pool."""
+    def get_next_available(self, timeout: Optional[int] = None,
+                           _skip_retries: int = 0,
+                           _max_skip_retries: Optional[int] = None) -> Optional[str]:
+        """Get the next available item from the pool.
+
+        When ``skip_predicate`` is configured, candidates returning ``True``
+        from the predicate are returned to the head of the list and the
+        next candidate is fetched, bounded by the pool size.
+        """
         timeout = timeout or self.default_timeout
 
         try:
             result = self.redis_client.brpop(self.available_list_key, timeout=timeout)
-            if result:
-                return result[1]
-            return None
+            if not result:
+                return None
+            str_id = result[1]
         except redis.exceptions.TimeoutError:
             return None
+
+        if self.skip_predicate is None:
+            return str_id
+
+        if _max_skip_retries is None:
+            _max_skip_retries = max(self.redis_client.scard(self.all_items_set_key), 1)
+
+        try:
+            skip = bool(self.skip_predicate(str_id))
+        except Exception:
+            logit.exception("skip_predicate failed", str_id)
+            skip = True
+
+        if not skip:
+            return str_id
+
+        self.redis_client.lpush(self.available_list_key, str_id)
+        if _skip_retries + 1 >= _max_skip_retries:
+            return None
+        return self.get_next_available(
+            timeout=0,
+            _skip_retries=_skip_retries + 1,
+            _max_skip_retries=_max_skip_retries,
+        )
 
     @contextmanager
     def checkout_item(self, timeout: Optional[int] = None, raise_on_timeout: bool = True):
@@ -204,7 +242,7 @@ class RedisBasePool:
 class RedisModelPool(RedisBasePool):
     """Django model-specific Redis pool."""
 
-    def __init__(self, model_cls, query_dict, pool_key=None, default_timeout=30):
+    def __init__(self, model_cls, query_dict, pool_key=None, default_timeout=30, skip_predicate=None):
         """
         Initialize the model pool.
 
@@ -213,12 +251,20 @@ class RedisModelPool(RedisBasePool):
             query_dict: Query parameters to filter model instances
             pool_key: Unique identifier for this pool
             default_timeout: Default timeout in seconds
+            skip_predicate: Optional callable (instance) -> bool. Returning
+                True marks the instance as temporarily ineligible — the pool
+                returns it to the head of the available list and tries the
+                next candidate, bounded by the number of items in the pool.
+                Predicate exceptions are caught and treated as skip.
+                ``get_specific_instance`` and ``checkout_specific_instance``
+                bypass this predicate by design.
         """
         if pool_key is None:
             pool_key = f"modelpool:{model_cls.__name__}"
         super().__init__(pool_key, default_timeout)
         self.model_cls = model_cls
         self.query_dict = query_dict
+        self.instance_skip_predicate = skip_predicate
 
     def init_pool(self) -> None:
         """Initialize pool with model instances."""
@@ -290,7 +336,10 @@ class RedisModelPool(RedisBasePool):
         all_items = self.list_checked_out()
         return self.model_cls.objects.filter(pk__in=all_items)
 
-    def get_next_instance(self, timeout: Optional[int] = None, _retries: int = 0, _max_retries: int = 100) -> Optional[models.Model]:
+    def get_next_instance(self, timeout: Optional[int] = None,
+                          _retries: int = 0, _max_retries: int = 100,
+                          _skip_retries: int = 0,
+                          _max_skip_retries: Optional[int] = None) -> Optional[models.Model]:
         """
         Get the next available model instance.
 
@@ -298,6 +347,9 @@ class RedisModelPool(RedisBasePool):
             timeout: Timeout for waiting for an available instance
             _retries: Internal counter to prevent infinite recursion
             _max_retries: Maximum number of retries for stale records
+            _skip_retries: Internal counter for predicate-skip retries
+            _max_skip_retries: Internal cap on predicate-skip retries
+                (defaults to the current pool size, computed once on entry)
         """
         if not self.redis_client.exists(self.all_items_set_key):
             self.init_pool()
@@ -314,12 +366,34 @@ class RedisModelPool(RedisBasePool):
                 for key, value in self.query_dict.items():
                     if getattr(instance, key) != value:
                         self.redis_client.srem(self.all_items_set_key, pk)
-                        return self.get_next_instance(timeout=0, _retries=_retries + 1, _max_retries=_max_retries)
+                        return self.get_next_instance(timeout=0, _retries=_retries + 1, _max_retries=_max_retries,
+                                                      _skip_retries=_skip_retries, _max_skip_retries=_max_skip_retries)
+
+                if self.instance_skip_predicate is not None:
+                    if _max_skip_retries is None:
+                        _max_skip_retries = max(self.redis_client.scard(self.all_items_set_key), 1)
+                    try:
+                        skip = bool(self.instance_skip_predicate(instance))
+                    except Exception:
+                        logit.exception("instance_skip_predicate failed", pk)
+                        skip = True
+                    if skip:
+                        self.redis_client.lpush(self.available_list_key, pk)
+                        if _skip_retries + 1 >= _max_skip_retries:
+                            return None
+                        return self.get_next_instance(
+                            timeout=0,
+                            _retries=_retries,
+                            _max_retries=_max_retries,
+                            _skip_retries=_skip_retries + 1,
+                            _max_skip_retries=_max_skip_retries,
+                        )
 
                 return instance
             except self.model_cls.DoesNotExist:
                 self.redis_client.srem(self.all_items_set_key, pk)
-                return self.get_next_instance(timeout=0, _retries=_retries + 1, _max_retries=_max_retries)
+                return self.get_next_instance(timeout=0, _retries=_retries + 1, _max_retries=_max_retries,
+                                              _skip_retries=_skip_retries, _max_skip_retries=_max_skip_retries)
 
         return None
 

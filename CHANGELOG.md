@@ -1,5 +1,8 @@
 ## v1.1.0 - (current)
 
+### Added
+- **`redis.pool` — optional `skip_predicate` for conditional checkout** — `RedisBasePool` and `RedisModelPool` accept an optional `skip_predicate` callable that marks a pool member as temporarily ineligible without removing it from the pool. The next-available loop returns the candidate to the head of the list and tries the next one, bounded by the current pool size. Useful for cooldown windows, maintenance flags, or any "in-pool but not right now" pattern. Predicate exceptions are caught, logged, and treated as skip. `get_specific_instance` / `checkout_specific_instance` bypass the predicate by design. See `docs/django_developer/helpers/redis.md`.
+
 ## v1.1.35 - May 01, 2026
 
 BUGFIX non auth return 200 on lists
