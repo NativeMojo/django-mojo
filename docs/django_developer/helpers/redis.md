@@ -305,6 +305,8 @@ Signature: `(str_id) -> bool`. Returning `True` means "skip this one for now." T
 
 `checkout_specific_item` bypasses the predicate by design — explicit checkouts of a known id always succeed.
 
+> **Ordering note:** skipped items move to the head of the list, so they are tried last after every other available member. This is a small shift away from strict FIFO — relevant only if your consumer relies on insertion order.
+
 ### RedisModelPool — Django Model Pool
 
 Manages a pool of Django model instances by primary key. Useful for distributing work across a set of model records (e.g. API keys, worker configs, external accounts).
