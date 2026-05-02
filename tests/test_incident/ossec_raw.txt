@@ -1,0 +1,37 @@
+=START=
+** Alert 1700000001.100001: mail - web,accesslog,
+2026 May 01 12:00:01 host01.example.com->/var/log/nginx/access.log
+Rule: 31101 (level 5) -> 'Web server 400 error code.'
+Src IP: 192.0.2.10
+192.0.2.10 - - [01/May/2026:12:00:00 +0000] "GET https://api.example.com/health HTTP/1.1" 401 27 "-" "Mozilla/5.0 (compatible; ExampleBot/1.0)" 0.001 443
+=END=
+=START=
+** Alert 1700000002.100002: mail - sudo,syslog,
+2026 May 01 12:05:10 host02.example.com->/var/log/secure
+Rule: 5402 (level 3) -> 'Successful sudo to ROOT executed.'
+User: alice
+May  1 12:05:09 host02 sudo:    alice : TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/usr/bin/cat /var/log/syslog
+=END=
+=START=
+** Alert 1700000003.100003: ossec - ossec,syscheck,
+2026 May 01 12:10:22 host01.example.com->syscheck
+Rule: 550 (level 7) -> 'Integrity checksum changed.'
+Integrity checksum changed for: '/etc/passwd'
+Size changed from '2048' to '2096'
+Old md5sum was: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+New md5sum is : 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+=END=
+=START=
+** Alert 1700000004.100004: syslog - pam,authentication_success,
+2026 May 01 12:15:33 host03.example.com->/var/log/auth.log
+Rule: 5501 (level 3) -> 'Login session opened.'
+User: bob
+May  1 12:15:32 host03 sshd[12345]: pam_unix(sshd:session): session opened for user bob by (uid=0)
+=END=
+=START=
+** Alert 1700000005.100005: syslog - authentication_failures,sshd,
+2026 May 01 12:20:44 host04.example.com->/var/log/auth.log
+Rule: 5712 (level 10) -> 'SSHD brute force trying to get access to the system.'
+Src IP: 192.0.2.55
+May  1 12:20:43 host04 sshd[23456]: Failed password for invalid user admin from 192.0.2.55 port 51234 ssh2
+=END=
