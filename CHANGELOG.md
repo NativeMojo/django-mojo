@@ -1,6 +1,10 @@
 ## v1.1.0 - (current)
 
 ### Added
+- **Per-account login throttling and bypass-resistant tiers** — `POST /api/login` now applies a 5-tier defense stack: IP (100/60s), server-set cookie muid (10/300s, bypass-resistant), per-resolved-account (10/900s, configurable via `LOGIN_USERNAME_LIMIT` / `LOGIN_USERNAME_WINDOW`), an `invalid_password` incident rule that fleet-wide IP-blocks for 30 minutes after 5 level-5 events in 15 minutes, and IP limits on TOTP/passkey verify endpoints (`MFA_VERIFY_IP_LIMIT` / `MFA_VERIFY_IP_WINDOW`). Per-account counter is cleared on successful password match. Admin clear endpoint `POST /api/auth/manage/clear_rate_limit` now accepts `username` or `user_id` to release a stuck account.
+- **`muid_limit` / `muid_window` on `rate_limit` and `strict_rate_limit`** — new optional parameters for server-set cookie dimension (bypass-resistant alternative to `duid_limit`).
+- **`check_account_attempt(key, account_id, limit, window, request=None)`** — view-level helper for per-account sliding-window throttling; fail-open on Redis error. `clear_rate_limits()` accepts new `muid=` and `account_id=` params.
+
 - **`redis.pool` — optional `skip_predicate` for conditional checkout** — `RedisBasePool` and `RedisModelPool` accept an optional `skip_predicate` callable that marks a pool member as temporarily ineligible without removing it from the pool. The next-available loop returns the candidate to the head of the list and tries the next one, bounded by the current pool size. Useful for cooldown windows, maintenance flags, or any "in-pool but not right now" pattern. Predicate exceptions are caught, logged, and treated as skip. `get_specific_instance` / `checkout_specific_instance` bypass the predicate by design. See `docs/django_developer/helpers/redis.md`.
 
 ## v1.1.35 - May 01, 2026

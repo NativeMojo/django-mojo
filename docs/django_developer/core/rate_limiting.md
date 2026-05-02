@@ -21,8 +21,8 @@ import mojo.decorators as md
 Counts requests in fixed time buckets. Fast and cheap (one Redis INCR per check). The right choice for general throughput limits where a small burst across a window boundary doesn't matter.
 
 ```python
-def rate_limit(key, ip_limit, duid_limit=None, apikey_limit=None,
-               ip_window=60, duid_window=60, apikey_window=60,
+def rate_limit(key, ip_limit, duid_limit=None, muid_limit=None, apikey_limit=None,
+               ip_window=60, duid_window=60, muid_window=60, apikey_window=60,
                min_granularity="hours")
 ```
 
@@ -33,9 +33,11 @@ def rate_limit(key, ip_limit, duid_limit=None, apikey_limit=None,
 | `key` | Bucket name — must be unique per endpoint (e.g. `"assess"`, `"feed"`) |
 | `ip_limit` | Max requests per `ip_window` seconds per IP |
 | `duid_limit` | Max requests per `duid_window` seconds per device UUID (optional) |
+| `muid_limit` | Max requests per `muid_window` seconds per server-set muid cookie (optional) |
 | `apikey_limit` | Default max requests per `apikey_window` per API key group (optional) |
 | `ip_window` | Window in seconds for IP counter (default `60`) |
 | `duid_window` | Window in seconds for duid counter (default `60`) |
+| `muid_window` | Window in seconds for muid counter (default `60`) |
 | `apikey_window` | Default window in seconds for API key counter (default `60`) |
 | `min_granularity` | Granularity for violation metrics (default `"hours"`) |
 
@@ -83,8 +85,8 @@ Counts requests within a true rolling window measured backwards from *now*. Corr
 Same signature as `rate_limit`:
 
 ```python
-def strict_rate_limit(key, ip_limit, duid_limit=None, apikey_limit=None,
-                      ip_window=60, duid_window=60, apikey_window=60,
+def strict_rate_limit(key, ip_limit, duid_limit=None, muid_limit=None, apikey_limit=None,
+                      ip_window=60, duid_window=60, muid_window=60, apikey_window=60,
                       min_granularity="hours")
 ```
 
@@ -179,6 +181,7 @@ def endpoint_metrics(slug, by=None, min_granularity="hours")
 |---|---|
 | `"ip"` | Source IP address |
 | `"duid"` | Device UUID from `request.DATA.get("duid")` |
+| `"muid"` | Server-set client cookie from `request.muid` |
 | `"api_key"` | API key group PK (`request.api_key.group.pk`) |
 | `"user"` | Authenticated user ID |
 | `"group"` | Request group ID (`request.group.pk`) |
@@ -259,6 +262,92 @@ def on_assess(request):
 ```
 
 Rate limiting before metrics ensures that blocked requests are still counted (you want to see the full traffic volume, including rejected requests).
+
+---
+
+---
+
+## `muid` — Server-Set Cookie Dimension
+
+`muid` is an `HttpOnly` cookie maintained by mojo's session middleware. Unlike `duid`, which is supplied by the client and can be omitted or rotated to bypass per-device limits, `muid` is set server-side and cannot be spoofed or cycled by a browser or scripted client.
+
+Use `muid_limit` / `muid_window` on security-sensitive endpoints where client-controlled `duid` bypass is a concern:
+
+```python
+@md.POST("login")
+@md.strict_rate_limit("login", ip_limit=100,
+                      muid_limit=10, muid_window=300,
+                      duid_limit=10, duid_window=300)
+def on_user_login(request):
+    ...
+```
+
+Both `muid` and `duid` checks run when both are configured — each is an independent additive gate.
+
+If `request.muid` is absent (e.g. first request before middleware sets the cookie), the muid check is skipped for that request.
+
+---
+
+## `check_account_attempt` — Per-Account Sliding-Window Helper
+
+For views that have already resolved an authenticated identity and need a per-account throttle independent of IP or client cookie:
+
+```python
+from mojo.decorators.limits import check_account_attempt
+
+count, blocked = check_account_attempt("login", user.pk, limit=10, window=900, request=request)
+if blocked is not None:
+    return blocked
+```
+
+The helper uses the same sliding-window algorithm as `strict_rate_limit` and returns an identical 429 response shape on block.
+
+**Signature:**
+
+```python
+def check_account_attempt(key, account_id, limit, window, request=None, min_granularity="hours")
+```
+
+| Param | Description |
+|---|---|
+| `key` | Rate limit bucket name (e.g. `"login"`) |
+| `account_id` | Resolved identity (e.g. `user.pk`) |
+| `limit` | Max attempts per window |
+| `window` | Sliding window in seconds |
+| `request` | Request object — used for the 429 response; if `None`, count is tracked but no block response is produced |
+| `min_granularity` | Passed to metrics on block (default `"hours"`) |
+
+**Returns:** `(count, response)` — `count` is the current number of attempts in the window; `response` is a 429 `JsonResponse` if blocked, or `None`.
+
+**Fail-open** — Redis errors are caught, logged to `error.log`, and the function returns `(0, None)`. A Redis outage will not lock users out.
+
+**Clearing the counter** on success:
+
+```python
+from mojo.decorators.limits import clear_rate_limits
+
+clear_rate_limits(key="login", account_id=user.pk)
+```
+
+---
+
+## `clear_rate_limits` — Cache Clearing Helper
+
+```python
+from mojo.decorators.limits import clear_rate_limits
+
+clear_rate_limits(ip=None, key=None, duid=None, muid=None, account_id=None)
+```
+
+| Param | Description |
+|---|---|
+| `ip` | Clear all srl/rl keys for this IP (optionally scoped to `key`) |
+| `key` | Limit bucket name (e.g. `"login"`) — required when clearing by duid/muid/account_id |
+| `duid` | Clear the device UUID counter for this bucket (requires `key`) |
+| `muid` | Clear the server-cookie counter for this bucket (requires `key`) |
+| `account_id` | Clear the per-account counter for this user (requires `key`) |
+
+Returns the number of Redis keys deleted.
 
 ---
 

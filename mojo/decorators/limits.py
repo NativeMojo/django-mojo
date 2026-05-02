@@ -369,11 +369,11 @@ def clear_rate_limits(ip=None, key=None, duid=None, muid=None, account_id=None):
         deleted += 1
     if muid and key:
         r.delete(f"srl:{key}:muid:{muid}")
+        deleted += 1
         # rl: muid keys are window-suffixed; pattern-scan to clear them all
         for k in r.scan_iter(f"rl:{key}:muid:{muid}:*"):
             r.delete(k)
             deleted += 1
-        deleted += 1
     if account_id is not None and key:
         r.delete(f"srl:{key}:account:{account_id}")
         r.delete(f"rl:{key}:account:{account_id}")

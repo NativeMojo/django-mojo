@@ -348,7 +348,66 @@ group.metadata["webapp_auth_path"] = "/login"  # optional, default /auth
 group.save()
 ```
 
+## Failed Login Protection
+
+The login endpoint applies a layered, bypass-resistant throttle stack. Each tier is independent — tripping one does not bypass any other.
+
+| Tier | Scope | Limit | Window | Notes |
+|---|---|---|---|---|
+| 1 | IP | 100 req | 60 s | First line; always active |
+| 2 | muid (server-set cookie) | 10 req | 300 s | Server-controlled; cannot be rotated by the client |
+| 3 | per-account (user.id) | 10 req | 900 s | Applied after username resolves; `LOGIN_USERNAME_LIMIT` / `LOGIN_USERNAME_WINDOW` |
+| 4 | `invalid_password` ruleset | 5 events | 15 min | Level-5 events → IP block fleet-wide for 30 min |
+| 5 | MFA verify endpoints (IP) | 10 req | 60 s | TOTP and passkey verify; `MFA_VERIFY_IP_LIMIT` / `MFA_VERIFY_IP_WINDOW` |
+
+**muid** is an `HttpOnly` cookie set by mojo middleware; unlike `duid` (client-supplied), the client cannot manufacture or cycle it. `duid` is still checked as an additive tier.
+
+**Per-account counter** is cleared automatically on a successful password match, so one legitimately mistyped password does not permanently penalise an account. On block the endpoint returns a standard 429 with `Retry-After`.
+
+**`invalid_password` ruleset** — the `ensure_auth_rules()` call during startup registers a bundled incident rule: 5 `invalid_password` events at level >= 5 from the same IP within 15 minutes triggers a fleet-wide IP block for 30 minutes. The rule name is `"Auth - Password Brute Force"`. This rule is idempotent — calling `ensure_auth_rules()` more than once is safe.
+
+### Settings
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `LOGIN_USERNAME_LIMIT` | `10` | Max failed attempts per account per window |
+| `LOGIN_USERNAME_WINDOW` | `900` | Window in seconds for per-account counter |
+| `MFA_VERIFY_IP_LIMIT` | `10` | Max TOTP/passkey verify attempts per IP per window |
+| `MFA_VERIFY_IP_WINDOW` | `60` | Window in seconds for MFA verify IP counter |
+
+### Admin — releasing a stuck account
+
+When a user is locked out by tier 3, an admin with `manage_users` can clear the counter:
+
+```
+POST /api/auth/manage/clear_rate_limit
+{
+  "username": "alice@example.com"
+}
+```
+
+Or by user ID:
+
+```
+POST /api/auth/manage/clear_rate_limit
+{
+  "user_id": 42
+}
+```
+
+When `username` or `user_id` is provided without an explicit `key`, the key defaults to `"login"`. To clear a specific bucket:
+
+```
+POST /api/auth/manage/clear_rate_limit
+{
+  "username": "alice@example.com",
+  "key": "login"
+}
+```
+
+The endpoint also accepts `ip`, `duid`, and `muid` to clear other tiers independently.
+
 ## Incident Reporting
 
-Failed login attempts, unknown usernames, and invalid password resets are automatically reported to the incident system with appropriate severity levels.
+Failed login attempts, unknown usernames, and invalid password resets are automatically reported to the incident system with appropriate severity levels. `invalid_password` events are emitted at level 5 once the username resolves (level 1 from `set_new_password`).
 

@@ -31,6 +31,34 @@
 
 Store both tokens. Use `access_token` in subsequent requests.
 
+## Login Rate Limiting
+
+`POST /api/login` applies layered throttling. A 429 with `Retry-After` can arrive from several independent tiers:
+
+- **IP limit** — 100 attempts per 60 seconds per source IP. Shared across all clients on the same network.
+- **Per-client limit** — 10 attempts per 5 minutes keyed on a server-set cookie. Cannot be bypassed by changing the `duid` parameter.
+- **Per-account limit** — 10 failed attempts per 15 minutes for a single account (resolved by username). Rotates the IP or device to a new address does not reset this counter.
+
+When the per-account limit is hit, the response is:
+
+```json
+{
+  "status": false,
+  "code": 429,
+  "error": "Rate limit exceeded"
+}
+```
+
+With a `Retry-After` header indicating seconds until the window resets.
+
+**Client guidance:**
+
+- Always read `Retry-After` and surface a generic "Too many attempts, try again in X minutes" message. Do not say which specific tier triggered the block.
+- Do not retry automatically on 429 — wait for the indicated interval.
+- The per-account counter is cleared on a successful login, so one legitimately mistyped password does not cause a prolonged lockout.
+
+MFA verify endpoints (`POST /api/auth/totp/verify`, `POST /api/auth/passkeys/login/complete`, etc.) have their own separate IP-level rate limit (10 requests per 60 seconds by default).
+
 ## Token Storage (UI Guidance)
 
 For this Bearer-token API, a practical default is:
