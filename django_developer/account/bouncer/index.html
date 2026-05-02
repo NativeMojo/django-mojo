@@ -4282,13 +4282,13 @@ forwarded query string.</p>
 <p>All <code>AUTH_*</code> settings resolve per-group using the parent-chain fallback:
 group → parent group → global.</p>
 <h3 id="challenge-page-branding">Challenge page branding<a class="headerlink" href="#challenge-page-branding" title="Permanent link">&para;</a></h3>
-<p>The bouncer challenge page uses REDACTED branding by default. To override it
+<p>The bouncer challenge page uses the configured default branding. To override it
 for a specific group (opt-in only):</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="n">settings</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="s1">&#39;BOUNCER_CHALLENGE_LOGO_URL&#39;</span><span class="p">,</span> <span class="s1">&#39;https://cdn.client.com/logo.svg&#39;</span><span class="p">,</span> <span class="n">group</span><span class="o">=</span><span class="n">group</span><span class="p">)</span>
 <a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="n">settings</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="s1">&#39;BOUNCER_CHALLENGE_BRAND&#39;</span><span class="p">,</span> <span class="s1">&#39;CLIENT BRAND&#39;</span><span class="p">,</span> <span class="n">group</span><span class="o">=</span><span class="n">group</span><span class="p">)</span>
 </code></pre></div>
 <p><code>BOUNCER_CHALLENGE_LOGO_URL</code> and <code>BOUNCER_CHALLENGE_BRAND</code> only take effect
-when a group is resolved. Requests with no group always use REDACTED branding.</p>
+when a group is resolved. Requests with no group always use the default branding.</p>
 <h3 id="oauth-round-trip">OAuth round-trip<a class="headerlink" href="#oauth-round-trip" title="Permanent link">&para;</a></h3>
 <p><code>group_uuid</code> is embedded in the OAuth state so branding survives the
 provider redirect. The callback reconstructs <code>?group=&lt;uuid&gt;</code> and appends it
@@ -4316,7 +4316,7 @@ to identify the group.</p>
 <h2 id="templates">Templates<a class="headerlink" href="#templates" title="Permanent link">&para;</a></h2>
 <ul>
 <li><code>account/login.html</code> — full mojo-auth webapp. Override in your project's templates dir.</li>
-<li><code>account/bouncer_challenge.html</code> — REDACTED-branded challenge page by default; override logo/brand via <code>BOUNCER_CHALLENGE_LOGO_URL</code> / <code>BOUNCER_CHALLENGE_BRAND</code> per group.</li>
+<li><code>account/bouncer_challenge.html</code> — challenge page using default branding; override logo/brand via <code>BOUNCER_CHALLENGE_LOGO_URL</code> / <code>BOUNCER_CHALLENGE_BRAND</code> per group.</li>
 <li><code>account/bouncer_decoy.html</code> — honeypot login at <code>/login</code>, <code>/signin</code>.</li>
 </ul>
 <p>Static assets in <code>account/static/account/</code>:
