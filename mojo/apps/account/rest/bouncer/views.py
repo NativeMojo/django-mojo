@@ -29,8 +29,8 @@ logger = logit.get_logger('bouncer', 'bouncer.log')
 
 DISABLE_LOGIN = settings.get_static('DISABLE_LOGIN', False)
 
-_DEFAULT_CHALLENGE_LOGO = ''
-_DEFAULT_CHALLENGE_BRAND = 'DJANGO MOJO'
+_DEFAULT_CHALLENGE_LOGO = 'https://mojoverify.com/logo.svg'
+_DEFAULT_CHALLENGE_BRAND = 'MOJO VERIFY'
 
 
 def _resolve_group(request):
