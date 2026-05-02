@@ -135,6 +135,7 @@ def on_totp_recovery_codes_regenerate(request):
 # -----------------------------------------------------------------
 
 @md.POST("auth/totp/verify")
+@md.strict_rate_limit("totp_verify", ip_limit=10, ip_window=60)
 @md.requires_params("mfa_token", "code")
 @md.public_endpoint()
 def on_totp_verify(request):
@@ -168,6 +169,7 @@ def on_totp_verify(request):
 # -----------------------------------------------------------------
 
 @md.POST("auth/totp/recover")
+@md.strict_rate_limit("totp_recover", ip_limit=10, ip_window=60)
 @md.requires_params("mfa_token", "recovery_code")
 @md.public_endpoint()
 def on_totp_recover(request):
@@ -207,10 +209,14 @@ def on_totp_recover(request):
 # -----------------------------------------------------------------
 
 @md.POST("auth/totp/login")
+@md.strict_rate_limit("totp_login", ip_limit=10, ip_window=60)
 @md.requires_params("username", "code")
 @md.public_endpoint()
 def on_totp_login(request):
     """Passwordless login using a TOTP code."""
+    from mojo.decorators.limits import check_account_attempt, clear_rate_limits
+    from mojo.helpers.settings import settings
+
     username = request.DATA.get("username", "").lower().strip()
     user = User.objects.filter(Q(username=username) | Q(email=username)).first()
 
@@ -223,6 +229,14 @@ def on_totp_login(request):
         )
         raise merrors.PermissionDeniedException()
 
+    # Same per-account guard as password login — totp/login is a passwordless
+    # guess against a known username and must not be brute-forceable.
+    acct_limit = settings.get("LOGIN_USERNAME_LIMIT", 10, kind="int")
+    acct_window = settings.get("LOGIN_USERNAME_WINDOW", 900, kind="int")
+    _, blocked = check_account_attempt("login", user.pk, acct_limit, acct_window, request=request)
+    if blocked is not None:
+        return blocked
+
     totp = UserTOTP.objects.filter(user=user, is_enabled=True).first()
     if not totp:
         raise merrors.PermissionDeniedException("TOTP not enabled for this account")
@@ -233,4 +247,5 @@ def on_totp_login(request):
         user.report_incident("Invalid TOTP code during standalone login", "totp:login_failed")
         raise merrors.PermissionDeniedException("Invalid code", 401, 401)
 
+    clear_rate_limits(key="login", account_id=user.pk)
     return jwt_login(request, user)

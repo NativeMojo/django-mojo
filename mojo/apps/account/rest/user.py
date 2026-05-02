@@ -31,12 +31,41 @@ def on_user_me(request):
 @md.POST('auth/manage/clear_rate_limit')
 @md.requires_perms("manage_users")
 def on_clear_rate_limit(request):
-    """Clear rate limit counters for an IP or device. Requires manage_users permission."""
+    """Clear rate limit counters for an IP, device, client, or user account.
+
+    Optional body params:
+      ip       — clear all srl/rl keys for this IP (optionally scoped via key)
+      key      — limit bucket name (e.g. "login"); required for duid/muid/account
+      duid     — clear the device counter (requires key)
+      muid     — clear the client cookie counter (requires key)
+      user_id  — clear the per-account counter for this user (requires key)
+      username — resolve to user_id and clear the per-account counter (requires key)
+    """
     from mojo.decorators.limits import clear_rate_limits
     ip = request.DATA.get("ip")
     key = request.DATA.get("key")
     duid = request.DATA.get("duid")
-    deleted = clear_rate_limits(ip=ip, key=key, duid=duid)
+    muid = request.DATA.get("muid")
+    user_id = request.DATA.get("user_id")
+    username = request.DATA.get("username")
+
+    account_id = None
+    if user_id:
+        try:
+            account_id = int(user_id)
+        except (TypeError, ValueError):
+            raise merrors.ValueException("Invalid user_id")
+    elif username:
+        target = User.objects.filter(username=username).first()
+        if target is None:
+            raise merrors.ValueException("Unknown username")
+        account_id = target.pk
+
+    # account-scope clears need a key bucket to target the right counter
+    if account_id is not None and not key:
+        key = "login"
+
+    deleted = clear_rate_limits(ip=ip, key=key, duid=duid, muid=muid, account_id=account_id)
     return JsonResponse({"status": True, "data": {"deleted": deleted}})
 
 
@@ -60,11 +89,15 @@ def on_refresh_token(request):
 @md.POST("login")
 @md.POST("auth/login")
 @md.POST('account/jwt/login')
-@md.strict_rate_limit("login", ip_limit=100, duid_limit=10, duid_window=300)
-@md.endpoint_metrics("login_attempts", by=["ip", "duid"])
+@md.strict_rate_limit("login", ip_limit=100,
+                      muid_limit=10, muid_window=300,
+                      duid_limit=10, duid_window=300)
+@md.endpoint_metrics("login_attempts", by=["ip", "muid"])
 @md.requires_params("password")
 @md.requires_bouncer_token('login')
 def on_user_login(request):
+    from mojo.decorators.limits import check_account_attempt, clear_rate_limits
+
     username = request.DATA.username
     password = request.DATA.password
 
@@ -76,9 +109,28 @@ def on_user_login(request):
             level=8,
             request=request)
         raise merrors.PermissionDeniedException("Invalid username or password", 401, 401)
+
+    # Per-account sliding-window throttle — bypass-resistant. Key on user.id so
+    # IP/duid/muid rotation does not let an attacker keep guessing one account.
+    acct_limit = settings.get("LOGIN_USERNAME_LIMIT", 10, kind="int")
+    acct_window = settings.get("LOGIN_USERNAME_WINDOW", 900, kind="int")
+    _, blocked = check_account_attempt("login", user.pk, acct_limit, acct_window, request=request)
+    if blocked is not None:
+        return blocked
+
     if not user.check_password(password):
-        user.report_incident(f"{user.username} enter an invalid password", "invalid_password")
+        # level=5 feeds the invalid_password ruleset for IP-block escalation.
+        user.report_incident(
+            f"{user.username} enter an invalid password",
+            "invalid_password",
+            level=5)
         raise merrors.PermissionDeniedException("Invalid username or password", 401, 401)
+
+    # Successful password — clear the per-account counter so prior bad attempts
+    # do not penalise this session. Done before MFA gate too, since the password
+    # check passed and a stolen-password retry would not get this far.
+    clear_rate_limits(key="login", account_id=user.pk)
+
     mfa_methods = get_mfa_methods(user)
     if mfa_methods:
         return mfa_required_response(user, mfa_methods)

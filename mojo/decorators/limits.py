@@ -9,7 +9,7 @@ from mojo.apps import metrics
 
 logger = logit.get_logger("error", "error.log")
 
-__all__ = ["rate_limit", "strict_rate_limit", "endpoint_metrics", "clear_rate_limits"]
+__all__ = ["rate_limit", "strict_rate_limit", "endpoint_metrics", "clear_rate_limits", "check_account_attempt"]
 
 
 def _hash_key(value):
@@ -113,6 +113,8 @@ def _get_dimension(request, dimension):
         return getattr(request, "ip", None) or request.META.get("REMOTE_ADDR")
     if dimension == "duid":
         return request.DATA.get("duid")
+    if dimension == "muid":
+        return getattr(request, "muid", None) or None
     if dimension == "api_key":
         api_key = getattr(request, "api_key", None)
         if api_key:
@@ -129,8 +131,8 @@ def _get_dimension(request, dimension):
     return None
 
 
-def rate_limit(key, ip_limit, duid_limit=None, apikey_limit=None,
-               ip_window=60, duid_window=60, apikey_window=60,
+def rate_limit(key, ip_limit, duid_limit=None, muid_limit=None, apikey_limit=None,
+               ip_window=60, duid_window=60, muid_window=60, apikey_window=60,
                min_granularity="hours"):
     """
     Fixed-window rate limiting decorator.
@@ -183,6 +185,15 @@ def rate_limit(key, ip_limit, duid_limit=None, apikey_limit=None,
                         if _incr_fixed(r, duid_key, duid_window) > duid_limit:
                             return _block(key, request, _retry_after_fixed(duid_window_start, duid_window), min_granularity)
 
+                # --- muid check (optional) — server-set cookie, bypass-resistant ---
+                if muid_limit is not None:
+                    muid = getattr(request, "muid", None)
+                    if muid:
+                        muid_window_start = now // muid_window * muid_window
+                        muid_key = f"rl:{key}:muid:{muid}:{muid_window_start}"
+                        if _incr_fixed(r, muid_key, muid_window) > muid_limit:
+                            return _block(key, request, _retry_after_fixed(muid_window_start, muid_window), min_granularity)
+
                 # --- api_key check (optional) ---
                 if apikey_limit is not None:
                     resolved = _get_apikey_limits(request, key, apikey_limit, apikey_window)
@@ -201,8 +212,8 @@ def rate_limit(key, ip_limit, duid_limit=None, apikey_limit=None,
     return decorator
 
 
-def strict_rate_limit(key, ip_limit, duid_limit=None, apikey_limit=None,
-                      ip_window=60, duid_window=60, apikey_window=60,
+def strict_rate_limit(key, ip_limit, duid_limit=None, muid_limit=None, apikey_limit=None,
+                      ip_window=60, duid_window=60, muid_window=60, apikey_window=60,
                       min_granularity="hours"):
     """
     Sliding-window rate limiting decorator.
@@ -257,6 +268,15 @@ def strict_rate_limit(key, ip_limit, duid_limit=None, apikey_limit=None,
                         if not allowed:
                             return _block(key, request, _retry_after_sliding(duid_window), min_granularity)
 
+                # --- muid check (optional) — server-set cookie, bypass-resistant ---
+                if muid_limit is not None:
+                    muid = getattr(request, "muid", None)
+                    if muid:
+                        muid_key = f"srl:{key}:muid:{muid}"
+                        _, allowed = _check_sliding(r, muid_key, muid_window, muid_limit)
+                        if not allowed:
+                            return _block(key, request, _retry_after_sliding(muid_window), min_granularity)
+
                 # --- api_key check (optional) ---
                 if apikey_limit is not None:
                     resolved = _get_apikey_limits(request, key, apikey_limit, apikey_window)
@@ -275,19 +295,61 @@ def strict_rate_limit(key, ip_limit, duid_limit=None, apikey_limit=None,
     return decorator
 
 
-def clear_rate_limits(ip=None, key=None, duid=None):
+def check_account_attempt(key, account_id, limit, window, request=None,
+                          min_granularity="hours"):
+    """
+    Per-account sliding-window check for failed-attempt counters.
+
+    Used by views that have already resolved a user (or other account-scoped
+    identity) and want to throttle attempts against that specific account
+    independent of IP/duid/muid. Mirrors the response shape of
+    strict_rate_limit so 429s look identical to the decorator's.
+
+    Fail-open on Redis errors — same contract as strict_rate_limit. A Redis
+    outage must never lock everyone out of authentication.
+
+    Args:
+        key:         Rate limit bucket name (e.g. "login")
+        account_id:  Resolved user/account identifier (e.g. user.pk)
+        limit:       Max attempts per window
+        window:      Sliding window in seconds
+        request:     Request object — used for the 429 response and incident
+                     reporting. Optional; if None, the helper still tracks
+                     the count but cannot produce a block response.
+        min_granularity: Granularity passed to metrics on block.
+
+    Returns:
+        (count, response) — count is current attempts in window;
+        response is a 429 JsonResponse if blocked, else None.
+    """
+    try:
+        r = get_connection()
+        redis_key = f"srl:{key}:account:{account_id}"
+        count, allowed = _check_sliding(r, redis_key, window, limit)
+        if not allowed and request is not None:
+            return count, _block(key, request, _retry_after_sliding(window), min_granularity)
+        return count, None
+    except Exception as err:
+        logger.error(f"check_account_attempt: Redis error for key '{key}' account '{account_id}': {err}")
+        return 0, None
+
+
+def clear_rate_limits(ip=None, key=None, duid=None, muid=None, account_id=None):
     """
     Clear rate limit counters from Redis.
 
     Args:
-        ip:   Clear all srl keys for this IP (optionally scoped to key)
-        key:  Limit bucket name (e.g. "login") — required when clearing by duid
-        duid: Clear the duid counter for this device UUID (requires key)
+        ip:         Clear all srl keys for this IP (optionally scoped to key)
+        key:        Limit bucket name (e.g. "login") — required when clearing by duid/muid/account_id
+        duid:       Clear the duid counter for this device UUID (requires key)
+        muid:       Clear the muid counter for this client cookie (requires key)
+        account_id: Clear the per-account counter for this resolved user (requires key)
 
     Examples:
-        clear_rate_limits(ip="1.2.3.4")           # clear all limits for an IP
-        clear_rate_limits(ip="1.2.3.4", key="login")  # clear login limit for an IP
-        clear_rate_limits(key="login", duid="abc123")  # clear login limit for a device
+        clear_rate_limits(ip="1.2.3.4")                       # clear all limits for an IP
+        clear_rate_limits(ip="1.2.3.4", key="login")          # clear login limit for an IP
+        clear_rate_limits(key="login", duid="abc123")         # clear login limit for a device
+        clear_rate_limits(key="login", account_id=42)         # clear per-account login counter
     """
     r = get_connection()
     if not r:
@@ -304,6 +366,17 @@ def clear_rate_limits(ip=None, key=None, duid=None):
     if duid and key:
         r.delete(f"srl:{key}:duid:{duid}")
         r.delete(f"rl:{key}:duid:{duid}")
+        deleted += 1
+    if muid and key:
+        r.delete(f"srl:{key}:muid:{muid}")
+        # rl: muid keys are window-suffixed; pattern-scan to clear them all
+        for k in r.scan_iter(f"rl:{key}:muid:{muid}:*"):
+            r.delete(k)
+            deleted += 1
+        deleted += 1
+    if account_id is not None and key:
+        r.delete(f"srl:{key}:account:{account_id}")
+        r.delete(f"rl:{key}:account:{account_id}")
         deleted += 1
     return deleted
 

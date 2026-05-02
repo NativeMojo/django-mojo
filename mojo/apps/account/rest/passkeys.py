@@ -200,6 +200,7 @@ def on_passkeys_login_begin(request):
 
 
 @md.POST("auth/passkeys/login/complete")
+@md.strict_rate_limit("passkey_login", ip_limit=10, ip_window=60)
 @md.requires_params("challenge_id", "credential")
 @md.public_endpoint()
 def on_passkeys_login_complete(request):

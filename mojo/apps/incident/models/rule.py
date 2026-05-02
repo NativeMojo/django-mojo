@@ -488,6 +488,26 @@ class RuleSet(models.Model, MojoModel):
             ],
         )
 
+        # Password brute force — sustained wrong-password attempts at level >= 5.
+        # The login view emits invalid_password at level 5 once a username has been
+        # resolved, so this rule fires only after multiple failed guesses against
+        # known accounts from the same IP.
+        cls._create_ruleset(
+            category="invalid_password",
+            name="Auth - Password Brute Force",
+            priority=5,
+            match_by=MatchBy.ALL,
+            bundle_by=BundleBy.SOURCE_IP,
+            bundle_minutes=15,
+            trigger_count=5,
+            trigger_window=15,
+            handler="block://?ttl=1800&fleet_wide=1",
+            rules=[
+                {"name": "Level >= 5", "field_name": "level",
+                 "comparator": ">=", "value": "5", "value_type": "int"},
+            ],
+        )
+
         # Bouncer token abuse — replay, IP mismatch, expired reuse.
         # These are deliberate probing attempts, not accidents.
         cls._create_ruleset(

@@ -49,9 +49,20 @@ class RestClient:
         self.logout()
         # Clear the login rate limit so tests never fail due to accumulated
         # logins across the suite hitting the ip_limit within the window.
+        # Also clears the muid- and account-tier counters for the current
+        # session cookie / username so tests that issue many logins from a
+        # single client do not get throttled by limits intended for sustained
+        # attack patterns.
         try:
             from mojo.decorators.limits import clear_rate_limits
+            from mojo.apps.account.models import User
             clear_rate_limits(ip="127.0.0.1", key="login")
+            muid = self.session.cookies.get("_muid")
+            if muid:
+                clear_rate_limits(key="login", muid=muid)
+            target = User.objects.filter(username=username).only("pk").first()
+            if target is not None:
+                clear_rate_limits(key="login", account_id=target.pk)
         except Exception:
             pass
         resp = self.post("/api/login", dict(username=username, password=password))
