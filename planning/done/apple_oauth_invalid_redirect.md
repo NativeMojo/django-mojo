@@ -11,8 +11,8 @@
 invalid_request
 Invalid web redirect url.
 
-https://appleid.apple.com/auth/authorize?client_id=com.REDACTED.app.login
-  &redirect_uri=https%3A%2F%2FREDACTED.com%2Fauth%2F
+https://appleid.apple.com/auth/authorize?client_id=com.example.app.login
+  &redirect_uri=https%3A%2F%2Fexample.com%2Fauth%2F
   &response_type=code&response_mode=form_post&scope=openid%20email
   &state=fd03931749804c18be25d1772ea45e95
 ```
@@ -23,15 +23,15 @@ https://appleid.apple.com/auth/authorize?client_id=com.REDACTED.app.login
 invalid_request
 Invalid web redirect url.
 
-https://appleid.apple.com/auth/authorize?client_id=com.REDACTED.app.login
-  &redirect_uri=https%3A%2F%2FREDACTED.com%2Fapi%2Fauth%2Foauth%2Fapple%2Fcallback
+https://appleid.apple.com/auth/authorize?client_id=com.example.app.login
+  &redirect_uri=https%3A%2F%2Fexample.com%2Fapi%2Fauth%2Foauth%2Fapple%2Fcallback
   &response_type=code&response_mode=form_post&scope=openid%20email
   &state=7ef6959780d54cd7a278cf2bc3e1f414
 ```
 
 The backend callback URL is now correctly sent to Apple. Apple is still rejecting it because
-`https://REDACTED.com/api/auth/oauth/apple/callback` is not registered as a Return URL
-in Apple Developer Portal for service ID `com.REDACTED.app.login`.
+`https://example.com/api/auth/oauth/apple/callback` is not registered as a Return URL
+in Apple Developer Portal for service ID `com.example.app.login`.
 
 ## What Has Been Done
 
@@ -45,10 +45,10 @@ in Apple Developer Portal for service ID `com.REDACTED.app.login`.
 
 ### 1. Register the callback URL in Apple Developer Portal (config — unblocks immediately)
 
-Add the following Return URL to the `com.REDACTED.app.login` Service ID:
+Add the following Return URL to the `com.example.app.login` Service ID:
 
 ```
-https://REDACTED.com/api/auth/oauth/apple/callback
+https://example.com/api/auth/oauth/apple/callback
 ```
 
 Apple Developer Portal → Certificates, Identifiers & Profiles →
@@ -75,7 +75,7 @@ This lets operators pin the exact URL registered in Apple Developer Portal.
 ```python
 # Optional — pin the backend callback URL registered in Apple Developer Portal.
 # Falls back to {origin}/api/auth/oauth/apple/callback if not set.
-APPLE_REDIRECT_URI = "https://REDACTED.com/api/auth/oauth/apple/callback"
+APPLE_REDIRECT_URI = "https://example.com/api/auth/oauth/apple/callback"
 ```
 
 ## Files to Change

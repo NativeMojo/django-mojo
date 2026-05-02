@@ -7,15 +7,15 @@
 
 ## Description
 
-Bouncer auth views (login, register, password reset) currently load branding from global Django settings (`AUTH_LOGO_URL`, `AUTH_APP_TITLE`, `AUTH_CUSTOM_CSS`, etc.). These need to resolve **per-group** so that multi-tenant platforms can serve operator-branded auth pages through a single REDACTED deployment.
+Bouncer auth views (login, register, password reset) currently load branding from global Django settings (`AUTH_LOGO_URL`, `AUTH_APP_TITLE`, `AUTH_CUSTOM_CSS`, etc.). These need to resolve **per-group** so that multi-tenant platforms can serve operator-branded auth pages through a single Mojo Verify deployment.
 
-This is the foundational piece enabling REDACTED to act as a white-labeled Identity Provider (like Auth0/Clerk) for downstream platforms like WMX — where each operator (e.g., "Club AXO") has their own branded login/register experience hosted by REDACTED.
+This is the foundational piece enabling Mojo Verify to act as a white-labeled Identity Provider (like Auth0/Clerk) for downstream multi-tenant platforms — where each operator has their own branded login/register experience hosted by Mojo Verify.
 
 ## Context
 
-- WMX is a multi-tenant gaming SaaS platform. Operators run branded casino sites (e.g., "Club AXO"). Players never see "WMX" or "REDACTED".
-- REDACTED already has the full auth stack: Google OAuth, Apple OAuth, SMS, email, passkeys, bouncer.
-- Rather than every downstream platform rebuilding auth, REDACTED will serve white-labeled auth pages per operator via OAuth redirect.
+- A multi-tenant SaaS platform routes operator users through Mojo Verify for auth. Operators run branded sites; their players never see the upstream platform name or "Mojo Verify".
+- Mojo Verify already has the full auth stack: Google OAuth, Apple OAuth, SMS, email, passkeys, bouncer.
+- Rather than every downstream platform rebuilding auth, Mojo Verify will serve white-labeled auth pages per operator via OAuth redirect.
 - The `Setting` model already supports group-scoped resolution with parent chain fallback (`Setting.resolve(key, group=...)`), but bouncer views don't use it — they call `settings.get()` globally.
 - Auth page templates already accept branding variables (`AUTH_LOGO_URL`, `AUTH_HERO_IMAGE_URL`, `AUTH_CUSTOM_CSS_URL`, etc.) — they just need to be loaded per-group instead of globally.
 
@@ -33,8 +33,8 @@ This is the foundational piece enabling REDACTED to act as a white-labeled Ident
 1. **`_auth_context()` in bouncer/views.py** — accept a `group` parameter and resolve all `AUTH_*` settings via `Setting.resolve(key, group=group)` instead of `settings.get()`
 2. **Group detection** — determine the operator group from the incoming request. Three mechanisms:
    - **OAuth client_id** — if the request includes `client_id` query param (OAuth flow), look up the OAuthClient's group
-   - **Custom domain/subdomain** — map request hostname to a group (e.g., `auth.clubaxo.com` → Club AXO group)
-   - **Explicit group param** — `?group=clubaxo` as fallback
+   - **Custom domain/subdomain** — map request hostname to a group (e.g., `auth.operator.com` → operator's group)
+   - **Explicit group param** — `?group=<group-uuid>` as fallback
 3. **Fallback chain** — if no group detected or group has no override for a setting, fall back to global defaults (this is already how `Setting.resolve` works)
 
 ### Branding settings that need per-group resolution
@@ -78,8 +78,8 @@ This is the foundational piece enabling REDACTED to act as a white-labeled Ident
 
 ## Out of Scope
 
-- Per-group terms versioning and acceptance tracking (separate request in REDACTED)
-- OAuth consent screen (separate request in REDACTED)
+- Per-group terms versioning and acceptance tracking (separate request in Mojo Verify)
+- OAuth consent screen (separate request in Mojo Verify)
 - Custom domain SSL/CNAME provisioning infrastructure
 - Per-group OAuth provider credentials (Google/Apple client IDs per operator)
 
@@ -118,13 +118,13 @@ Make bouncer auth pages (login, register, challenge) resolve branding settings p
 
 5. **`mojo/apps/account/rest/bouncer/views.py`** — Update `_serve_challenge()`
    - Accept `group` parameter
-   - Default logo/brand: REDACTED (current hardcoded values)
-   - If group provided: resolve `BOUNCER_CHALLENGE_LOGO_URL` and `BOUNCER_CHALLENGE_BRAND` via `settings.get(..., group=group)`, falling back to the REDACTED defaults
-   - This keeps challenge REDACTED-branded unless operator explicitly overrides
+   - Default logo/brand: Mojo Verify (current hardcoded values)
+   - If group provided: resolve `BOUNCER_CHALLENGE_LOGO_URL` and `BOUNCER_CHALLENGE_BRAND` via `settings.get(..., group=group)`, falling back to the Mojo Verify defaults
+   - This keeps challenge Mojo-Verify-branded unless operator explicitly overrides
 
 6. **`mojo/apps/account/rest/bouncer/views.py`** — Update `_serve_decoy()` (nice-to-have)
    - Low priority. Accept `group` and resolve `BOUNCER_LOGO_URL` / `BOUNCER_ACCENT_COLOR` per-group
-   - Only matters if operator is on a custom domain (bot hits `auth.clubaxo.com/login`)
+   - Only matters if operator is on a custom domain (bot hits `auth.operator.com/login`)
 
 7. **`mojo/apps/account/services/oauth/google.py` and `apple.py`** — Encode group in OAuth `state`
    - When building the OAuth redirect URL, if `group_uuid` is present in the request, embed it in the `state` parameter alongside the CSRF token
@@ -142,10 +142,10 @@ Make bouncer auth pages (login, register, challenge) resolve branding settings p
 - **Indexed `auth_domain` field vs JSONField**: Proper column gives us DB-enforced uniqueness (no two groups can claim the same hostname), fast indexed lookup, and discoverability in admin/REST. JSONField query is fragile across backends and can't enforce uniqueness.
 - **Redis cache for hostname→group**: `auth_domain:{hostname} → group_id` avoids DB hit on every page view. Cache invalidated on Group save. 2-3 lookups per login flow, all cache hits after first.
 - **`settings.get(group=group)` for all branding**: Leverages existing `Setting.resolve()` infrastructure — group → parent chain → global fallback. Zero new settings backend code.
-- **Challenge page: REDACTED default, opt-in override**: Challenge is a security gate. Operators see REDACTED branding unless they explicitly set `BOUNCER_CHALLENGE_LOGO_URL` / `BOUNCER_CHALLENGE_BRAND` at their group level.
+- **Challenge page: Mojo Verify default, opt-in override**: Challenge is a security gate. Operators see Mojo Verify branding unless they explicitly set `BOUNCER_CHALLENGE_LOGO_URL` / `BOUNCER_CHALLENGE_BRAND` at their group level.
 - **Decoy page: nice-to-have**: Bots aren't humans — operator branding on decoy is low priority. Implement if trivial, skip if not.
 - **Group query param uses `uuid`**: Already indexed on Group, no new field needed. URL looks like `?group=f7a2b3c4-...`.
-- **Verification emails use global REDACTED domain**: Out of scope — emails and SMS come from REDACTED's own addresses/numbers regardless of operator branding.
+- **Verification emails use global Mojo Verify domain**: Out of scope — emails and SMS come from Mojo Verify's own addresses/numbers regardless of operator branding.
 
 ### Edge Cases
 
@@ -156,7 +156,7 @@ Make bouncer auth pages (login, register, challenge) resolve branding settings p
 - **Hostname matches but group has no setting overrides**: `Setting.resolve` walks parent chain then global. Operator gets parent/global branding — correct behavior.
 - **Two groups try to claim same hostname**: `unique=True` on `auth_domain` — DB rejects the second save with IntegrityError. REST returns 400.
 - **Redis cache stale after group save**: Invalidate `auth_domain:{old_hostname}` and set `auth_domain:{new_hostname}` on Group post-save. Use existing `post_save` signal or `on_rest_saved`.
-- **Pass cookie across groups on same domain**: Pass cookie (`mbp`) is domain-scoped by browser. If operators share a parent domain (e.g., `axo.REDACTED.com` and `other.REDACTED.com`), cookie scope depends on `SameSite` and domain attribute. Not a branding issue — cookie just skips challenge, doesn't affect which group's branding is shown.
+- **Pass cookie across groups on same domain**: Pass cookie (`mbp`) is domain-scoped by browser. If operators share a parent domain (e.g., `op-a.mojoverify.com` and `op-b.mojoverify.com`), cookie scope depends on `SameSite` and domain attribute. Not a branding issue — cookie just skips challenge, doesn't affect which group's branding is shown.
 
 ### Testing
 
@@ -173,7 +173,7 @@ Make bouncer auth pages (login, register, challenge) resolve branding settings p
   - Group has no override, parent does → parent's value used
   - No group or override → global default used
 - **Challenge page branding** → same test file
-  - No override → REDACTED branding
+  - No override → Mojo Verify branding
   - Group sets `BOUNCER_CHALLENGE_LOGO_URL` → operator logo shown
 - **OAuth state round-trip** → same test file or `tests/test_account/test_oauth.py`
   - OAuth redirect includes group UUID in state
@@ -196,7 +196,7 @@ Make bouncer auth pages (login, register, challenge) resolve branding settings p
 **Date**: 2026-04-11
 
 ### What Was Built
-Per-group branding for bouncer auth pages. Group detection via hostname (`auth_domain` field) or `?group=<uuid>` query param. All AUTH_* settings resolve per-group with parent chain fallback. Challenge page defaults to REDACTED branding with opt-in override. OAuth state preserves group context through round-trip.
+Per-group branding for bouncer auth pages. Group detection via hostname (`auth_domain` field) or `?group=<uuid>` query param. All AUTH_* settings resolve per-group with parent chain fallback. Challenge page defaults to Mojo Verify branding with opt-in override. OAuth state preserves group context through round-trip.
 
 ### Files Changed
 - `mojo/apps/account/models/group.py` — `auth_domain` field, `resolve_by_auth_domain()`, Redis cache + invalidation

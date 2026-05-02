@@ -27,7 +27,7 @@ class Group(MojoSecrets, MojoModel):
     parent = models.ForeignKey("account.Group", null=True, related_name="groups",
         default=None, on_delete=models.CASCADE)
 
-    # Custom domain for white-label auth pages (e.g. auth.clubaxo.com)
+    # Custom domain for white-label auth pages (e.g. auth.operator.com)
     auth_domain = models.CharField(max_length=255, null=True, default=None,
         unique=True, db_index=True, blank=True)
 

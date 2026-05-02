@@ -38,7 +38,7 @@ The domain registers in `DOMAIN_DESCRIPTIONS`:
 
 - Tool registered as `send_notification` in `comms` domain with `mutates=True`
 - Accepts: `channel` (sms/email/push/in_app), `message`/`body`, optional `subject`, `title`, `action_url`, and `recipients` spec
-- Recipients spec supports: `{"usernames": ["admin@example.com"]}`, `{"permission": "is_superuser"}`, `{"group_id": 5}`, `{"metadata": {"role": "oncall"}}`, `{"email_domain": "REDACTED.com"}`
+- Recipients spec supports: `{"usernames": ["admin@example.com"]}`, `{"permission": "is_superuser"}`, `{"group_id": 5}`, `{"metadata": {"role": "oncall"}}`, `{"email_domain": "example.com"}`
 - All recipient resolution paths filter `is_active=True` — never notify deactivated users
 - SMS: sends via `SMS.send()`, requires `to_number` or resolves from user profile
 - Email: sends via `email_service.send_email()`, uses system default mailbox
@@ -139,7 +139,7 @@ Add a `comms` tool domain with a `send_notification` tool that sends messages ac
      - `{"permission": "is_superuser"}` — `User.objects.filter(permissions__has_key=perm)` (PostgreSQL JSONField)
      - `{"group_id": 5}` — group members via `GroupMember.objects.filter(group_id=..., is_active=True)`
      - `{"metadata": {"role": "oncall"}}` — `User.objects.filter(metadata__contains={"role": "oncall"})` (PostgreSQL)
-     - `{"email_domain": "REDACTED.com"}` — `User.objects.filter(email__iendswith="@REDACTED.com")`
+     - `{"email_domain": "example.com"}` — `User.objects.filter(email__iendswith="@example.com")`
    - All resolution paths apply `.filter(is_active=True)` — never notify deactivated users
    - Cap at 100 recipients — return error with total count if exceeded
    - Channel dispatchers (each checks `is_notification_allowed` before sending):
@@ -184,7 +184,7 @@ All tests in `tests/test_assistant/19_test_notifications_tool.py`:
 - `test_resolve_by_permission` — resolve `{"permission": "is_superuser"}` finds superusers
 - `test_resolve_by_group` — resolve `{"group_id": N}` returns active group members
 - `test_resolve_by_metadata` — resolve `{"metadata": {"role": "oncall"}}` filters correctly
-- `test_resolve_by_email_domain` — resolve `{"email_domain": "REDACTED.com"}` finds matching active users
+- `test_resolve_by_email_domain` — resolve `{"email_domain": "example.com"}` finds matching active users
 - `test_resolve_excludes_inactive_users` — deactivated users (is_active=False) are never included in any resolution path
 - `test_recipient_cap_enforced` — >100 recipients returns error with total count
 - `test_send_in_app` — send in_app to a user, verify Notification record created in DB

@@ -17,7 +17,7 @@ is server-side.
 
 ### Why This Exists
 
-The current Bouncer lives in `apps/REDACTED/bouncer/` as a REDACTED-specific app. It works
+The current Bouncer lives in `apps/mojoverify/bouncer/` as a Mojo Verify-specific app. It works
 as follows today:
 
 1. Django serves `auth/index.html` + `mojo-bouncer.js` to **everyone**, including bots
@@ -39,18 +39,18 @@ django-mojo already has:
 - The incident/reporting system
 - Security-first design philosophy
 
-The bouncer is not REDACTED-specific. Any django-mojo project handling authentication
+The bouncer is not Mojo Verify-specific. Any django-mojo project handling authentication
 (login, registration, password reset) needs bot protection. Centralising it in `account`
 means every project gets it.
 
 ### Prior Work
 
-`REDACTED` already has a working bouncer implementation to reference:
-- `apps/REDACTED/bouncer/services/scoring.py` — scoring engine + pluggable analyzers
-- `apps/REDACTED/bouncer/rest/assess.py` — Stage 1 assessment endpoint
-- `apps/REDACTED/bouncer/rest/submit.py` — Stage 2 form signal endpoint
-- `apps/REDACTED/bouncer/services/token_manager.py` — HMAC token signing + Redis nonces
-- `apps/REDACTED/bouncer/models/device_session.py` — device reputation model
+`Mojo Verify` already has a working bouncer implementation to reference:
+- `apps/mojoverify/bouncer/services/scoring.py` — scoring engine + pluggable analyzers
+- `apps/mojoverify/bouncer/rest/assess.py` — Stage 1 assessment endpoint
+- `apps/mojoverify/bouncer/rest/submit.py` — Stage 2 form signal endpoint
+- `apps/mojoverify/bouncer/services/token_manager.py` — HMAC token signing + Redis nonces
+- `apps/mojoverify/bouncer/models/device_session.py` — device reputation model
 - `public/js/mojo-bouncer.js` — client-side signal collection + challenge UI
 
 ---
@@ -524,7 +524,7 @@ campaign detected).
 
 ### Challenge Page Branding
 
-The challenge page and all bouncer UI carry **REDACTED branding** — this is intentional.
+The challenge page and all bouncer UI carry **MOJO VERIFY branding** — this is intentional.
 Even though the bouncer lives in django-mojo, it is part of the native mojo product family
 and the branded experience is desirable across all projects using it.
 
@@ -532,7 +532,7 @@ and the branded experience is desirable across all projects using it.
 - Background: `linear-gradient(145deg, #0a0e1a 0%, #121830 40%, #1a1040 100%)`
 - Primary: `#6384ff` (indigo) — borders, button accents, progress bar start
 - Accent: `#a78bfa` (purple) — progress bar end, hover states
-- Logo: `https://REDACTED.com/logo.svg` at 72px with `drop-shadow(0 0 20px rgba(99,132,255,.3))`
+- Logo: `https://mojoverify.com/logo.svg` at 72px with `drop-shadow(0 0 20px rgba(99,132,255,.3))`
 - Pulse rings: two concentric circles animating with `mbg-pulse` keyframes
 - Wordmark: "MOJO VERIFY" — system font stack, 600 weight, 3.5px letter-spacing, uppercase,
   `rgba(255,255,255,.7)`
@@ -555,7 +555,7 @@ automation selectors. Class names get a per-render nonce suffix (e.g. `.mbg-card
 | 2 | Two-column split — branding panel left, challenge area right |
 | 3 | Top bar (logo + wordmark compressed), challenge widget fills main area below |
 
-All four variants reference `https://REDACTED.com/logo.svg` and "MOJO VERIFY" wordmark.
+All four variants reference `https://mojoverify.com/logo.svg` and "MOJO VERIFY" wordmark.
 Projects cannot override the branding on the challenge page — it is intentionally fixed.
 
 ### What mojo-bouncer.js Becomes
@@ -734,7 +734,7 @@ risk_tier <= 'medium'" without a full challenge flow.
 
 ## Notes
 
-- Reference implementation: `apps/REDACTED/bouncer/` in REDACTED. Port the
+- Reference implementation: `apps/mojoverify/bouncer/` in Mojo Verify. Port the
   scoring engine, token manager, and device session logic directly — do not redesign
   what works.
 - The `mojo-bouncer.js` already implements: `EnvironmentScanner`, `BehaviorWatcher`,
