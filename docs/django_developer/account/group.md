@@ -71,7 +71,7 @@ Settings resolve with parent-chain fallback: group → parent group → global.
 
 ### Challenge page branding (opt-in)
 
-By default, the bouncer challenge page always uses REDACTED branding. To
+By default, the bouncer challenge page always uses the default branding. To
 override it for a specific group:
 
 ```python
@@ -80,7 +80,7 @@ settings.set('BOUNCER_CHALLENGE_BRAND', 'CLIENT BRAND', group=group)
 ```
 
 These settings are intentionally not global — they only take effect when a
-group is detected. This preserves REDACTED branding for the default flow.
+group is detected. This preserves the default branding for the default flow.
 
 ## RestMeta
 

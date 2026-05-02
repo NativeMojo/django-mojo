@@ -235,7 +235,7 @@ new oauth brand support
 ### Added
 - **Per-group white-label auth pages** — `Group.auth_domain` field maps a custom hostname to a group. The bouncer resolves the group from the request hostname (Redis-cached) or `?group=<uuid>` query param and applies that group's `AUTH_*` settings (logo, brand, OAuth, success redirect) to the login and registration pages.
 - **`Group.resolve_by_auth_domain(hostname)`** — class method for hostname→group lookup with Redis caching (24h hits, 1h misses). Cache is invalidated automatically on `auth_domain` or `is_active` changes.
-- **Per-group challenge branding** — `BOUNCER_CHALLENGE_LOGO_URL` and `BOUNCER_CHALLENGE_BRAND` settings resolve per-group. The challenge page uses REDACTED branding by default; set these settings on a group to override.
+- **Per-group challenge branding** — `BOUNCER_CHALLENGE_LOGO_URL` and `BOUNCER_CHALLENGE_BRAND` settings resolve per-group. The challenge page uses the configured default branding; set these settings on a group to override.
 - **OAuth `group_uuid` round-trip** — `group_uuid` is embedded in OAuth state so branding survives the Google/Apple provider redirect. The callback appends `?group=<uuid>` to the frontend redirect URI.
 - **`groupUuid` in `window._matConfig`** — `auth_base.html` now passes `groupUuid` into `window._matConfig` so `mojo-auth.js` can include it in auth API calls.
 
@@ -557,7 +557,7 @@ Bots are blocked before they ever see the login form, field names, or auth API e
 - **New models**: `BouncerDevice` (pre-auth device reputation), `BouncerSignal` (assess/event audit log), `BotSignature` (adaptive learning registry). Full REST CRUD via operator portal.
 - **Decoy honeypot**: `/login` and `/signin` serve a visually identical login page that POSTs to a dead endpoint returning plausible errors with a 300ms delay. Detection is never revealed.
 - **Gradual rollout**: `BOUNCER_REQUIRE_TOKEN=False` (default) logs missing tokens without blocking. Flip to `True` to enforce. Per-group opt-in via `group.metadata["require_bouncer_token"]`.
-- **REDACTED branding** on the challenge page: dark navy gradient, `#6384ff` indigo, animated scan line, pulse rings — fixed branding, not overridable. Login page branding (`BOUNCER_LOGO_URL`, `BOUNCER_ACCENT_COLOR`) is configurable.
+- **Default branding** on the challenge page: dark navy gradient, `#6384ff` indigo, animated scan line, pulse rings — opt-in override per group. Login page branding (`BOUNCER_LOGO_URL`, `BOUNCER_ACCENT_COLOR`) is configurable.
 - All features opt-in via settings. Existing projects are unaffected.
 - Docs: `docs/django_developer/account/bouncer.md`, `docs/web_developer/account/bouncer.md`
 

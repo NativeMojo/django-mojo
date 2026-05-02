@@ -294,7 +294,7 @@ CHANNEL_DISPATCHERS = {
                     'permission (permission key like "is_superuser"), '
                     'group_id (integer), '
                     'metadata (dict to match against user metadata), '
-                    'email_domain (string like "REDACTED.com")'
+                    'email_domain (string like "example.com")'
                 ),
             },
         },

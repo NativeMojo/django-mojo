@@ -328,7 +328,7 @@ group → parent group → global.
 
 ### Challenge page branding
 
-The bouncer challenge page uses REDACTED branding by default. To override it
+The bouncer challenge page uses the configured default branding. To override it
 for a specific group (opt-in only):
 
 ```python
@@ -337,7 +337,7 @@ settings.set('BOUNCER_CHALLENGE_BRAND', 'CLIENT BRAND', group=group)
 ```
 
 `BOUNCER_CHALLENGE_LOGO_URL` and `BOUNCER_CHALLENGE_BRAND` only take effect
-when a group is resolved. Requests with no group always use REDACTED branding.
+when a group is resolved. Requests with no group always use the default branding.
 
 ### OAuth round-trip
 
@@ -375,7 +375,7 @@ See [group.md](group.md) for the full `auth_domain` field and `resolve_by_auth_d
 ## Templates
 
 - `account/login.html` — full mojo-auth webapp. Override in your project's templates dir.
-- `account/bouncer_challenge.html` — REDACTED-branded challenge page by default; override logo/brand via `BOUNCER_CHALLENGE_LOGO_URL` / `BOUNCER_CHALLENGE_BRAND` per group.
+- `account/bouncer_challenge.html` — challenge page using default branding; override logo/brand via `BOUNCER_CHALLENGE_LOGO_URL` / `BOUNCER_CHALLENGE_BRAND` per group.
 - `account/bouncer_decoy.html` — honeypot login at `/login`, `/signin`.
 
 Static assets in `account/static/account/`:

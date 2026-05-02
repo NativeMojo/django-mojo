@@ -110,7 +110,7 @@ def _gate_threshold(key, default):
 
 
 # ---------------------------------------------------------------------------
-# Built-in analyzers — ported from REDACTED bouncer
+# Built-in analyzers
 # ---------------------------------------------------------------------------
 
 @register_analyzer

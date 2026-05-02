@@ -147,7 +147,7 @@ placing a file with the same path in your project's `TEMPLATES` directories.
 | `auth_hero.html` | Left panel partial — override to swap imagery/messaging |
 | `login.html` | Login page — extends base, all 5 views + OAuth |
 | `register.html` | Registration page — extends base |
-| `bouncer_challenge.html` | Bouncer challenge (REDACTED branded, not overridable) |
+| `bouncer_challenge.html` | Bouncer challenge (default branded, opt-in override per group) |
 | `bouncer_decoy.html` | Honeypot decoy login page |
 
 ### Template blocks (in `auth_base.html`)

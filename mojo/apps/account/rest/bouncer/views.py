@@ -29,8 +29,8 @@ logger = logit.get_logger('bouncer', 'bouncer.log')
 
 DISABLE_LOGIN = settings.get_static('DISABLE_LOGIN', False)
 
-_DEFAULT_CHALLENGE_LOGO = 'https://REDACTED.com/logo.svg'
-_DEFAULT_CHALLENGE_BRAND = 'MOJO VERIFY'
+_DEFAULT_CHALLENGE_LOGO = ''
+_DEFAULT_CHALLENGE_BRAND = 'DJANGO MOJO'
 
 
 def _resolve_group(request):
@@ -227,10 +227,10 @@ def _auth_context(request, group=None):
     return {
         'api_base': settings.get('AUTH_API_BASE', '', group=group),
         'success_redirect': settings.get('AUTH_SUCCESS_REDIRECT', '/', group=group),
-        'logo_url': settings.get('AUTH_LOGO_URL', 'https://REDACTED.s3.amazonaws.com/signatures/14e7aab75c2749cb846f7d57298691ac/mojo_logo_f97e2d0a.png', group=group),
+        'logo_url': settings.get('AUTH_LOGO_URL', '', group=group),
         'favicon_url': settings.get('AUTH_FAVICON_URL', '', group=group),
         'brand_name': settings.get('AUTH_APP_TITLE', 'DJANGO MOJO', group=group),
-        'hero_image_url': settings.get('AUTH_HERO_IMAGE_URL', 'https://REDACTED.s3.amazonaws.com/signatures/14e7aab75c2749cb846f7d57298691ac/purple_dunes_lake_2_bd730023.png', group=group),
+        'hero_image_url': settings.get('AUTH_HERO_IMAGE_URL', '', group=group),
         'hero_headline': settings.get('AUTH_HERO_HEADLINE', 'Welcome back', group=group),
         'hero_subheadline': settings.get('AUTH_HERO_SUBHEADLINE', 'Admin Portal', group=group),
         'back_to_website_url': settings.get('AUTH_BACK_TO_WEBSITE_URL', '', group=group),
@@ -286,7 +286,7 @@ def _serve_challenge(request, challenge_tier=1, page_type='login', group=None):
     if back_val:
         fwd_params['back'] = back_val
     group_qs = f'?{urlencode(fwd_params)}' if fwd_params else ''
-    # Challenge page: REDACTED branding by default, opt-in override per group
+    # Challenge page: default branding from settings, opt-in override per group
     logo_url = settings.get('BOUNCER_CHALLENGE_LOGO_URL', _DEFAULT_CHALLENGE_LOGO, group=group)
     brand_name = settings.get('BOUNCER_CHALLENGE_BRAND', _DEFAULT_CHALLENGE_BRAND, group=group)
     return render(request, 'account/bouncer_challenge.html', {
