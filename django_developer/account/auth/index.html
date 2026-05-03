@@ -1466,6 +1466,45 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#failed-login-protection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Failed Login Protection
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Failed Login Protection">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Settings
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#admin-releasing-a-stuck-account" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Admin — releasing a stuck account
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#incident-reporting" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4257,6 +4296,45 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#failed-login-protection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Failed Login Protection
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Failed Login Protection">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Settings
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#admin-releasing-a-stuck-account" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Admin — releasing a stuck account
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#incident-reporting" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4615,8 +4693,114 @@ for the end-to-end client-side flow.</p>
 <a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="n">group</span><span class="o">.</span><span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;webapp_auth_path&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;/login&quot;</span>  <span class="c1"># optional, default /auth</span>
 <a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="n">group</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
 </code></pre></div>
+<h2 id="failed-login-protection">Failed Login Protection<a class="headerlink" href="#failed-login-protection" title="Permanent link">&para;</a></h2>
+<p>The login endpoint applies a layered, bypass-resistant throttle stack. Each tier is independent — tripping one does not bypass any other.</p>
+<table>
+<thead>
+<tr>
+<th>Tier</th>
+<th>Scope</th>
+<th>Limit</th>
+<th>Window</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>IP</td>
+<td>100 req</td>
+<td>60 s</td>
+<td>First line; always active</td>
+</tr>
+<tr>
+<td>2</td>
+<td>muid (server-set cookie)</td>
+<td>10 req</td>
+<td>300 s</td>
+<td>Server-controlled; cannot be rotated by the client</td>
+</tr>
+<tr>
+<td>3</td>
+<td>per-account (user.id)</td>
+<td>10 req</td>
+<td>900 s</td>
+<td>Applied after username resolves; <code>LOGIN_USERNAME_LIMIT</code> / <code>LOGIN_USERNAME_WINDOW</code></td>
+</tr>
+<tr>
+<td>4</td>
+<td><code>invalid_password</code> ruleset</td>
+<td>5 events</td>
+<td>15 min</td>
+<td>Level-5 events → IP block fleet-wide for 30 min</td>
+</tr>
+<tr>
+<td>5</td>
+<td>MFA verify endpoints (IP)</td>
+<td>10 req</td>
+<td>60 s</td>
+<td>TOTP and passkey verify; <code>MFA_VERIFY_IP_LIMIT</code> / <code>MFA_VERIFY_IP_WINDOW</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>muid</strong> is an <code>HttpOnly</code> cookie set by mojo middleware; unlike <code>duid</code> (client-supplied), the client cannot manufacture or cycle it. <code>duid</code> is still checked as an additive tier.</p>
+<p><strong>Per-account counter</strong> is cleared automatically on a successful password match, so one legitimately mistyped password does not permanently penalise an account. On block the endpoint returns a standard 429 with <code>Retry-After</code>.</p>
+<p><strong><code>invalid_password</code> ruleset</strong> — the <code>ensure_auth_rules()</code> call during startup registers a bundled incident rule: 5 <code>invalid_password</code> events at level &gt;= 5 from the same IP within 15 minutes triggers a fleet-wide IP block for 30 minutes. The rule name is <code>"Auth - Password Brute Force"</code>. This rule is idempotent — calling <code>ensure_auth_rules()</code> more than once is safe.</p>
+<h3 id="settings">Settings<a class="headerlink" href="#settings" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Default</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>LOGIN_USERNAME_LIMIT</code></td>
+<td><code>10</code></td>
+<td>Max failed attempts per account per window</td>
+</tr>
+<tr>
+<td><code>LOGIN_USERNAME_WINDOW</code></td>
+<td><code>900</code></td>
+<td>Window in seconds for per-account counter</td>
+</tr>
+<tr>
+<td><code>MFA_VERIFY_IP_LIMIT</code></td>
+<td><code>10</code></td>
+<td>Max TOTP/passkey verify attempts per IP per window</td>
+</tr>
+<tr>
+<td><code>MFA_VERIFY_IP_WINDOW</code></td>
+<td><code>60</code></td>
+<td>Window in seconds for MFA verify IP counter</td>
+</tr>
+</tbody>
+</table>
+<h3 id="admin-releasing-a-stuck-account">Admin — releasing a stuck account<a class="headerlink" href="#admin-releasing-a-stuck-account" title="Permanent link">&para;</a></h3>
+<p>When a user is locked out by tier 3, an admin with <code>manage_users</code> can clear the counter:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>POST /api/auth/manage/clear_rate_limit
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>{
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>  &quot;username&quot;: &quot;alice@example.com&quot;
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>}
+</code></pre></div>
+<p>Or by user ID:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>POST /api/auth/manage/clear_rate_limit
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>{
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>  &quot;user_id&quot;: 42
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>}
+</code></pre></div>
+<p>When <code>username</code> or <code>user_id</code> is provided without an explicit <code>key</code>, the key defaults to <code>"login"</code>. To clear a specific bucket:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>POST /api/auth/manage/clear_rate_limit
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>{
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>  &quot;username&quot;: &quot;alice@example.com&quot;,
+<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a>  &quot;key&quot;: &quot;login&quot;
+<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a>}
+</code></pre></div>
+<p>The endpoint also accepts <code>ip</code>, <code>duid</code>, and <code>muid</code> to clear other tiers independently.</p>
 <h2 id="incident-reporting">Incident Reporting<a class="headerlink" href="#incident-reporting" title="Permanent link">&para;</a></h2>
-<p>Failed login attempts, unknown usernames, and invalid password resets are automatically reported to the incident system with appropriate severity levels.</p>
+<p>Failed login attempts, unknown usernames, and invalid password resets are automatically reported to the incident system with appropriate severity levels. <code>invalid_password</code> events are emitted at level 5 once the username resolves (level 1 from <code>set_new_password</code>).</p>
 
 
 

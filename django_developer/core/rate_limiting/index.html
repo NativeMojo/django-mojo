@@ -3793,6 +3793,39 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#muid-server-set-cookie-dimension" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        muid — Server-Set Cookie Dimension
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#check_account_attempt-per-account-sliding-window-helper" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        check_account_attempt — Per-Account Sliding-Window Helper
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#clear_rate_limits-cache-clearing-helper" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        clear_rate_limits — Cache Clearing Helper
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#settings" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3868,8 +3901,8 @@
 <hr />
 <h2 id="mdrate_limit-fixed-window"><code>@md.rate_limit</code> — Fixed-Window<a class="headerlink" href="#mdrate_limit-fixed-window" title="Permanent link">&para;</a></h2>
 <p>Counts requests in fixed time buckets. Fast and cheap (one Redis INCR per check). The right choice for general throughput limits where a small burst across a window boundary doesn't matter.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">rate_limit</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">ip_limit</span><span class="p">,</span> <span class="n">duid_limit</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">apikey_limit</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>               <span class="n">ip_window</span><span class="o">=</span><span class="mi">60</span><span class="p">,</span> <span class="n">duid_window</span><span class="o">=</span><span class="mi">60</span><span class="p">,</span> <span class="n">apikey_window</span><span class="o">=</span><span class="mi">60</span><span class="p">,</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">rate_limit</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">ip_limit</span><span class="p">,</span> <span class="n">duid_limit</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">muid_limit</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">apikey_limit</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>               <span class="n">ip_window</span><span class="o">=</span><span class="mi">60</span><span class="p">,</span> <span class="n">duid_window</span><span class="o">=</span><span class="mi">60</span><span class="p">,</span> <span class="n">muid_window</span><span class="o">=</span><span class="mi">60</span><span class="p">,</span> <span class="n">apikey_window</span><span class="o">=</span><span class="mi">60</span><span class="p">,</span>
 <a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>               <span class="n">min_granularity</span><span class="o">=</span><span class="s2">&quot;hours&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="parameters">Parameters<a class="headerlink" href="#parameters" title="Permanent link">&para;</a></h3>
@@ -3894,6 +3927,10 @@
 <td>Max requests per <code>duid_window</code> seconds per device UUID (optional)</td>
 </tr>
 <tr>
+<td><code>muid_limit</code></td>
+<td>Max requests per <code>muid_window</code> seconds per server-set muid cookie (optional)</td>
+</tr>
+<tr>
 <td><code>apikey_limit</code></td>
 <td>Default max requests per <code>apikey_window</code> per API key group (optional)</td>
 </tr>
@@ -3904,6 +3941,10 @@
 <tr>
 <td><code>duid_window</code></td>
 <td>Window in seconds for duid counter (default <code>60</code>)</td>
+</tr>
+<tr>
+<td><code>muid_window</code></td>
+<td>Window in seconds for muid counter (default <code>60</code>)</td>
 </tr>
 <tr>
 <td><code>apikey_window</code></td>
@@ -3946,8 +3987,8 @@
 <h2 id="mdstrict_rate_limit-sliding-window"><code>@md.strict_rate_limit</code> — Sliding-Window<a class="headerlink" href="#mdstrict_rate_limit-sliding-window" title="Permanent link">&para;</a></h2>
 <p>Counts requests within a true rolling window measured backwards from <em>now</em>. Correctly catches bursts that straddle window boundaries. Use this for any endpoint where the limit has a security meaning.</p>
 <p>Same signature as <code>rate_limit</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">strict_rate_limit</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">ip_limit</span><span class="p">,</span> <span class="n">duid_limit</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">apikey_limit</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>                      <span class="n">ip_window</span><span class="o">=</span><span class="mi">60</span><span class="p">,</span> <span class="n">duid_window</span><span class="o">=</span><span class="mi">60</span><span class="p">,</span> <span class="n">apikey_window</span><span class="o">=</span><span class="mi">60</span><span class="p">,</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">strict_rate_limit</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">ip_limit</span><span class="p">,</span> <span class="n">duid_limit</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">muid_limit</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">apikey_limit</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>                      <span class="n">ip_window</span><span class="o">=</span><span class="mi">60</span><span class="p">,</span> <span class="n">duid_window</span><span class="o">=</span><span class="mi">60</span><span class="p">,</span> <span class="n">muid_window</span><span class="o">=</span><span class="mi">60</span><span class="p">,</span> <span class="n">apikey_window</span><span class="o">=</span><span class="mi">60</span><span class="p">,</span>
 <a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>                      <span class="n">min_granularity</span><span class="o">=</span><span class="s2">&quot;hours&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="examples_1">Examples<a class="headerlink" href="#examples_1" title="Permanent link">&para;</a></h3>
@@ -4043,6 +4084,10 @@
 <td>Device UUID from <code>request.DATA.get("duid")</code></td>
 </tr>
 <tr>
+<td><code>"muid"</code></td>
+<td>Server-set client cookie from <code>request.muid</code></td>
+</tr>
+<tr>
 <td><code>"api_key"</code></td>
 <td>API key group PK (<code>request.api_key.group.pk</code>)</td>
 </tr>
@@ -4115,6 +4160,111 @@
 <a id="__codelineno-13-12" name="__codelineno-13-12" href="#__codelineno-13-12"></a>    <span class="o">...</span>
 </code></pre></div>
 <p>Rate limiting before metrics ensures that blocked requests are still counted (you want to see the full traffic volume, including rejected requests).</p>
+<hr />
+<hr />
+<h2 id="muid-server-set-cookie-dimension"><code>muid</code> — Server-Set Cookie Dimension<a class="headerlink" href="#muid-server-set-cookie-dimension" title="Permanent link">&para;</a></h2>
+<p><code>muid</code> is an <code>HttpOnly</code> cookie maintained by mojo's session middleware. Unlike <code>duid</code>, which is supplied by the client and can be omitted or rotated to bypass per-device limits, <code>muid</code> is set server-side and cannot be spoofed or cycled by a browser or scripted client.</p>
+<p>Use <code>muid_limit</code> / <code>muid_window</code> on security-sensitive endpoints where client-controlled <code>duid</code> bypass is a concern:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="nd">@md</span><span class="o">.</span><span class="n">POST</span><span class="p">(</span><span class="s2">&quot;login&quot;</span><span class="p">)</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="nd">@md</span><span class="o">.</span><span class="n">strict_rate_limit</span><span class="p">(</span><span class="s2">&quot;login&quot;</span><span class="p">,</span> <span class="n">ip_limit</span><span class="o">=</span><span class="mi">100</span><span class="p">,</span>
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>                      <span class="n">muid_limit</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">muid_window</span><span class="o">=</span><span class="mi">300</span><span class="p">,</span>
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>                      <span class="n">duid_limit</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">duid_window</span><span class="o">=</span><span class="mi">300</span><span class="p">)</span>
+<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_user_login</span><span class="p">(</span><span class="n">request</span><span class="p">):</span>
+<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a>    <span class="o">...</span>
+</code></pre></div>
+<p>Both <code>muid</code> and <code>duid</code> checks run when both are configured — each is an independent additive gate.</p>
+<p>If <code>request.muid</code> is absent (e.g. first request before middleware sets the cookie), the muid check is skipped for that request.</p>
+<hr />
+<h2 id="check_account_attempt-per-account-sliding-window-helper"><code>check_account_attempt</code> — Per-Account Sliding-Window Helper<a class="headerlink" href="#check_account_attempt-per-account-sliding-window-helper" title="Permanent link">&para;</a></h2>
+<p>For views that have already resolved an authenticated identity and need a per-account throttle independent of IP or client cookie:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.decorators.limits</span><span class="w"> </span><span class="kn">import</span> <span class="n">check_account_attempt</span>
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="n">count</span><span class="p">,</span> <span class="n">blocked</span> <span class="o">=</span> <span class="n">check_account_attempt</span><span class="p">(</span><span class="s2">&quot;login&quot;</span><span class="p">,</span> <span class="n">user</span><span class="o">.</span><span class="n">pk</span><span class="p">,</span> <span class="n">limit</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">window</span><span class="o">=</span><span class="mi">900</span><span class="p">,</span> <span class="n">request</span><span class="o">=</span><span class="n">request</span><span class="p">)</span>
+<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="k">if</span> <span class="n">blocked</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a>    <span class="k">return</span> <span class="n">blocked</span>
+</code></pre></div>
+<p>The helper uses the same sliding-window algorithm as <code>strict_rate_limit</code> and returns an identical 429 response shape on block.</p>
+<p><strong>Signature:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">check_account_attempt</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">account_id</span><span class="p">,</span> <span class="n">limit</span><span class="p">,</span> <span class="n">window</span><span class="p">,</span> <span class="n">request</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">min_granularity</span><span class="o">=</span><span class="s2">&quot;hours&quot;</span><span class="p">)</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Param</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>key</code></td>
+<td>Rate limit bucket name (e.g. <code>"login"</code>)</td>
+</tr>
+<tr>
+<td><code>account_id</code></td>
+<td>Resolved identity (e.g. <code>user.pk</code>)</td>
+</tr>
+<tr>
+<td><code>limit</code></td>
+<td>Max attempts per window</td>
+</tr>
+<tr>
+<td><code>window</code></td>
+<td>Sliding window in seconds</td>
+</tr>
+<tr>
+<td><code>request</code></td>
+<td>Request object — used for the 429 response; if <code>None</code>, count is tracked but no block response is produced</td>
+</tr>
+<tr>
+<td><code>min_granularity</code></td>
+<td>Passed to metrics on block (default <code>"hours"</code>)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Returns:</strong> <code>(count, response)</code> — <code>count</code> is the current number of attempts in the window; <code>response</code> is a 429 <code>JsonResponse</code> if blocked, or <code>None</code>.</p>
+<p><strong>Fail-open</strong> — Redis errors are caught, logged to <code>error.log</code>, and the function returns <code>(0, None)</code>. A Redis outage will not lock users out.</p>
+<p><strong>Clearing the counter</strong> on success:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.decorators.limits</span><span class="w"> </span><span class="kn">import</span> <span class="n">clear_rate_limits</span>
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>
+<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a><span class="n">clear_rate_limits</span><span class="p">(</span><span class="n">key</span><span class="o">=</span><span class="s2">&quot;login&quot;</span><span class="p">,</span> <span class="n">account_id</span><span class="o">=</span><span class="n">user</span><span class="o">.</span><span class="n">pk</span><span class="p">)</span>
+</code></pre></div>
+<hr />
+<h2 id="clear_rate_limits-cache-clearing-helper"><code>clear_rate_limits</code> — Cache Clearing Helper<a class="headerlink" href="#clear_rate_limits-cache-clearing-helper" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.decorators.limits</span><span class="w"> </span><span class="kn">import</span> <span class="n">clear_rate_limits</span>
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>
+<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="n">clear_rate_limits</span><span class="p">(</span><span class="n">ip</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">key</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">duid</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">muid</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">account_id</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Param</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ip</code></td>
+<td>Clear all srl/rl keys for this IP (optionally scoped to <code>key</code>)</td>
+</tr>
+<tr>
+<td><code>key</code></td>
+<td>Limit bucket name (e.g. <code>"login"</code>) — required when clearing by duid/muid/account_id</td>
+</tr>
+<tr>
+<td><code>duid</code></td>
+<td>Clear the device UUID counter for this bucket (requires <code>key</code>)</td>
+</tr>
+<tr>
+<td><code>muid</code></td>
+<td>Clear the server-cookie counter for this bucket (requires <code>key</code>)</td>
+</tr>
+<tr>
+<td><code>account_id</code></td>
+<td>Clear the per-account counter for this user (requires <code>key</code>)</td>
+</tr>
+</tbody>
+</table>
+<p>Returns the number of Redis keys deleted.</p>
 <hr />
 <h2 id="settings">Settings<a class="headerlink" href="#settings" title="Permanent link">&para;</a></h2>
 <table>
