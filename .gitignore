@@ -5,6 +5,7 @@
 *.egg-info/
 
 .claude/worktrees
+.claude/scheduled_tasks.lock
 # Editors
 *~
 /.zed
