@@ -4186,70 +4186,142 @@
 <a id="__codelineno-13-17" name="__codelineno-13-17" href="#__codelineno-13-17"></a>    <span class="c1"># Yields worker-2 first; worker-1 is skipped while its cooldown key is alive</span>
 <a id="__codelineno-13-18" name="__codelineno-13-18" href="#__codelineno-13-18"></a>    <span class="o">...</span>
 </code></pre></div>
-<p>Signature: <code>(str_id) -&gt; bool</code>. Returning <code>True</code> means "skip this one for now." The skipped id is <code>lpush</code>ed back to the head of the list so other items (at the tail) are tried first by <code>brpop</code>. Skip retries are bounded by the current pool size — if every member is ineligible, <code>get_next_available</code> returns <code>None</code> rather than blocking. Predicate exceptions are caught, logged via <code>logit.exception</code>, and treated as skip (conservative default — a buggy predicate cannot return a poisoned id).</p>
+<p>Signature: <code>(str_id) -&gt; bool | int | float</code>. Three return shapes are recognised:</p>
+<table>
+<thead>
+<tr>
+<th>Return value</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>False</code> / <code>0</code></td>
+<td>Eligible — return this candidate now.</td>
+</tr>
+<tr>
+<td><code>True</code> / <code>None</code> / unknown truthy / negative numeric</td>
+<td>Skip — try another candidate, no retry-after info.</td>
+</tr>
+<tr>
+<td><code>int</code> / <code>float</code> (&gt; 0)</td>
+<td>Temporarily ineligible — pool may retry this candidate after N seconds.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Wallclock-budget contract (numeric returns):</strong> when the predicate returns a positive number, <code>timeout</code> is treated as the maximum wallclock time the call may take. The pool holds the deferred candidate out of the available list and <code>time.sleep</code>s until the soonest retry-after matures (capped at 1 second per sleep so peer checkins from other workers are observed quickly). All deferred items are republished to the available list when the call exits — peers are never starved. If the budget elapses before any candidate becomes eligible, <code>get_next_available</code> returns <code>None</code>.</p>
+<p><strong>Bool-only carve-out (no retry signal):</strong> when the predicate returns only <code>True</code> / <code>False</code>, the pool sweeps the available list once (bounded by the current pool size) and returns <code>None</code> if every candidate said skip — even if <code>timeout</code> is large. <code>True</code> carries no information about <em>when</em> the candidate might become eligible, so the pool cannot meaningfully wait. Return a numeric retry-after (seconds) to opt into the wallclock-budget behaviour.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">cooldown</span><span class="p">(</span><span class="n">str_id</span><span class="p">):</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>    <span class="n">ttl</span> <span class="o">=</span> <span class="n">r</span><span class="o">.</span><span class="n">ttl</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;cooldown:</span><span class="si">{</span><span class="n">str_id</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>    <span class="k">if</span> <span class="n">ttl</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">ttl</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">:</span>
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>        <span class="k">return</span> <span class="kc">False</span>  <span class="c1"># eligible</span>
+<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a>    <span class="k">return</span> <span class="nb">float</span><span class="p">(</span><span class="n">ttl</span><span class="p">)</span>  <span class="c1"># retry after this many seconds</span>
+<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a>
+<a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a><span class="n">pool</span> <span class="o">=</span> <span class="n">RedisBasePool</span><span class="p">(</span><span class="s2">&quot;my_pool&quot;</span><span class="p">,</span> <span class="n">skip_predicate</span><span class="o">=</span><span class="n">cooldown</span><span class="p">)</span>
+<a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a><span class="c1"># get_next_available(timeout=30) will sleep through cooldown windows up to 30s</span>
+</code></pre></div>
+<p>Bool-skip candidates are <code>lpush</code>ed back to the head of the list so other items (at the tail) are tried first by <code>brpop</code>. Predicate exceptions are caught, logged via <code>logit.exception</code>, and treated as skip (conservative default — a buggy predicate cannot return a poisoned id).</p>
 <p><code>checkout_specific_item</code> bypasses the predicate by design — explicit checkouts of a known id always succeed.</p>
 <blockquote>
 <p><strong>Ordering note:</strong> skipped items move to the head of the list, so they are tried last after every other available member. This is a small shift away from strict FIFO — relevant only if your consumer relies on insertion order.</p>
 </blockquote>
 <h3 id="redismodelpool-django-model-pool">RedisModelPool — Django Model Pool<a class="headerlink" href="#redismodelpool-django-model-pool" title="Permanent link">&para;</a></h3>
 <p>Manages a pool of Django model instances by primary key. Useful for distributing work across a set of model records (e.g. API keys, worker configs, external accounts).</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers.redis.pool</span><span class="w"> </span><span class="kn">import</span> <span class="n">RedisModelPool</span>
-<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>
-<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="c1"># Pool of active ApiKey instances</span>
-<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="n">pool</span> <span class="o">=</span> <span class="n">RedisModelPool</span><span class="p">(</span>
-<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a>    <span class="n">model_cls</span><span class="o">=</span><span class="n">ApiKey</span><span class="p">,</span>
-<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a>    <span class="n">query_dict</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="s2">&quot;active&quot;</span><span class="p">},</span>
-<a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a>    <span class="n">pool_key</span><span class="o">=</span><span class="s2">&quot;apikey_pool&quot;</span><span class="p">,</span>
-<a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a>    <span class="n">default_timeout</span><span class="o">=</span><span class="mi">30</span><span class="p">,</span>
-<a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a><span class="p">)</span>
-<a id="__codelineno-14-10" name="__codelineno-14-10" href="#__codelineno-14-10"></a>
-<a id="__codelineno-14-11" name="__codelineno-14-11" href="#__codelineno-14-11"></a><span class="c1"># Initialize from database (clears and rebuilds)</span>
-<a id="__codelineno-14-12" name="__codelineno-14-12" href="#__codelineno-14-12"></a><span class="n">pool</span><span class="o">.</span><span class="n">init_pool</span><span class="p">()</span>
-<a id="__codelineno-14-13" name="__codelineno-14-13" href="#__codelineno-14-13"></a>
-<a id="__codelineno-14-14" name="__codelineno-14-14" href="#__codelineno-14-14"></a><span class="c1"># Checkout an instance (context manager)</span>
-<a id="__codelineno-14-15" name="__codelineno-14-15" href="#__codelineno-14-15"></a><span class="k">with</span> <span class="n">pool</span><span class="o">.</span><span class="n">checkout_instance</span><span class="p">(</span><span class="n">timeout</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span> <span class="k">as</span> <span class="n">key</span><span class="p">:</span>
-<a id="__codelineno-14-16" name="__codelineno-14-16" href="#__codelineno-14-16"></a>    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Using API key: </span><span class="si">{</span><span class="n">key</span><span class="o">.</span><span class="n">pk</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-<a id="__codelineno-14-17" name="__codelineno-14-17" href="#__codelineno-14-17"></a>    <span class="c1"># Instance is returned to pool on exit</span>
-<a id="__codelineno-14-18" name="__codelineno-14-18" href="#__codelineno-14-18"></a>
-<a id="__codelineno-14-19" name="__codelineno-14-19" href="#__codelineno-14-19"></a><span class="c1"># Checkout a specific instance</span>
-<a id="__codelineno-14-20" name="__codelineno-14-20" href="#__codelineno-14-20"></a><span class="k">with</span> <span class="n">pool</span><span class="o">.</span><span class="n">checkout_specific_instance</span><span class="p">(</span><span class="n">my_key</span><span class="p">)</span> <span class="k">as</span> <span class="n">key</span><span class="p">:</span>
-<a id="__codelineno-14-21" name="__codelineno-14-21" href="#__codelineno-14-21"></a>    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Using: </span><span class="si">{</span><span class="n">key</span><span class="o">.</span><span class="n">pk</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-<a id="__codelineno-14-22" name="__codelineno-14-22" href="#__codelineno-14-22"></a>
-<a id="__codelineno-14-23" name="__codelineno-14-23" href="#__codelineno-14-23"></a><span class="c1"># Manual checkout / return</span>
-<a id="__codelineno-14-24" name="__codelineno-14-24" href="#__codelineno-14-24"></a><span class="n">instance</span> <span class="o">=</span> <span class="n">pool</span><span class="o">.</span><span class="n">get_next_instance</span><span class="p">(</span><span class="n">timeout</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
-<a id="__codelineno-14-25" name="__codelineno-14-25" href="#__codelineno-14-25"></a><span class="c1"># ... do work ...</span>
-<a id="__codelineno-14-26" name="__codelineno-14-26" href="#__codelineno-14-26"></a><span class="n">pool</span><span class="o">.</span><span class="n">return_instance</span><span class="p">(</span><span class="n">instance</span><span class="p">)</span>
-<a id="__codelineno-14-27" name="__codelineno-14-27" href="#__codelineno-14-27"></a>
-<a id="__codelineno-14-28" name="__codelineno-14-28" href="#__codelineno-14-28"></a><span class="c1"># Add / remove instances dynamically</span>
-<a id="__codelineno-14-29" name="__codelineno-14-29" href="#__codelineno-14-29"></a><span class="n">pool</span><span class="o">.</span><span class="n">add_to_pool</span><span class="p">(</span><span class="n">new_key</span><span class="p">)</span>                    <span class="c1"># auto-inits pool if needed</span>
-<a id="__codelineno-14-30" name="__codelineno-14-30" href="#__codelineno-14-30"></a><span class="n">pool</span><span class="o">.</span><span class="n">remove_from_pool</span><span class="p">(</span><span class="n">old_key</span><span class="p">)</span>               <span class="c1"># only if available</span>
-<a id="__codelineno-14-31" name="__codelineno-14-31" href="#__codelineno-14-31"></a><span class="n">pool</span><span class="o">.</span><span class="n">remove_from_pool</span><span class="p">(</span><span class="n">old_key</span><span class="p">,</span> <span class="n">force</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>   <span class="c1"># even if checked out</span>
-<a id="__codelineno-14-32" name="__codelineno-14-32" href="#__codelineno-14-32"></a>
-<a id="__codelineno-14-33" name="__codelineno-14-33" href="#__codelineno-14-33"></a><span class="c1"># Inspect</span>
-<a id="__codelineno-14-34" name="__codelineno-14-34" href="#__codelineno-14-34"></a><span class="n">pool</span><span class="o">.</span><span class="n">list_checked_out_instances</span><span class="p">()</span>  <span class="c1"># returns queryset of checked-out models</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers.redis.pool</span><span class="w"> </span><span class="kn">import</span> <span class="n">RedisModelPool</span>
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="c1"># Pool of active ApiKey instances</span>
+<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="n">pool</span> <span class="o">=</span> <span class="n">RedisModelPool</span><span class="p">(</span>
+<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a>    <span class="n">model_cls</span><span class="o">=</span><span class="n">ApiKey</span><span class="p">,</span>
+<a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a>    <span class="n">query_dict</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="s2">&quot;active&quot;</span><span class="p">},</span>
+<a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a>    <span class="n">pool_key</span><span class="o">=</span><span class="s2">&quot;apikey_pool&quot;</span><span class="p">,</span>
+<a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a>    <span class="n">default_timeout</span><span class="o">=</span><span class="mi">30</span><span class="p">,</span>
+<a id="__codelineno-15-9" name="__codelineno-15-9" href="#__codelineno-15-9"></a><span class="p">)</span>
+<a id="__codelineno-15-10" name="__codelineno-15-10" href="#__codelineno-15-10"></a>
+<a id="__codelineno-15-11" name="__codelineno-15-11" href="#__codelineno-15-11"></a><span class="c1"># Initialize from database (clears and rebuilds)</span>
+<a id="__codelineno-15-12" name="__codelineno-15-12" href="#__codelineno-15-12"></a><span class="n">pool</span><span class="o">.</span><span class="n">init_pool</span><span class="p">()</span>
+<a id="__codelineno-15-13" name="__codelineno-15-13" href="#__codelineno-15-13"></a>
+<a id="__codelineno-15-14" name="__codelineno-15-14" href="#__codelineno-15-14"></a><span class="c1"># Checkout an instance (context manager)</span>
+<a id="__codelineno-15-15" name="__codelineno-15-15" href="#__codelineno-15-15"></a><span class="k">with</span> <span class="n">pool</span><span class="o">.</span><span class="n">checkout_instance</span><span class="p">(</span><span class="n">timeout</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span> <span class="k">as</span> <span class="n">key</span><span class="p">:</span>
+<a id="__codelineno-15-16" name="__codelineno-15-16" href="#__codelineno-15-16"></a>    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Using API key: </span><span class="si">{</span><span class="n">key</span><span class="o">.</span><span class="n">pk</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<a id="__codelineno-15-17" name="__codelineno-15-17" href="#__codelineno-15-17"></a>    <span class="c1"># Instance is returned to pool on exit</span>
+<a id="__codelineno-15-18" name="__codelineno-15-18" href="#__codelineno-15-18"></a>
+<a id="__codelineno-15-19" name="__codelineno-15-19" href="#__codelineno-15-19"></a><span class="c1"># Checkout a specific instance</span>
+<a id="__codelineno-15-20" name="__codelineno-15-20" href="#__codelineno-15-20"></a><span class="k">with</span> <span class="n">pool</span><span class="o">.</span><span class="n">checkout_specific_instance</span><span class="p">(</span><span class="n">my_key</span><span class="p">)</span> <span class="k">as</span> <span class="n">key</span><span class="p">:</span>
+<a id="__codelineno-15-21" name="__codelineno-15-21" href="#__codelineno-15-21"></a>    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Using: </span><span class="si">{</span><span class="n">key</span><span class="o">.</span><span class="n">pk</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<a id="__codelineno-15-22" name="__codelineno-15-22" href="#__codelineno-15-22"></a>
+<a id="__codelineno-15-23" name="__codelineno-15-23" href="#__codelineno-15-23"></a><span class="c1"># Manual checkout / return</span>
+<a id="__codelineno-15-24" name="__codelineno-15-24" href="#__codelineno-15-24"></a><span class="n">instance</span> <span class="o">=</span> <span class="n">pool</span><span class="o">.</span><span class="n">get_next_instance</span><span class="p">(</span><span class="n">timeout</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+<a id="__codelineno-15-25" name="__codelineno-15-25" href="#__codelineno-15-25"></a><span class="c1"># ... do work ...</span>
+<a id="__codelineno-15-26" name="__codelineno-15-26" href="#__codelineno-15-26"></a><span class="n">pool</span><span class="o">.</span><span class="n">return_instance</span><span class="p">(</span><span class="n">instance</span><span class="p">)</span>
+<a id="__codelineno-15-27" name="__codelineno-15-27" href="#__codelineno-15-27"></a>
+<a id="__codelineno-15-28" name="__codelineno-15-28" href="#__codelineno-15-28"></a><span class="c1"># Add / remove instances dynamically</span>
+<a id="__codelineno-15-29" name="__codelineno-15-29" href="#__codelineno-15-29"></a><span class="n">pool</span><span class="o">.</span><span class="n">add_to_pool</span><span class="p">(</span><span class="n">new_key</span><span class="p">)</span>                    <span class="c1"># auto-inits pool if needed</span>
+<a id="__codelineno-15-30" name="__codelineno-15-30" href="#__codelineno-15-30"></a><span class="n">pool</span><span class="o">.</span><span class="n">remove_from_pool</span><span class="p">(</span><span class="n">old_key</span><span class="p">)</span>               <span class="c1"># only if available</span>
+<a id="__codelineno-15-31" name="__codelineno-15-31" href="#__codelineno-15-31"></a><span class="n">pool</span><span class="o">.</span><span class="n">remove_from_pool</span><span class="p">(</span><span class="n">old_key</span><span class="p">,</span> <span class="n">force</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>   <span class="c1"># even if checked out</span>
+<a id="__codelineno-15-32" name="__codelineno-15-32" href="#__codelineno-15-32"></a>
+<a id="__codelineno-15-33" name="__codelineno-15-33" href="#__codelineno-15-33"></a><span class="c1"># Inspect</span>
+<a id="__codelineno-15-34" name="__codelineno-15-34" href="#__codelineno-15-34"></a><span class="n">pool</span><span class="o">.</span><span class="n">list_checked_out_instances</span><span class="p">()</span>  <span class="c1"># returns queryset of checked-out models</span>
 </code></pre></div>
 <p>The model pool validates instances on checkout — if a record was deleted or no longer matches <code>query_dict</code>, it is silently removed and the next available item is returned.</p>
 <h4 id="conditional-checkout-skip_predicate_1">Conditional checkout — <code>skip_predicate</code><a class="headerlink" href="#conditional-checkout-skip_predicate_1" title="Permanent link">&para;</a></h4>
 <p><code>RedisModelPool</code> accepts an optional <code>skip_predicate</code> callable applied to the loaded instance after the <code>query_dict</code> recheck. Use it to mark instances as temporarily ineligible without removing them from the pool.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers.redis</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_connection</span>
-<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers.redis.pool</span><span class="w"> </span><span class="kn">import</span> <span class="n">RedisModelPool</span>
-<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>
-<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="n">r</span> <span class="o">=</span> <span class="n">get_connection</span><span class="p">()</span>
-<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a>
-<a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a><span class="n">pool</span> <span class="o">=</span> <span class="n">RedisModelPool</span><span class="p">(</span>
-<a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a>    <span class="n">model_cls</span><span class="o">=</span><span class="n">ApiKey</span><span class="p">,</span>
-<a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a>    <span class="n">query_dict</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="s2">&quot;active&quot;</span><span class="p">},</span>
-<a id="__codelineno-15-9" name="__codelineno-15-9" href="#__codelineno-15-9"></a>    <span class="n">pool_key</span><span class="o">=</span><span class="s2">&quot;apikey_pool&quot;</span><span class="p">,</span>
-<a id="__codelineno-15-10" name="__codelineno-15-10" href="#__codelineno-15-10"></a>    <span class="n">skip_predicate</span><span class="o">=</span><span class="k">lambda</span> <span class="n">key</span><span class="p">:</span> <span class="nb">bool</span><span class="p">(</span><span class="n">r</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;cooldown:apikey:</span><span class="si">{</span><span class="n">key</span><span class="o">.</span><span class="n">pk</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)),</span>
-<a id="__codelineno-15-11" name="__codelineno-15-11" href="#__codelineno-15-11"></a><span class="p">)</span>
-<a id="__codelineno-15-12" name="__codelineno-15-12" href="#__codelineno-15-12"></a>
-<a id="__codelineno-15-13" name="__codelineno-15-13" href="#__codelineno-15-13"></a><span class="k">with</span> <span class="n">pool</span><span class="o">.</span><span class="n">checkout_instance</span><span class="p">(</span><span class="n">timeout</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span> <span class="k">as</span> <span class="n">key</span><span class="p">:</span>
-<a id="__codelineno-15-14" name="__codelineno-15-14" href="#__codelineno-15-14"></a>    <span class="c1"># Skipped while its per-pk cooldown TTL key is alive</span>
-<a id="__codelineno-15-15" name="__codelineno-15-15" href="#__codelineno-15-15"></a>    <span class="o">...</span>
-<a id="__codelineno-15-16" name="__codelineno-15-16" href="#__codelineno-15-16"></a>    <span class="c1"># On checkin, mark a 30s cooldown so other workers prefer different keys</span>
-<a id="__codelineno-15-17" name="__codelineno-15-17" href="#__codelineno-15-17"></a>    <span class="n">r</span><span class="o">.</span><span class="n">setex</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;cooldown:apikey:</span><span class="si">{</span><span class="n">key</span><span class="o">.</span><span class="n">pk</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="mi">30</span><span class="p">,</span> <span class="s2">&quot;1&quot;</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers.redis</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_connection</span>
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers.redis.pool</span><span class="w"> </span><span class="kn">import</span> <span class="n">RedisModelPool</span>
+<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>
+<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="n">r</span> <span class="o">=</span> <span class="n">get_connection</span><span class="p">()</span>
+<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a>
+<a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a><span class="n">pool</span> <span class="o">=</span> <span class="n">RedisModelPool</span><span class="p">(</span>
+<a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a>    <span class="n">model_cls</span><span class="o">=</span><span class="n">ApiKey</span><span class="p">,</span>
+<a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a>    <span class="n">query_dict</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="s2">&quot;active&quot;</span><span class="p">},</span>
+<a id="__codelineno-16-9" name="__codelineno-16-9" href="#__codelineno-16-9"></a>    <span class="n">pool_key</span><span class="o">=</span><span class="s2">&quot;apikey_pool&quot;</span><span class="p">,</span>
+<a id="__codelineno-16-10" name="__codelineno-16-10" href="#__codelineno-16-10"></a>    <span class="n">skip_predicate</span><span class="o">=</span><span class="k">lambda</span> <span class="n">key</span><span class="p">:</span> <span class="nb">bool</span><span class="p">(</span><span class="n">r</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;cooldown:apikey:</span><span class="si">{</span><span class="n">key</span><span class="o">.</span><span class="n">pk</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)),</span>
+<a id="__codelineno-16-11" name="__codelineno-16-11" href="#__codelineno-16-11"></a><span class="p">)</span>
+<a id="__codelineno-16-12" name="__codelineno-16-12" href="#__codelineno-16-12"></a>
+<a id="__codelineno-16-13" name="__codelineno-16-13" href="#__codelineno-16-13"></a><span class="k">with</span> <span class="n">pool</span><span class="o">.</span><span class="n">checkout_instance</span><span class="p">(</span><span class="n">timeout</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span> <span class="k">as</span> <span class="n">key</span><span class="p">:</span>
+<a id="__codelineno-16-14" name="__codelineno-16-14" href="#__codelineno-16-14"></a>    <span class="c1"># Skipped while its per-pk cooldown TTL key is alive</span>
+<a id="__codelineno-16-15" name="__codelineno-16-15" href="#__codelineno-16-15"></a>    <span class="o">...</span>
+<a id="__codelineno-16-16" name="__codelineno-16-16" href="#__codelineno-16-16"></a>    <span class="c1"># On checkin, mark a 30s cooldown so other workers prefer different keys</span>
+<a id="__codelineno-16-17" name="__codelineno-16-17" href="#__codelineno-16-17"></a>    <span class="n">r</span><span class="o">.</span><span class="n">setex</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;cooldown:apikey:</span><span class="si">{</span><span class="n">key</span><span class="o">.</span><span class="n">pk</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="mi">30</span><span class="p">,</span> <span class="s2">&quot;1&quot;</span><span class="p">)</span>
 </code></pre></div>
-<p>Signature: <code>(instance) -&gt; bool</code>. Returning <code>True</code> skips that instance — the pk is <code>lpush</code>ed back to the head of the available list and the next candidate is tried, bounded by the current pool size. If every member is ineligible, <code>get_next_instance</code> returns <code>None</code> after one full sweep. Predicate exceptions are caught, logged, and treated as skip.</p>
+<p>Signature: <code>(instance) -&gt; bool | int | float</code>. Same three return shapes as <code>RedisBasePool.skip_predicate</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Return value</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>False</code> / <code>0</code></td>
+<td>Eligible — return this instance now.</td>
+</tr>
+<tr>
+<td><code>True</code> / <code>None</code> / unknown truthy / negative numeric</td>
+<td>Skip — try another candidate, no retry-after info.</td>
+</tr>
+<tr>
+<td><code>int</code> / <code>float</code> (&gt; 0)</td>
+<td>Temporarily ineligible — pool may retry this instance after N seconds.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Wallclock-budget contract:</strong> for numeric returns, <code>timeout</code> is the maximum wallclock time the call may take. The pool holds the deferred instance out of the available list and sleeps until the soonest retry-after matures (capped at 1s per sleep). Deferred instances are always republished on exit. The deadline also bounds the existing stale-row retry path (<code>DoesNotExist</code> / <code>query_dict</code> mismatch) — slow stale-row recovery cannot blow the budget.</p>
+<p><strong>Bool-only carve-out:</strong> with bool-only returns, the pool sweeps once (bounded by the current pool size) and returns <code>None</code> if every member is <code>True</code>. Use a numeric retry-after to opt into waiting.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">cooldown</span><span class="p">(</span><span class="n">instance</span><span class="p">):</span>
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>    <span class="n">ttl</span> <span class="o">=</span> <span class="n">r</span><span class="o">.</span><span class="n">ttl</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;cooldown:apikey:</span><span class="si">{</span><span class="n">instance</span><span class="o">.</span><span class="n">pk</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a>    <span class="k">if</span> <span class="n">ttl</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">ttl</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">:</span>
+<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a>        <span class="k">return</span> <span class="kc">False</span>
+<a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a>    <span class="k">return</span> <span class="nb">float</span><span class="p">(</span><span class="n">ttl</span><span class="p">)</span>
+<a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a>
+<a id="__codelineno-17-7" name="__codelineno-17-7" href="#__codelineno-17-7"></a><span class="n">pool</span> <span class="o">=</span> <span class="n">RedisModelPool</span><span class="p">(</span>
+<a id="__codelineno-17-8" name="__codelineno-17-8" href="#__codelineno-17-8"></a>    <span class="n">model_cls</span><span class="o">=</span><span class="n">ApiKey</span><span class="p">,</span>
+<a id="__codelineno-17-9" name="__codelineno-17-9" href="#__codelineno-17-9"></a>    <span class="n">query_dict</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="s2">&quot;active&quot;</span><span class="p">},</span>
+<a id="__codelineno-17-10" name="__codelineno-17-10" href="#__codelineno-17-10"></a>    <span class="n">pool_key</span><span class="o">=</span><span class="s2">&quot;apikey_pool&quot;</span><span class="p">,</span>
+<a id="__codelineno-17-11" name="__codelineno-17-11" href="#__codelineno-17-11"></a>    <span class="n">skip_predicate</span><span class="o">=</span><span class="n">cooldown</span><span class="p">,</span>
+<a id="__codelineno-17-12" name="__codelineno-17-12" href="#__codelineno-17-12"></a><span class="p">)</span>
+<a id="__codelineno-17-13" name="__codelineno-17-13" href="#__codelineno-17-13"></a><span class="c1"># get_next_instance(timeout=30) sleeps through per-key cooldowns up to 30s</span>
+</code></pre></div>
 <p><code>get_specific_instance</code> and <code>checkout_specific_instance</code> bypass the predicate by design — admin or non-customer paths can force access to a specific instance regardless of its eligibility state.</p>
 <blockquote>
 <p><strong>Ordering note:</strong> skipped items move to the head of the list, so they are tried last after every other available member. This is a small shift away from strict FIFO — relevant only if your consumer relies on insertion order.</p>
@@ -4260,11 +4332,11 @@
 <hr />
 <h2 id="direct-client-access">Direct Client Access<a class="headerlink" href="#direct-client-access" title="Permanent link">&para;</a></h2>
 <p>For operations not covered by the adapter (e.g. <code>SCAN</code>, <code>GETSET</code>, Lua scripting), use the raw client:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers.redis</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_connection</span>
-<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>
-<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a><span class="n">r</span> <span class="o">=</span> <span class="n">get_connection</span><span class="p">()</span>
-<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="n">r</span><span class="o">.</span><span class="n">incr</span><span class="p">(</span><span class="s2">&quot;counter&quot;</span><span class="p">)</span>
-<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a><span class="n">r</span><span class="o">.</span><span class="n">srandmember</span><span class="p">(</span><span class="s2">&quot;myset&quot;</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers.redis</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_connection</span>
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>
+<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="n">r</span> <span class="o">=</span> <span class="n">get_connection</span><span class="p">()</span>
+<a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a><span class="n">r</span><span class="o">.</span><span class="n">incr</span><span class="p">(</span><span class="s2">&quot;counter&quot;</span><span class="p">)</span>
+<a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a><span class="n">r</span><span class="o">.</span><span class="n">srandmember</span><span class="p">(</span><span class="s2">&quot;myset&quot;</span><span class="p">)</span>
 </code></pre></div>
 <p>The client is a standard <code>redis.Redis</code> (or <code>redis.cluster.RedisCluster</code>) instance from redis-py. All redis-py methods are available.</p>
 

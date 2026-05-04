@@ -2554,6 +2554,62 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Date Range Filter">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#partial-dates-in-dr_start-dr_end" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Partial Dates in dr_start / dr_end
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#date-component-filters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Date-Component Filters
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Date-Component Filters">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#partial-date-shorthand" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Partial-Date Shorthand
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#timezone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Timezone
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -3870,6 +3926,62 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Date Range Filter">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#partial-dates-in-dr_start-dr_end" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Partial Dates in dr_start / dr_end
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#date-component-filters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Date-Component Filters
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Date-Component Filters">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#partial-date-shorthand" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Partial-Date Shorthand
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#timezone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Timezone
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4028,9 +4140,142 @@
 </tr>
 </tbody>
 </table>
-<p>Dates accept ISO 8601: <code>2024-01-01</code> or <code>2024-01-01T00:00:00Z</code></p>
+<p>Dates accept ISO 8601: <code>2024-01-01</code> or <code>2024-01-01T00:00:00Z</code>.</p>
+<h3 id="partial-dates-in-dr_start-dr_end">Partial Dates in <code>dr_start</code> / <code>dr_end</code><a class="headerlink" href="#partial-dates-in-dr_start-dr_end" title="Permanent link">&para;</a></h3>
+<p><code>dr_start</code> and <code>dr_end</code> also accept partial dates — <code>YYYY</code>, <code>YYYY-MM</code>, or <code>YYYY-MM-DD</code> — and expand them to the start / end of the period:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>GET /api/myapp/book?dr_start=2026-04&amp;dr_end=2026-04   # all of April 2026
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>GET /api/myapp/book?dr_start=2026                     # from 2026-01-01 onward
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>GET /api/myapp/book?dr_start=2026-04-02&amp;dr_end=2026-04-02   # that whole day
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Input</th>
+<th><code>dr_start</code> expands to</th>
+<th><code>dr_end</code> expands to</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>2026</code></td>
+<td><code>2026-01-01T00:00:00</code></td>
+<td><code>2026-12-31T23:59:59.999999</code></td>
+</tr>
+<tr>
+<td><code>2026-04</code></td>
+<td><code>2026-04-01T00:00:00</code></td>
+<td><code>2026-04-30T23:59:59.999999</code></td>
+</tr>
+<tr>
+<td><code>2026-04-02</code></td>
+<td><code>2026-04-02T00:00:00</code></td>
+<td><code>2026-04-02T23:59:59.999999</code></td>
+</tr>
+</tbody>
+</table>
+<p>Bounds are anchored in the request's timezone (see <a href="#timezone">Timezone</a> below). Out-of-range months / days return <code>400</code>.</p>
+<h2 id="date-component-filters">Date-Component Filters<a class="headerlink" href="#date-component-filters" title="Permanent link">&para;</a></h2>
+<p>Filter by individual components of a <code>DateField</code> or <code>DateTimeField</code> using Django's standard component lookups:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>GET /api/myapp/book?created__year=2026
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>GET /api/myapp/book?created__month=4
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>GET /api/myapp/book?created__year=2026&amp;created__month=4   # AND
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>GET /api/myapp/book?created__quarter=2
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>GET /api/myapp/book?created__day=15
+</code></pre></div>
+<p>Supported lookup suffixes:</p>
+<table>
+<thead>
+<tr>
+<th>Suffix</th>
+<th>Range</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>__year</code></td>
+<td>any</td>
+<td>calendar year</td>
+</tr>
+<tr>
+<td><code>__iso_year</code></td>
+<td>any</td>
+<td>ISO 8601 week-numbering year</td>
+</tr>
+<tr>
+<td><code>__month</code></td>
+<td>1–12</td>
+<td></td>
+</tr>
+<tr>
+<td><code>__day</code></td>
+<td>1–31</td>
+<td>day of month</td>
+</tr>
+<tr>
+<td><code>__week</code></td>
+<td>1–53</td>
+<td>ISO week number</td>
+</tr>
+<tr>
+<td><code>__week_day</code></td>
+<td>1–7</td>
+<td>DB-dependent (1=Sunday on most backends)</td>
+</tr>
+<tr>
+<td><code>__iso_week_day</code></td>
+<td>1–7</td>
+<td>1=Monday</td>
+</tr>
+<tr>
+<td><code>__quarter</code></td>
+<td>1–4</td>
+<td></td>
+</tr>
+<tr>
+<td><code>__hour</code></td>
+<td>0–23</td>
+<td></td>
+</tr>
+<tr>
+<td><code>__minute</code></td>
+<td>0–59</td>
+<td></td>
+</tr>
+<tr>
+<td><code>__second</code></td>
+<td>0–59</td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<p>Component lookups compose with <code>__in</code> and <code>__not</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>GET /api/myapp/book?created__month__in=4,5,6   # April, May, OR June
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>GET /api/myapp/book?created__month__not=12     # exclude December
+</code></pre></div>
+<p>Invalid values (<code>?created__month=foo</code>) return <code>400</code>.</p>
+<blockquote>
+<p><strong>Timezone caveat.</strong> Component lookups (<code>__year</code>, <code>__month</code>, …) run in the database connection's timezone (typically UTC). For a user-local "all of April" filter, prefer the <strong>partial-date shorthand</strong> below, which expands to a tz-aware UTC range.</p>
+</blockquote>
+<h3 id="partial-date-shorthand">Partial-Date Shorthand<a class="headerlink" href="#partial-date-shorthand" title="Permanent link">&para;</a></h3>
+<p>On a <code>DateField</code> / <code>DateTimeField</code>, the bare exact-match operator accepts a partial date and expands to a tz-aware range:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>GET /api/myapp/book?created=2026-04        # all of April 2026 (in request tz)
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>GET /api/myapp/book?created=2026           # all of 2026
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>GET /api/myapp/book?created=2026-04-02     # that whole day
+</code></pre></div>
+<p>Internally this becomes <code>created__gte=...&amp;created__lte=...</code> with the bounds anchored to the request timezone, so a user in <code>America/Los_Angeles</code> filtering <code>created=2026-04</code> gets PT-April, not UTC-April.</p>
+<p>The shorthand only applies to the bare exact-match key. Composing with <code>__in</code> / <code>__not</code> is not supported in v1 — use component lookups for those cases.</p>
+<p>CharFields and other non-date fields keep their existing exact-match behavior even when the value looks like a date.</p>
+<h3 id="timezone">Timezone<a class="headerlink" href="#timezone" title="Permanent link">&para;</a></h3>
+<p><code>dr_start</code> / <code>dr_end</code> partial-date expansion and the partial-date field shorthand both pick a timezone in this order:</p>
+<ol>
+<li><code>?timezone=&lt;tz&gt;</code> (or in POST body) — IANA name, e.g. <code>America/Los_Angeles</code></li>
+<li>The request group's timezone (<code>request.group.timezone</code>)</li>
+<li>UTC</li>
+</ol>
+<p>The <code>timezone</code> param uses the same key already used for CSV download localization.</p>
 <h2 id="text-search">Text Search<a class="headerlink" href="#text-search" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>GET /api/myapp/book?search=django
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>GET /api/myapp/book?search=django
 </code></pre></div>
 <h3 id="advanced-search-syntax">Advanced Search Syntax<a class="headerlink" href="#advanced-search-syntax" title="Permanent link">&para;</a></h3>
 <table>
@@ -4069,15 +4314,15 @@
 </tr>
 </tbody>
 </table>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>GET /api/myapp/book?search=&quot;machine learning&quot; -python author:alice
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>GET /api/myapp/book?search=&quot;machine learning&quot; -python author:alice
 </code></pre></div>
 <h2 id="sorting">Sorting<a class="headerlink" href="#sorting" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>GET /api/myapp/book?sort=title
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>GET /api/myapp/book?sort=-created    # descending (prefix with -)
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>GET /api/myapp/book?sort=title
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>GET /api/myapp/book?sort=-created    # descending (prefix with -)
 </code></pre></div>
 <p>Default sort is <code>-id</code> (newest first) unless the model specifies otherwise.</p>
 <h2 id="combining-parameters">Combining Parameters<a class="headerlink" href="#combining-parameters" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>GET /api/myapp/book?status=published&amp;sort=-created&amp;search=django&amp;dr_start=2024-01-01&amp;start=0&amp;size=20
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>GET /api/myapp/book?status=published&amp;sort=-created&amp;search=django&amp;dr_start=2024-01-01&amp;start=0&amp;size=20
 </code></pre></div>
 
 

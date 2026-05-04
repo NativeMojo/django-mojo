@@ -5111,8 +5111,14 @@ field-filter parser. Models with a column named <code>mode</code>, <code>field</
 aggregation params take the <code>_</code> prefix.</p>
 <p>The existing reserved bare params (<code>size</code>, <code>start</code>, <code>sort</code>,
 <code>dr_start</code>, <code>dr_end</code>, <code>graph</code>, <code>search</code>, <code>download_format</code>,
-<code>limit</code>, <code>offset</code>) keep their current names — only the
+<code>limit</code>, <code>offset</code>, <code>timezone</code>) keep their current names — only the
 new aggregation surface uses <code>_</code>.</p>
+<p><code>dr_start</code> / <code>dr_end</code> and the bare exact-match on a date field accept partial
+dates (<code>YYYY</code>, <code>YYYY-MM</code>, <code>YYYY-MM-DD</code>) and expand them to tz-aware
+<code>__gte</code> / <code>__lte</code> bounds. Django's <code>__year</code> / <code>__month</code> / <code>__quarter</code> / etc.
+component lookups are also passed through (with int coercion). See
+<a href="../../../web_developer/core/filtering/#date-component-filters">web_developer/core/filtering.md</a>
+for the consumer-facing reference.</p>
 <h4 id="field-validation-guards">Field validation guards<a class="headerlink" href="#field-validation-guards" title="Permanent link">&para;</a></h4>
 <p>The aggregation layer rejects <code>_field</code> values that would leak data
 or break the database (HTTP 400):</p>
