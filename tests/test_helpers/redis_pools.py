@@ -37,7 +37,8 @@ def setup_redis_pools(opts):
             'test_performance*',
             'test_shared_connection*',
             'test_init_pool*',
-            'test_skip_predicate*'
+            'test_skip_predicate*',
+            'test_retry_after*'
         ]
 
         keys_cleaned = 0
@@ -724,6 +725,433 @@ def test_redis_model_pool_skip_predicate_default_none(opts):
         pool.return_instance(instance)
 
     assert set(seen) == {1, 2, 3}, f"All pks should surface without predicate, got: {seen}"
+
+    pool.clear()
+
+
+@th.django_unit_test()
+def test_retry_after_eligible_zero_returns_immediately(opts):
+    """Predicate returning 0 → eligible, served immediately."""
+    from mojo.helpers.redis.pool import RedisBasePool
+
+    pool = RedisBasePool('test_retry_after_zero', skip_predicate=lambda x: 0)
+    pool.clear()
+    pool.add('only')
+
+    start = time.time()
+    item = pool.get_next_available(timeout=2)
+    elapsed = time.time() - start
+
+    assert item == 'only', f"Expected 'only' served immediately, got: {item}"
+    assert elapsed < 0.5, f"Predicate returning 0 should serve immediately, took {elapsed:.2f}s"
+
+    pool.clear()
+
+
+@th.django_unit_test()
+def test_retry_after_served_after_wait(opts):
+    """Predicate returns 0.5 once then False; pool waits and serves within budget."""
+    from mojo.helpers.redis.pool import RedisBasePool
+
+    state = {'calls': 0}
+
+    def predicate(str_id):
+        state['calls'] += 1
+        return 0.5 if state['calls'] == 1 else False
+
+    pool = RedisBasePool('test_retry_after_wait', skip_predicate=predicate)
+    pool.clear()
+    pool.add('only')
+
+    start = time.time()
+    item = pool.get_next_available(timeout=3)
+    elapsed = time.time() - start
+
+    assert item == 'only', f"Expected 'only' served after wait, got: {item}"
+    assert 0.4 <= elapsed <= 1.5, f"Should wait ~0.5s and then serve, took {elapsed:.2f}s"
+
+    pool.clear()
+
+
+@th.django_unit_test()
+def test_retry_after_respects_timeout(opts):
+    """Predicate returns 5.0 always; timeout=1 returns None within ~1.2s."""
+    from mojo.helpers.redis.pool import RedisBasePool
+
+    pool = RedisBasePool('test_retry_after_timeout', skip_predicate=lambda x: 5.0)
+    pool.clear()
+    pool.add('cooler')
+
+    start = time.time()
+    item = pool.get_next_available(timeout=1)
+    elapsed = time.time() - start
+
+    assert item is None, f"Should return None when retry-after exceeds timeout, got: {item}"
+    assert 0.9 <= elapsed <= 1.5, f"Should honour timeout=1 wallclock, took {elapsed:.2f}s"
+
+    available = pool.list_available()
+    assert 'cooler' in available, f"Deferred item should be republished on None return, got: {available}"
+
+    pool.clear()
+
+
+@th.django_unit_test()
+def test_retry_after_picks_soonest(opts):
+    """Multi-member pool with mixed retry-after values; soonest is served first."""
+    from mojo.helpers.redis.pool import RedisBasePool
+
+    delays = {'fast': 0.3, 'slow': 2.0, 'slowest': 5.0}
+
+    def predicate(str_id):
+        return delays.get(str_id, True)
+
+    pool = RedisBasePool('test_retry_after_soonest', skip_predicate=predicate)
+    pool.clear()
+    pool.add('slow')
+    pool.add('fast')
+    pool.add('slowest')
+
+    # When the fast member matures, predicate keeps returning 0.3 — flip to eligible after first wait.
+    flipped = {'done': False}
+    original = predicate
+
+    def predicate_with_flip(str_id):
+        if str_id == 'fast' and flipped['done']:
+            return False
+        if str_id == 'fast':
+            flipped['done'] = True
+            return 0.3
+        return delays.get(str_id, True)
+
+    pool.skip_predicate = predicate_with_flip
+
+    start = time.time()
+    item = pool.get_next_available(timeout=3)
+    elapsed = time.time() - start
+
+    assert item == 'fast', f"Expected 'fast' (shortest retry-after) to be served, got: {item}"
+    assert elapsed < 1.0, f"Should serve within ~0.4s, took {elapsed:.2f}s"
+
+    pool.clear()
+
+
+@th.django_unit_test()
+def test_retry_after_mixed_bool_and_numeric(opts):
+    """Mix of True / numeric / False — eligible served immediately, bool-skip never selected."""
+    from mojo.helpers.redis.pool import RedisBasePool
+
+    def predicate(str_id):
+        if str_id == 'eligible':
+            return False
+        if str_id == 'cooling':
+            return 0.5
+        return True  # 'banned'
+
+    pool = RedisBasePool('test_retry_after_mixed', skip_predicate=predicate)
+    pool.clear()
+    pool.add('banned')
+    pool.add('cooling')
+    pool.add('eligible')
+
+    start = time.time()
+    item = pool.get_next_available(timeout=3)
+    elapsed = time.time() - start
+
+    assert item == 'eligible', f"Expected 'eligible' served immediately, got: {item}"
+    assert elapsed < 0.5, f"Eligible should be returned without waiting, took {elapsed:.2f}s"
+
+    # banned must remain in pool, not held off
+    available = pool.list_available()
+    assert 'banned' in available, f"'banned' should be back in pool, got: {available}"
+    assert 'cooling' in available, f"'cooling' (deferred) should be republished on exit, got: {available}"
+
+    pool.clear()
+
+
+@th.django_unit_test()
+def test_retry_after_negative_treated_as_skip(opts):
+    """Negative numeric returns are conservatively treated as bool-skip."""
+    from mojo.helpers.redis.pool import RedisBasePool
+
+    pool = RedisBasePool('test_retry_after_negative', skip_predicate=lambda x: -1)
+    pool.clear()
+    pool.add('a')
+    pool.add('b')
+
+    start = time.time()
+    item = pool.get_next_available(timeout=1)
+    elapsed = time.time() - start
+
+    assert item is None, f"Negative return should map to skip; got: {item}"
+    assert elapsed < 1.0, f"Skip path should not wait the full budget, took {elapsed:.2f}s"
+
+    available = pool.list_available()
+    assert len(available) == 2, f"Both items should remain in pool after skip cycle, got: {available}"
+
+    pool.clear()
+
+
+@th.django_unit_test()
+def test_retry_after_predicate_raises_treated_as_skip(opts):
+    """Exception from predicate is caught, logged, and treated as skip."""
+    from mojo.helpers.redis.pool import RedisBasePool
+
+    def boom(str_id):
+        raise RuntimeError("predicate exploded")
+
+    pool = RedisBasePool('test_retry_after_raises', skip_predicate=boom)
+    pool.clear()
+    pool.add('x')
+    pool.add('y')
+
+    item = pool.get_next_available(timeout=1)
+    assert item is None, f"Raising predicate should drain to None, got: {item}"
+
+    available = pool.list_available()
+    assert len(available) == 2, f"Items should remain in pool after exceptions, got: {available}"
+
+    pool.clear()
+
+
+@th.django_unit_test()
+def test_retry_after_deferred_republished_on_none(opts):
+    """All items return retry-after > timeout — pool returns None and republishes deferred items."""
+    from mojo.helpers.redis.pool import RedisBasePool
+
+    pool = RedisBasePool('test_retry_after_republish_none', skip_predicate=lambda x: 60.0)
+    pool.clear()
+    pool.add('p1')
+    pool.add('p2')
+    pool.add('p3')
+
+    start = time.time()
+    item = pool.get_next_available(timeout=1)
+    elapsed = time.time() - start
+
+    assert item is None, f"Should return None when nothing matures within timeout, got: {item}"
+    assert 0.9 <= elapsed <= 2.0, f"Should honour timeout=1, took {elapsed:.2f}s"
+
+    available = pool.list_available()
+    assert set(available) == {'p1', 'p2', 'p3'}, \
+        f"All deferred items must be republished on exit, got: {available}"
+
+    pool.clear()
+
+
+@th.django_unit_test()
+def test_retry_after_deferred_republished_on_eligible(opts):
+    """Mixed pool — when an eligible candidate is served, deferred items are republished."""
+    from mojo.helpers.redis.pool import RedisBasePool
+
+    def predicate(str_id):
+        if str_id == 'served':
+            return False
+        return 30.0  # everyone else is cooling for ages
+
+    pool = RedisBasePool('test_retry_after_republish_eligible', skip_predicate=predicate)
+    pool.clear()
+    pool.add('cooler1')
+    pool.add('cooler2')
+    pool.add('served')
+
+    item = pool.get_next_available(timeout=2)
+    assert item == 'served', f"Expected 'served' to be returned, got: {item}"
+
+    available = pool.list_available()
+    assert set(available) == {'cooler1', 'cooler2'}, \
+        f"Deferred coolers should be back in the pool after eligible served, got: {available}"
+
+    pool.clear()
+
+
+@th.django_unit_test()
+def test_retry_after_back_compat_bool_only_sweep(opts):
+    """Pure bool predicate path — all True returns; behaviour identical to today."""
+    from mojo.helpers.redis.pool import RedisBasePool
+
+    pool = RedisBasePool('test_retry_after_back_compat', skip_predicate=lambda x: True)
+    pool.clear()
+    pool.add('one')
+    pool.add('two')
+    pool.add('three')
+
+    start = time.time()
+    item = pool.get_next_available(timeout=10)
+    elapsed = time.time() - start
+
+    assert item is None, f"Bool-only sweep with all True should return None, got: {item}"
+    assert elapsed < 3.0, \
+        f"Bool-only carve-out: must NOT wait the full timeout, took {elapsed:.2f}s"
+
+    available = pool.list_available()
+    assert set(available) == {'one', 'two', 'three'}, \
+        f"All items must be back in pool, got: {available}"
+
+    pool.clear()
+
+
+@th.django_unit_test()
+def test_retry_after_no_predicate_byte_identical(opts):
+    """skip_predicate=None — byte-identical to today's brpop-only fast path."""
+    from mojo.helpers.redis.pool import RedisBasePool
+
+    pool = RedisBasePool('test_retry_after_no_predicate')
+    pool.clear()
+    assert pool.skip_predicate is None, "Default skip_predicate should be None"
+
+    pool.add('alpha')
+    pool.add('beta')
+
+    item1 = pool.get_next_available(timeout=1)
+    item2 = pool.get_next_available(timeout=1)
+    assert {item1, item2} == {'alpha', 'beta'}, \
+        f"Both items should surface in the no-predicate fast path, got: {item1}, {item2}"
+
+    # Empty pool — should block then return None
+    start = time.time()
+    item = pool.get_next_available(timeout=1)
+    elapsed = time.time() - start
+    assert item is None, f"Empty pool fast path should return None, got: {item}"
+    assert elapsed >= 0.9, f"Empty pool should block on brpop for the timeout, took {elapsed:.2f}s"
+
+    pool.clear()
+
+
+@th.django_unit_test()
+def test_retry_after_model_pool_served_after_wait(opts):
+    """RedisModelPool: instance predicate returns numeric retry-after, served after wait."""
+    from mojo.helpers.redis.pool import RedisModelPool
+    from mojo.apps.account.models import Group
+
+    state = {'calls': 0}
+
+    def predicate(instance):
+        state['calls'] += 1
+        return 0.4 if state['calls'] == 1 else False
+
+    pool = RedisModelPool(
+        Group,
+        {'is_active': True},
+        'test_retry_after_model_wait',
+        skip_predicate=predicate,
+    )
+    _seed_model_pool(pool, [1])
+
+    start = time.time()
+    instance = pool.get_next_instance(timeout=3)
+    elapsed = time.time() - start
+
+    assert instance is not None, f"Expected instance after retry-after wait, got: {instance}"
+    assert instance.pk == 1, f"Expected pk=1, got pk={instance.pk}"
+    assert 0.3 <= elapsed <= 1.5, f"Should wait ~0.4s and then serve, took {elapsed:.2f}s"
+
+    pool.clear()
+
+
+@th.django_unit_test()
+def test_retry_after_model_pool_respects_timeout(opts):
+    """RedisModelPool: predicate returns long retry-after; timeout caps the wait."""
+    from mojo.helpers.redis.pool import RedisModelPool
+    from mojo.apps.account.models import Group
+
+    pool = RedisModelPool(
+        Group,
+        {'is_active': True},
+        'test_retry_after_model_timeout',
+        skip_predicate=lambda i: 10.0,
+    )
+    _seed_model_pool(pool, [1, 2])
+
+    start = time.time()
+    instance = pool.get_next_instance(timeout=1)
+    elapsed = time.time() - start
+
+    assert instance is None, f"Should return None when retry-after > timeout, got: {instance}"
+    assert 0.9 <= elapsed <= 1.5, f"Should honour timeout=1, took {elapsed:.2f}s"
+
+    available = pool.list_available()
+    assert set(available) == {'1', '2'}, \
+        f"Deferred instances must be republished on exit, got: {available}"
+
+    pool.clear()
+
+
+@th.django_unit_test()
+def test_retry_after_model_pool_picks_soonest(opts):
+    """RedisModelPool: multi-instance retry-after; soonest matures first."""
+    from mojo.helpers.redis.pool import RedisModelPool
+    from mojo.apps.account.models import Group
+
+    flipped = {'done': False}
+
+    def predicate(instance):
+        if instance.pk == 2:
+            if flipped['done']:
+                return False
+            flipped['done'] = True
+            return 0.3
+        return 5.0  # 1 and 3 are cooling for ages
+
+    pool = RedisModelPool(
+        Group,
+        {'is_active': True},
+        'test_retry_after_model_soonest',
+        skip_predicate=predicate,
+    )
+    _seed_model_pool(pool, [1, 2, 3])
+
+    start = time.time()
+    instance = pool.get_next_instance(timeout=3)
+    elapsed = time.time() - start
+
+    assert instance is not None, f"Expected an instance, got: {instance}"
+    assert instance.pk == 2, f"Expected pk=2 (soonest), got pk={instance.pk}"
+    assert elapsed < 1.0, f"Should serve within ~0.4s, took {elapsed:.2f}s"
+
+    pool.clear()
+
+
+@th.django_unit_test()
+def test_retry_after_model_pool_negative_treated_as_skip(opts):
+    """RedisModelPool: negative numeric → skip."""
+    from mojo.helpers.redis.pool import RedisModelPool
+    from mojo.apps.account.models import Group
+
+    pool = RedisModelPool(
+        Group,
+        {'is_active': True},
+        'test_retry_after_model_negative',
+        skip_predicate=lambda i: -3.0,
+    )
+    _seed_model_pool(pool, [1, 2])
+
+    instance = pool.get_next_instance(timeout=1)
+    assert instance is None, f"Negative numeric should map to skip → None, got: {instance}"
+
+    available = pool.list_available()
+    assert set(available) == {'1', '2'}, \
+        f"Items should remain in pool after skip cycle, got: {available}"
+
+    pool.clear()
+
+
+@th.django_unit_test()
+def test_retry_after_model_pool_back_compat_no_predicate(opts):
+    """RedisModelPool with no predicate — fast path unchanged."""
+    from mojo.helpers.redis.pool import RedisModelPool
+    from mojo.apps.account.models import Group
+
+    pool = RedisModelPool(
+        Group,
+        {'is_active': True},
+        'test_retry_after_model_no_predicate',
+    )
+    _seed_model_pool(pool, [1, 2])
+
+    instance1 = pool.get_next_instance(timeout=1)
+    instance2 = pool.get_next_instance(timeout=1)
+    pks = {instance1.pk, instance2.pk}
+    assert pks == {1, 2}, f"Both pks should surface in fast path, got: {pks}"
 
     pool.clear()
 

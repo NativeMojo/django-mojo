@@ -301,7 +301,30 @@ with pool.checkout_item(timeout=10) as item:
     ...
 ```
 
-Signature: `(str_id) -> bool`. Returning `True` means "skip this one for now." The skipped id is `lpush`ed back to the head of the list so other items (at the tail) are tried first by `brpop`. Skip retries are bounded by the current pool size — if every member is ineligible, `get_next_available` returns `None` rather than blocking. Predicate exceptions are caught, logged via `logit.exception`, and treated as skip (conservative default — a buggy predicate cannot return a poisoned id).
+Signature: `(str_id) -> bool | int | float`. Three return shapes are recognised:
+
+| Return value | Meaning |
+|---|---|
+| `False` / `0` | Eligible — return this candidate now. |
+| `True` / `None` / unknown truthy / negative numeric | Skip — try another candidate, no retry-after info. |
+| `int` / `float` (> 0) | Temporarily ineligible — pool may retry this candidate after N seconds. |
+
+**Wallclock-budget contract (numeric returns):** when the predicate returns a positive number, `timeout` is treated as the maximum wallclock time the call may take. The pool holds the deferred candidate out of the available list and `time.sleep`s until the soonest retry-after matures (capped at 1 second per sleep so peer checkins from other workers are observed quickly). All deferred items are republished to the available list when the call exits — peers are never starved. If the budget elapses before any candidate becomes eligible, `get_next_available` returns `None`.
+
+**Bool-only carve-out (no retry signal):** when the predicate returns only `True` / `False`, the pool sweeps the available list once (bounded by the current pool size) and returns `None` if every candidate said skip — even if `timeout` is large. `True` carries no information about *when* the candidate might become eligible, so the pool cannot meaningfully wait. Return a numeric retry-after (seconds) to opt into the wallclock-budget behaviour.
+
+```python
+def cooldown(str_id):
+    ttl = r.ttl(f"cooldown:{str_id}")
+    if ttl is None or ttl <= 0:
+        return False  # eligible
+    return float(ttl)  # retry after this many seconds
+
+pool = RedisBasePool("my_pool", skip_predicate=cooldown)
+# get_next_available(timeout=30) will sleep through cooldown windows up to 30s
+```
+
+Bool-skip candidates are `lpush`ed back to the head of the list so other items (at the tail) are tried first by `brpop`. Predicate exceptions are caught, logged via `logit.exception`, and treated as skip (conservative default — a buggy predicate cannot return a poisoned id).
 
 `checkout_specific_item` bypasses the predicate by design — explicit checkouts of a known id always succeed.
 
@@ -374,7 +397,33 @@ with pool.checkout_instance(timeout=10) as key:
     r.setex(f"cooldown:apikey:{key.pk}", 30, "1")
 ```
 
-Signature: `(instance) -> bool`. Returning `True` skips that instance — the pk is `lpush`ed back to the head of the available list and the next candidate is tried, bounded by the current pool size. If every member is ineligible, `get_next_instance` returns `None` after one full sweep. Predicate exceptions are caught, logged, and treated as skip.
+Signature: `(instance) -> bool | int | float`. Same three return shapes as `RedisBasePool.skip_predicate`:
+
+| Return value | Meaning |
+|---|---|
+| `False` / `0` | Eligible — return this instance now. |
+| `True` / `None` / unknown truthy / negative numeric | Skip — try another candidate, no retry-after info. |
+| `int` / `float` (> 0) | Temporarily ineligible — pool may retry this instance after N seconds. |
+
+**Wallclock-budget contract:** for numeric returns, `timeout` is the maximum wallclock time the call may take. The pool holds the deferred instance out of the available list and sleeps until the soonest retry-after matures (capped at 1s per sleep). Deferred instances are always republished on exit. The deadline also bounds the existing stale-row retry path (`DoesNotExist` / `query_dict` mismatch) — slow stale-row recovery cannot blow the budget.
+
+**Bool-only carve-out:** with bool-only returns, the pool sweeps once (bounded by the current pool size) and returns `None` if every member is `True`. Use a numeric retry-after to opt into waiting.
+
+```python
+def cooldown(instance):
+    ttl = r.ttl(f"cooldown:apikey:{instance.pk}")
+    if ttl is None or ttl <= 0:
+        return False
+    return float(ttl)
+
+pool = RedisModelPool(
+    model_cls=ApiKey,
+    query_dict={"status": "active"},
+    pool_key="apikey_pool",
+    skip_predicate=cooldown,
+)
+# get_next_instance(timeout=30) sleeps through per-key cooldowns up to 30s
+```
 
 `get_specific_instance` and `checkout_specific_instance` bypass the predicate by design — admin or non-customer paths can force access to a specific instance regardless of its eligibility state.
 

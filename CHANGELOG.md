@@ -1,5 +1,8 @@
 ## v1.1.0 - (current)
 
+### Changed
+- **`redis.pool` — `skip_predicate` may now return a retry-after duration** — `RedisBasePool` and `RedisModelPool` predicates can return a positive `int`/`float` (seconds) to signal "temporarily ineligible, retry after N seconds." When any predicate returns numeric, `get_next_available` / `get_next_instance` honour the caller's `timeout` as a true wallclock budget — they hold deferred candidates out of the available list and sleep until the soonest retry-after matures (capped at 1s per sleep so peer checkins are observed promptly), republishing all deferred items on exit so peers are not starved. The pre-existing bool path (`True`/`False`) and predicate-less callers behave exactly as before; the no-predicate fast path is byte-identical to the previous implementation. See `docs/django_developer/helpers/redis.md`.
+
 ## v1.1.36 - May 03, 2026
 
 - added strict login throttling for failed logins

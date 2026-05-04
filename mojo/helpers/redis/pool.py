@@ -1,10 +1,35 @@
 from typing import Optional, List, Set
 from contextlib import contextmanager
+import heapq
+import time
 from django.db import models
 import redis.exceptions
 from .client import get_connection
 from ...errors import TimeoutException
 from .. import logit
+
+
+def _classify_predicate_result(result):
+    """
+    Normalise a skip_predicate return value to one of three verdicts.
+
+    Returns:
+        ('eligible', None)         — caller may use this candidate now.
+        ('skip', None)             — skip without retry-after info (today's bool path).
+        ('retry_after', float_seconds) — temporarily ineligible; caller may wait this many seconds.
+
+    Conservative defaults:
+        - Negative numerics, unknown truthy values, and exceptions in the caller
+          are mapped to ('skip', None) so the pool never returns a candidate
+          that should have been ineligible.
+    """
+    if result is False or result == 0:
+        return ('eligible', None)
+    if result is True or result is None:
+        return ('skip', None)
+    if isinstance(result, (int, float)) and result > 0:
+        return ('retry_after', float(result))
+    return ('skip', None)
 
 
 class RedisBasePool:
@@ -166,48 +191,116 @@ class RedisBasePool:
 
         return duplicates_removed
 
-    def get_next_available(self, timeout: Optional[int] = None,
-                           _skip_retries: int = 0,
-                           _max_skip_retries: Optional[int] = None) -> Optional[str]:
+    def get_next_available(self, timeout: Optional[int] = None) -> Optional[str]:
         """Get the next available item from the pool.
 
-        When ``skip_predicate`` is configured, candidates returning ``True``
-        from the predicate are returned to the head of the list and the
-        next candidate is fetched, bounded by the pool size.
+        ``timeout`` is a wallclock budget — the maximum number of seconds the
+        caller is willing to wait for an eligible candidate to be returned.
+
+        Without ``skip_predicate``, this is a single ``brpop(timeout)`` call.
+
+        With ``skip_predicate`` configured, the loop is deadline-driven:
+        candidates returning ``True`` (or any unknown truthy / exception) are
+        ``lpush``ed back and bounded by the pool size (today's bool path);
+        candidates returning a positive number are held out of the available
+        list and re-evaluated after the pool sleeps until the soonest
+        retry-after time, bounded by the caller's ``timeout``. Deferred items
+        are always republished on exit so peer workers are not starved.
         """
         timeout = timeout or self.default_timeout
 
-        try:
-            result = self.redis_client.brpop(self.available_list_key, timeout=timeout)
-            if not result:
-                return None
-            str_id = result[1]
-        except redis.exceptions.TimeoutError:
-            return None
-
+        # Fast path — no predicate, byte-identical to the original implementation.
         if self.skip_predicate is None:
-            return str_id
+            try:
+                result = self.redis_client.brpop(self.available_list_key, timeout=timeout)
+                if not result:
+                    return None
+                return result[1]
+            except redis.exceptions.TimeoutError:
+                return None
 
-        if _max_skip_retries is None:
-            _max_skip_retries = max(self.redis_client.scard(self.all_items_set_key), 1)
+        deadline = time.monotonic() + timeout
+        deferred = []     # min-heap of (mature_at, str_id) — held OUT of available list
+        examined = set()  # ids bool-skipped this call (already lpush'd back)
+        pool_size = max(self.redis_client.scard(self.all_items_set_key), 1)
 
         try:
-            skip = bool(self.skip_predicate(str_id))
-        except Exception:
-            logit.exception("skip_predicate failed", str_id)
-            skip = True
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
 
-        if not skip:
-            return str_id
+                # Republish any deferred items whose timer has fired.
+                now = time.monotonic()
+                while deferred and deferred[0][0] <= now:
+                    _, mature_id = heapq.heappop(deferred)
+                    self.redis_client.lpush(self.available_list_key, mature_id)
+                    examined.discard(mature_id)  # fresh evaluation after maturity
 
-        self.redis_client.lpush(self.available_list_key, str_id)
-        if _skip_retries + 1 >= _max_skip_retries:
-            return None
-        return self.get_next_available(
-            timeout=0,
-            _skip_retries=_skip_retries + 1,
-            _max_skip_retries=_max_skip_retries,
-        )
+                # Pop a candidate. Block on brpop only when nothing is deferred.
+                if deferred:
+                    str_id = self.redis_client.rpop(self.available_list_key)
+                else:
+                    blk = max(1, int(remaining))
+                    try:
+                        result = self.redis_client.brpop(self.available_list_key, timeout=blk)
+                    except redis.exceptions.TimeoutError:
+                        return None
+                    str_id = result[1] if result else None
+                    if str_id is None:
+                        return None  # nothing arrived within the budget
+
+                if str_id is None:
+                    # List empty but heap non-empty — sleep until soonest matures.
+                    soonest = deferred[0][0]
+                    sleep_for = min(
+                        soonest - time.monotonic(),
+                        max(0.0, deadline - time.monotonic()),
+                        1.0,
+                    )
+                    if sleep_for > 0:
+                        time.sleep(sleep_for)
+                    continue
+
+                if str_id in examined:
+                    # Already bool-skipped this call — don't re-evaluate.
+                    self.redis_client.lpush(self.available_list_key, str_id)
+                    if len(examined) + len(deferred) >= pool_size:
+                        if not deferred:
+                            return None  # bool-only sweep exhausted (today's contract)
+                        soonest = deferred[0][0]
+                        sleep_for = min(
+                            soonest - time.monotonic(),
+                            max(0.0, deadline - time.monotonic()),
+                            1.0,
+                        )
+                        if sleep_for > 0:
+                            time.sleep(sleep_for)
+                    continue
+
+                try:
+                    verdict, retry_after = _classify_predicate_result(self.skip_predicate(str_id))
+                except Exception:
+                    logit.exception("skip_predicate failed", str_id)
+                    verdict, retry_after = ('skip', None)
+
+                if verdict == 'eligible':
+                    return str_id
+                if verdict == 'retry_after':
+                    heapq.heappush(deferred, (time.monotonic() + retry_after, str_id))
+                    # Held OUT of the available list — no lpush.
+                    continue
+
+                # 'skip' (bool path)
+                self.redis_client.lpush(self.available_list_key, str_id)
+                examined.add(str_id)
+                if len(examined) >= pool_size and not deferred:
+                    return None  # bool-only sweep exhausted
+
+        finally:
+            # Always republish remaining deferred items so peers are not starved.
+            for _, str_id in deferred:
+                self.redis_client.lpush(self.available_list_key, str_id)
 
     @contextmanager
     def checkout_item(self, timeout: Optional[int] = None, raise_on_timeout: bool = True):
@@ -337,65 +430,168 @@ class RedisModelPool(RedisBasePool):
         return self.model_cls.objects.filter(pk__in=all_items)
 
     def get_next_instance(self, timeout: Optional[int] = None,
-                          _retries: int = 0, _max_retries: int = 100,
-                          _skip_retries: int = 0,
-                          _max_skip_retries: Optional[int] = None) -> Optional[models.Model]:
+                          _retries: int = 0,
+                          _max_retries: int = 100) -> Optional[models.Model]:
         """
         Get the next available model instance.
 
+        ``timeout`` is a wallclock budget — the maximum number of seconds the
+        caller is willing to wait for an eligible instance. Stale-row retries
+        and predicate-driven retry-after waits all draw from the same budget.
+
+        Without ``instance_skip_predicate``, the loop is the simple stale-row
+        path identical to today.
+
+        With ``instance_skip_predicate`` configured, the loop is deadline-
+        driven: instances returning ``True`` from the predicate are
+        ``lpush``ed back and bounded by the pool size; instances returning a
+        positive number are held out of the available list and re-evaluated
+        after the pool sleeps until the soonest retry-after, bounded by the
+        caller's ``timeout``. Deferred items are always republished on exit.
+
         Args:
-            timeout: Timeout for waiting for an available instance
-            _retries: Internal counter to prevent infinite recursion
-            _max_retries: Maximum number of retries for stale records
-            _skip_retries: Internal counter for predicate-skip retries
-            _max_skip_retries: Internal cap on predicate-skip retries
-                (defaults to the current pool size, computed once on entry)
+            timeout: Wallclock budget in seconds.
+            _retries: Internal counter to prevent infinite recursion on stale
+                records (deleted models or query_dict mismatches).
+            _max_retries: Maximum stale-row retries.
         """
         if not self.redis_client.exists(self.all_items_set_key):
             self.init_pool()
 
-        if _retries >= _max_retries:
-            return None
+        timeout = timeout or self.default_timeout
 
-        pk = self.get_next_available(timeout)
-        if pk:
+        # Fast path — no predicate. Use today's recursion-based stale-row handling.
+        if self.instance_skip_predicate is None:
+            if _retries >= _max_retries:
+                return None
+            pk = self.get_next_available(timeout)
+            if not pk:
+                return None
             try:
                 instance = self.model_cls.objects.get(pk=pk)
-
-                # Verify instance still matches criteria
                 for key, value in self.query_dict.items():
                     if getattr(instance, key) != value:
                         self.redis_client.srem(self.all_items_set_key, pk)
-                        return self.get_next_instance(timeout=0, _retries=_retries + 1, _max_retries=_max_retries,
-                                                      _skip_retries=_skip_retries, _max_skip_retries=_max_skip_retries)
-
-                if self.instance_skip_predicate is not None:
-                    if _max_skip_retries is None:
-                        _max_skip_retries = max(self.redis_client.scard(self.all_items_set_key), 1)
-                    try:
-                        skip = bool(self.instance_skip_predicate(instance))
-                    except Exception:
-                        logit.exception("instance_skip_predicate failed", pk)
-                        skip = True
-                    if skip:
-                        self.redis_client.lpush(self.available_list_key, pk)
-                        if _skip_retries + 1 >= _max_skip_retries:
-                            return None
                         return self.get_next_instance(
                             timeout=0,
-                            _retries=_retries,
+                            _retries=_retries + 1,
                             _max_retries=_max_retries,
-                            _skip_retries=_skip_retries + 1,
-                            _max_skip_retries=_max_skip_retries,
                         )
-
                 return instance
             except self.model_cls.DoesNotExist:
                 self.redis_client.srem(self.all_items_set_key, pk)
-                return self.get_next_instance(timeout=0, _retries=_retries + 1, _max_retries=_max_retries,
-                                              _skip_retries=_skip_retries, _max_skip_retries=_max_skip_retries)
+                return self.get_next_instance(
+                    timeout=0,
+                    _retries=_retries + 1,
+                    _max_retries=_max_retries,
+                )
 
-        return None
+        # Predicate path — deadline-driven loop.
+        deadline = time.monotonic() + timeout
+        deferred = []
+        examined = set()
+        pool_size = max(self.redis_client.scard(self.all_items_set_key), 1)
+        stale_retries = 0
+
+        try:
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
+
+                # Republish matured deferred items.
+                now = time.monotonic()
+                while deferred and deferred[0][0] <= now:
+                    _, mature_pk = heapq.heappop(deferred)
+                    self.redis_client.lpush(self.available_list_key, mature_pk)
+                    examined.discard(mature_pk)
+
+                # Pop a candidate.
+                if deferred:
+                    pk = self.redis_client.rpop(self.available_list_key)
+                else:
+                    blk = max(1, int(remaining))
+                    try:
+                        result = self.redis_client.brpop(self.available_list_key, timeout=blk)
+                    except redis.exceptions.TimeoutError:
+                        return None
+                    pk = result[1] if result else None
+                    if pk is None:
+                        return None
+
+                if pk is None:
+                    soonest = deferred[0][0]
+                    sleep_for = min(
+                        soonest - time.monotonic(),
+                        max(0.0, deadline - time.monotonic()),
+                        1.0,
+                    )
+                    if sleep_for > 0:
+                        time.sleep(sleep_for)
+                    continue
+
+                if pk in examined:
+                    self.redis_client.lpush(self.available_list_key, pk)
+                    if len(examined) + len(deferred) >= pool_size:
+                        if not deferred:
+                            return None
+                        soonest = deferred[0][0]
+                        sleep_for = min(
+                            soonest - time.monotonic(),
+                            max(0.0, deadline - time.monotonic()),
+                            1.0,
+                        )
+                        if sleep_for > 0:
+                            time.sleep(sleep_for)
+                    continue
+
+                # Resolve instance + validate query_dict (stale-row path).
+                try:
+                    instance = self.model_cls.objects.get(pk=pk)
+                except self.model_cls.DoesNotExist:
+                    self.redis_client.srem(self.all_items_set_key, pk)
+                    stale_retries += 1
+                    if stale_retries >= _max_retries:
+                        return None
+                    pool_size = max(self.redis_client.scard(self.all_items_set_key), 1)
+                    continue
+
+                stale = False
+                for key, value in self.query_dict.items():
+                    if getattr(instance, key) != value:
+                        stale = True
+                        break
+                if stale:
+                    self.redis_client.srem(self.all_items_set_key, pk)
+                    stale_retries += 1
+                    if stale_retries >= _max_retries:
+                        return None
+                    pool_size = max(self.redis_client.scard(self.all_items_set_key), 1)
+                    continue
+
+                # Predicate evaluation.
+                try:
+                    verdict, retry_after = _classify_predicate_result(
+                        self.instance_skip_predicate(instance))
+                except Exception:
+                    logit.exception("instance_skip_predicate failed", pk)
+                    verdict, retry_after = ('skip', None)
+
+                if verdict == 'eligible':
+                    return instance
+                if verdict == 'retry_after':
+                    heapq.heappush(deferred, (time.monotonic() + retry_after, pk))
+                    continue
+
+                # 'skip'
+                self.redis_client.lpush(self.available_list_key, pk)
+                examined.add(pk)
+                if len(examined) >= pool_size and not deferred:
+                    return None
+
+        finally:
+            for _, pk in deferred:
+                self.redis_client.lpush(self.available_list_key, pk)
 
     def get_specific_instance(self, instance: models.Model) -> bool:
         """Get a specific instance from pool."""
