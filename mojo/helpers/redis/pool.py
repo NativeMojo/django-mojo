@@ -1,6 +1,7 @@
 from typing import Optional, List, Set
 from contextlib import contextmanager
 import heapq
+import math
 import time
 from django.db import models
 import redis.exceptions
@@ -19,15 +20,19 @@ def _classify_predicate_result(result):
         ('retry_after', float_seconds) — temporarily ineligible; caller may wait this many seconds.
 
     Conservative defaults:
-        - Negative numerics, unknown truthy values, and exceptions in the caller
-          are mapped to ('skip', None) so the pool never returns a candidate
-          that should have been ineligible.
+        - Negative, NaN, infinite, or otherwise non-finite numerics, unknown
+          truthy values, and exceptions in the caller are mapped to
+          ('skip', None) so the pool never holds a candidate forever and never
+          returns one that should have been ineligible.
     """
     if result is False or result == 0:
         return ('eligible', None)
     if result is True or result is None:
         return ('skip', None)
-    if isinstance(result, (int, float)) and result > 0:
+    if (isinstance(result, (int, float))
+            and not isinstance(result, bool)
+            and math.isfinite(result)
+            and result > 0):
         return ('retry_after', float(result))
     return ('skip', None)
 

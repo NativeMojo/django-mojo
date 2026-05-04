@@ -892,6 +892,31 @@ def test_retry_after_negative_treated_as_skip(opts):
 
 
 @th.django_unit_test()
+def test_retry_after_non_finite_treated_as_skip(opts):
+    """float('inf') / float('nan') are conservatively mapped to skip, not held forever."""
+    from mojo.helpers.redis.pool import RedisBasePool
+
+    for bad in (float('inf'), float('nan')):
+        pool = RedisBasePool('test_retry_after_nonfinite', skip_predicate=lambda x, b=bad: b)
+        pool.clear()
+        pool.add('a')
+        pool.add('b')
+
+        start = time.time()
+        item = pool.get_next_available(timeout=1)
+        elapsed = time.time() - start
+
+        assert item is None, f"{bad!r} should map to skip → None, got: {item}"
+        assert elapsed < 1.0, f"{bad!r} should bound the sweep, took {elapsed:.2f}s"
+
+        available = pool.list_available()
+        assert set(available) == {'a', 'b'}, \
+            f"{bad!r}: items must remain available, got: {available}"
+
+        pool.clear()
+
+
+@th.django_unit_test()
 def test_retry_after_predicate_raises_treated_as_skip(opts):
     """Exception from predicate is caught, logged, and treated as skip."""
     from mojo.helpers.redis.pool import RedisBasePool
