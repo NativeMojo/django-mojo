@@ -695,7 +695,7 @@ def dream_tier(tier, redis_key, tier_label=None):
     entries_text = "\n".join(entry_lines)
 
     prompt = DREAM_PROMPT.format(
-        date=dates.now().strftime("%Y-%m-%d"),
+        date=dates.utcnow().strftime("%Y-%m-%d"),
         tier_label=tier_label or tier,
         entries=entries_text,
     )

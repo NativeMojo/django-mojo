@@ -172,7 +172,7 @@ new aggregation surface uses `_`.
 dates (`YYYY`, `YYYY-MM`, `YYYY-MM-DD`) and expand them to tz-aware
 `__gte` / `__lte` bounds. Django's `__year` / `__month` / `__quarter` / etc.
 component lookups are also passed through (with int coercion). See
-[docs/web_developer/core/filtering.md](../../web_developer/core/filtering.md#date-component-filters)
+[web_developer/core/filtering.md](../../web_developer/core/filtering.md#date-component-filters)
 for the consumer-facing reference.
 
 #### Field validation guards

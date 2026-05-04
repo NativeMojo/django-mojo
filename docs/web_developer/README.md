@@ -65,6 +65,7 @@ Authorization: Bearer <jwt-token>
 | `sort` | Sort field, prefix `-` for descending |
 | `search` | Full-text search |
 | `group` | Group context for scoped resources |
-| `dr_start` / `dr_end` | Date range filter |
+| `dr_start` / `dr_end` | Date range filter — accepts ISO datetime or partial date (`YYYY`, `YYYY-MM`, `YYYY-MM-DD`); see [Filtering](core/filtering.md#date-range-filter) |
+| `timezone` | IANA timezone name (e.g. `America/Los_Angeles`) — anchors partial-date expansion and CSV localization |
 | `_mode` | Aggregation mode (`count`, `top`, `distinct`, `summary`, `histogram`) — see [Aggregation](core/aggregation.md) |
 | `download_format` | Export format (e.g., `?download_format=csv`) |

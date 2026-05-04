@@ -58,8 +58,8 @@ Returns a paginated list of jobs. Supports filtering, sorting, and graph selecti
 | `func` | `?func=myapp.tasks.send_email` | Filter by job function path |
 | `runner_id` | `?runner_id=runner-host1-abc` | Filter by runner |
 | `broadcast` | `?broadcast=true` | Filter broadcast jobs |
-| `dr_start` | `?dr_start=2024-01-01` | Created-at range start (ISO date or datetime) |
-| `dr_end` | `?dr_end=2024-01-31` | Created-at range end |
+| `dr_start` | `?dr_start=2024-01-01` | Created-at range start — ISO datetime or partial date (`YYYY`, `YYYY-MM`, `YYYY-MM-DD`) |
+| `dr_end` | `?dr_end=2024-01-31` | Created-at range end — same formats as `dr_start` |
 | `sort` | `?sort=-created` | Sort field (prefix `-` for descending) |
 | `size` | `?size=50` | Page size (default 20) |
 | `start` | `?start=40` | Offset for pagination |

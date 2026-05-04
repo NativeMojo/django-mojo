@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## v1.1.37 - May 04, 2026
+
+NEW advanced date filter, see filtering docs
+
+
 ### Added
 - **REST list filtering — date-component lookups + partial-date shorthand** — list endpoints now accept Django's standard date-component lookups on `DateField` / `DateTimeField` columns (`?created__year=2026`, `?created__month=4`, `?created__quarter=2`, `__day`, `__week`, `__hour`, etc.), composable with `__in` / `__not`. The bare exact-match operator on a date field also accepts a partial date (`?created=2026-04`, `?created=2026`, `?created=2026-04-02`) and expands it to a tz-aware UTC `__gte` / `__lte` range using the request's `timezone` param (or `request.group.timezone`, falling back to UTC). `dr_start` / `dr_end` accept the same partial-date forms and expand to start/end of period. New helpers: `mojo.helpers.dates.parse_partial_date`, `partial_date_to_range`. Invalid component values and out-of-range partials return `400`. Component lookups themselves still run in DB time — use the partial-date shorthand for tz-aware semantics. See `docs/web_developer/core/filtering.md`.
 
