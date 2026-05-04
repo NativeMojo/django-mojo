@@ -362,7 +362,16 @@ Mapped above; all in `tests/test_helpers/redis_pools.py` using the existing setu
 - `CHANGELOG.md` — v1.1.0 entry.
 
 ### Security Review
-Pending — security-review agent will run post-commit.
+One finding from the security agent, fixed in a follow-up commit:
+
+- `_classify_predicate_result` accepted `float('inf')` because `inf > 0` is `True`. The 1s sleep cap prevented an actual infinite sleep, but the item was held out of the available list for the call's full wallclock budget instead of falling through to the skip path. Also tightened the numeric branch to reject `bool` explicitly (`bool` is a subclass of `int` in Python).
+- Fix: numeric branch now requires `not isinstance(result, bool) and math.isfinite(result)`. `inf` and `nan` both map to `('skip', None)`.
+- Regression test added: `test_retry_after_non_finite_treated_as_skip`.
+
+All other concerns (heap growth bounded by pool size, sleep DoS bounded by deadline, crash starvation profile unchanged from before, exception logging via `logit.exception` does not leak structurally sensitive data) were either bounded by existing guards or unchanged from the prior implementation.
+
+### Test Suite Result
+Full suite: **1716 passed, 0 failed**, 56 skipped (slow opt-in modules), 1772 total in 104s. No regressions across all 27 active modules.
 
 ### Follow-up
 - The deferred-checkin proposal lives in `planning/requests/redis-pool-delayed-checkin.md` — independent feature, separate request file.
