@@ -19,6 +19,15 @@ LOGGING_CLASS = None
 MOJO_APP_STATUS_200_ON_ERROR = settings.MOJO_APP_STATUS_200_ON_ERROR
 MOJO_REST_LIST_PERM_DENY = settings.get_static("MOJO_REST_LIST_PERM_DENY", True)
 
+# Django ORM date-component lookup suffixes. Values are integers, not dates,
+# so normalize_rest_value must skip its datetime-parse branch when it sees one.
+_DATE_COMPONENT_LOOKUPS = {
+    "year", "iso_year", "month", "day",
+    "week", "week_day", "iso_week_day",
+    "quarter", "hour", "minute", "second",
+}
+_DATE_FIELD_TYPES = ("DateTimeField", "DateField")
+
 # use this when there is no ACTIVE_REQUEST
 SYSTEM_REQUEST = objict.objict()
 SYSTEM_REQUEST.user = objict.objict()
@@ -709,9 +718,32 @@ class MojoModel:
         return resp
 
     @classmethod
+    def _resolve_filter_timezone(cls, request):
+        """Pick the timezone for partial-date expansion.
+
+        Precedence: explicit ``timezone`` request param → ``request.group.timezone``
+        → UTC. Mirrors how CSV localization at on_rest_list_response resolves it.
+        """
+        tz = request.DATA.get("timezone") if hasattr(request, "DATA") else None
+        if tz:
+            return tz
+        group = getattr(request, "group", None)
+        if group is not None:
+            tz = getattr(group, "timezone", None)
+            if tz:
+                return tz
+        return None
+
+    @classmethod
     def on_rest_list_date_range_filter(cls, request, queryset):
         """
         Filter queryset based on a date range provided in the request.
+
+        Accepts both full ISO datetimes (existing behavior) and partial dates
+        (``2026``, ``2026-04``, ``2026-04-02``). When a partial date is given,
+        ``dr_start`` expands to the start of the period and ``dr_end`` to the
+        end, anchored in the request's timezone (``request.DATA["timezone"]``
+        → ``request.group.timezone`` → UTC).
 
         Args:
             request: Django HTTP request object.
@@ -724,21 +756,57 @@ class MojoModel:
         dr_start = request.DATA.get("dr_start")
         dr_end = request.DATA.get("dr_end")
 
+        tz = cls._resolve_filter_timezone(request)
+
         if dr_start:
-            dr_start = dates.parse_datetime(dr_start)
-            if request.group:
-                dr_start = request.group.get_local_time(dr_start)
-            queryset = queryset.filter(**{f"{dr_field}__gte": dr_start})
+            parts = dates.parse_partial_date(dr_start)
+            if parts is not None:
+                try:
+                    dr_start_dt, _ = dates.partial_date_to_range(parts, timezone=tz)
+                except ValueError as e:
+                    raise me.ValueException(f"Invalid dr_start: {e}", code=400, status=400)
+            else:
+                dr_start_dt = dates.parse_datetime(dr_start)
+                if request.group:
+                    dr_start_dt = request.group.get_local_time(dr_start_dt)
+            queryset = queryset.filter(**{f"{dr_field}__gte": dr_start_dt})
 
         if dr_end:
-            dr_end = dates.parse_datetime(dr_end)
-            if request.group:
-                dr_end = request.group.get_local_time(dr_end)
-            queryset = queryset.filter(**{f"{dr_field}__lte": dr_end})
+            parts = dates.parse_partial_date(dr_end)
+            if parts is not None:
+                try:
+                    _, dr_end_dt = dates.partial_date_to_range(parts, timezone=tz)
+                except ValueError as e:
+                    raise me.ValueException(f"Invalid dr_end: {e}", code=400, status=400)
+            else:
+                dr_end_dt = dates.parse_datetime(dr_end)
+                if request.group:
+                    dr_end_dt = request.group.get_local_time(dr_end_dt)
+            queryset = queryset.filter(**{f"{dr_field}__lte": dr_end_dt})
         return queryset
 
     @classmethod
-    def normalize_rest_value(cls, request, field_name, value):
+    def normalize_rest_value(cls, request, field_name, value, lookup=None):
+        """Coerce a raw query-param value to the right Python type for filter().
+
+        ``lookup`` is the trailing ``__<suffix>`` token from the filter key.
+        When it names a date-component lookup (``year``, ``month``, ``day``,
+        ``quarter``, …), the value is coerced to int (or list-of-int for
+        ``__in``) instead of being parsed as a datetime — this lets
+        ``?created__month=4`` work on a ``DateTimeField`` without the value
+        being mangled by ``dates.parse_datetime``.
+        """
+        if lookup in _DATE_COMPONENT_LOOKUPS:
+            try:
+                if isinstance(value, list):
+                    return [int(v) for v in value]
+                return int(value)
+            except (TypeError, ValueError):
+                raise me.ValueException(
+                    f"Invalid value for {field_name}__{lookup}: {value!r}",
+                    code=400, status=400,
+                )
+
         field = cls.get_model_field(field_name)
         # Preserve boolean values (e.g., __isnull filters) and do not coerce them to dates
         if isinstance(value, bool):
@@ -804,6 +872,11 @@ class MojoModel:
             is_exclusion = key.endswith("__not") or key.endswith("__not_in")
             target_dict = excludes if is_exclusion else filters
 
+            # Trailing lookup token (e.g. "month" in "created__month") — used
+            # to recognize Django date-component lookups so we don't try to
+            # parse the value as a datetime.
+            trailing_lookup = key_parts[-1] if len(key_parts) > 1 else None
+
             if field_name in cls.__rest_field_names__ and cls._meta.get_field(field_name).is_relation:
                 # TODO Normalize relation field values
                 if key.endswith("__in"):
@@ -821,6 +894,26 @@ class MojoModel:
                     value = None
                 target_dict[key] = value
             elif hasattr(cls, field_name):
+                # Partial-date field shorthand: ?created=2026-04 expands to a
+                # local-tz UTC range so __month/__year semantics are correct
+                # under non-UTC databases. Only fires on the bare exact-match
+                # key (no operator suffix) and only on date/datetime fields.
+                if trailing_lookup is None:
+                    field_obj = cls.get_model_field(field_name)
+                    if field_obj is not None and field_obj.get_internal_type() in _DATE_FIELD_TYPES:
+                        parts = dates.parse_partial_date(value)
+                        if parts is not None:
+                            tz = cls._resolve_filter_timezone(request)
+                            try:
+                                start, end = dates.partial_date_to_range(parts, timezone=tz)
+                            except ValueError as e:
+                                raise me.ValueException(
+                                    f"Invalid {field_name}: {e}", code=400, status=400,
+                                )
+                            filters[f"{field_name}__gte"] = start
+                            filters[f"{field_name}__lte"] = end
+                            continue
+
                 if key.endswith("__in"):
                     value = value.split(",")
                 elif key.endswith("__not_in"):
@@ -834,7 +927,20 @@ class MojoModel:
                     value = str(value).strip().lower() in ("true", "1", "yes", "y", "t")
                 elif value == "null":
                     value = None
-                target_dict[key] = cls.normalize_rest_value(request, field_name, value)
+
+                # Detect a date-component lookup anywhere in the key parts.
+                # ``created__month`` is parts[-1], ``created__month__in`` is
+                # parts[-2] after the __in suffix, etc. Scan all parts after
+                # the field name so the int coercion fires regardless of
+                # which operator suffix is composed on top.
+                normalized_lookup = None
+                for part in key.split("__")[1:]:
+                    if part in _DATE_COMPONENT_LOOKUPS:
+                        normalized_lookup = part
+                        break
+                target_dict[key] = cls.normalize_rest_value(
+                    request, field_name, value, lookup=normalized_lookup,
+                )
 
         # logger.info("filters", filters)
         # logger.info("excludes", excludes)

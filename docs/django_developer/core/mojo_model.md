@@ -165,8 +165,15 @@ aggregation params take the `_` prefix.
 
 The existing reserved bare params (`size`, `start`, `sort`,
 `dr_start`, `dr_end`, `graph`, `search`, `download_format`,
-`limit`, `offset`) keep their current names — only the
+`limit`, `offset`, `timezone`) keep their current names — only the
 new aggregation surface uses `_`.
+
+`dr_start` / `dr_end` and the bare exact-match on a date field accept partial
+dates (`YYYY`, `YYYY-MM`, `YYYY-MM-DD`) and expand them to tz-aware
+`__gte` / `__lte` bounds. Django's `__year` / `__month` / `__quarter` / etc.
+component lookups are also passed through (with int coercion). See
+[docs/web_developer/core/filtering.md](../../web_developer/core/filtering.md#date-component-filters)
+for the consumer-facing reference.
 
 #### Field validation guards
 

@@ -1,7 +1,74 @@
 from datetime import datetime, timedelta
+import calendar
+import re
 import pytz
 import objict
 from .settings import settings
+
+
+_PARTIAL_DATE_RE = re.compile(r"^(\d{4})(?:-(\d{1,2}))?(?:-(\d{1,2}))?$")
+
+
+def parse_partial_date(value):
+    """Parse YYYY, YYYY-MM, or YYYY-MM-DD into objict({year, month, day}).
+
+    Strict: requires a 4-digit year and digits-only month/day. Anything with
+    a time component, ``T``, or non-digit characters returns None so the
+    caller can fall through to the full-datetime parser.
+
+    Returns None when the value is not a recognized partial date.
+    """
+    if not isinstance(value, str):
+        return None
+    m = _PARTIAL_DATE_RE.match(value)
+    if not m:
+        return None
+    year, month, day = m.groups()
+    return objict.objict(
+        year=int(year),
+        month=int(month) if month is not None else None,
+        day=int(day) if day is not None else None,
+    )
+
+
+def partial_date_to_range(parts, timezone=None):
+    """Translate a parse_partial_date result into (start_utc, end_utc).
+
+    Bounds are inclusive on both sides. When ``timezone`` is provided the
+    range is anchored to that local zone before being converted to UTC,
+    so a caller asking for "April 2026" in America/Los_Angeles gets the
+    UTC bounds for PT-April rather than UTC-April.
+
+    Raises ValueError on out-of-range month/day so callers can surface
+    a clean 400 instead of letting datetime() raise generically.
+    """
+    if timezone is not None and isinstance(timezone, str):
+        local_tz = pytz.timezone(timezone)
+    else:
+        local_tz = pytz.UTC
+
+    year = parts.year
+    month = parts.month
+    day = parts.day
+
+    if month is not None and not 1 <= month <= 12:
+        raise ValueError(f"Invalid month: {month}")
+
+    if day is not None:
+        last_day = calendar.monthrange(year, month)[1]
+        if not 1 <= day <= last_day:
+            raise ValueError(f"Invalid day for {year}-{month:02d}: {day}")
+        start = local_tz.localize(datetime(year, month, day, 0, 0, 0, 0))
+        end = local_tz.localize(datetime(year, month, day, 23, 59, 59, 999999))
+    elif month is not None:
+        last_day = calendar.monthrange(year, month)[1]
+        start = local_tz.localize(datetime(year, month, 1, 0, 0, 0, 0))
+        end = local_tz.localize(datetime(year, month, last_day, 23, 59, 59, 999999))
+    else:
+        start = local_tz.localize(datetime(year, 1, 1, 0, 0, 0, 0))
+        end = local_tz.localize(datetime(year, 12, 31, 23, 59, 59, 999999))
+
+    return start.astimezone(pytz.UTC), end.astimezone(pytz.UTC)
 
 
 def parse(value, timezone=None):
