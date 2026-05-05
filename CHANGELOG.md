@@ -1,5 +1,14 @@
 ## v1.1.0 - (current)
 
+## v1.1.38 - May 04, 2026
+
+assistant `aggregate_model` — FK group_by + `having`
+
+
+### Added
+- **`aggregate_model` — forward FK fields in `group_by`** — the assistant `aggregate_model` tool now resolves forward `ForeignKey` / `OneToOneField` group_by entries to their column attname (e.g. `"group"` → `"group_id"`). Both the relation name and the column name are accepted on input; the column form is what appears as the key on each result row, matching SQL `GROUP BY` semantics. Reverse relations and many-to-many fields are rejected with a clear error. Ordering on grouped queries is now strictly validated to reference either a resolved group_by column or an aggregation alias.
+- **`aggregate_model` — `having` parameter** — new optional `having` object applies a post-aggregation filter (SQL `HAVING`) after `group_by` + `annotate`. Keys must reference an aggregation alias; lookup suffixes are restricted to scalar comparisons (`gte`, `gt`, `lte`, `lt`, `exact`, `in`, `isnull`, `range`). Requires `group_by`. Lets the assistant express "groups whose aggregate crosses a threshold" queries (e.g. `{"total__gte": 2}`) without pulling raw rows. See `docs/django_developer/assistant/README.md` and `docs/web_developer/assistant/README.md`.
+
 ## v1.1.37 - May 04, 2026
 
 NEW advanced date filter, see filtering docs

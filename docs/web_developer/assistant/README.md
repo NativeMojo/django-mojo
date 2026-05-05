@@ -566,7 +566,7 @@ Filtering on sensitive fields is blocked and logged as a security event. Max 200
 
 ### `aggregate_model`
 
-Run aggregate queries (count, sum, avg, min, max, count_distinct) on any MojoModel. Supports `group_by` for grouped breakdowns. The assistant uses this for summary questions — never fetching rows just to count them.
+Run aggregate queries (count, sum, avg, min, max, count_distinct) on any MojoModel. Supports `group_by` for grouped breakdowns and `having` for post-aggregation filtering (SQL HAVING semantics). The assistant uses this for summary questions — never fetching rows just to count them.
 
 **Required permission**: `view_admin` plus model `VIEW_PERMS`.
 
@@ -592,6 +592,31 @@ Run aggregate queries (count, sum, avg, min, max, count_distinct) on any MojoMod
     "results": {"count_id": 240, "avg_priority": 6.4}
 }
 ```
+
+**Grouping by a foreign key**:
+
+`group_by` accepts forward FK fields by either the relation name or the column name. Both forms resolve to the column attname (e.g. `"group"` → `"group_id"`), and the column is the key used in each result row. Reverse relations and many-to-many fields are rejected.
+
+**Post-aggregation filter (`having`)**:
+
+`having` filters grouped results after the aggregations are computed. Keys must reference an aggregation alias and may use scalar lookup suffixes (`gte`, `gt`, `lte`, `lt`, `exact`, `in`, `isnull`, `range`). It requires `group_by`. Combined with FK grouping, this expresses "groups whose aggregate crosses a threshold" queries:
+
+```json
+{
+    "app_name": "incident",
+    "model_name": "Event",
+    "filters": {"category": "auth_failure"},
+    "group_by": ["group"],
+    "aggregations": [
+        {"field": "id", "func": "count", "alias": "tx_count"},
+        {"field": "source_ip", "func": "count_distinct", "alias": "ip_count"}
+    ],
+    "having": {"ip_count__gte": 2},
+    "ordering": "-ip_count"
+}
+```
+
+`ordering` must reference a `group_by` column or an aggregation alias.
 
 ### `export_data`
 

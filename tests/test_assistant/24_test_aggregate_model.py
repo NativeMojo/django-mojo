@@ -9,7 +9,7 @@ from testit import helpers as th
 @th.django_unit_setup()
 @th.requires_app("mojo.apps.assistant")
 def setup_aggregate(opts):
-    from mojo.apps.account.models import User
+    from mojo.apps.account.models import User, Group
     from mojo.apps.incident.models import Event
 
     # Clean up test users
@@ -30,7 +30,13 @@ def setup_aggregate(opts):
     opts.nopriv.save()
     opts.nopriv.add_permission("view_admin")
 
-    # Create test events with known levels and categories
+    # Two groups used for FK group_by + having tests. Cleanup first so reruns
+    # against the long-lived test DB stay deterministic.
+    Group.objects.filter(name__startswith="aggtest_group_").delete()
+    opts.group_a = Group.objects.create(name="aggtest_group_a", kind="aggtest")
+    opts.group_b = Group.objects.create(name="aggtest_group_b", kind="aggtest")
+
+    # Baseline 6 events with no group (existing flat / non-FK tests).
     Event.objects.filter(title__startswith="aggtest_").delete()
     for i in range(6):
         Event.objects.create(
@@ -40,6 +46,26 @@ def setup_aggregate(opts):
             level=i + 1,
             scope="global",
         )
+
+    # FK fixture: group_a gets 3 events, group_b gets 1. Used to exercise
+    # group_by on a forward FK and `having` thresholds.
+    for i in range(3):
+        Event.objects.create(
+            title=f"aggfk_a_{i}",
+            details=f"FK group A event {i}",
+            category="fk_test",
+            level=2,
+            scope="global",
+            group=opts.group_a,
+        )
+    Event.objects.create(
+        title="aggfk_b_0",
+        details="FK group B event 0",
+        category="fk_test",
+        level=2,
+        scope="global",
+        group=opts.group_b,
+    )
 
 
 def _aggregate(params, user):
@@ -249,6 +275,145 @@ def test_aggregate_bad_model(opts):
         "aggregations": [{"field": "id", "func": "count"}],
     }, opts.admin)
     assert "error" in result, "Should error for nonexistent model"
+
+
+# ---------------------------------------------------------------------------
+# FK group_by + having
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test()
+def test_aggregate_group_by_fk_relation_name(opts):
+    """group_by with the FK relation name resolves to the column attname."""
+    result = _aggregate({
+        "app_name": "incident", "model_name": "Event",
+        "filters": {"category": "fk_test"},
+        "aggregations": [{"field": "id", "func": "count", "alias": "total"}],
+        "group_by": ["group"],
+    }, opts.admin)
+    assert "error" not in result, f"FK group_by should succeed: {result.get('error')}"
+    assert result["group_by"] == ["group_id"], \
+        f"Resolved group_by should be column name, got {result.get('group_by')}"
+    by_group = {r["group_id"]: r["total"] for r in result["results"]}
+    assert by_group.get(opts.group_a.id) == 3, \
+        f"Expected group_a count=3, got {by_group}"
+    assert by_group.get(opts.group_b.id) == 1, \
+        f"Expected group_b count=1, got {by_group}"
+
+
+@th.django_unit_test()
+def test_aggregate_group_by_fk_column_name(opts):
+    """group_by accepts the column name (e.g. 'group_id') directly."""
+    result = _aggregate({
+        "app_name": "incident", "model_name": "Event",
+        "filters": {"category": "fk_test"},
+        "aggregations": [{"field": "id", "func": "count", "alias": "total"}],
+        "group_by": ["group_id"],
+    }, opts.admin)
+    assert "error" not in result, f"FK column group_by should succeed: {result.get('error')}"
+    assert result["group_by"] == ["group_id"], \
+        f"Resolved group_by should be column name, got {result.get('group_by')}"
+    assert result["count"] == 2, f"Expected 2 groups, got {result.get('count')}"
+
+
+@th.django_unit_test()
+def test_aggregate_count_distinct_on_fk(opts):
+    """count_distinct on a FK field counts distinct related pks."""
+    result = _aggregate({
+        "app_name": "incident", "model_name": "Event",
+        "filters": {"category": "fk_test"},
+        "aggregations": [{"field": "group", "func": "count_distinct", "alias": "groups"}],
+    }, opts.admin)
+    assert "error" not in result, f"count_distinct on FK should succeed: {result.get('error')}"
+    assert result["results"]["groups"] == 2, \
+        f"Expected 2 distinct groups, got {result['results'].get('groups')}"
+
+
+@th.django_unit_test()
+def test_aggregate_having_filters_below_threshold(opts):
+    """having with __gte filters out groups below the threshold (HAVING semantics)."""
+    result = _aggregate({
+        "app_name": "incident", "model_name": "Event",
+        "filters": {"category": "fk_test"},
+        "aggregations": [{"field": "id", "func": "count", "alias": "total"}],
+        "group_by": ["group"],
+        "having": {"total__gte": 2},
+    }, opts.admin)
+    assert "error" not in result, f"having should succeed: {result.get('error')}"
+    assert result["count"] == 1, \
+        f"having total__gte=2 should leave 1 group, got {result.get('count')}"
+    row = result["results"][0]
+    assert row["group_id"] == opts.group_a.id, \
+        f"Surviving row should be group_a, got {row}"
+    assert row["total"] == 3, f"Surviving row total should be 3, got {row}"
+
+
+@th.django_unit_test()
+def test_aggregate_having_requires_group_by(opts):
+    """having without group_by is rejected."""
+    result = _aggregate({
+        "app_name": "incident", "model_name": "Event",
+        "filters": {"category": "fk_test"},
+        "aggregations": [{"field": "id", "func": "count", "alias": "total"}],
+        "having": {"total__gte": 1},
+    }, opts.admin)
+    assert "error" in result, "having without group_by should be rejected"
+    assert "group_by" in result["error"], f"Error should mention group_by: {result['error']}"
+
+
+@th.django_unit_test()
+def test_aggregate_having_unknown_alias(opts):
+    """having key that does not match any aggregation alias is rejected."""
+    result = _aggregate({
+        "app_name": "incident", "model_name": "Event",
+        "filters": {"category": "fk_test"},
+        "aggregations": [{"field": "id", "func": "count", "alias": "total"}],
+        "group_by": ["group"],
+        "having": {"bogus_alias__gte": 2},
+    }, opts.admin)
+    assert "error" in result, "having with unknown alias should be rejected"
+    assert "Unknown having key" in result["error"], f"Error: {result['error']}"
+
+
+@th.django_unit_test()
+def test_aggregate_having_invalid_lookup(opts):
+    """having with a non-scalar lookup suffix is rejected."""
+    result = _aggregate({
+        "app_name": "incident", "model_name": "Event",
+        "filters": {"category": "fk_test"},
+        "aggregations": [{"field": "id", "func": "count", "alias": "total"}],
+        "group_by": ["group"],
+        "having": {"total__icontains": "bad"},
+    }, opts.admin)
+    assert "error" in result, "having with invalid lookup should be rejected"
+    assert "Invalid having lookup" in result["error"], f"Error: {result['error']}"
+
+
+@th.django_unit_test()
+def test_aggregate_group_by_rejects_reverse_relation(opts):
+    """group_by on a reverse FK accessor is rejected."""
+    # Incident has events = ForeignKey(Incident, related_name='events') on Event.
+    # The reverse accessor 'events' on Incident is not a valid group_by target.
+    result = _aggregate({
+        "app_name": "incident", "model_name": "Incident",
+        "aggregations": [{"field": "id", "func": "count"}],
+        "group_by": ["events"],
+    }, opts.admin)
+    assert "error" in result, "Reverse relation group_by should be rejected"
+    assert "Unknown group_by field" in result["error"], f"Error: {result['error']}"
+
+
+@th.django_unit_test()
+def test_aggregate_ordering_validates_against_known_keys(opts):
+    """Ordering by a field that is neither a group_by column nor an alias is rejected."""
+    result = _aggregate({
+        "app_name": "incident", "model_name": "Event",
+        "filters": {"category": "fk_test"},
+        "aggregations": [{"field": "id", "func": "count", "alias": "total"}],
+        "group_by": ["group"],
+        "ordering": "-bogus",
+    }, opts.admin)
+    assert "error" in result, "Bogus ordering field should be rejected"
+    assert "must match" in result["error"], f"Error: {result['error']}"
 
 
 # ---------------------------------------------------------------------------

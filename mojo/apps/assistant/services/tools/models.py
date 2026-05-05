@@ -264,6 +264,45 @@ def _get_valid_field_names(model):
     return names
 
 
+def _resolve_group_by_field(model, name):
+    """Resolve a group_by field name to the column to pass to .values().
+
+    Forward FK / OneToOne fields resolve to their column attname (e.g.
+    ``group`` -> ``group_id``) so the result key is unambiguous and matches
+    SQL semantics. Plain concrete fields pass through unchanged. Both the
+    relation name (``group``) and the column name (``group_id``) are
+    accepted; the column form is returned in either case.
+
+    Returns the resolved column name, or None if the field is unknown,
+    a reverse relation, or many-to-many.
+    """
+    candidates = [name]
+    if name.endswith("_id"):
+        candidates.append(name[:-3])
+
+    field = None
+    for candidate in candidates:
+        try:
+            field = model._meta.get_field(candidate)
+            break
+        except Exception:
+            continue
+    if field is None:
+        return None
+
+    if getattr(field, "many_to_many", False):
+        return None
+    if getattr(field, "one_to_many", False):
+        return None
+    if getattr(field, "auto_created", False) and not getattr(field, "concrete", True):
+        return None
+
+    if getattr(field, "many_to_one", False) or getattr(field, "one_to_one", False):
+        return getattr(field, "attname", field.name)
+
+    return field.name
+
+
 def _validate_filter_keys(filters, valid_fields, user, model_label):
     """Validate filter keys against model fields. Returns error dict or None."""
     # ORM lookup suffixes that are not field names
@@ -296,6 +335,35 @@ def _validate_filter_keys(filters, valid_fields, user, model_label):
         if base not in valid_fields:
             return {"error": f"Unknown field '{base}' on {model_label}"}
 
+    return None
+
+
+# ORM lookup suffixes accepted on having clauses. Restricted to numeric /
+# scalar comparisons — no traversal, no string/regex matching against
+# aggregated values.
+_HAVING_SUFFIXES = {
+    "gte", "gt", "lte", "lt", "exact", "in", "isnull", "range",
+}
+
+
+def _validate_having_keys(having, aliases):
+    """Validate having clause keys against the set of aggregation aliases.
+
+    Each key's base must be an aggregation alias. Lookup suffixes are
+    restricted to scalar comparisons — relational traversal is rejected.
+    Returns an error dict or None.
+    """
+    for key in having:
+        parts = key.split("__")
+        base = parts[0]
+        if base not in aliases:
+            return {"error": (
+                f"Unknown having key '{base}' — must match an aggregation alias "
+                f"({sorted(aliases)})"
+            )}
+        for segment in parts[1:]:
+            if segment not in _HAVING_SUFFIXES:
+                return {"error": f"Invalid having lookup '{segment}' in '{key}'"}
     return None
 
 
@@ -950,11 +1018,30 @@ def _get_field_type(model, field_name):
             "group_by": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Fields to group by (e.g. ['status'] or ['status', 'category'])",
+                "description": (
+                    "Fields to group by (e.g. ['status'] or ['status', 'category']). "
+                    "Forward FK fields are accepted by either the relation name or the "
+                    "column name and resolve to the column (e.g. 'group' -> 'group_id'). "
+                    "Reverse relations and many-to-many fields are not supported."
+                ),
+            },
+            "having": {
+                "type": "object",
+                "description": (
+                    "Post-aggregation filter applied after group_by + annotate "
+                    "(SQL HAVING semantics). Keys must reference an aggregation "
+                    "alias and may use ORM lookup suffixes (gte, gt, lte, lt, "
+                    "exact, in, isnull, range). Requires group_by. "
+                    "Example: {'total__gte': 2}."
+                ),
             },
             "ordering": {
                 "type": "string",
-                "description": "Order grouped results (e.g. '-total' or 'status')",
+                "description": (
+                    "Order grouped results. Must reference a group_by column or an "
+                    "aggregation alias (e.g. '-total' or 'status'). "
+                    "Relational ordering is not supported."
+                ),
             },
             "limit": {
                 "type": "integer",
@@ -1044,13 +1131,27 @@ def _tool_aggregate_model(params, user):
 
         aggs[alias] = agg_map[func](field)
 
-    # Validate group_by
+    # Validate group_by — resolve FK names to their column attname so the
+    # result keys are unambiguous (e.g. 'group' -> 'group_id').
     group_by = params.get("group_by") or []
+    resolved_group_by = []
     for gb_field in group_by:
         if _is_sensitive_field(gb_field):
             return {"error": f"Cannot group by sensitive field '{gb_field}'"}
-        if gb_field not in valid_fields:
+        resolved = _resolve_group_by_field(model, gb_field)
+        if resolved is None:
             return {"error": f"Unknown group_by field '{gb_field}' on {model_label}"}
+        resolved_group_by.append(resolved)
+
+    # Validate having — must reference an aggregation alias, with ORM-style
+    # lookup suffixes only. Requires group_by (HAVING needs grouped results).
+    having = params.get("having") or {}
+    if having:
+        if not group_by:
+            return {"error": "'having' requires 'group_by'"}
+        having_err = _validate_having_keys(having, set(aggs.keys()))
+        if having_err:
+            return having_err
 
     # Build queryset
     queryset = model.objects.all()
@@ -1068,15 +1169,30 @@ def _tool_aggregate_model(params, user):
         limit = min(params.get("limit", DEFAULT_GROUP_LIMIT), MAX_GROUP_ROWS)
         ordering = params.get("ordering", "").strip()
 
-        # Validate ordering
+        # Validate ordering — must match a resolved group_by column or an
+        # aggregation alias, with no relational traversal.
+        valid_order_fields = set(resolved_group_by) | set(aggs.keys())
         if ordering:
             order_field = ordering.lstrip("-")
             if "__" in order_field:
                 return {"error": "Relational ordering is not supported"}
             if _is_sensitive_field(order_field):
                 return {"error": f"Ordering on '{order_field}' is not allowed"}
+            if order_field not in valid_order_fields:
+                return {"error": (
+                    f"Ordering field '{order_field}' must match a group_by "
+                    f"column or aggregation alias"
+                )}
 
-        qs = queryset.values(*group_by).annotate(**aggs)
+        qs = queryset.values(*resolved_group_by).annotate(**aggs)
+
+        if having:
+            try:
+                qs = qs.filter(**having)
+            except Exception as e:
+                logger.warning("aggregate_model having error", model_label, str(e))
+                return {"error": "Invalid having parameters"}
+
         if ordering:
             qs = qs.order_by(ordering)
 
@@ -1092,11 +1208,12 @@ def _tool_aggregate_model(params, user):
                 elif val is not None and not isinstance(val, (str, int, float, bool)):
                     row[key] = str(val)
 
-        logger.info("aggregate_model", model_label, f"group_by={group_by}",
+        logger.info("aggregate_model", model_label, f"group_by={resolved_group_by}",
+                     f"having={list(having.keys()) if having else []}",
                      f"groups={len(rows)}", f"user={user.id}")
         result = {
             "model": model_label,
-            "group_by": group_by,
+            "group_by": resolved_group_by,
             "results": rows,
             "count": len(rows),
         }

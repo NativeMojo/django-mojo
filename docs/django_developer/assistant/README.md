@@ -268,8 +268,9 @@ Every read tool calls `mojo.apps.metrics.rest.helpers.check_view_permissions(req
 | `model_name` | string | required | Model class name |
 | `aggregations` | array | required | List of `{field, func, alias?}` objects. `func` is one of `count`, `sum`, `avg`, `min`, `max`, `count_distinct`. `alias` defaults to `{func}_{field}`. Use `id` as the field for row counts. |
 | `filters` | object | `{}` | ORM filter dict |
-| `group_by` | array | — | Fields to group by (e.g. `["status"]` or `["status", "category"]`) |
-| `ordering` | string | — | Order grouped results (e.g. `-total` or `status`) |
+| `group_by` | array | — | Fields to group by (e.g. `["status"]` or `["status", "category"]`). Forward FK fields are accepted by either the relation name or the column name and resolve to the column attname (e.g. `"group"` → `"group_id"`); the resolved column is the key used in result rows. Reverse relations and many-to-many fields are rejected. |
+| `having` | object | — | Post-aggregation filter applied after `group_by` + `annotate` (SQL HAVING semantics). Keys must reference an aggregation alias and may use scalar lookup suffixes (`gte`, `gt`, `lte`, `lt`, `exact`, `in`, `isnull`, `range`). Requires `group_by`. Example: `{"total__gte": 2}`. |
+| `ordering` | string | — | Order grouped results. Must reference a `group_by` column or an aggregation alias (e.g. `-total` or `group_id`). Relational ordering is not supported. |
 | `limit` | integer | `50` | Max grouped rows to return (max 200) |
 
 `export_data` parameters:
