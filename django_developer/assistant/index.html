@@ -5591,13 +5591,19 @@
 <td><code>group_by</code></td>
 <td>array</td>
 <td>—</td>
-<td>Fields to group by (e.g. <code>["status"]</code> or <code>["status", "category"]</code>)</td>
+<td>Fields to group by (e.g. <code>["status"]</code> or <code>["status", "category"]</code>). Forward FK fields are accepted by either the relation name or the column name and resolve to the column attname (e.g. <code>"group"</code> → <code>"group_id"</code>); the resolved column is the key used in result rows. Reverse relations and many-to-many fields are rejected.</td>
+</tr>
+<tr>
+<td><code>having</code></td>
+<td>object</td>
+<td>—</td>
+<td>Post-aggregation filter applied after <code>group_by</code> + <code>annotate</code> (SQL HAVING semantics). Keys must reference an aggregation alias and may use scalar lookup suffixes (<code>gte</code>, <code>gt</code>, <code>lte</code>, <code>lt</code>, <code>exact</code>, <code>in</code>, <code>isnull</code>, <code>range</code>). Requires <code>group_by</code>. Example: <code>{"total__gte": 2}</code>.</td>
 </tr>
 <tr>
 <td><code>ordering</code></td>
 <td>string</td>
 <td>—</td>
-<td>Order grouped results (e.g. <code>-total</code> or <code>status</code>)</td>
+<td>Order grouped results. Must reference a <code>group_by</code> column or an aggregation alias (e.g. <code>-total</code> or <code>group_id</code>). Relational ordering is not supported.</td>
 </tr>
 <tr>
 <td><code>limit</code></td>
