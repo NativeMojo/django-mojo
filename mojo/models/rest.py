@@ -1064,6 +1064,12 @@ class MojoModel:
         """
         Apply sorting to the queryset.
 
+        Nullable date/datetime fields always sort NULLs LAST regardless of
+        direction or database backend. SQLite and MySQL otherwise place
+        NULLs at the top of a descending sort (and the bottom of ascending),
+        which is rarely what callers want when sorting an event log by
+        ``-resolved_at`` or similar.
+
         Args:
             request: Django HTTP request object.
             queryset: The queryset to sort.
@@ -1074,9 +1080,17 @@ class MojoModel:
         if not hasattr(cls, '__rest_field_names__'):
             cls.__rest_field_names__ = [f.name for f in cls._meta.get_fields()]
         sort_field = request.DATA.pop("sort", "-id")
-        if sort_field.lstrip('-') in cls.__rest_field_names__:
-            return queryset.order_by(sort_field)
-        return queryset
+        bare = sort_field.lstrip('-')
+        if bare not in cls.__rest_field_names__:
+            return queryset
+        descending = sort_field.startswith('-')
+        field = cls.get_model_field(bare)
+        if field is not None and getattr(field, "null", False) \
+                and field.get_internal_type() in _DATE_FIELD_TYPES:
+            expr = dm.F(bare)
+            expr = expr.desc(nulls_last=True) if descending else expr.asc(nulls_last=True)
+            return queryset.order_by(expr)
+        return queryset.order_by(sort_field)
 
     @classmethod
     def return_rest_response(cls, data, flat=False):

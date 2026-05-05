@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## v1.1.39 - May 05, 2026
+
+bugfix when sorting null fields
+
+
 ## v1.1.38 - May 04, 2026
 
 assistant `aggregate_model` — FK group_by + `having`
