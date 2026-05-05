@@ -416,6 +416,14 @@ class TicketHandler:
                 except Exception:
                     assignee = None
 
+            incident = getattr(event, "incident", None)
+            if incident and incident.rule_set_id:
+                if Ticket.objects.filter(
+                    incident__rule_set_id=incident.rule_set_id
+                ).exclude(status__in=("resolved", "closed")).exists():
+                    logger.info("TicketHandler: skipping duplicate for rule_set %s", incident.rule_set_id)
+                    return True
+
             Ticket.objects.create(
                 title=title,
                 description=description,
@@ -423,7 +431,7 @@ class TicketHandler:
                 priority=priority,
                 category=category,
                 assignee=assignee,
-                incident=getattr(event, "incident", None),
+                incident=incident,
                 metadata={**getattr(event, "metadata", {})},
             )
             return True

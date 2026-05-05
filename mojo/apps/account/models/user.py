@@ -1229,8 +1229,12 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
 
     @classmethod
     def lookup_from_request(cls, request, phone_as_username=False):
-        username = request.DATA.get("username", "").lower().strip()
-        email = request.DATA.get("email", "").lower().strip()
+        username = request.DATA.get("username", "")
+        email = request.DATA.get("email", "")
+        if not isinstance(username, str) or not isinstance(email, str):
+            raise merrors.ValueException("invalid_request")
+        username = username.lower().strip()
+        email = email.lower().strip()
         if not email and username and "@" in username:
             email = username
         phone_number = request.DATA.get("phone_number")
@@ -1240,8 +1244,12 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
 
     @classmethod
     def lookup_from_request_with_source(cls, request, phone_as_username=False):
-        username = request.DATA.get("username", "").lower().strip()
-        email = request.DATA.get("email", "").lower().strip()
+        username = request.DATA.get("username", "")
+        email = request.DATA.get("email", "")
+        if not isinstance(username, str) or not isinstance(email, str):
+            raise merrors.ValueException("invalid_request")
+        username = username.lower().strip()
+        email = email.lower().strip()
         phone_number = request.DATA.get("phone_number")
 
         if not email and username and "@" in username:

@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## v1.1.40 - May 05, 2026
+
+hotfix for ticket generator creating dups
+
+
 ## v1.1.39 - May 05, 2026
 
 bugfix when sorting null fields
