@@ -3,6 +3,7 @@ from mojo.apps import jobs
 from mojo.helpers.settings import settings
 
 HEALTH_MONITORING_ENABLED = settings.get_static("HEALTH_MONITORING_ENABLED", False)
+LLM_TRIAGE_ENABLED = settings.get_static("LLM_HANDLER_API_KEY", None)
 
 _health_defaults_checked = False
 
@@ -48,6 +49,16 @@ def refresh_ipsets(force=False, verbose=False, now=None):
     jobs.publish(
         func="mojo.apps.incident.asyncjobs.refresh_ipsets",
         payload={})
+
+
+# Twice a day — triage any new incidents that haven't been LLM-assessed yet
+@schedule(hours="9,18")
+def triage_new_incidents(force=False, verbose=False, now=None):
+    if not LLM_TRIAGE_ENABLED:
+        return
+    jobs.publish(
+        func="mojo.apps.incident.asyncjobs.triage_new_incidents",
+        channel="incident_handlers", payload={})
 
 
 # Every 3 minutes — check system health across all runners

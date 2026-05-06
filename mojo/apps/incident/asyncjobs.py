@@ -410,5 +410,60 @@ def check_system_health(job):
     job.add_log(f"Health check complete: {checked} runners checked, {len(alive_ids)} alive")
 
 
+def triage_new_incidents(job):
+    """
+    Cron job: find all new, unassessed incidents and queue each for LLM triage.
+
+    Runs periodically (every few minutes). Picks up incidents that arrived via
+    rulesets without an llm:// handler — so the LLM sees everything, not just
+    incidents from rules that explicitly opted in.
+
+    Guards against double-pickup by moving each incident to "investigating"
+    before publishing the job. The LLM agent takes over from there.
+    """
+    from mojo.apps.incident.models import Incident
+    from mojo.apps import jobs
+
+    if not settings.get("LLM_HANDLER_API_KEY"):
+        return
+
+    BATCH_SIZE = 20
+
+    # Incidents still "new" with no LLM assessment recorded yet
+    incidents = list(
+        Incident.objects
+        .filter(status="new")
+        .exclude(metadata__has_key="llm_assessment")
+        .order_by("-priority", "created")[:BATCH_SIZE]
+    )
+
+    if not incidents:
+        return
+
+    queued = 0
+    for incident in incidents:
+        event = Event.objects.filter(incident=incident).order_by("-created").first()
+        if not event:
+            continue
+
+        # Mark investigating now so concurrent sweeps don't double-queue
+        incident.status = "investigating"
+        incident.save(update_fields=["status"])
+        incident.add_history("handler:llm", note="[LLM Agent] Queued for automated triage")
+
+        jobs.publish(
+            "mojo.apps.incident.handlers.llm_agent.execute_llm_handler",
+            {
+                "event_id": event.pk,
+                "incident_id": incident.pk,
+                "ruleset_id": incident.rule_set_id,
+            },
+            channel="incident_handlers",
+        )
+        queued += 1
+
+    job.add_log(f"Queued {queued}/{len(incidents)} incidents for LLM triage")
+
+
 def example(job):
     job.add_log("This is an example job")
