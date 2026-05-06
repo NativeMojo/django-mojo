@@ -52,6 +52,8 @@ You have access to tools that let you query the system and take actions.
 - For concerning issues that need human attention, create a ticket and send email/notify alerts.
 - Read the agent_memory for this rule type — it contains your past learnings.
 - Update agent_memory when you learn something new about a pattern.
+- Before creating a new rule, check the existing active rules shown in the prompt context. If an existing rule covers a similar pattern but missed this event, use suggest_rule_update to propose modifications to that rule instead of creating a new one.
+- Use request_approval when you want human confirmation before taking a destructive action (blocking IPs, escalations). This creates a structured approval request on the ticket.
 
 ## Incident Deletion Lifecycle
 - RuleSets can have `metadata.delete_on_resolution = true` — incidents matching that rule are auto-deleted when resolved or closed. Use `delete_on_resolution` when proposing rules for noise patterns (bot scanning, brute-force, health blips) where the incident has no long-term value.
@@ -297,6 +299,52 @@ TOOLS = [
                 "memory": {"type": "string", "description": "What you learned (appended to existing memory)"},
             },
             "required": ["ruleset_id", "memory"],
+        },
+    },
+    {
+        "name": "request_approval",
+        "description": "Request human approval for an action. Creates a ticket note with structured action metadata that the UI renders as Approve/Deny buttons. Use this instead of executing destructive actions directly when you're uncertain or the action requires human confirmation (blocking IPs, escalations, etc.).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticket_id": {"type": "integer", "description": "The ticket to add the approval request to"},
+                "handler": {"type": "string", "description": "Action handler name (e.g., 'incident.block_confirm', 'incident.escalate')"},
+                "label": {"type": "string", "description": "Human-readable description of what is being requested (e.g., 'Block IP 10.0.0.1?')"},
+                "context": {
+                    "type": "object",
+                    "description": "Handler-specific context. For model references use {\"target\": {\"model\": \"app.Model\", \"pk\": 123}}. For block_confirm use {\"ip\": \"...\", \"reason\": \"...\"}.",
+                },
+                "reasoning": {"type": "string", "description": "Your reasoning for requesting this action"},
+            },
+            "required": ["ticket_id", "handler", "label", "context", "reasoning"],
+        },
+    },
+    {
+        "name": "suggest_rule_update",
+        "description": "Suggest modifications to an existing active rule. Use when an existing rule covers a similar pattern but missed this event — instead of creating a new rule, propose changes to widen the existing rule. Creates a ticket with an approval action for the update.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ruleset_id": {"type": "integer", "description": "The existing RuleSet to update"},
+                "proposed_rules": {
+                    "type": "array",
+                    "description": "The new set of rules that should replace the current ones",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "field_name": {"type": "string", "description": "Event field or metadata key to match"},
+                            "comparator": {"type": "string", "enum": ["==", ">", ">=", "<", "<=", "contains", "regex"]},
+                            "value": {"type": "string"},
+                            "value_type": {"type": "string", "enum": ["int", "float", "str", "bool"], "default": "str"},
+                        },
+                        "required": ["field_name", "comparator", "value"],
+                    },
+                },
+                "reasoning": {"type": "string", "description": "Why the existing rule needs updating and what the changes accomplish"},
+                "incident_id": {"type": "integer", "description": "The incident that triggered this suggestion"},
+            },
+            "required": ["ruleset_id", "proposed_rules", "reasoning"],
         },
     },
 ]
@@ -589,7 +637,7 @@ def _tool_create_ticket(params):
             )
             return {"ok": True, "ticket_id": existing.pk, "deduplicated": True}
 
-    metadata = {"llm_linked": True}
+    metadata = {"llm_linked": True, "llm_enabled": True}
     if params.get("ruleset_id"):
         metadata["ruleset_id"] = params["ruleset_id"]
 
@@ -719,6 +767,34 @@ def _find_matching_proposed_ruleset(category, signature):
     return None
 
 
+def _find_open_proposal_ticket(category):
+    """Find any open rule-proposal ticket for this category.
+
+    Replaces the time-windowed dedup — if there's an open proposal ticket
+    linked to a pending ruleset in the same category, the new proposal
+    is a duplicate regardless of timing.
+    """
+    from mojo.apps.incident.models import Ticket, RuleSet
+
+    open_tickets = (
+        Ticket.objects
+        .filter(category="llm_review")
+        .exclude(status__in=TICKET_CLOSED_STATUSES)
+        .order_by("-modified")
+    )
+    for ticket in open_tickets:
+        ruleset_id = (ticket.metadata or {}).get("ruleset_id")
+        if not ruleset_id:
+            continue
+        try:
+            rs = RuleSet.objects.get(pk=ruleset_id)
+            if rs.category == category and not rs.is_active:
+                return ticket, rs
+        except RuleSet.DoesNotExist:
+            continue
+    return None, None
+
+
 def _tool_create_rule(params):
     from mojo.apps.incident.models import RuleSet, Rule, Ticket
 
@@ -727,73 +803,40 @@ def _tool_create_rule(params):
     rules_payload = params.get("rules") or []
     signature = _rule_signature(category, handler, rules_payload)
 
+    # Check exact signature match against ACTIVE rules only
     existing = _find_matching_proposed_ruleset(category, signature)
-    if existing is not None:
-        existing_meta = existing.metadata or {}
-
-        # Active match — rule is live, nothing to do.
-        if not existing_meta.get("disabled"):
-            return {
-                "ok": True,
-                "ruleset_id": existing.pk,
-                "deduplicated": True,
-                "already_active": True,
-            }
-
-        # Pending match — bump occurrence counter and append to approval ticket.
-        occurrence_count = int(existing_meta.get("occurrence_count") or 1) + 1
-        existing_meta["occurrence_count"] = occurrence_count
-        existing.metadata = existing_meta
-        existing.save(update_fields=["metadata"])
-
-        open_ticket = (
-            Ticket.objects
-            .filter(metadata__ruleset_id=existing.pk)
-            .exclude(status__in=TICKET_CLOSED_STATUSES)
-            .order_by("-modified")
-            .first()
-        )
-
-        if open_ticket is not None:
-            note_text = (
-                f"Pattern seen again — total observations: {occurrence_count}. "
-                f"Reasoning from latest sighting: {params['reasoning']}"
-            )
-            _append_ticket_note(open_ticket, note_text)
-            return {
-                "ok": True,
-                "ruleset_id": existing.pk,
-                "ticket_id": open_ticket.pk,
-                "deduplicated": True,
-                "occurrence_count": occurrence_count,
-            }
-
-        # Pending rule has no open approval ticket (human closed/rejected without
-        # disabling the LLM flag). Re-propose with a fresh ticket on the existing rule.
-        ticket_result = _tool_create_ticket({
-            "title": f"[Rule Proposal] {existing.name}",
-            "note": (
-                f"Re-proposing a previously seen rule — total observations: {occurrence_count}.\n\n"
-                f"**Name**: {existing.name}\n"
-                f"**Category**: {category}\n"
-                f"**Handler**: {handler}\n"
-                f"**Reasoning**: {params['reasoning']}\n\n"
-                f"The rule is currently disabled. Please review and approve by replying to this ticket."
-            ),
-            "priority": 3,
-            "ruleset_id": existing.pk,
-        })
+    if existing is not None and existing.is_active:
         return {
             "ok": True,
             "ruleset_id": existing.pk,
-            "ticket_id": ticket_result.get("ticket_id"),
+            "deduplicated": True,
+            "already_active": True,
+        }
+
+    # Check for any open proposal ticket in this category (replaces time-window dedup)
+    open_ticket, pending_rs = _find_open_proposal_ticket(category)
+    if open_ticket is not None and pending_rs is not None:
+        pending_meta = pending_rs.metadata or {}
+        occurrence_count = int(pending_meta.get("occurrence_count") or 1) + 1
+        pending_meta["occurrence_count"] = occurrence_count
+        pending_rs.metadata = pending_meta
+        pending_rs.save(update_fields=["metadata"])
+
+        _append_ticket_note(
+            open_ticket,
+            f"Pattern seen again — total observations: {occurrence_count}. "
+            f"Reasoning from latest sighting: {params['reasoning']}",
+        )
+        return {
+            "ok": True,
+            "ruleset_id": pending_rs.pk,
+            "ticket_id": open_ticket.pk,
             "deduplicated": True,
             "occurrence_count": occurrence_count,
         }
 
-    # No match — create a new RuleSet and approval ticket.
+    # No match — create a new RuleSet and approval ticket with action block.
     metadata = {
-        "disabled": True,
         "llm_proposed": True,
         "llm_reasoning": params["reasoning"],
         "occurrence_count": 1,
@@ -812,6 +855,7 @@ def _tool_create_rule(params):
         bundle_by=params.get("bundle_by", 4),
         bundle_minutes=params.get("bundle_minutes", 30),
         priority=params.get("priority", 50),
+        is_active=False,
         metadata=metadata,
     )
 
@@ -829,22 +873,47 @@ def _tool_create_rule(params):
     delete_note = ""
     if metadata.get("delete_on_resolution"):
         delete_note = "\n**Delete on Resolution**: Yes (noise pattern — incidents auto-deleted when resolved/closed)\n"
-    ticket_result = _tool_create_ticket({
-        "title": f"[Rule Proposal] {params['name']}",
-        "note": (
-            f"I've detected a recurring pattern and propose a new rule:\n\n"
-            f"**Name**: {params['name']}\n"
-            f"**Category**: {category}\n"
-            f"**Handler**: {handler}\n"
-            f"{delete_note}"
-            f"**Reasoning**: {params['reasoning']}\n\n"
-            f"The rule is currently disabled. Please review and approve by replying to this ticket."
-        ),
-        "priority": 3,
-        "ruleset_id": ruleset.pk,
-    })
 
-    return {"ok": True, "ruleset_id": ruleset.pk, "ticket_id": ticket_result.get("ticket_id")}
+    # Create the ticket with llm_enabled and requires_approval metadata
+    ticket_metadata = {
+        "llm_linked": True,
+        "llm_enabled": True,
+        "ruleset_id": ruleset.pk,
+        "requires_approval": True,
+    }
+    ticket = Ticket.objects.create(
+        title=f"[Rule Proposal] {params['name']}",
+        description=f"Rule proposal for pattern in category '{category}'",
+        priority=3,
+        category="llm_review",
+        metadata=ticket_metadata,
+    )
+
+    # Create the first note with an action block for approval
+    note_text = (
+        f"I've detected a recurring pattern and propose a new rule:\n\n"
+        f"**Name**: {params['name']}\n"
+        f"**Category**: {category}\n"
+        f"**Handler**: {handler}\n"
+        f"{delete_note}"
+        f"**Reasoning**: {params['reasoning']}"
+    )
+    action_note_meta = {
+        "action": {
+            "type": "approval",
+            "handler": "incident.rule_approval",
+            "label": f"Approve rule proposal \"{params['name']}\"?",
+            "context": {
+                "target": {"model": "incident.RuleSet", "pk": ruleset.pk},
+            },
+        }
+    }
+    note = _append_ticket_note(ticket, note_text)
+    if note:
+        note.metadata = action_note_meta
+        note.save(update_fields=["metadata"])
+
+    return {"ok": True, "ruleset_id": ruleset.pk, "ticket_id": ticket.pk}
 
 
 def _tool_update_rule_memory(params):
@@ -917,6 +986,123 @@ def _tool_query_open_incidents(params):
     ]
 
 
+def _tool_request_approval(params):
+    from mojo.apps.incident.models import Ticket, TicketNote
+
+    ticket = Ticket.objects.get(pk=params["ticket_id"])
+
+    action_meta = {
+        "action": {
+            "type": "approval",
+            "handler": params["handler"],
+            "label": params["label"],
+            "context": params["context"],
+        }
+    }
+
+    note = _append_ticket_note(
+        ticket,
+        f"Requesting approval: {params['label']}\n\nReasoning: {params['reasoning']}",
+    )
+    if note:
+        note.metadata = action_meta
+        note.save(update_fields=["metadata"])
+
+    return {"ok": True, "ticket_id": ticket.pk, "note_id": note.pk if note else None}
+
+
+def _tool_suggest_rule_update(params):
+    from mojo.apps.incident.models import RuleSet, Ticket
+
+    ruleset = RuleSet.objects.get(pk=params["ruleset_id"])
+
+    # Dedup: check for an existing open update-suggestion ticket for this ruleset
+    existing_ticket = (
+        Ticket.objects
+        .filter(
+            category="llm_review",
+            metadata__ruleset_id=ruleset.pk,
+            metadata__update_suggestion=True,
+        )
+        .exclude(status__in=TICKET_CLOSED_STATUSES)
+        .order_by("-modified")
+        .first()
+    )
+
+    if existing_ticket:
+        _append_ticket_note(
+            existing_ticket,
+            f"Additional update suggestion:\n\n{params['reasoning']}",
+        )
+        return {
+            "ok": True,
+            "ticket_id": existing_ticket.pk,
+            "ruleset_id": ruleset.pk,
+            "deduplicated": True,
+        }
+
+    # Build current rules description for comparison
+    current_rules = []
+    for r in ruleset.rules.all().order_by("index"):
+        current_rules.append({
+            "name": r.name,
+            "field_name": r.field_name,
+            "comparator": r.comparator,
+            "value": r.value,
+            "value_type": r.value_type,
+        })
+
+    incident = None
+    if params.get("incident_id"):
+        try:
+            from mojo.apps.incident.models import Incident
+            incident = Incident.objects.get(pk=params["incident_id"])
+        except Exception:
+            pass
+
+    ticket_metadata = {
+        "llm_linked": True,
+        "llm_enabled": True,
+        "ruleset_id": ruleset.pk,
+        "update_suggestion": True,
+    }
+    ticket = Ticket.objects.create(
+        title=f"[Rule Update] {ruleset.name}",
+        description=f"Suggested changes to RuleSet #{ruleset.pk}",
+        priority=3,
+        category="llm_review",
+        incident=incident,
+        metadata=ticket_metadata,
+    )
+
+    action_note_meta = {
+        "action": {
+            "type": "approval",
+            "handler": "incident.rule_update",
+            "label": f"Update RuleSet \"{ruleset.name}\"?",
+            "context": {
+                "target": {"model": "incident.RuleSet", "pk": ruleset.pk},
+                "proposed_rules": params["proposed_rules"],
+                "current_rules": current_rules,
+            },
+        }
+    }
+
+    note_text = (
+        f"I suggest updating an existing rule to cover this pattern:\n\n"
+        f"**RuleSet**: #{ruleset.pk} \"{ruleset.name}\"\n"
+        f"**Reasoning**: {params['reasoning']}\n\n"
+        f"Current rules: {len(current_rules)} condition(s)\n"
+        f"Proposed rules: {len(params['proposed_rules'])} condition(s)"
+    )
+    note = _append_ticket_note(ticket, note_text)
+    if note:
+        note.metadata = action_note_meta
+        note.save(update_fields=["metadata"])
+
+    return {"ok": True, "ticket_id": ticket.pk, "ruleset_id": ruleset.pk}
+
+
 TOOL_DISPATCH = {
     "query_events": _tool_query_events,
     "query_event_counts": _tool_query_event_counts,
@@ -930,6 +1116,8 @@ TOOL_DISPATCH = {
     "send_alert": _tool_send_alert,
     "create_rule": _tool_create_rule,
     "update_rule_memory": _tool_update_rule_memory,
+    "request_approval": _tool_request_approval,
+    "suggest_rule_update": _tool_suggest_rule_update,
     "merge_incidents": _tool_merge_incidents,
     "query_open_incidents": _tool_query_open_incidents,
 }
@@ -1008,6 +1196,54 @@ def _build_system_prompt(ruleset=None):
     return "\n".join(parts)
 
 
+def _build_pending_proposals_section(category):
+    """Return a prompt section listing pending rule proposals for this category."""
+    from mojo.apps.incident.models import RuleSet
+    pending = list(
+        RuleSet.objects.filter(
+            category=category,
+            metadata__llm_proposed=True,
+            is_active=False,
+        ).order_by("-modified")[:5]
+    )
+    if not pending:
+        return ""
+    lines = ["\n## Pending Rule Proposals for This Category"]
+    lines.append("A rule has already been proposed for this category and is awaiting human approval.")
+    lines.append("Do NOT call create_rule if the existing proposal covers the same attack pattern.")
+    lines.append("The create_rule tool will deduplicate automatically, but avoiding the call is preferred.\n")
+    for rs in pending:
+        meta = rs.metadata or {}
+        count = meta.get("occurrence_count", 1)
+        reasoning = (meta.get("llm_reasoning") or "")[:200]
+        lines.append(f"- **RuleSet #{rs.pk}** \"{rs.name}\" — seen {count} time(s)")
+        if reasoning:
+            lines.append(f"  Reasoning: {reasoning}")
+    return "\n".join(lines)
+
+
+def _build_active_rules_section(category):
+    """Return a prompt section listing active rules for this category."""
+    from mojo.apps.incident.models import RuleSet
+    active = list(
+        RuleSet.objects.filter(category=category, is_active=True)
+        .order_by("priority")[:5]
+    )
+    if not active:
+        return ""
+    lines = ["\n## Active Rules for This Category"]
+    lines.append("These rules are currently live. If an existing rule covers a similar pattern")
+    lines.append("but missed this event, use suggest_rule_update instead of creating a new rule.\n")
+    for rs in active:
+        rules = list(rs.rules.all().order_by("index"))
+        conditions = ", ".join(
+            f"{r.field_name} {r.comparator} {r.value}" for r in rules
+        ) or "no conditions"
+        lines.append(f"- **RuleSet #{rs.pk}** \"{rs.name}\" — handler: {rs.handler}")
+        lines.append(f"  Conditions: {conditions}")
+    return "\n".join(lines)
+
+
 def _build_incident_message(event, incident):
     """Build the user message with incident context."""
     parts = [
@@ -1047,6 +1283,14 @@ def _build_incident_message(event, incident):
 
     if incident and incident.rule_set_id:
         parts.append(f"\n- **RuleSet ID**: {incident.rule_set_id}")
+
+    active_section = _build_active_rules_section(event.category)
+    if active_section:
+        parts.append(active_section)
+
+    pending_section = _build_pending_proposals_section(event.category)
+    if pending_section:
+        parts.append(pending_section)
 
     parts.append("\nPlease investigate this incident. Start by setting it to 'investigating', "
                  "then use the available tools to gather context before making a decision.")
@@ -1265,6 +1509,8 @@ def execute_llm_analysis(job):
             pass
 
 
+
+
 def execute_llm_ticket_reply(job):
     """
     Job function: re-invoke the LLM when a human replies to an llm_linked ticket.
@@ -1285,6 +1531,9 @@ def execute_llm_ticket_reply(job):
         ticket = Ticket.objects.get(pk=ticket_id)
     except Exception:
         logger.exception("LLM ticket reply: failed to load ticket %s", ticket_id)
+        return
+
+    if not ticket.is_llm_enabled():
         return
 
     # Build conversation from all notes
