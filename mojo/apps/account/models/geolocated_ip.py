@@ -1,5 +1,5 @@
 from datetime import timedelta
-from django.db import models
+from django.db import models, IntegrityError
 from mojo.helpers.settings import settings
 from mojo.models import MojoModel
 from mojo.helpers import dates, logit
@@ -514,17 +514,27 @@ class GeoLocatedIP(models.Model, MojoModel):
         geo_ip = cls.objects.filter(ip_address=ip_address).first()
 
         if not geo_ip and subdomain_only:
-            geo_ip = cls.objects.filter(subnet=subnet).last()
-            if geo_ip:
-                geo_ip.id = None
-                geo_ip.pk = None
-                geo_ip.ip_address = ip_address
-                if geo_ip.provider and "subnet" not in geo_ip.provider:
-                    geo_ip.provider = f"subnet:{geo_ip.provider}"
-                geo_ip.save()
+            subnet_match = cls.objects.filter(subnet=subnet).last()
+            if subnet_match:
+                provider = subnet_match.provider
+                if provider and "subnet" not in provider:
+                    provider = f"subnet:{provider}"
+                try:
+                    geo_ip = cls.objects.create(
+                        ip_address=ip_address, subnet=subnet,
+                        city=subnet_match.city, region=subnet_match.region,
+                        country_name=subnet_match.country_name, country_code=subnet_match.country_code,
+                        latitude=subnet_match.latitude, longitude=subnet_match.longitude,
+                        timezone=subnet_match.timezone, provider=provider,
+                    )
+                except IntegrityError:
+                    geo_ip = cls.objects.filter(ip_address=ip_address).first()
 
         if not geo_ip:
-            geo_ip = cls.objects.create(ip_address=ip_address, subnet=subnet)
+            try:
+                geo_ip = cls.objects.create(ip_address=ip_address, subnet=subnet)
+            except IntegrityError:
+                geo_ip = cls.objects.filter(ip_address=ip_address).first()
         else:
             # Touch last_seen only when stale to avoid unnecessary writes
             age_seconds = (dates.utcnow() - geo_ip.last_seen).total_seconds()
