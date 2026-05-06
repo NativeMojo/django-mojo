@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## v1.2.0 - May 06, 2026
+
+significant recent chants cause for a version bump
+
+
 ## v1.1.43 - May 06, 2026
 
 ticket updates

@@ -132,12 +132,17 @@ def get_current_version() -> str:
         raise PublishError(f"Failed to read version from {PYPROJECT_FILE}: {str(e)}")
 
 
-def bump_version() -> str:
-    """Bump the patch version in pyproject.toml and return the new version string."""
-    logger.info("Bumping version...")
+def bump_version(level="patch"):
+    """Bump the version in pyproject.toml and return the new version string."""
+    logger.info(f"Bumping {level} version...")
     current = get_current_version()
     major, minor, patch = current.split(".")
-    new_version = f"{major}.{minor}.{int(patch) + 1}"
+    if level == "major":
+        new_version = f"{int(major) + 1}.0.0"
+    elif level == "minor":
+        new_version = f"{major}.{int(minor) + 1}.0"
+    else:
+        new_version = f"{major}.{minor}.{int(patch) + 1}"
     content = PYPROJECT_FILE.read_text(encoding='utf-8')
     new_content = re.sub(r'^version\s*=\s*"[^"]+"', f'version = "{new_version}"', content, count=1, flags=re.MULTILINE)
     PYPROJECT_FILE.write_text(new_content, encoding='utf-8')
@@ -327,6 +332,12 @@ def parse_arguments() -> argparse.Namespace:
         help="Skip version bumping"
     )
     parser.add_argument(
+        "--bump",
+        choices=["major", "minor", "patch"],
+        default="patch",
+        help="Version level to bump (default: patch)"
+    )
+    parser.add_argument(
         "--nopypi",
         action="store_true",
         help="Skip PyPI publishing"
@@ -363,7 +374,7 @@ def main() -> None:
             version = get_current_version()
             logger.info(f"Using current version: {version}")
         else:
-            version = bump_version()
+            version = bump_version(args.bump)
             logger.info(f"Bumped to version: {version}")
 
         # Get release notes
