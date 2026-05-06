@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## v1.1.43 - May 06, 2026
+
+ticket updates
+
+
 ## v1.1.42 - May 06, 2026
 
 hotfix for race condition in token refresh
