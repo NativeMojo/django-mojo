@@ -13,6 +13,7 @@ class Ticket(models.Model, MojoModel):
         SAVE_PERMS = ["manage_security", "security"]
         DELETE_PERMS = ["manage_security"]
         CAN_DELETE = True
+        POST_SAVE_ACTIONS = ["enable_llm", "disable_llm"]
         GRAPHS = {
             "default": {
                 "graphs": {
@@ -51,6 +52,31 @@ class Ticket(models.Model, MojoModel):
         if 'status' in changed_fields:
             self.add_note(f"Status changed from {changed_fields['status']} to {self.status}", user=self.active_request.user)
 
+    def is_llm_enabled(self):
+        meta = self.metadata or {}
+        return meta.get("llm_enabled") or meta.get("llm_linked", False)
+
+    def on_action_enable_llm(self, value):
+        if not self.metadata:
+            self.metadata = {}
+        self.metadata["llm_enabled"] = True
+        self.save(update_fields=["metadata"])
+        try:
+            from mojo.apps import jobs
+            jobs.publish(
+                "mojo.apps.incident.handlers.llm_agent.execute_llm_ticket_reply",
+                {"ticket_id": self.pk, "note_id": None},
+                channel="incident_handlers",
+            )
+        except Exception:
+            logger.exception("Failed to invoke LLM on enable for ticket %s", self.pk)
+
+    def on_action_disable_llm(self, value):
+        if not self.metadata:
+            self.metadata = {}
+        self.metadata["llm_enabled"] = False
+        self.save(update_fields=["metadata"])
+
     def add_note(self, note, user):
         logit.info(f"Adding note to ticket {self.id}: {note}")
         TicketNote.objects.create(parent=self, note=note, group=self.group, user=user)
@@ -79,6 +105,7 @@ class TicketNote(models.Model, MojoModel):
     user = models.ForeignKey("account.User", related_name="+", on_delete=models.CASCADE)
     note = models.TextField(blank=True, null=True)
     media = models.ForeignKey("fileman.File", related_name="+", null=True, blank=True, default=None, on_delete=models.SET_NULL)
+    metadata = models.JSONField(default=dict, blank=True)
 
     def on_rest_saved(self, changed_fields, created):
         if not hasattr(self, 'group') or not self.group:
@@ -86,8 +113,18 @@ class TicketNote(models.Model, MojoModel):
                 self.group = self.parent.group
                 self.save(update_fields=['group'])
 
-        # Re-invoke LLM agent when a human replies to an llm_linked ticket
-        if created and self._is_llm_ticket() and not self._is_llm_note():
+        if not created:
+            return
+
+        # Action response dispatch — structured actions take priority
+        response_meta = (self.metadata or {}).get("action_response")
+        if response_meta:
+            from mojo.apps.incident.handlers.ticket_actions import dispatch_action
+            dispatch_action(self.parent, self, response_meta)
+            return
+
+        # LLM re-invocation for non-action notes on LLM-enabled tickets
+        if self.parent.is_llm_enabled() and not self._is_llm_note():
             try:
                 from mojo.apps import jobs
                 jobs.publish(
@@ -97,10 +134,6 @@ class TicketNote(models.Model, MojoModel):
                 )
             except Exception:
                 logger.exception("Failed to re-invoke LLM for ticket %s", self.parent_id)
-
-    def _is_llm_ticket(self):
-        """Check if the parent ticket is LLM-linked."""
-        return (self.parent.metadata or {}).get("llm_linked", False)
 
     def _is_llm_note(self):
         """Check if this note was posted by the LLM (avoid infinite loop)."""
