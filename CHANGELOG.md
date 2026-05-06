@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## v1.1.42 - May 06, 2026
+
+hotfix for race condition in token refresh
+
+
 ## v1.1.41 - May 06, 2026
 
 bugfix for large scale game deployments the pool logic incorrectly re-inits
