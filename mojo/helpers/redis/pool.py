@@ -62,8 +62,15 @@ class RedisBasePool:
         self.all_items_set_key = f"{pool_key}:set"
 
     def is_ready(self) -> bool:
-        """Check if the pool is ready."""
-        return self.redis_client.exists(self.available_list_key) and self.redis_client.exists(self.all_items_set_key)
+        """Return True if the pool has been initialized.
+
+        The set key is the source of truth for pool membership and persists for
+        the pool's lifetime. The available list is volatile — Redis auto-deletes
+        the list key when its last element is popped (e.g. when all members are
+        currently checked out), but the pool is still operating correctly. Only
+        the set existence reflects "the pool has been set up".
+        """
+        return bool(self.redis_client.exists(self.all_items_set_key))
 
     def add(self, str_id: str) -> bool:
         """Add an item to the pool."""
@@ -363,46 +370,86 @@ class RedisModelPool(RedisBasePool):
         self.model_cls = model_cls
         self.query_dict = query_dict
         self.instance_skip_predicate = skip_predicate
+        self.init_lock_key = f"{pool_key}:init_lock"
 
-    def init_pool(self) -> None:
-        """Initialize pool with model instances."""
-        self.destroy_pool()
+    def init_pool(self, force: bool = False) -> None:
+        """Initialize the pool from ``query_dict``.
 
-        queryset = self.model_cls.objects.filter(**self.query_dict)
-        for instance in queryset:
-            item = str(instance.pk)
-            # After destroy_pool(), the set is empty, so no need to check membership
-            self.redis_client.sadd(self.all_items_set_key, item)
-            self.redis_client.lpush(self.available_list_key, item)
+        Idempotent: when the pool is already initialized (``is_ready()``), a
+        non-forced call is a no-op. Use ``force=True`` to rebuild from the
+        queryset — this wipes any items added via ``add_to_pool()`` that fall
+        outside ``query_dict``. ``force=True`` waits for any in-flight init
+        to release the lock, then always rebuilds.
+
+        First-time / post-destroy init is guarded by a Redis ``SET NX EX``
+        lock at ``{pool_key}:init_lock`` so concurrent callers do not race on
+        ``destroy_pool()`` + bulk rebuild. The 10s TTL is a safety net for a
+        holder that crashes mid-init.
+        """
+        if not force and self.is_ready():
+            return
+
+        if force:
+            # Force rebuilds always run — wait until we own the lock.
+            deadline = time.monotonic() + 10
+            while not self.redis_client.set(self.init_lock_key, "1", nx=True, ex=10):
+                if time.monotonic() >= deadline:
+                    return  # could not acquire within budget
+                time.sleep(0.25)
+        else:
+            # Lazy init — one caller rebuilds; the rest spin until ready.
+            if not self.redis_client.set(self.init_lock_key, "1", nx=True, ex=10):
+                for _ in range(20):
+                    time.sleep(0.25)
+                    if self.is_ready():
+                        return
+                return
+
+        try:
+            if not force and self.is_ready():
+                return  # double-check after acquiring lock
+
+            self.destroy_pool()
+            items = [str(i.pk) for i in
+                     self.model_cls.objects.filter(**self.query_dict)]
+            if items:
+                # Bulk SADD + LPUSH in two calls instead of 2N round-trips.
+                # LPUSH preserves the same head-of-list ordering as the
+                # per-item loop: pushing args left-to-right places the last
+                # arg at the head, matching previous behaviour.
+                self.redis_client.sadd(self.all_items_set_key, *items)
+                self.redis_client.lpush(self.available_list_key, *items)
+        finally:
+            self.redis_client.delete(self.init_lock_key)
 
     def add_to_pool(self, instance: models.Model) -> bool:
-        """
-        Add a model instance to the pool.
+        """Add a model instance to the pool.
+
+        Lazy-inits the pool from ``query_dict`` when uninitialized (cold start
+        or post-destroy). When already initialized, the instance is added
+        directly without rebuilding.
 
         Returns:
-            True if item was added (either by init_pool or directly), False if it already existed
+            True if the item was newly added, False if it was already a member.
         """
+        self.init_pool()  # idempotent — no-op when already initialized
+
         item = str(instance.pk)
-
-        # Check if item exists before potential init
-        existed_before = self.redis_client.exists(self.all_items_set_key) and \
-                        self.redis_client.sismember(self.all_items_set_key, item)
-
-        if not self.is_ready():
-            self.init_pool()
-            # If item didn't exist before but exists now, init_pool added it
-            if not existed_before and self.redis_client.sismember(self.all_items_set_key, item):
-                return True
-
-        if not self.redis_client.sismember(self.all_items_set_key, item):
-            self.redis_client.sadd(self.all_items_set_key, item)
-            self.redis_client.lpush(self.available_list_key, item)
-            return True
-        return False
+        # SADD returns the number of elements actually added (0 or 1).
+        # Using its return value avoids a separate SISMEMBER round-trip and
+        # closes the TOCTOU race where another caller could insert the same
+        # item between SISMEMBER and SADD.
+        if not self.redis_client.sadd(self.all_items_set_key, item):
+            return False
+        self.redis_client.lpush(self.available_list_key, item)
+        return True
 
     def remove_from_pool(self, instance: models.Model, force: bool = False) -> bool:
-        """
-        Remove instance from pool.
+        """Remove an instance from the pool.
+
+        Does NOT lazy-init: removing from an uninitialized pool returns False
+        without rebuilding from the DB queryset (which would be a surprising
+        side effect).
 
         Args:
             instance: Model instance to remove
@@ -410,10 +457,11 @@ class RedisModelPool(RedisBasePool):
                    only removes if currently available.
 
         Returns:
-            True if removed, False if not in pool or checked out (when force=False)
+            True if removed, False if pool not initialized, item not in pool,
+            or item is checked out (when force=False).
         """
-        if not self.redis_client.exists(self.all_items_set_key):
-            self.init_pool()
+        if not self.is_ready():
+            return False
 
         item = str(instance.pk)
         if not self.redis_client.sismember(self.all_items_set_key, item):
@@ -460,8 +508,7 @@ class RedisModelPool(RedisBasePool):
                 records (deleted models or query_dict mismatches).
             _max_retries: Maximum stale-row retries.
         """
-        if not self.redis_client.exists(self.all_items_set_key):
-            self.init_pool()
+        self.init_pool()  # idempotent — lazy-inits cold pool, no-op when ready
 
         timeout = timeout or self.default_timeout
 

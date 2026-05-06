@@ -345,8 +345,13 @@ pool = RedisModelPool(
     default_timeout=30,
 )
 
-# Initialize from database (clears and rebuilds)
+# Initialize from database (idempotent — no-op if already initialized)
 pool.init_pool()
+
+# Force rebuild from queryset (wipes any items added via add_to_pool that
+# fall outside query_dict; use sparingly — typically only when the underlying
+# DB rows have changed and you want the pool refreshed from scratch)
+pool.init_pool(force=True)
 
 # Checkout an instance (context manager)
 with pool.checkout_instance(timeout=10) as key:
@@ -363,8 +368,8 @@ instance = pool.get_next_instance(timeout=10)
 pool.return_instance(instance)
 
 # Add / remove instances dynamically
-pool.add_to_pool(new_key)                    # auto-inits pool if needed
-pool.remove_from_pool(old_key)               # only if available
+pool.add_to_pool(new_key)                    # lazy-inits pool if uninitialized
+pool.remove_from_pool(old_key)               # only if available; no auto-init
 pool.remove_from_pool(old_key, force=True)   # even if checked out
 
 # Inspect
@@ -372,6 +377,14 @@ pool.list_checked_out_instances()  # returns queryset of checked-out models
 ```
 
 The model pool validates instances on checkout — if a record was deleted or no longer matches `query_dict`, it is silently removed and the next available item is returned.
+
+#### Initialization contract
+
+- **`is_ready()`** — returns `True` once the pool has been initialized. The check is on the membership set only, so the pool is still considered ready when every member is currently checked out (the available list goes empty during normal operation; the set persists for the pool's lifetime).
+- **`init_pool(force=False)`** — idempotent. When `is_ready()` is already `True`, the call is a no-op and does not destroy the existing pool. When the pool is uninitialized (cold start or after `destroy_pool()`), the method acquires a Redis lock at `{pool_key}:init_lock`, double-checks readiness, then runs `destroy_pool()` + per-item rebuild from `query_dict`. Concurrent first-time inits across processes are safe — only one rebuild runs; the others poll briefly for it to finish.
+- **`init_pool(force=True)`** — always rebuilds from the queryset. Use this when the underlying DB rows have changed and you want a fresh pool. Items added via `add_to_pool()` that fall outside `query_dict` are wiped on a forced rebuild; preserve them across non-forced calls.
+- **Lazy init** — `add_to_pool()` and `get_next_instance()` call `init_pool()` (idempotent) before their work. A cold or destroyed pool is populated automatically on first use. `remove_from_pool()` does NOT lazy-init — it returns `False` when the pool is uninitialized, since rebuilding the pool from the DB queryset just to remove an item would silently undo a `destroy_pool()`.
+- **Thread-safety** — all mutation paths go through atomic Redis operations and (for the destructive rebuild) a Redis lock with a 10s TTL safety net. The pool tolerates lock-holder crashes: the next caller after the TTL expires acquires the lock and reinitialises.
 
 #### Conditional checkout — `skip_predicate`
 

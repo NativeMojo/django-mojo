@@ -280,19 +280,20 @@ def test_redis_model_pool_mock_operations(opts):
 
     query_dict = {'is_active': True, "pk__in": [1, 2]}
     pool = RedisModelPool(Group, query_dict, 'test_model_operations')
-    pool.clear()
+    pool.destroy_pool()
 
-    # Test that pool auto-initializes on first add_to_pool
-    # Since the pool is not ready, add_to_pool(instance1) will call init_pool()
-    # which adds both instance1 and instance2 (matching the query)
-    assert pool.add_to_pool(instance1) == True, "Failed to add instance1 to pool (should trigger init)"
+    # Pool is uninitialized — add_to_pool() lazy-inits from query_dict, which
+    # adds both instance1 and instance2. Because instance1 is already a member
+    # after lazy init, add_to_pool returns False ("already in pool").
+    assert pool.add_to_pool(instance1) == False, (
+        "instance1 should already be a member after lazy init from queryset")
 
     # Verify pool is now initialized with both instances
     all_items = pool.list_all()
     assert '1' in all_items, f"Instance '1' not found in pool after auto-init: {all_items}"
     assert '2' in all_items, f"Instance '2' not found in pool after auto-init: {all_items}"
 
-    # Second add should return False since instance2 was already added during init_pool
+    # Second add should also return False since instance2 was added during lazy init
     assert pool.add_to_pool(instance2) == False, "instance2 should already be in pool from auto-init"
 
     # Test removing instance
@@ -1243,3 +1244,627 @@ def test_redis_decode_responses_fix(opts):
     # Clean up
     shared_conn.delete(test_key)
     pool.clear()
+
+
+# ---------------------------------------------------------------------------
+# Failing tests proving init_pool race + resurrect bugs
+# (planning/issues/redis-pool-init-pool-race-on-empty-list.md)
+# ---------------------------------------------------------------------------
+
+
+@th.django_unit_test()
+def test_init_pool_is_ready_true_when_all_items_checked_out(opts):
+    """is_ready() must reflect 'is initialized' (set exists), not 'has available items'.
+
+    Redis auto-deletes empty lists. After all items are checked out, the list key is
+    gone but the pool is still operating correctly. Today is_ready() requires both
+    keys to exist and returns False, which fires destructive auto-init paths.
+    """
+    from mojo.helpers.redis.pool import RedisModelPool
+    from mojo.apps.account.models import Group
+
+    pool = RedisModelPool(Group, {'is_active': True, 'pk__in': [1, 2, 3]},
+                          'test_init_pool_is_ready_busy')
+    pool.destroy_pool()
+    pool.init_pool()
+
+    checked_out = []
+    for _ in range(3):
+        item = pool.get_next_available(timeout=1)
+        assert item is not None, "should be able to check out item from initialized pool"
+        checked_out.append(item)
+
+    members = pool.list_all()
+    available = pool.list_available()
+
+    assert pool.is_ready() is True, (
+        "is_ready() must be True when pool is initialized but list is empty "
+        f"(all checked out). set={members}, list={available}, is_ready={pool.is_ready()}"
+    )
+
+    pool.destroy_pool()
+
+
+@th.django_unit_test()
+def test_init_pool_idempotent_preserves_extra_items(opts):
+    """init_pool() must be a no-op when the pool is already initialized.
+
+    Today init_pool() always calls destroy_pool() first, wiping items added via
+    add_to_pool() that fall outside query_dict.
+    """
+    from mojo.helpers.redis.pool import RedisModelPool
+    from mojo.apps.account.models import Group
+
+    # Test uses dedicated high-ID rows so parallel test modules cannot mutate
+    # the queryset members between init_pool() calls within this test.
+    # Re-set both name and is_active because get_or_create's defaults only
+    # apply on create — an existing row may have been touched by another test.
+    extra_id, extra_name = 9011, '__pool_test_idempotent_extra__'
+    extra, _ = Group.objects.get_or_create(
+        id=extra_id, defaults={'name': extra_name, 'is_active': False})
+    if extra.name != extra_name or extra.is_active:
+        extra.name = extra_name
+        extra.is_active = False
+        extra.save()
+
+    pool = RedisModelPool(Group, {'is_active': True, 'pk__in': [1, 2, 3]},
+                          'test_init_pool_idempotent')
+    pool.destroy_pool()
+    pool.init_pool()
+
+    assert pool.add_to_pool(extra) is True, (
+        f"add_to_pool(extra) should return True. members: {pool.list_all()}")
+    assert str(extra_id) in pool.list_all(), (
+        f"extra (pk={extra_id}) should be in pool members: {pool.list_all()}")
+
+    pool.init_pool()  # second call must be a no-op
+
+    members = pool.list_all()
+    assert str(extra_id) in members, (
+        f"init_pool() must be idempotent — extra item (pk={extra_id}) was wiped "
+        f"by second call. Members after second init_pool: {members}"
+    )
+
+    pool.destroy_pool()
+
+
+@th.django_unit_test()
+def test_add_to_pool_does_not_destroy_when_all_checked_out(opts):
+    """add_to_pool() must not rebuild the pool when all items are simply checked out.
+
+    Today is_ready() returns False once the available list is empty (Redis
+    auto-deletes empty lists), so add_to_pool() spuriously calls init_pool().
+    init_pool() destroys the set and rebuilds the available list, re-publishing
+    items that are still in use by other workers — duplicating availability and
+    breaking returns.
+    """
+    from mojo.helpers.redis.pool import RedisModelPool
+    from mojo.apps.account.models import Group
+
+    extra_id, extra_name = 9012, '__pool_test_busy_extra__'
+    extra, _ = Group.objects.get_or_create(
+        id=extra_id, defaults={'name': extra_name, 'is_active': False})
+    if extra.name != extra_name or extra.is_active:
+        extra.name = extra_name
+        extra.is_active = False
+        extra.save()
+
+    pool = RedisModelPool(Group, {'is_active': True, 'pk__in': [1, 2, 3]},
+                          'test_no_destroy_when_busy')
+    pool.destroy_pool()
+    pool.init_pool()
+
+    items_out = []
+    for _ in range(3):
+        item = pool.get_next_available(timeout=1)
+        assert item is not None, "should check out item"
+        items_out.append(item)
+
+    assert pool.list_available() == [], (
+        f"all items should be checked out: {pool.list_available()}")
+
+    pool.add_to_pool(extra)
+
+    available = pool.list_available()
+    # The only legitimate availability after add_to_pool is the freshly-added item.
+    # Currently init_pool() runs and re-publishes 1/2/3 even though they are checked out.
+    available_strs = [a if isinstance(a, str) else a.decode() for a in available]
+    in_use_resurrected = [s for s in available_strs if s in items_out]
+    assert in_use_resurrected == [], (
+        "add_to_pool() rebuilt the available list while items were still checked "
+        f"out, re-publishing in-use items: {in_use_resurrected}. "
+        f"available_after_add={available_strs}, checked_out={items_out}"
+    )
+
+    pool.destroy_pool()
+
+
+@th.django_unit_test()
+def test_remove_from_pool_does_not_resurrect_after_destroy(opts):
+    """remove_from_pool() on a destroyed pool must not auto-rebuild from the DB.
+
+    Today remove_from_pool() calls init_pool() if the set is missing, repopulating
+    the pool from query_dict — silently undoing destroy_pool().
+    """
+    from mojo.helpers.redis.pool import RedisModelPool
+    from mojo.apps.account.models import Group
+
+    pool = RedisModelPool(Group, {'is_active': True, 'pk__in': [1, 2, 3]},
+                          'test_no_resurrect_remove')
+    pool.destroy_pool()
+    pool.init_pool()
+    pool.destroy_pool()
+
+    assert pool.list_all() == set(), "pool should be empty after destroy_pool()"
+
+    group_1 = Group.objects.get(pk=1)
+    pool.remove_from_pool(group_1)
+
+    members = pool.list_all()
+    assert members == set(), (
+        "remove_from_pool() resurrected a destroyed pool from the DB queryset. "
+        f"Expected empty, got: {members}"
+    )
+
+    pool.destroy_pool()
+
+
+@th.django_unit_test()
+def test_get_next_instance_lazy_inits_when_uninitialized(opts):
+    """get_next_instance() on an uninitialized pool must lazy-init from the DB.
+
+    A pool is "uninitialized" if it was never created OR was explicitly destroyed.
+    In either case, get_next_instance() should populate from query_dict and serve
+    an instance. The lazy-init path uses the idempotent init_pool() so it cannot
+    race with itself.
+    """
+    from mojo.helpers.redis.pool import RedisModelPool
+    from mojo.apps.account.models import Group
+
+    # query_dict uses attribute-only filters (no pk__in) so the stale-row check
+    # in get_next_instance can do getattr(instance, key) cleanly.
+    pool = RedisModelPool(Group, {'is_active': True}, 'test_lazy_init_get_next')
+    pool.destroy_pool()  # ensure cold start
+    assert pool.is_ready() is False, "precondition: pool must be cold"
+
+    instance = pool.get_next_instance(timeout=2)
+
+    assert instance is not None, (
+        "get_next_instance() on cold pool must lazy-init and return an instance")
+    assert instance.is_active is True, (
+        f"returned instance must match query_dict, got is_active={instance.is_active}")
+
+    assert pool.is_ready() is True, (
+        "pool should be initialized after lazy-init via get_next_instance()")
+    members = pool.list_all()
+    assert len(members) >= 3, (
+        f"pool should be populated from queryset after lazy-init: {members}")
+    assert {'1', '2', '3'}.issubset(members), (
+        f"queryset members 1/2/3 should be in pool: {members}")
+
+    pool.destroy_pool()
+
+
+@th.django_unit_test()
+def test_concurrent_first_init_is_safe(opts):
+    """Concurrent first-time lazy-init from N threads must produce a consistent pool.
+
+    Today each thread's add_to_pool() detects not-ready, calls init_pool(), and
+    each init_pool() calls destroy_pool() + per-item LPUSH/SADD. Threads race on
+    destroy and writes; the final list often contains lost or duplicated items.
+    """
+    from mojo.helpers.redis.pool import RedisModelPool
+    from mojo.apps.account.models import Group
+    from unittest.mock import patch
+    import threading
+
+    pool_key = 'test_concurrent_first_init'
+    cleanup = RedisModelPool(Group, {'is_active': True, 'pk__in': [1, 2, 3]}, pool_key)
+    cleanup.destroy_pool()
+
+    barrier = threading.Barrier(5)
+    errors = []
+
+    original_destroy = RedisModelPool.destroy_pool
+
+    def slow_destroy(self):
+        time.sleep(0.05)
+        return original_destroy(self)
+
+    def worker():
+        try:
+            barrier.wait()
+            local_pool = RedisModelPool(
+                Group, {'is_active': True, 'pk__in': [1, 2, 3]}, pool_key)
+            instance = Group.objects.get(pk=1)
+            local_pool.add_to_pool(instance)
+        except Exception as e:
+            errors.append(e)
+
+    with patch.object(RedisModelPool, 'destroy_pool', slow_destroy):
+        threads = [threading.Thread(target=worker) for _ in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+    assert errors == [], f"workers raised errors: {errors}"
+
+    final_pool = RedisModelPool(
+        Group, {'is_active': True, 'pk__in': [1, 2, 3]}, pool_key)
+    members = final_pool.list_all()
+    available = final_pool.list_available()
+    available_strs = sorted(a if isinstance(a, str) else a.decode() for a in available)
+
+    assert members == {'1', '2', '3'}, (
+        f"concurrent init produced inconsistent set: {members}")
+    assert available_strs == ['1', '2', '3'], (
+        "concurrent init left duplicates or missing items in the available list: "
+        f"{available_strs}"
+    )
+
+    final_pool.destroy_pool()
+
+
+@th.django_unit_test()
+def test_add_to_pool_during_get_next_instance_serves_new_item(opts):
+    """A consumer blocked on get_next_instance() should be served the item newly
+    added by another thread, not a stale resurrected one.
+
+    Today, with all members checked out, add_to_pool() triggers init_pool() which
+    destroys the set and re-publishes ALL queryset members (including the ones
+    currently checked out). The blocked consumer gets a resurrected duplicate.
+    """
+    from mojo.helpers.redis.pool import RedisModelPool
+    from mojo.apps.account.models import Group
+    import threading
+
+    # Use dedicated high-ID rows + a unique name so parallel test modules
+    # cannot mutate the queryset members. Re-set both fields explicitly
+    # because get_or_create's defaults only apply on create.
+    pool_test_name = '__pool_test_add_during_get__'
+    initial_id, second_id = 9020, 9021
+
+    initial, _ = Group.objects.get_or_create(
+        id=initial_id, defaults={'name': pool_test_name, 'is_active': True})
+    if initial.name != pool_test_name or not initial.is_active:
+        initial.name = pool_test_name
+        initial.is_active = True
+        initial.save()
+
+    # query_dict uses only attribute filters (no ORM lookups like pk__in)
+    # because get_next_instance's stale-check uses getattr(instance, key).
+    pool = RedisModelPool(Group, {'is_active': True, 'name': pool_test_name},
+                          'test_add_during_get_next')
+    pool.destroy_pool()
+    pool.init_pool()
+
+    # Check out the only initial member, leaving the available list empty.
+    item = pool.get_next_available(timeout=1)
+    assert item == str(initial_id), (
+        f"expected to check out item {initial_id}, got {item}")
+    assert pool.list_available() == [], (
+        f"available list should be empty: {pool.list_available()}")
+
+    # Create a SECOND group that also matches the query_dict but isn't in the pool.
+    second, _ = Group.objects.get_or_create(
+        id=second_id, defaults={'name': pool_test_name, 'is_active': True})
+    if second.name != pool_test_name or not second.is_active:
+        second.name = pool_test_name
+        second.is_active = True
+        second.save()
+
+    received = []
+    err = []
+
+    def consumer():
+        try:
+            instance = pool.get_next_instance(timeout=5)
+            received.append(instance)
+        except Exception as e:
+            err.append(e)
+
+    consumer_thread = threading.Thread(target=consumer)
+    consumer_thread.start()
+    time.sleep(0.3)  # let consumer block on brpop
+
+    pool.add_to_pool(second)
+    consumer_thread.join(timeout=5)
+
+    assert err == [], f"consumer raised errors: {err}"
+    assert len(received) == 1 and received[0] is not None, (
+        f"consumer should have been served exactly one instance: {received}")
+    assert received[0].pk == second_id, (
+        f"consumer should have received the freshly added group {second_id}, got "
+        f"pk={received[0].pk}. Without the fix, add_to_pool() destroys the pool "
+        f"and resurrects the already-checked-out group {initial_id}."
+    )
+
+    pool.destroy_pool()
+
+
+@th.django_unit_test()
+def test_remove_from_pool_during_get_next_instance_excludes_removed(opts):
+    """A removed pool member must not appear in the pool's set or list after the
+    operation completes, even when removal is concurrent with consumers."""
+    from mojo.helpers.redis.pool import RedisModelPool
+    from mojo.apps.account.models import Group
+    import threading
+
+    # query_dict uses attribute-only filters (no pk__in) so stale-check works.
+    pool = RedisModelPool(Group, {'is_active': True}, 'test_remove_during_get_next')
+    pool.destroy_pool()
+    pool.init_pool()
+
+    initial_members = pool.list_all()
+    assert '1' in initial_members and '2' in initial_members and '3' in initial_members, (
+        f"setup groups 1/2/3 should be in pool: {initial_members}")
+
+    err = []
+    consumed = []
+    barrier = threading.Barrier(2)
+
+    def consumer():
+        try:
+            barrier.wait()
+            for _ in range(5):
+                instance = pool.get_next_instance(timeout=2)
+                if instance is None:
+                    break
+                consumed.append(str(instance.pk))
+                pool.return_instance(instance)
+        except Exception as e:
+            err.append(e)
+
+    def remover():
+        try:
+            barrier.wait()
+            time.sleep(0.05)
+            group_2 = Group.objects.get(pk=2)
+            pool.remove_from_pool(group_2, force=True)
+        except Exception as e:
+            err.append(e)
+
+    t1 = threading.Thread(target=consumer)
+    t2 = threading.Thread(target=remover)
+    t1.start()
+    t2.start()
+    t1.join(timeout=10)
+    t2.join(timeout=10)
+
+    assert err == [], f"threads raised errors: {err}"
+
+    members = pool.list_all()
+    assert '2' not in members, (
+        f"removed item (pk=2) must not be in the pool set after remove: {members}")
+    assert '1' in members and '3' in members, (
+        f"non-removed items must remain in the pool set: {members}")
+
+    pool.destroy_pool()
+
+
+@th.django_unit_test()
+def test_concurrent_add_and_init_pool_no_data_loss(opts):
+    """An item added via add_to_pool() must not be wiped by a concurrent init_pool().
+
+    Today init_pool() runs destroy_pool() unconditionally. With an item added
+    via add_to_pool() that is NOT in query_dict, a subsequent init_pool() — even
+    if no race is involved — will wipe that item. This test orders the threads
+    so add_to_pool() runs FIRST, then init_pool() runs. The fix should make
+    init_pool() idempotent so the extra survives.
+    """
+    from mojo.helpers.redis.pool import RedisModelPool
+    from mojo.apps.account.models import Group
+    import threading
+
+    extra_id, extra_name = 9013, '__pool_test_concurrent_add_extra__'
+    extra, _ = Group.objects.get_or_create(
+        id=extra_id, defaults={'name': extra_name, 'is_active': False})
+    if extra.name != extra_name or extra.is_active:
+        extra.name = extra_name
+        extra.is_active = False
+        extra.save()
+
+    pool = RedisModelPool(Group, {'is_active': True}, 'test_concurrent_add_init')
+    pool.destroy_pool()
+    pool.init_pool()  # warm-up — pool now has all active groups
+
+    barrier = threading.Barrier(2)
+    err = []
+
+    def init_worker():
+        try:
+            barrier.wait()
+            time.sleep(0.05)  # let add_to_pool() complete first
+            pool.init_pool()
+        except Exception as e:
+            err.append(e)
+
+    def add_worker():
+        try:
+            barrier.wait()
+            pool.add_to_pool(extra)  # add 99 first, fast
+        except Exception as e:
+            err.append(e)
+
+    t1 = threading.Thread(target=init_worker)
+    t2 = threading.Thread(target=add_worker)
+    t1.start()
+    t2.start()
+    t1.join(timeout=10)
+    t2.join(timeout=10)
+
+    assert err == [], f"workers raised errors: {err}"
+
+    members = pool.list_all()
+    assert str(extra_id) in members, (
+        f"extra item (pk={extra_id}) was wiped by a subsequent init_pool() call. "
+        f"Members: {members}. init_pool() must be idempotent."
+    )
+
+    pool.destroy_pool()
+
+
+@th.django_unit_test()
+def test_init_pool_force_rebuilds_existing_pool(opts):
+    """init_pool(force=True) rebuilds from queryset, wiping items added via
+    add_to_pool() that fall outside query_dict."""
+    from mojo.helpers.redis.pool import RedisModelPool
+    from mojo.apps.account.models import Group
+
+    extra_id, extra_name = 9014, '__pool_test_force_extra__'
+    extra, _ = Group.objects.get_or_create(
+        id=extra_id, defaults={'name': extra_name, 'is_active': False})
+    if extra.name != extra_name or extra.is_active:
+        extra.name = extra_name
+        extra.is_active = False
+        extra.save()
+
+    pool = RedisModelPool(Group, {'is_active': True}, 'test_init_pool_force')
+    pool.destroy_pool()
+    pool.init_pool()
+    pool.add_to_pool(extra)
+    assert str(extra_id) in pool.list_all(), (
+        f"precondition: extra (pk={extra_id}) must be added: {pool.list_all()}")
+
+    pool.init_pool(force=True)
+
+    members = pool.list_all()
+    assert str(extra_id) not in members, (
+        f"force=True must wipe items outside query_dict: {members}")
+    assert {'1', '2', '3'}.issubset(members), (
+        f"force=True must rebuild queryset members: {members}")
+
+    pool.destroy_pool()
+
+
+@th.django_unit_test()
+def test_init_pool_empty_queryset_returns_cleanly(opts):
+    """init_pool() with a query that matches zero rows must not crash; the
+    pool simply remains uninitialized (set never created)."""
+    from mojo.helpers.redis.pool import RedisModelPool
+    from mojo.apps.account.models import Group
+
+    # Filter that matches no Groups
+    pool = RedisModelPool(Group, {'name': '__no_such_group__'},
+                          'test_init_pool_empty_qs')
+    pool.destroy_pool()
+
+    pool.init_pool()  # must not raise
+
+    assert pool.is_ready() is False, (
+        "pool with empty queryset should remain uninitialized "
+        f"(set is empty / not created): is_ready={pool.is_ready()}, "
+        f"members={pool.list_all()}")
+    assert pool.list_all() == set(), (
+        f"pool members should be empty: {pool.list_all()}")
+
+    # get_next_instance on empty queryset should return None within timeout
+    instance = pool.get_next_instance(timeout=1)
+    assert instance is None, (
+        f"get_next_instance with empty queryset must return None, got {instance}")
+
+    pool.destroy_pool()
+
+
+@th.django_unit_test()
+def test_init_pool_bulk_uses_few_round_trips(opts):
+    """init_pool() should use bulk SADD/LPUSH (2 calls) regardless of the
+    number of queryset members, not 2N per-item calls."""
+    from mojo.helpers.redis.pool import RedisModelPool
+    from mojo.apps.account.models import Group
+    from unittest.mock import patch
+
+    pool = RedisModelPool(Group, {'is_active': True}, 'test_init_pool_bulk')
+    pool.destroy_pool()
+
+    sadd_calls = []
+    lpush_calls = []
+
+    original_sadd = pool.redis_client.sadd
+    original_lpush = pool.redis_client.lpush
+
+    def tracking_sadd(key, *args, **kwargs):
+        if key == pool.all_items_set_key:
+            sadd_calls.append(args)
+        return original_sadd(key, *args, **kwargs)
+
+    def tracking_lpush(key, *args, **kwargs):
+        if key == pool.available_list_key:
+            lpush_calls.append(args)
+        return original_lpush(key, *args, **kwargs)
+
+    with patch.object(pool.redis_client, 'sadd', side_effect=tracking_sadd), \
+         patch.object(pool.redis_client, 'lpush', side_effect=tracking_lpush):
+        pool.init_pool()
+
+    assert len(sadd_calls) == 1, (
+        f"init_pool() should issue exactly 1 bulk SADD, got {len(sadd_calls)} "
+        f"calls: {sadd_calls}")
+    assert len(lpush_calls) == 1, (
+        f"init_pool() should issue exactly 1 bulk LPUSH, got {len(lpush_calls)} "
+        f"calls: {lpush_calls}")
+    assert len(sadd_calls[0]) >= 3, (
+        f"bulk SADD should include all queryset members: {sadd_calls[0]}")
+    assert len(lpush_calls[0]) >= 3, (
+        f"bulk LPUSH should include all queryset members: {lpush_calls[0]}")
+
+    pool.destroy_pool()
+
+
+@th.django_unit_test()
+def test_init_pool_force_during_concurrent_lazy_init(opts):
+    """A force=True call must produce a fresh rebuild even if a regular lazy
+    init is running concurrently. The force caller waits for the in-flight
+    init to release the lock, then re-acquires it and rebuilds."""
+    from mojo.helpers.redis.pool import RedisModelPool
+    from mojo.apps.account.models import Group
+    import threading
+
+    extra_id, extra_name = 9015, '__pool_test_force_concurrent_extra__'
+    extra, _ = Group.objects.get_or_create(
+        id=extra_id, defaults={'name': extra_name, 'is_active': False})
+    if extra.name != extra_name or extra.is_active:
+        extra.name = extra_name
+        extra.is_active = False
+        extra.save()
+
+    pool = RedisModelPool(Group, {'is_active': True}, 'test_init_pool_force_concurrent')
+    pool.destroy_pool()
+    pool.init_pool()
+    pool.add_to_pool(extra)
+    assert str(extra_id) in pool.list_all(), (
+        f"precondition: extra (pk={extra_id}) must be in pool")
+
+    err = []
+    barrier = threading.Barrier(2)
+
+    def lazy_worker():
+        try:
+            barrier.wait()
+            pool.init_pool()  # idempotent — no-op since pool is ready
+        except Exception as e:
+            err.append(e)
+
+    def force_worker():
+        try:
+            barrier.wait()
+            time.sleep(0.05)
+            pool.init_pool(force=True)
+        except Exception as e:
+            err.append(e)
+
+    t1 = threading.Thread(target=lazy_worker)
+    t2 = threading.Thread(target=force_worker)
+    t1.start()
+    t2.start()
+    t1.join(timeout=15)
+    t2.join(timeout=15)
+
+    assert err == [], f"workers raised errors: {err}"
+
+    members = pool.list_all()
+    assert str(extra_id) not in members, (
+        f"force=True must wipe extras even when racing with lazy init: {members}")
+
+    pool.destroy_pool()
