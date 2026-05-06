@@ -1,5 +1,11 @@
 ## v1.1.0 - (current)
 
+### Fixed
+- **`redis.pool.RedisModelPool` — race + resurrect bugs in `init_pool` auto-init** — `init_pool()` is now idempotent (no-op when `is_ready()`) and guarded by a Redis `SET NX EX` lock at `{pool_key}:init_lock` so concurrent first-time inits don't race on `destroy_pool()` + per-item rebuild. `is_ready()` now checks set existence only (the available list is auto-deleted by Redis when empty during normal "all checked out" operation). `add_to_pool()` and `get_next_instance()` lazy-init via the idempotent `init_pool()` for cold-start convenience; `remove_from_pool()` no longer auto-inits — it returns `False` when the pool is uninitialized rather than rebuilding from the queryset just to remove. Use `init_pool(force=True)` to explicitly rebuild from the DB queryset. See `docs/django_developer/helpers/redis.md`.
+
+### Changed
+- **`add_to_pool()` return value semantic** — when called on a cold pool, the lazy init may add the instance from the queryset; in that case `add_to_pool()` now returns `False` ("already a member after init") rather than `True`. The behaviour for items NOT in the queryset is unchanged: `True` when newly added, `False` when already present.
+
 ## v1.1.40 - May 05, 2026
 
 hotfix for ticket generator creating dups
