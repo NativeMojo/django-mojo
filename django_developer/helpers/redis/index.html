@@ -3828,6 +3828,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#initialization-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Initialization contract
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#conditional-checkout-skip_predicate_1" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4237,32 +4248,45 @@
 <a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a>    <span class="n">default_timeout</span><span class="o">=</span><span class="mi">30</span><span class="p">,</span>
 <a id="__codelineno-15-9" name="__codelineno-15-9" href="#__codelineno-15-9"></a><span class="p">)</span>
 <a id="__codelineno-15-10" name="__codelineno-15-10" href="#__codelineno-15-10"></a>
-<a id="__codelineno-15-11" name="__codelineno-15-11" href="#__codelineno-15-11"></a><span class="c1"># Initialize from database (clears and rebuilds)</span>
+<a id="__codelineno-15-11" name="__codelineno-15-11" href="#__codelineno-15-11"></a><span class="c1"># Initialize from database (idempotent — no-op if already initialized)</span>
 <a id="__codelineno-15-12" name="__codelineno-15-12" href="#__codelineno-15-12"></a><span class="n">pool</span><span class="o">.</span><span class="n">init_pool</span><span class="p">()</span>
 <a id="__codelineno-15-13" name="__codelineno-15-13" href="#__codelineno-15-13"></a>
-<a id="__codelineno-15-14" name="__codelineno-15-14" href="#__codelineno-15-14"></a><span class="c1"># Checkout an instance (context manager)</span>
-<a id="__codelineno-15-15" name="__codelineno-15-15" href="#__codelineno-15-15"></a><span class="k">with</span> <span class="n">pool</span><span class="o">.</span><span class="n">checkout_instance</span><span class="p">(</span><span class="n">timeout</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span> <span class="k">as</span> <span class="n">key</span><span class="p">:</span>
-<a id="__codelineno-15-16" name="__codelineno-15-16" href="#__codelineno-15-16"></a>    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Using API key: </span><span class="si">{</span><span class="n">key</span><span class="o">.</span><span class="n">pk</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-<a id="__codelineno-15-17" name="__codelineno-15-17" href="#__codelineno-15-17"></a>    <span class="c1"># Instance is returned to pool on exit</span>
+<a id="__codelineno-15-14" name="__codelineno-15-14" href="#__codelineno-15-14"></a><span class="c1"># Force rebuild from queryset (wipes any items added via add_to_pool that</span>
+<a id="__codelineno-15-15" name="__codelineno-15-15" href="#__codelineno-15-15"></a><span class="c1"># fall outside query_dict; use sparingly — typically only when the underlying</span>
+<a id="__codelineno-15-16" name="__codelineno-15-16" href="#__codelineno-15-16"></a><span class="c1"># DB rows have changed and you want the pool refreshed from scratch)</span>
+<a id="__codelineno-15-17" name="__codelineno-15-17" href="#__codelineno-15-17"></a><span class="n">pool</span><span class="o">.</span><span class="n">init_pool</span><span class="p">(</span><span class="n">force</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 <a id="__codelineno-15-18" name="__codelineno-15-18" href="#__codelineno-15-18"></a>
-<a id="__codelineno-15-19" name="__codelineno-15-19" href="#__codelineno-15-19"></a><span class="c1"># Checkout a specific instance</span>
-<a id="__codelineno-15-20" name="__codelineno-15-20" href="#__codelineno-15-20"></a><span class="k">with</span> <span class="n">pool</span><span class="o">.</span><span class="n">checkout_specific_instance</span><span class="p">(</span><span class="n">my_key</span><span class="p">)</span> <span class="k">as</span> <span class="n">key</span><span class="p">:</span>
-<a id="__codelineno-15-21" name="__codelineno-15-21" href="#__codelineno-15-21"></a>    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Using: </span><span class="si">{</span><span class="n">key</span><span class="o">.</span><span class="n">pk</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-<a id="__codelineno-15-22" name="__codelineno-15-22" href="#__codelineno-15-22"></a>
-<a id="__codelineno-15-23" name="__codelineno-15-23" href="#__codelineno-15-23"></a><span class="c1"># Manual checkout / return</span>
-<a id="__codelineno-15-24" name="__codelineno-15-24" href="#__codelineno-15-24"></a><span class="n">instance</span> <span class="o">=</span> <span class="n">pool</span><span class="o">.</span><span class="n">get_next_instance</span><span class="p">(</span><span class="n">timeout</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
-<a id="__codelineno-15-25" name="__codelineno-15-25" href="#__codelineno-15-25"></a><span class="c1"># ... do work ...</span>
-<a id="__codelineno-15-26" name="__codelineno-15-26" href="#__codelineno-15-26"></a><span class="n">pool</span><span class="o">.</span><span class="n">return_instance</span><span class="p">(</span><span class="n">instance</span><span class="p">)</span>
+<a id="__codelineno-15-19" name="__codelineno-15-19" href="#__codelineno-15-19"></a><span class="c1"># Checkout an instance (context manager)</span>
+<a id="__codelineno-15-20" name="__codelineno-15-20" href="#__codelineno-15-20"></a><span class="k">with</span> <span class="n">pool</span><span class="o">.</span><span class="n">checkout_instance</span><span class="p">(</span><span class="n">timeout</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span> <span class="k">as</span> <span class="n">key</span><span class="p">:</span>
+<a id="__codelineno-15-21" name="__codelineno-15-21" href="#__codelineno-15-21"></a>    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Using API key: </span><span class="si">{</span><span class="n">key</span><span class="o">.</span><span class="n">pk</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<a id="__codelineno-15-22" name="__codelineno-15-22" href="#__codelineno-15-22"></a>    <span class="c1"># Instance is returned to pool on exit</span>
+<a id="__codelineno-15-23" name="__codelineno-15-23" href="#__codelineno-15-23"></a>
+<a id="__codelineno-15-24" name="__codelineno-15-24" href="#__codelineno-15-24"></a><span class="c1"># Checkout a specific instance</span>
+<a id="__codelineno-15-25" name="__codelineno-15-25" href="#__codelineno-15-25"></a><span class="k">with</span> <span class="n">pool</span><span class="o">.</span><span class="n">checkout_specific_instance</span><span class="p">(</span><span class="n">my_key</span><span class="p">)</span> <span class="k">as</span> <span class="n">key</span><span class="p">:</span>
+<a id="__codelineno-15-26" name="__codelineno-15-26" href="#__codelineno-15-26"></a>    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Using: </span><span class="si">{</span><span class="n">key</span><span class="o">.</span><span class="n">pk</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 <a id="__codelineno-15-27" name="__codelineno-15-27" href="#__codelineno-15-27"></a>
-<a id="__codelineno-15-28" name="__codelineno-15-28" href="#__codelineno-15-28"></a><span class="c1"># Add / remove instances dynamically</span>
-<a id="__codelineno-15-29" name="__codelineno-15-29" href="#__codelineno-15-29"></a><span class="n">pool</span><span class="o">.</span><span class="n">add_to_pool</span><span class="p">(</span><span class="n">new_key</span><span class="p">)</span>                    <span class="c1"># auto-inits pool if needed</span>
-<a id="__codelineno-15-30" name="__codelineno-15-30" href="#__codelineno-15-30"></a><span class="n">pool</span><span class="o">.</span><span class="n">remove_from_pool</span><span class="p">(</span><span class="n">old_key</span><span class="p">)</span>               <span class="c1"># only if available</span>
-<a id="__codelineno-15-31" name="__codelineno-15-31" href="#__codelineno-15-31"></a><span class="n">pool</span><span class="o">.</span><span class="n">remove_from_pool</span><span class="p">(</span><span class="n">old_key</span><span class="p">,</span> <span class="n">force</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>   <span class="c1"># even if checked out</span>
+<a id="__codelineno-15-28" name="__codelineno-15-28" href="#__codelineno-15-28"></a><span class="c1"># Manual checkout / return</span>
+<a id="__codelineno-15-29" name="__codelineno-15-29" href="#__codelineno-15-29"></a><span class="n">instance</span> <span class="o">=</span> <span class="n">pool</span><span class="o">.</span><span class="n">get_next_instance</span><span class="p">(</span><span class="n">timeout</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+<a id="__codelineno-15-30" name="__codelineno-15-30" href="#__codelineno-15-30"></a><span class="c1"># ... do work ...</span>
+<a id="__codelineno-15-31" name="__codelineno-15-31" href="#__codelineno-15-31"></a><span class="n">pool</span><span class="o">.</span><span class="n">return_instance</span><span class="p">(</span><span class="n">instance</span><span class="p">)</span>
 <a id="__codelineno-15-32" name="__codelineno-15-32" href="#__codelineno-15-32"></a>
-<a id="__codelineno-15-33" name="__codelineno-15-33" href="#__codelineno-15-33"></a><span class="c1"># Inspect</span>
-<a id="__codelineno-15-34" name="__codelineno-15-34" href="#__codelineno-15-34"></a><span class="n">pool</span><span class="o">.</span><span class="n">list_checked_out_instances</span><span class="p">()</span>  <span class="c1"># returns queryset of checked-out models</span>
+<a id="__codelineno-15-33" name="__codelineno-15-33" href="#__codelineno-15-33"></a><span class="c1"># Add / remove instances dynamically</span>
+<a id="__codelineno-15-34" name="__codelineno-15-34" href="#__codelineno-15-34"></a><span class="n">pool</span><span class="o">.</span><span class="n">add_to_pool</span><span class="p">(</span><span class="n">new_key</span><span class="p">)</span>                    <span class="c1"># lazy-inits pool if uninitialized</span>
+<a id="__codelineno-15-35" name="__codelineno-15-35" href="#__codelineno-15-35"></a><span class="n">pool</span><span class="o">.</span><span class="n">remove_from_pool</span><span class="p">(</span><span class="n">old_key</span><span class="p">)</span>               <span class="c1"># only if available; no auto-init</span>
+<a id="__codelineno-15-36" name="__codelineno-15-36" href="#__codelineno-15-36"></a><span class="n">pool</span><span class="o">.</span><span class="n">remove_from_pool</span><span class="p">(</span><span class="n">old_key</span><span class="p">,</span> <span class="n">force</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>   <span class="c1"># even if checked out</span>
+<a id="__codelineno-15-37" name="__codelineno-15-37" href="#__codelineno-15-37"></a>
+<a id="__codelineno-15-38" name="__codelineno-15-38" href="#__codelineno-15-38"></a><span class="c1"># Inspect</span>
+<a id="__codelineno-15-39" name="__codelineno-15-39" href="#__codelineno-15-39"></a><span class="n">pool</span><span class="o">.</span><span class="n">list_checked_out_instances</span><span class="p">()</span>  <span class="c1"># returns queryset of checked-out models</span>
 </code></pre></div>
 <p>The model pool validates instances on checkout — if a record was deleted or no longer matches <code>query_dict</code>, it is silently removed and the next available item is returned.</p>
+<h4 id="initialization-contract">Initialization contract<a class="headerlink" href="#initialization-contract" title="Permanent link">&para;</a></h4>
+<ul>
+<li><strong><code>is_ready()</code></strong> — returns <code>True</code> once the pool has been initialized. The check is on the membership set only, so the pool is still considered ready when every member is currently checked out (the available list goes empty during normal operation; the set persists for the pool's lifetime).</li>
+<li><strong><code>init_pool(force=False)</code></strong> — idempotent. When <code>is_ready()</code> is already <code>True</code>, the call is a no-op and does not destroy the existing pool. When the pool is uninitialized (cold start or after <code>destroy_pool()</code>), the method acquires a Redis lock at <code>{pool_key}:init_lock</code>, double-checks readiness, then runs <code>destroy_pool()</code> + per-item rebuild from <code>query_dict</code>. Concurrent first-time inits across processes are safe — only one rebuild runs; the others poll briefly for it to finish.</li>
+<li><strong><code>init_pool(force=True)</code></strong> — always rebuilds from the queryset. Use this when the underlying DB rows have changed and you want a fresh pool. Items added via <code>add_to_pool()</code> that fall outside <code>query_dict</code> are wiped on a forced rebuild; preserve them across non-forced calls.</li>
+<li><strong>Lazy init</strong> — <code>add_to_pool()</code> and <code>get_next_instance()</code> call <code>init_pool()</code> (idempotent) before their work. A cold or destroyed pool is populated automatically on first use. <code>remove_from_pool()</code> does NOT lazy-init — it returns <code>False</code> when the pool is uninitialized, since rebuilding the pool from the DB queryset just to remove an item would silently undo a <code>destroy_pool()</code>.</li>
+<li><strong>Thread-safety</strong> — all mutation paths go through atomic Redis operations and (for the destructive rebuild) a Redis lock with a 10s TTL safety net. The pool tolerates lock-holder crashes: the next caller after the TTL expires acquires the lock and reinitialises.</li>
+</ul>
 <h4 id="conditional-checkout-skip_predicate_1">Conditional checkout — <code>skip_predicate</code><a class="headerlink" href="#conditional-checkout-skip_predicate_1" title="Permanent link">&para;</a></h4>
 <p><code>RedisModelPool</code> accepts an optional <code>skip_predicate</code> callable applied to the loaded instance after the <code>query_dict</code> recheck. Use it to mark instances as temporarily ineligible without removing them from the pool.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers.redis</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_connection</span>
