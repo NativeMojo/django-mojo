@@ -18,6 +18,19 @@ def register_handler(name, func):
     ACTION_HANDLERS[name] = func
 
 
+def _find_matching_action_note(ticket, handler_name):
+    """Find an unresolved action note on this ticket matching the given handler."""
+    from mojo.apps.incident.models import TicketNote
+    for tn in TicketNote.objects.filter(parent=ticket).order_by("-created"):
+        meta = tn.metadata or {}
+        action = meta.get("action")
+        if not action:
+            continue
+        if action.get("handler") == handler_name and not action.get("resolved"):
+            return tn
+    return None
+
+
 def dispatch_action(ticket, note, response_meta):
     """Dispatch an action response to the appropriate handler.
 
@@ -37,11 +50,28 @@ def dispatch_action(ticket, note, response_meta):
         logger.warning("Unknown action handler: %s (ticket %s)", handler_name, ticket.pk)
         return False
 
+    # Verify a matching unresolved action note exists on this ticket
+    action_note = _find_matching_action_note(ticket, handler_name)
+    if action_note is None:
+        logger.warning(
+            "No matching action note for handler %s on ticket %s — rejecting",
+            handler_name, ticket.pk,
+        )
+        return False
+
+    # Prevent double-dispatch: if ticket is already in a terminal state, skip
+    if ticket.status in ("closed", "resolved"):
+        logger.info("Ticket %s already %s — skipping action dispatch", ticket.pk, ticket.status)
+        return False
+
     action = response_meta.get("action")
     context = response_meta.get("context") or {}
 
     try:
         handler(ticket, note, action, context)
+        # Mark the original action note as resolved
+        action_note.metadata["action"]["resolved"] = True
+        action_note.save(update_fields=["metadata"])
         return True
     except Exception:
         logger.exception("Action handler %s failed for ticket %s", handler_name, ticket.pk)
@@ -69,10 +99,14 @@ def _add_system_note(ticket, text):
     )
 
 
+ALLOWED_MODEL_REFS = {"incident.RuleSet"}
+
+
 def _resolve_model_ref(context):
     """Resolve a model reference from action context.
 
     Context format: {"target": {"model": "app.Model", "pk": 123}}
+    Only models in ALLOWED_MODEL_REFS can be resolved.
     Returns the model instance or None.
     """
     target = context.get("target")
@@ -82,6 +116,10 @@ def _resolve_model_ref(context):
     model_path = target.get("model")
     pk = target.get("pk")
     if not model_path or not pk:
+        return None
+
+    if model_path not in ALLOWED_MODEL_REFS:
+        logger.warning("Model ref %s not in allowed list — rejecting", model_path)
         return None
 
     try:
@@ -98,11 +136,17 @@ def _handler_rule_approval(ticket, note, action, context):
     Approve: set is_active=True on the linked RuleSet, close ticket.
     Deny: delete the RuleSet, close ticket.
     """
+    from mojo.apps.incident.models import RuleSet
+
     ruleset = _resolve_model_ref(context)
-    if ruleset is None:
+    if ruleset is None or not isinstance(ruleset, RuleSet):
         _add_system_note(ticket, "Cannot resolve linked ruleset — it may have been deleted.")
         ticket.status = "closed"
         ticket.save(update_fields=["status"])
+        return
+
+    if not (ruleset.metadata or {}).get("llm_proposed"):
+        _add_system_note(ticket, "Target ruleset is not an LLM proposal — refusing to modify.")
         return
 
     if action == "approve":
@@ -135,8 +179,10 @@ def _handler_rule_update(ticket, note, action, context):
     Approve: replace the target RuleSet's rules with the proposed rules from context.
     Deny: close ticket, no changes.
     """
+    from mojo.apps.incident.models import RuleSet
+
     ruleset = _resolve_model_ref(context)
-    if ruleset is None:
+    if ruleset is None or not isinstance(ruleset, RuleSet):
         _add_system_note(ticket, "Cannot resolve linked ruleset — it may have been deleted.")
         ticket.status = "closed"
         ticket.save(update_fields=["status"])
@@ -183,9 +229,15 @@ def _handler_block_confirm(ticket, note, action, context):
     Deny: close ticket.
     """
     if action == "approve":
+        import ipaddress
         ip = context.get("ip")
         reason = context.get("reason", "Approved via ticket action")
         if ip:
+            try:
+                ipaddress.ip_address(ip)
+            except ValueError:
+                _add_system_note(ticket, f"Invalid IP address format: {ip}")
+                return
             try:
                 from mojo.apps.incident.models import IPSet
                 IPSet.block_ip(ip, reason=reason)

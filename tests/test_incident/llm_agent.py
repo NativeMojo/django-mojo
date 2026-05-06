@@ -981,6 +981,20 @@ def test_ticket_action_denial_deletes_rule(opts):
         metadata={"llm_linked": True, "ruleset_id": rs_pk},
     )
 
+    # Create the original action note (required for dispatch validation)
+    TicketNote.objects.create(
+        parent=ticket, user=user,
+        note="[LLM Agent] Proposing rule for approval",
+        metadata={
+            "action": {
+                "type": "approval",
+                "handler": "incident.rule_approval",
+                "label": "Approve rule?",
+                "context": {"target": {"model": "incident.RuleSet", "pk": rs_pk}},
+            }
+        },
+    )
+
     response_meta = {
         "handler": "incident.rule_approval",
         "action": "deny",
@@ -1031,6 +1045,20 @@ def test_ticket_action_double_approval(opts):
         metadata={"llm_linked": True, "ruleset_id": ruleset.pk},
     )
 
+    # Create the original action note
+    TicketNote.objects.create(
+        parent=ticket, user=user,
+        note="[LLM Agent] Proposing rule for approval",
+        metadata={
+            "action": {
+                "type": "approval",
+                "handler": "incident.rule_approval",
+                "label": "Approve rule?",
+                "context": {"target": {"model": "incident.RuleSet", "pk": ruleset.pk}},
+            }
+        },
+    )
+
     response_meta = {
         "handler": "incident.rule_approval",
         "action": "approve",
@@ -1046,16 +1074,17 @@ def test_ticket_action_double_approval(opts):
     ruleset.refresh_from_db()
     assert ruleset.is_active, "RuleSet should be active after first approval"
 
+    # Second dispatch should be blocked — ticket is now resolved
     ticket.refresh_from_db()
     note2 = TicketNote.objects.create(
         parent=ticket, user=user, note="Approved again",
         metadata={"action_response": response_meta},
     )
     result = dispatch_action(ticket, note2, response_meta)
-    assert result is True, "Second approval should still succeed (idempotent)"
+    assert result is False, "Second approval should be blocked (ticket already resolved)"
 
     ruleset.refresh_from_db()
-    assert ruleset.is_active, "RuleSet should still be active after second approval"
+    assert ruleset.is_active, "RuleSet should still be active after second approval attempt"
 
 
 @th.django_unit_test("LLM tool: suggest_rule_update creates ticket with action note")
@@ -1271,6 +1300,23 @@ def test_rule_update_approval(opts):
         {"name": "Wider level", "field_name": "level", "comparator": ">=", "value": "7", "value_type": "int"},
         {"name": "IP filter", "field_name": "source_ip", "comparator": "regex", "value": "10\\..*"},
     ]
+
+    # Create the original action note (required for dispatch validation)
+    TicketNote.objects.create(
+        parent=ticket, user=user,
+        note="[LLM Agent] Suggesting rule update",
+        metadata={
+            "action": {
+                "type": "approval",
+                "handler": "incident.rule_update",
+                "label": "Update rule?",
+                "context": {
+                    "target": {"model": "incident.RuleSet", "pk": ruleset.pk},
+                    "proposed_rules": proposed_rules,
+                },
+            }
+        },
+    )
 
     response_meta = {
         "handler": "incident.rule_update",
