@@ -24,7 +24,7 @@ def _find_matching_action_note(ticket, handler_name):
     for tn in TicketNote.objects.filter(parent=ticket).order_by("-created"):
         meta = tn.metadata or {}
         action = meta.get("action")
-        if not action:
+        if not action or not isinstance(action, dict):
             continue
         if action.get("handler") == handler_name and not action.get("resolved"):
             return tn

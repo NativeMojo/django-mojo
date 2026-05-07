@@ -89,6 +89,7 @@ class TicketNote(models.Model, MojoModel):
         VIEW_PERMS = ["view_security", "security"]
         SAVE_PERMS = ["manage_security", "security"]
         CAN_DELETE = True
+        JSON_REPLACE_FIELDS = ["metadata"]
         GRAPHS = {
             "default": {
                 "graphs": {
