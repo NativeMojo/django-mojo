@@ -735,6 +735,36 @@ def test_update_skill_auto_execute(opts):
     skill.refresh_from_db()
     assert_true(skill.auto_execute, "auto_execute should now be True")
 
+    # Toggle back to False — must not be silently dropped
+    result = update_skill(user, skill.pk, auto_execute=False)
+    assert_true("error" not in result, "update_skill should succeed setting auto_execute=False")
+    skill.refresh_from_db()
+    assert_true(not skill.auto_execute, "auto_execute should be back to False")
+
+
+@th.django_unit_test()
+@th.requires_app("mojo.apps.assistant")
+def test_update_skill_deactivate(opts):
+    """update_skill can set is_active=False."""
+    from mojo.apps.assistant.services.skills import save_skill, update_skill
+    from mojo.apps.assistant.models import Skill
+    _cleanup()
+    _, user, _ = _load_users()
+
+    save_skill(
+        user, tier="user", name="test-skill-deactivate",
+        description="Deactivation test",
+        triggers=["deactivate"],
+        steps=SAMPLE_STEPS,
+    )
+    skill = Skill.objects.get(tier="user", user=user, name="test-skill-deactivate")
+    assert_true(skill.is_active, "Should start active")
+
+    result = update_skill(user, skill.pk, is_active=False)
+    assert_true("error" not in result, "update_skill should succeed setting is_active=False")
+    skill.refresh_from_db()
+    assert_true(not skill.is_active, "Skill should now be inactive")
+
 
 @th.django_unit_test()
 @th.requires_app("mojo.apps.assistant")

@@ -34,6 +34,8 @@ def _tool_find_skill(params, user):
     skill_id = params.get("skill_id")
 
     if skill_id is not None:
+        if not isinstance(skill_id, int):
+            return {"error": "skill_id must be an integer"}
         result = get_skill(user, skill_id, group=group)
         if "error" in result:
             return result
@@ -223,6 +225,8 @@ def _tool_update_skill(params, user):
 
     group = getattr(user, "_assistant_group", None)
     skill_id = params.pop("skill_id")
+    if not isinstance(skill_id, int):
+        return {"error": "skill_id must be an integer"}
     return update_skill(user, skill_id, group=group, **params)
 
 

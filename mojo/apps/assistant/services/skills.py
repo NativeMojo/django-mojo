@@ -273,7 +273,9 @@ def get_skill(user, skill_id, group=None):
     except Skill.DoesNotExist:
         return {"error": f"Skill {skill_id} not found"}
 
-    if not _can_read_tier(skill.tier, user, group):
+    # Use skill's own group for group-tier checks, not caller's ambient group
+    check_group = skill.group if skill.tier == "group" else group
+    if not _can_read_tier(skill.tier, user, check_group):
         return {"error": "You don't have permission to view this skill"}
 
     # User-tier skills are scoped to owner
@@ -302,7 +304,9 @@ def update_skill(user, skill_id, group=None, **fields):
     except Skill.DoesNotExist:
         return {"error": f"Skill {skill_id} not found"}
 
-    if not _can_write_tier(skill.tier, user, group):
+    # Use skill's own group for group-tier checks, not caller's ambient group
+    check_group = skill.group if skill.tier == "group" else group
+    if not _can_write_tier(skill.tier, user, check_group):
         return {"error": f"You don't have permission to modify {skill.tier} skills"}
 
     # User-tier: only owner or superuser
@@ -310,7 +314,7 @@ def update_skill(user, skill_id, group=None, **fields):
         return {"error": "You can only modify your own skills"}
 
     UPDATABLE = {"name", "description", "triggers", "steps", "auto_execute", "is_active"}
-    to_update = {k: v for k, v in fields.items() if k in UPDATABLE and v is not None}
+    to_update = {k: v for k, v in fields.items() if k in UPDATABLE}
 
     if not to_update:
         return {"error": "No valid fields provided to update"}
