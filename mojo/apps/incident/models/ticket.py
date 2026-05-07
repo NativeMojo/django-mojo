@@ -50,7 +50,17 @@ class Ticket(models.Model, MojoModel):
 
     def on_rest_saved(self, changed_fields, created):
         if 'status' in changed_fields:
-            self.add_note(f"Status changed from {changed_fields['status']} to {self.status}", user=self.active_request.user)
+            old_status = changed_fields['status']
+            new_status = self.status
+            self.add_note(
+                f"Status changed from {old_status} to {new_status}",
+                user=self.active_request.user,
+                metadata={
+                    "type": "status_change",
+                    "old_status": old_status,
+                    "new_status": new_status,
+                },
+            )
 
     def is_llm_enabled(self):
         meta = self.metadata or {}
@@ -77,9 +87,12 @@ class Ticket(models.Model, MojoModel):
         self.metadata["llm_enabled"] = False
         self.save(update_fields=["metadata"])
 
-    def add_note(self, note, user):
+    def add_note(self, note, user, metadata=None):
         logit.info(f"Adding note to ticket {self.id}: {note}")
-        TicketNote.objects.create(parent=self, note=note, group=self.group, user=user)
+        kwargs = {"parent": self, "note": note, "group": self.group, "user": user}
+        if metadata:
+            kwargs["metadata"] = metadata
+        TicketNote.objects.create(**kwargs)
 
 class TicketNote(models.Model, MojoModel):
     class Meta:
