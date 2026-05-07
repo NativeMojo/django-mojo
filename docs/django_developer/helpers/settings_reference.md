@@ -240,6 +240,7 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 
 - `METRICS_DEFAULT_MAX_GRANULARITY`
 - `METRICS_DEFAULT_MIN_GRANULARITY`
+- `METRICS_FANOUT_MAX_CHILDREN`
 - `METRICS_TIMEZONE`
 - `METRICS_TRACK_USER_ACTIVITY`
 
