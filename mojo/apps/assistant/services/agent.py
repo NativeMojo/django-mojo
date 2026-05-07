@@ -156,7 +156,7 @@ _BLOCK_RE = re.compile(
     re.DOTALL,
 )
 
-VALID_BLOCK_TYPES = {"table", "chart", "stat", "action", "list", "alert", "progress", "file"}
+VALID_BLOCK_TYPES = {"table", "chart", "stat", "action", "list", "alert", "progress", "file", "context"}
 
 VALID_ALERT_LEVELS = {"info", "success", "warning", "error"}
 
@@ -242,6 +242,10 @@ def _validate_block(block):
             return False
     elif block_type == "chart":
         if not _validate_chart_block(block):
+            return False
+    elif block_type == "context":
+        refs = block.get("references")
+        if not isinstance(refs, list) or not refs:
             return False
     return True
 
@@ -548,6 +552,9 @@ When steps are independent (no data dependencies), mark them parallel=true and i
 
 ## Parallel Execution
 When you need data from multiple independent sources (e.g., incidents AND jobs AND users), call all the tools in a single turn rather than one at a time. The system executes concurrent tool calls in parallel for faster results. Only serialize tool calls when one tool's result informs the next tool's input.
+
+## Context References
+When you reference specific records in your responses (users, jobs, incidents, rulesets, etc.), use add_context to attach clickable links. This lets admins click through directly instead of having to search for the record you're discussing. Call add_context alongside your final response — invalid references are silently filtered.
 """
 
 
@@ -723,6 +730,27 @@ def _handle_plan_tool(conversation, tool_name, tool_input, tool_result, on_event
 
 
 META_TOOLS = {"load_tools", "create_plan", "update_plan"}
+
+
+def _extract_context_refs(tool_blocks, tool_results):
+    """Extract validated context references from add_context tool results.
+
+    Returns a list of reference dicts to accumulate across the agent loop.
+    """
+    refs = []
+    add_context_ids = {b["id"] for b in tool_blocks if b.get("name") == "add_context"}
+    if not add_context_ids:
+        return refs
+    for tr in tool_results:
+        if tr.get("tool_use_id") not in add_context_ids:
+            continue
+        try:
+            parsed = ujson.loads(tr["content"])
+            for r in parsed.get("references") or []:
+                refs.append(r)
+        except Exception:
+            pass
+    return refs
 
 
 def _execute_tool(block, registry, user, conversation, tools, on_event, tool_calls_made, request_meta=None):
@@ -1133,6 +1161,7 @@ def run_assistant(user, message, conversation_id=None, on_event=None, request=No
     max_turns = settings.get("LLM_ADMIN_MAX_TURNS", 25, kind="int")
     registry = get_registry()
     tool_calls_made = []
+    context_refs = []
     request_meta = _build_request_meta(request)
     t_start = time.time()
 
@@ -1154,6 +1183,10 @@ def run_assistant(user, message, conversation_id=None, on_event=None, request=No
                 raw_text = "\n".join(text_parts) if text_parts else ""
                 response_text, blocks = _parse_blocks(raw_text)
                 duration_ms = int((time.time() - t_start) * 1000)
+
+                if context_refs:
+                    blocks = blocks or []
+                    blocks.append({"type": "context", "references": context_refs})
 
                 Message.objects.create(
                     conversation=conversation,
@@ -1195,6 +1228,9 @@ def run_assistant(user, message, conversation_id=None, on_event=None, request=No
                 tool_blocks, registry, user, conversation, tools, on_event, tool_calls_made,
                 request_meta=request_meta,
             )
+
+            # Accumulate context references from add_context calls
+            context_refs.extend(_extract_context_refs(tool_blocks, tool_results))
 
             # Store tool interaction messages
             Message.objects.create(
@@ -1338,6 +1374,7 @@ def run_assistant_ws(user, message, conversation_id, on_event=None):
     max_turns = settings.get("LLM_ADMIN_MAX_TURNS", 25, kind="int")
     registry = get_registry()
     tool_calls_made = []
+    context_refs = []
     t_start = time.time()
 
     try:
@@ -1351,6 +1388,11 @@ def run_assistant_ws(user, message, conversation_id, on_event=None):
                 raw_text = "\n".join(text_parts) if text_parts else ""
                 response_text, blocks = _parse_blocks(raw_text)
                 duration_ms = int((time.time() - t_start) * 1000)
+
+                if context_refs:
+                    blocks = blocks or []
+                    blocks.append({"type": "context", "references": context_refs})
+
                 msg = Message.objects.create(
                     conversation=conversation, role="assistant",
                     content=response_text, blocks=blocks or None,
@@ -1384,6 +1426,9 @@ def run_assistant_ws(user, message, conversation_id, on_event=None):
             tool_results = _execute_tools(
                 tool_blocks, registry, user, conversation, tools, on_event, tool_calls_made,
             )
+
+            # Accumulate context references from add_context calls
+            context_refs.extend(_extract_context_refs(tool_blocks, tool_results))
 
             Message.objects.create(
                 conversation=conversation, role="assistant",

@@ -1490,3 +1490,93 @@ def _get_export_url(file_instance, user, group, expire_days):
             logger.warning("export_data shortlink error, falling back to direct URL", str(e))
 
     return file_instance.generate_download_url()
+
+
+# ---------------------------------------------------------------------------
+# Context references — clickable model links on assistant messages
+# ---------------------------------------------------------------------------
+
+MAX_CONTEXT_REFS = 20
+
+
+@tool(
+    name="add_context",
+    domain="models",
+    permission="view_admin",
+    core=True,
+    mutates=False,
+    description=(
+        "Attach clickable model references to your message. Use when you mention "
+        "specific records (users, jobs, incidents, rulesets) so admins can click "
+        "through directly instead of searching. Each reference renders as a linked "
+        "card in the UI. Invalid or inaccessible references are silently filtered."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "references": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "app_name": {
+                            "type": "string",
+                            "description": "Django app label (e.g. 'incident', 'account', 'jobs')",
+                        },
+                        "model_name": {
+                            "type": "string",
+                            "description": "Model class name (e.g. 'RuleSet', 'User', 'Job')",
+                        },
+                        "pk": {
+                            "type": "integer",
+                            "description": "Primary key of the instance",
+                        },
+                        "label": {
+                            "type": "string",
+                            "description": "Display label (e.g. 'SSH brute force blocker')",
+                        },
+                    },
+                    "required": ["app_name", "model_name", "pk"],
+                },
+                "description": "Model references to attach as clickable cards",
+            },
+        },
+        "required": ["references"],
+    },
+)
+def _tool_add_context(params, user):
+    """Validate and return context references for attachment to the message."""
+    references = params.get("references") or []
+    if not references:
+        return {"references": []}
+
+    references = references[:MAX_CONTEXT_REFS]
+    valid_refs = []
+
+    for ref in references:
+        app_name = ref.get("app_name", "").strip()
+        model_name = ref.get("model_name", "").strip()
+        pk = ref.get("pk")
+
+        if not app_name or not model_name or pk is None:
+            continue
+
+        model, err = _resolve_model(app_name, model_name)
+        if err:
+            continue
+
+        if _check_ai_access(model, "view", user):
+            continue
+
+        if not model.objects.filter(pk=pk).exists():
+            continue
+
+        valid_refs.append({
+            "app_name": app_name,
+            "model_name": model_name,
+            "pk": pk,
+            "label": ref.get("label", ""),
+        })
+
+    logger.info("add_context", f"refs={len(valid_refs)}/{len(references)}", f"user={user.id}")
+    return {"references": valid_refs}

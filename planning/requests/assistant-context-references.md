@@ -1,7 +1,7 @@
 # Assistant Context References
 
 **Type**: request
-**Status**: open
+**Status**: planned
 **Date**: 2026-05-06
 **Priority**: medium
 
@@ -122,3 +122,60 @@ When you reference specific records in your responses (users, jobs, incidents, r
 use add_context to attach clickable links. This lets admins click through directly instead of
 having to search for the record you're discussing.
 ```
+
+## Plan
+
+**Status**: planned
+**Planned**: 2026-05-06
+
+### Objective
+
+Add an `add_context` tool to the assistant that attaches validated, clickable model references to messages — rendered by the frontend as context cards.
+
+### Steps
+
+1. `mojo/apps/assistant/services/tools/models.py` — Add `_tool_add_context` handler registered via `@tool(name="add_context", domain="models", core=True, mutates=False)`. For each ref in `params["references"]`: call `_resolve_model(app_name, model_name)`, then `_check_ai_access(model, "view", user)`, then optionally `model.objects.filter(pk=ref["pk"]).exists()`. Return `{"references": valid_refs}`.
+
+2. `mojo/apps/assistant/services/agent.py` — Add `"context"` to `VALID_BLOCK_TYPES` set (line ~159). Add a `_validate_context_block(block)` check in `_validate_block` that requires a non-empty `references` list.
+
+3. `mojo/apps/assistant/services/agent.py` — Track `add_context` results during the tool loop. After each `_execute_tools` call, if any tool result came from `add_context`, accumulate the validated refs. Before saving the final Message, inject a `{"type": "context", "references": accumulated_refs}` block into the `blocks` list. Apply in both `run_assistant` and `run_assistant_ws`.
+
+4. `mojo/apps/assistant/services/agent.py` — Append the system prompt snippet (from Notes section) to `SYSTEM_PROMPT` so the LLM knows when to use `add_context`.
+
+5. `tests/test_assistant/test_context_refs.py` — Test cases: valid ref passes validation; invalid model filtered; DENY_AI_VIEW model filtered; non-existent pk filtered; mixed valid/invalid returns only valid; empty input returns empty list.
+
+6. `docs/django_developer/assistant/README.md` — Document the `add_context` tool, the `context` block type schema, and system prompt guidance.
+
+7. `docs/web_developer/` — Document the `context` block rendering contract: `{"type": "context", "references": [{app_name, model_name, pk, label}]}`. Frontend resolves via `app.getModelByRef()`, constructs REST URL, renders as compact card.
+
+### Design Decisions
+
+- **Store as a `blocks` entry, not message metadata**: Consistent with existing structured data pattern. No schema migration. Frontend already iterates `blocks` by type.
+- **Dynamic validation via `_resolve_model` + `_check_ai_access`**: No hardcoded allowlist to maintain. If you can query it, you can link to it.
+- **Pk existence check included**: One indexed `.exists()` per ref prevents broken links. Cheap and prevents dead cards.
+- **Silent filtering on invalid refs**: Tool never errors — bad refs are dropped, good refs are returned. Message still posts.
+- **Merge multiple calls**: If the LLM calls `add_context` multiple times in one turn, all valid refs merge into a single `context` block.
+- **Core tool**: Always available (like `query_model`), not gated behind `load_tools`.
+
+### Edge Cases
+
+- All refs invalid: tool returns `{"references": []}`, no context block injected on the message
+- Model valid but pk missing: ref filtered out by `.exists()` check
+- `DENY_AI` / `DENY_AI_VIEW` model: ref filtered out silently
+- User lacks VIEW_PERMS on the model: ref filtered out (permission check via `_check_ai_access`)
+- Multiple `add_context` calls in one agent turn: refs accumulated and merged into one block
+- No `add_context` called: zero overhead, no block injected
+
+### Testing
+
+- Valid ref passes → `tests/test_assistant/test_context_refs.py`
+- Invalid model name filtered → same file
+- DENY_AI model filtered → same file
+- Non-existent pk filtered → same file
+- Mixed valid/invalid refs → same file
+- Integration: agent loop injects context block on Message → same file
+
+### Docs
+
+- `docs/django_developer/assistant/README.md` — add_context tool, context block type, system prompt guidance
+- `docs/web_developer/assistant/` — context block rendering contract for frontend consumers
