@@ -125,8 +125,13 @@ The fan-out is implemented in `mojo.apps.metrics.rest.helpers.fetch_group_fanout
 Constraints:
 - `account` must be `group-<parent_id>`; other accounts combined with `child_kind` return 400.
 - The descendant set is capped at `METRICS_FANOUT_MAX_CHILDREN` (default 200). Exceeding the cap returns 400.
-- Sum is the only supported aggregation.
 - An empty descendant set returns a zero-filled series, not an error.
+
+### Per-Child Breakdown
+
+Pass `breakdown=true` (or call `fetch_group_fanout(..., breakdown=True)`) to return one series per child instead of the sum. Single-slug only — multi-slug + breakdown raises `ValueException`.
+
+Response keys are child `name`; when two children share a name both keys become `name#<id>` to avoid silent merging. The response includes a `groups` map of `key -> id`.
 
 ## Settings
 

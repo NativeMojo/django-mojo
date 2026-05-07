@@ -92,15 +92,19 @@ def check_write_permissions(request, account="public"):
 
 
 def fetch_group_fanout(parent_id, child_kind, slugs, dt_start=None, dt_end=None,
-                       granularity="hours", with_labels=False):
+                       granularity="hours", with_labels=False, breakdown=False):
     """
-    Sum metric series for ``slugs`` across every active descendant of
+    Aggregate metric series for ``slugs`` across every active descendant of
     ``parent_id`` whose ``kind`` matches ``child_kind``.
 
-    Returns the same shape as ``metrics.fetch(slugs, with_labels=True)`` for a
-    multi-slug call: ``{"labels": [...], "data": {slug: [int, ...]}}``. When
-    ``with_labels=False`` the labels key is omitted and the response is
-    ``{slug: [int, ...]}``.
+    Default (``breakdown=False``) sums per-bucket across children and returns
+    the same shape as ``metrics.fetch(slugs, with_labels=True)`` for a
+    multi-slug call: ``{"labels": [...], "data": {slug: [int, ...]}}``.
+
+    When ``breakdown=True`` returns one series per child, keyed by the child
+    group's ``name`` (with a ``#<id>`` suffix when names collide), plus a
+    ``groups`` map for ``key -> id`` lookup. Single-slug only — caller must
+    pass exactly one slug or ``ValueException`` is raised.
     """
     from mojo.apps.account.models import Group
 
@@ -110,19 +114,23 @@ def fetch_group_fanout(parent_id, child_kind, slugs, dt_start=None, dt_end=None,
         slug_list = list(slugs)
     if not slug_list:
         raise mojo.errors.ValueException("fan-out requires at least one slug")
+    if breakdown and len(slug_list) > 1:
+        raise mojo.errors.ValueException(
+            f"breakdown=true requires a single slug, got {len(slug_list)}"
+        )
 
     parent = Group.objects.filter(id=parent_id).first()
     if parent is None:
         raise mojo.errors.ValueException(f"group-{parent_id} not found")
 
     max_children = settings.get_static("METRICS_FANOUT_MAX_CHILDREN", 200)
-    child_ids = list(
+    children = list(
         parent.get_children(is_active=True, kind=child_kind)
-              .values_list("id", flat=True)
+              .values("id", "name")
     )
-    if len(child_ids) > max_children:
+    if len(children) > max_children:
         raise mojo.errors.ValueException(
-            f"fan-out resolved {len(child_ids)} children, exceeds "
+            f"fan-out resolved {len(children)} children, exceeds "
             f"METRICS_FANOUT_MAX_CHILDREN ({max_children})"
         )
 
@@ -133,10 +141,23 @@ def fetch_group_fanout(parent_id, child_kind, slugs, dt_start=None, dt_end=None,
     labels = utils.periods_from_dr_slugs(label_slugs)
     bucket_count = len(labels)
 
+    if breakdown:
+        return _build_breakdown(
+            children, slug_list[0], dt_start, dt_end, granularity,
+            bucket_count, labels, with_labels,
+        )
+    return _build_sum(
+        children, slug_list, dt_start, dt_end, granularity,
+        bucket_count, labels, with_labels,
+    )
+
+
+def _build_sum(children, slug_list, dt_start, dt_end, granularity,
+               bucket_count, labels, with_labels):
     accumulator = {s.split(":")[-1]: [0] * bucket_count for s in slug_list}
 
-    for cid in child_ids:
-        child_account = f"group-{cid}"
+    for child in children:
+        child_account = f"group-{child['id']}"
         result = metrics.fetch(
             slug_list if len(slug_list) > 1 else slug_list[0],
             dt_start=dt_start, dt_end=dt_end, granularity=granularity,
@@ -158,3 +179,30 @@ def fetch_group_fanout(parent_id, child_kind, slugs, dt_start=None, dt_end=None,
     if with_labels:
         return nobjict(labels=labels, data=accumulator)
     return nobjict(**accumulator)
+
+
+def _build_breakdown(children, slug, dt_start, dt_end, granularity,
+                     bucket_count, labels, with_labels):
+    name_counts = {}
+    for child in children:
+        name_counts[child["name"]] = name_counts.get(child["name"], 0) + 1
+
+    data = {}
+    groups = {}
+    for child in children:
+        cid, name = child["id"], child["name"]
+        key = f"{name}#{cid}" if name_counts[name] > 1 else name
+        series = metrics.fetch(
+            slug, dt_start=dt_start, dt_end=dt_end, granularity=granularity,
+            account=f"group-{cid}", with_labels=False, allow_empty=True,
+        )
+        bucket = [0] * bucket_count
+        for i, v in enumerate(series):
+            if i < bucket_count:
+                bucket[i] = int(v or 0)
+        data[key] = bucket
+        groups[key] = cid
+
+    if with_labels:
+        return nobjict(labels=labels, data=data, groups=groups)
+    return nobjict(data=data, groups=groups)

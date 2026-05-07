@@ -31,6 +31,7 @@ GET /api/metrics/fetch?slug=page_views&granularity=days&dr_start=2024-01-01&dr_e
 | `account` | `global` | Account namespace |
 | `with_labels` | `false` | Include time labels in response |
 | `child_kind` | unset | When set with `account=group-<parent_id>`, sums the metric across all active descendants of the parent whose `kind` matches. See [Parent-Group Fan-Out](#parent-group-fan-out). |
+| `breakdown` | `false` | When `true` (with `child_kind`), returns one series per child group instead of summing. Single-slug only. |
 
 **Response (single slug):**
 
@@ -174,6 +175,39 @@ The response shape matches the multi-slug shape of the regular fetch:
 ```
 
 `slug`, `slugs`, and `category` all work with `child_kind` — slugs are resolved once (from the parent's category index when `category` is used) and then summed per slug across children.
+
+### Per-Child Breakdown
+
+Pass `breakdown=true` to return one series per child group instead of the sum. Useful for stacked charts and per-location dashboards.
+
+```
+GET /api/metrics/fetch?slug=visits&account=group-42&child_kind=location&breakdown=true&granularity=days&with_labels=true
+```
+
+Constraints:
+- Single slug only. Multi-slug + breakdown returns 400 (the flat shape can't carry both slug-keyed and child-keyed data).
+- Same permission, descendant, and cap rules as sum-mode fan-out.
+
+The response uses the same flat `{labels, data: {<key>: [int]}}` shape, but `<key>` is the child group's `name`. When two children share a name, both keys become `name#<id>` to avoid silent merging. A top-level `groups` map gives `key -> id`:
+
+```json
+{
+  "status": true,
+  "data": {
+    "labels": ["2026-04-07", "2026-04-08", "2026-04-09"],
+    "data": {
+      "Downtown": [10, 20, 30],
+      "Uptown":   [5, 15, 25]
+    },
+    "groups": {
+      "Downtown": 12,
+      "Uptown":   13
+    }
+  }
+}
+```
+
+If two children share the name `Downtown`, both keys become `Downtown#12` / `Downtown#15`; other unique-named children keep their bare name.
 
 ## Fetch by Category
 

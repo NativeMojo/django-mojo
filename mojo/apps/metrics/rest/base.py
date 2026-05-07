@@ -130,6 +130,7 @@ def on_metrics_data(request):
     account = request.DATA.get("account", "public")
     granularity = request.DATA.get("granularity", "hours")
     child_kind = request.DATA.get("child_kind", None)
+    breakdown = request.DATA.get_typed("breakdown", typed=bool, default=False)
     check_view_permissions(request, account)
 
     category = request.DATA.get("category", None)
@@ -162,6 +163,7 @@ def on_metrics_data(request):
             parent_id, child_kind, slugs,
             dt_start=dt_start, dt_end=dt_end,
             granularity=granularity, with_labels=True,
+            breakdown=breakdown,
         )
         return JsonResponse(dict(status=True, data=records))
 

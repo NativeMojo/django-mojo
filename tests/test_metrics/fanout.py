@@ -347,6 +347,202 @@ def test_fanout_rejects_non_group_account(opts):
         f"non-group account + child_kind expected 400, got {resp.status_code}: {resp.body}"
 
 
+@th.django_unit_test()
+def test_fanout_breakdown_keys_by_name(opts):
+    """Breakdown mode returns one series per child, keyed by child name, with
+    a `groups` lookup map of name -> id."""
+    from mojo.apps.metrics.rest.helpers import fetch_group_fanout
+
+    parent, matches, _, _ = _build_tree()
+    counts = [3, 5, 7]
+    for g, c in zip(matches, counts):
+        _seed("fan_bd", g, c)
+
+    result = fetch_group_fanout(
+        parent.pk, "location", ["fan_bd"],
+        granularity="hours", with_labels=True, breakdown=True,
+    )
+    data = result["data"]
+    groups = result["groups"]
+    assert set(data.keys()) == {g.name for g in matches}, \
+        f"Expected one entry per matching child name, got {list(data.keys())}"
+    for g, c in zip(matches, counts):
+        series = data[g.name]
+        assert sum(series) == c, \
+            f"{g.name} expected sum {c}, got {sum(series)}: {series}"
+        assert groups[g.name] == g.pk, \
+            f"groups lookup for {g.name} expected {g.pk}, got {groups[g.name]}"
+
+
+@th.django_unit_test()
+def test_fanout_breakdown_name_collision_disambiguates(opts):
+    """When two children share a name, both keys become 'name#<id>' so neither
+    series is silently merged. Other children with unique names use bare name."""
+    from mojo.apps.account.models import Group
+    from mojo.apps.metrics.rest.helpers import fetch_group_fanout
+
+    Group.objects.filter(name__startswith="fanout_coll_").delete()
+    parent = Group(name="fanout_coll_parent", kind="org", is_active=True)
+    parent.save()
+
+    dup_a = Group(name="Duplicate", kind="location", parent=parent, is_active=True)
+    dup_a.save()
+    dup_b = Group(name="Duplicate", kind="location", parent=parent, is_active=True)
+    dup_b.save()
+    unique = Group(name="Unique", kind="location", parent=parent, is_active=True)
+    unique.save()
+
+    _seed("fan_coll", dup_a, 1)
+    _seed("fan_coll", dup_b, 2)
+    _seed("fan_coll", unique, 5)
+
+    result = fetch_group_fanout(
+        parent.pk, "location", ["fan_coll"],
+        granularity="hours", with_labels=True, breakdown=True,
+    )
+    data = result["data"]
+    groups = result["groups"]
+
+    expected_keys = {f"Duplicate#{dup_a.pk}", f"Duplicate#{dup_b.pk}", "Unique"}
+    assert set(data.keys()) == expected_keys, \
+        f"Expected keys {expected_keys}, got {set(data.keys())}"
+    assert sum(data[f"Duplicate#{dup_a.pk}"]) == 1, \
+        f"dup_a expected 1, got {sum(data[f'Duplicate#{dup_a.pk}'])}"
+    assert sum(data[f"Duplicate#{dup_b.pk}"]) == 2, \
+        f"dup_b expected 2, got {sum(data[f'Duplicate#{dup_b.pk}'])}"
+    assert sum(data["Unique"]) == 5, \
+        f"unique expected 5, got {sum(data['Unique'])}"
+    assert groups[f"Duplicate#{dup_a.pk}"] == dup_a.pk, \
+        f"groups lookup for dup_a key wrong: {groups}"
+    assert groups[f"Duplicate#{dup_b.pk}"] == dup_b.pk, \
+        f"groups lookup for dup_b key wrong: {groups}"
+    assert groups["Unique"] == unique.pk, \
+        f"groups lookup for Unique wrong: {groups}"
+
+
+@th.django_unit_test()
+def test_fanout_breakdown_rejects_multi_slug(opts):
+    """Multi-slug + breakdown must 400 (response shape can't carry both
+    slug-keyed and child-keyed data in one flat dict)."""
+    from mojo.apps.metrics.rest.helpers import fetch_group_fanout
+    import mojo.errors
+
+    parent, _, _, _ = _build_tree()
+    raised = False
+    try:
+        fetch_group_fanout(
+            parent.pk, "location", ["fan_a", "fan_b"],
+            granularity="hours", with_labels=True, breakdown=True,
+        )
+    except mojo.errors.ValueException as e:
+        raised = True
+        assert "single slug" in str(e.reason).lower(), \
+            f"Multi-slug breakdown error must mention single slug, got: {e.reason}"
+    assert raised, "fetch_group_fanout should reject breakdown with >1 slug"
+
+
+@th.django_unit_test()
+def test_fanout_breakdown_empty_children(opts):
+    """No matching children + breakdown → empty data and groups dicts, no error."""
+    from mojo.apps.account.models import Group
+    from mojo.apps.metrics.rest.helpers import fetch_group_fanout
+
+    Group.objects.filter(name__startswith="fanout_bdempty_").delete()
+    parent = Group(name="fanout_bdempty_parent", kind="org", is_active=True)
+    parent.save()
+
+    result = fetch_group_fanout(
+        parent.pk, "location", ["fan_bdempty"],
+        granularity="hours", with_labels=True, breakdown=True,
+    )
+    assert result["data"] == {}, f"Expected empty data dict, got {result['data']}"
+    assert result["groups"] == {}, f"Expected empty groups dict, got {result['groups']}"
+    assert isinstance(result["labels"], list) and len(result["labels"]) > 0, \
+        f"Expected labels populated even with empty children, got {result['labels']}"
+
+
+@th.unit_test()
+def test_fanout_breakdown_via_api(opts):
+    """End-to-end: API call with breakdown=true returns per-child series and
+    the groups lookup."""
+    from mojo.apps.account.models import User, Group
+    from mojo.apps.account.models.member import GroupMember
+    from mojo.apps import metrics
+
+    user_name = "fanout_bd_api"
+    pword = "metrics##mojo99"
+
+    user = User.objects.filter(username=user_name).last()
+    if user is None:
+        user = User(username=user_name, email=f"{user_name}@example.com")
+        user.save()
+    user.is_email_verified = True
+    user.save_password(pword)
+    user.remove_all_permissions()
+
+    Group.objects.filter(name__startswith="fanout_bdapi_").delete()
+    parent = Group(name="fanout_bdapi_parent", kind="org", is_active=True)
+    parent.save()
+    a = Group(name="LocA", kind="location", parent=parent, is_active=True)
+    a.save()
+    b = Group(name="LocB", kind="location", parent=parent, is_active=True)
+    b.save()
+
+    GroupMember.objects.filter(user=user, group=parent).delete()
+    ms = GroupMember(user=user, group=parent, is_active=True)
+    ms.save()
+    ms.add_permission("view_metrics")
+
+    for grp, count in [(a, 3), (b, 7)]:
+        account = f"group-{grp.pk}"
+        metrics.delete_metrics_slug("fan_bdapi", account=account)
+        for _ in range(count):
+            metrics.record("fan_bdapi", account=account, min_granularity="hours")
+
+    assert opts.client.login(user_name, pword), "member login failed"
+    resp = opts.client.get(
+        "/api/metrics/fetch",
+        params=dict(slug="fan_bdapi", account=f"group-{parent.pk}",
+                    child_kind="location", with_labels=True,
+                    breakdown=True, granularity="hours"),
+    )
+    assert resp.status_code == 200, \
+        f"breakdown API expected 200, got {resp.status_code}: {resp.body}"
+    data = resp.response.data.data
+    groups = resp.response.data.groups
+    assert sum(data.LocA) == 3, f"LocA expected 3, got {sum(data.LocA)}: {data.LocA}"
+    assert sum(data.LocB) == 7, f"LocB expected 7, got {sum(data.LocB)}: {data.LocB}"
+    assert groups.LocA == a.pk, f"groups.LocA expected {a.pk}, got {groups.LocA}"
+    assert groups.LocB == b.pk, f"groups.LocB expected {b.pk}, got {groups.LocB}"
+
+
+@th.unit_test()
+def test_fanout_breakdown_via_api_rejects_multi_slug(opts):
+    from mojo.apps.account.models import User
+
+    user_name = "fanout_bd_multi"
+    pword = "metrics##mojo99"
+    user = User.objects.filter(username=user_name).last()
+    if user is None:
+        user = User(username=user_name, email=f"{user_name}@example.com")
+        user.save()
+    user.is_email_verified = True
+    user.save_password(pword)
+    user.remove_all_permissions()
+    user.add_permission("view_metrics")
+
+    assert opts.client.login(user_name, pword), "user login failed"
+    resp = opts.client.get(
+        "/api/metrics/fetch",
+        params=dict(slugs="a,b", account="group-1",
+                    child_kind="location", breakdown=True),
+    )
+    # 400 from breakdown+multi-slug check, OR 400 from missing parent group —
+    # both are ValueException paths. Just assert it isn't 200.
+    assert resp.status_code == 400, \
+        f"breakdown + multi-slug expected 400, got {resp.status_code}: {resp.body}"
+
+
 @th.unit_test()
 def test_fanout_missing_parent_group(opts):
     from mojo.apps.account.models import User, Group
