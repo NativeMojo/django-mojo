@@ -3837,6 +3837,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#add_context-clickable-model-references" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        add_context — Clickable model references
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -4796,6 +4807,10 @@
 <td><code>skills</code></td>
 <td><code>find_skill</code>, <code>save_skill</code>, <code>list_skills</code>, <code>delete_skill</code></td>
 </tr>
+<tr>
+<td><code>models</code> (extended)</td>
+<td><code>add_context</code></td>
+</tr>
 </tbody>
 </table>
 <h3 id="domain-tools-loaded-on-demand">Domain Tools (loaded on demand)<a class="headerlink" href="#domain-tools-loaded-on-demand" title="Permanent link">&para;</a></h3>
@@ -5717,6 +5732,81 @@
 </table>
 <p>The tool delegates to <code>instance.on_rest_save(request, data)</code> so all model-level save hooks, validators, and <code>POST_SAVE_ACTIONS</code> fire exactly as they would through the REST API. The <code>action_response</code> from <code>POST_SAVE_ACTIONS</code> is included in the return dict when present. Setting <code>CAN_CREATE = False</code> in <code>RestMeta</code> blocks creates; setting <code>CAN_UPDATE = False</code> blocks updates to existing instances.</p>
 <p>All five tools enforce the same permission and owner/group scoping as the REST layer via <code>rest_check_permission</code> and <code>_apply_owner_group_filter</code>. Attempts to filter or aggregate on sensitive fields are blocked and reported as security events.</p>
+<h4 id="add_context-clickable-model-references"><code>add_context</code> — Clickable model references<a class="headerlink" href="#add_context-clickable-model-references" title="Permanent link">&para;</a></h4>
+<p><code>add_context</code> is a core tool that lets the LLM attach validated clickable model references to its response. When the LLM mentions specific records (users, jobs, incidents, rulesets, etc.) it can call <code>add_context</code> to give admins a direct link to each record instead of having to search for it.</p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Name</td>
+<td><code>add_context</code></td>
+</tr>
+<tr>
+<td>Domain</td>
+<td><code>models</code></td>
+</tr>
+<tr>
+<td>Permission</td>
+<td><code>view_admin</code></td>
+</tr>
+<tr>
+<td>Core</td>
+<td>Yes (always sent)</td>
+</tr>
+<tr>
+<td>Mutates</td>
+<td>No</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Input schema:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>    <span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;object&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    <span class="s2">&quot;properties&quot;</span><span class="p">:</span> <span class="p">{</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>        <span class="s2">&quot;references&quot;</span><span class="p">:</span> <span class="p">{</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>            <span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;array&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>            <span class="s2">&quot;items&quot;</span><span class="p">:</span> <span class="p">{</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>                <span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;object&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>                <span class="s2">&quot;properties&quot;</span><span class="p">:</span> <span class="p">{</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>                    <span class="s2">&quot;app_name&quot;</span><span class="p">:</span>   <span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;string&quot;</span><span class="p">},</span>   <span class="c1"># Django app label, e.g. &quot;incident&quot;</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>                    <span class="s2">&quot;model_name&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;string&quot;</span><span class="p">},</span>   <span class="c1"># Model class name, e.g. &quot;RuleSet&quot;</span>
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>                    <span class="s2">&quot;pk&quot;</span><span class="p">:</span>         <span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;integer&quot;</span><span class="p">},</span>  <span class="c1"># Primary key of the instance</span>
+<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a>                    <span class="s2">&quot;label&quot;</span><span class="p">:</span>      <span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;string&quot;</span><span class="p">},</span>   <span class="c1"># Display label, e.g. &quot;SSH brute force blocker&quot;</span>
+<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a>                <span class="p">},</span>
+<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a>                <span class="s2">&quot;required&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;app_name&quot;</span><span class="p">,</span> <span class="s2">&quot;model_name&quot;</span><span class="p">,</span> <span class="s2">&quot;pk&quot;</span><span class="p">],</span>
+<a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a>            <span class="p">},</span>
+<a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a>        <span class="p">},</span>
+<a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a>    <span class="p">},</span>
+<a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a>    <span class="s2">&quot;required&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;references&quot;</span><span class="p">],</span>
+<a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a><span class="p">}</span>
+</code></pre></div>
+<p><strong>Validation pipeline</strong> (per reference, silent filter on failure):</p>
+<ol>
+<li><code>app_name</code>, <code>model_name</code>, and <code>pk</code> must be present and non-empty</li>
+<li><code>_resolve_model(app_name, model_name)</code> must succeed (model exists, has RestMeta, no <code>NO_REST</code>)</li>
+<li><code>_check_ai_access(model, "view", user)</code> must pass (honors <code>DENY_AI_VIEW</code> / <code>DENY_AI</code> flags)</li>
+<li><code>model.objects.filter(pk=pk).exists()</code> must return True</li>
+</ol>
+<p>Invalid references are silently dropped. The tool never errors — if all references fail validation it returns <code>{"references": []}</code> and no block is injected.</p>
+<p>Maximum 20 references per call. Multiple <code>add_context</code> calls in one agent turn are merged into a single <code>context</code> block.</p>
+<p><strong>Agent loop behavior:</strong></p>
+<ul>
+<li>After each tool turn, <code>_extract_context_refs()</code> collects validated refs from any <code>add_context</code> results</li>
+<li>Refs are accumulated across all turns in <code>context_refs</code></li>
+<li>Before saving the final assistant <code>Message</code>, if <code>context_refs</code> is non-empty, the agent appends <code>{"type": "context", "references": context_refs}</code> to the <code>blocks</code> list</li>
+<li>The context block is stored on the <code>Message.blocks</code> field alongside any other structured blocks</li>
+</ul>
+<p><strong>System prompt guidance (built in):</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>When you reference specific records in your responses (users, jobs, incidents, rulesets, etc.),
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>use add_context to attach clickable links. This lets admins click through directly instead of
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>having to search for the record you&#39;re discussing. Call add_context alongside your final
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>response — invalid references are silently filtered.
+</code></pre></div>
 <h3 id="logs-domain-view_logs">Logs Domain (<code>view_logs</code>)<a class="headerlink" href="#logs-domain-view_logs" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
@@ -6311,17 +6401,17 @@
 <p>Groups are resolved from the Conversation's <code>group</code> FK. The <code>group</code> field is set when a conversation is created in a group context (via REST or WebSocket with <code>group_id</code>).</p>
 <h3 id="system-prompt-injection">System Prompt Injection<a class="headerlink" href="#system-prompt-injection" title="Permanent link">&para;</a></h3>
 <p>At conversation start, <code>_get_system_prompt(user, group)</code> calls <code>build_memory_prompt()</code>, which loads all applicable memory tiers and formats them as a <code>## Memory</code> section:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>## Memory
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>### Platform
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>- platform: Healthcare SaaS (HIPAA-compliant) on AWS us-east-1
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>- internal_ips: Never block 10.0.0.0/8 or 172.16.0.0/12
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>### Your Notes
-<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>- preferred_channel: Prefers Slack notifications for non-critical alerts
-<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>
-<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>### Group: Acme Corp
-<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>- deploy_window: Deploys run Tuesdays 9-11 PM UTC only
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>## Memory
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>### Platform
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>- platform: Healthcare SaaS (HIPAA-compliant) on AWS us-east-1
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>- internal_ips: Never block 10.0.0.0/8 or 172.16.0.0/12
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>### Your Notes
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>- preferred_channel: Prefers Slack notifications for non-critical alerts
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>### Group: Acme Corp
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>- deploy_window: Deploys run Tuesdays 9-11 PM UTC only
 </code></pre></div>
 <p>Empty tiers are omitted. When global memory is empty and the user has <code>assistant</code> permission, an onboarding prompt is injected instead — it instructs the LLM to ask the user about their platform and store answers as global memories.</p>
 <h3 id="memory-limits">Memory Limits<a class="headerlink" href="#memory-limits" title="Permanent link">&para;</a></h3>
@@ -6433,13 +6523,13 @@
 </tbody>
 </table>
 <h3 id="service-api">Service API<a class="headerlink" href="#service-api" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.assistant.services.memory</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>    <span class="n">read_memories</span><span class="p">,</span>      <span class="c1"># Read all applicable tiers for a user/group context</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>    <span class="n">write_memory</span><span class="p">,</span>       <span class="c1"># Write a single entry (validates key, value, secrets, limits)</span>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>    <span class="n">delete_memory</span><span class="p">,</span>      <span class="c1"># Delete a single entry</span>
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>    <span class="n">build_memory_prompt</span><span class="p">,</span>  <span class="c1"># Build the ## Memory section string for the system prompt</span>
-<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>    <span class="n">is_global_empty</span><span class="p">,</span>    <span class="c1"># Check if global tier has zero entries (used for onboarding)</span>
-<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.assistant.services.memory</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>    <span class="n">read_memories</span><span class="p">,</span>      <span class="c1"># Read all applicable tiers for a user/group context</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>    <span class="n">write_memory</span><span class="p">,</span>       <span class="c1"># Write a single entry (validates key, value, secrets, limits)</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>    <span class="n">delete_memory</span><span class="p">,</span>      <span class="c1"># Delete a single entry</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>    <span class="n">build_memory_prompt</span><span class="p">,</span>  <span class="c1"># Build the ## Memory section string for the system prompt</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>    <span class="n">is_global_empty</span><span class="p">,</span>    <span class="c1"># Check if global tier has zero entries (used for onboarding)</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="p">)</span>
 </code></pre></div>
 <p>All functions degrade gracefully when Redis is unavailable — they return empty results or error dicts rather than raising.</p>
 <h3 id="key-files_1">Key Files<a class="headerlink" href="#key-files_1" title="Permanent link">&para;</a></h3>
@@ -6453,10 +6543,10 @@
 <p>Create a conversation pre-loaded with the full context of any MojoModel instance. The UI calls this to provide an "Open in Assistant" button from any detail view (tickets, incidents, or any other model).</p>
 <h3 id="endpoint">Endpoint<a class="headerlink" href="#endpoint" title="Permanent link">&para;</a></h3>
 <p><code>POST /api/assistant/context</code> — requires <code>view_admin</code> + the model's own <code>VIEW_PERMS</code>.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span><span class="nt">&quot;model&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;incident.Ticket&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;pk&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">123</span><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span><span class="nt">&quot;model&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;incident.Ticket&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;pk&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">123</span><span class="p">}</span>
 </code></pre></div>
 <p>Returns:
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;conversation_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">789</span><span class="p">}}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;conversation_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">789</span><span class="p">}}</span>
 </code></pre></div></p>
 <h3 id="how-it-works">How It Works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h3>
 <ol>
@@ -6477,14 +6567,14 @@
 <h3 id="generic-fallback">Generic Fallback<a class="headerlink" href="#generic-fallback" title="Permanent link">&para;</a></h3>
 <p>Any MojoModel without a registered builder gets <code>to_dict(graph="detail")</code> serialization with sensitive fields stripped. This means the endpoint works for RuleSets, Jobs, Users, or any other model — the context is less rich but still useful.</p>
 <h3 id="registering-custom-builders">Registering Custom Builders<a class="headerlink" href="#registering-custom-builders" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.assistant.services.context</span><span class="w"> </span><span class="kn">import</span> <span class="n">register_context_builder</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="k">def</span><span class="w"> </span><span class="nf">build_order_context</span><span class="p">(</span><span class="n">instance</span><span class="p">):</span>
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>    <span class="n">title</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;Order #</span><span class="si">{</span><span class="n">instance</span><span class="o">.</span><span class="n">pk</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">instance</span><span class="o">.</span><span class="n">status</span><span class="si">}</span><span class="s2">&quot;</span>
-<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>    <span class="n">message</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;I need help with this order:</span><span class="se">\n\n</span><span class="s2">## </span><span class="si">{</span><span class="n">title</span><span class="si">}</span><span class="se">\n</span><span class="s2">...&quot;</span>
-<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>    <span class="k">return</span> <span class="n">title</span><span class="p">,</span> <span class="n">message</span><span class="p">,</span> <span class="kc">None</span>  <span class="c1"># (title, message, error)</span>
-<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>
-<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="n">register_context_builder</span><span class="p">(</span><span class="s2">&quot;myapp.Order&quot;</span><span class="p">,</span> <span class="n">build_order_context</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.assistant.services.context</span><span class="w"> </span><span class="kn">import</span> <span class="n">register_context_builder</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="k">def</span><span class="w"> </span><span class="nf">build_order_context</span><span class="p">(</span><span class="n">instance</span><span class="p">):</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>    <span class="n">title</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;Order #</span><span class="si">{</span><span class="n">instance</span><span class="o">.</span><span class="n">pk</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">instance</span><span class="o">.</span><span class="n">status</span><span class="si">}</span><span class="s2">&quot;</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>    <span class="n">message</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;I need help with this order:</span><span class="se">\n\n</span><span class="s2">## </span><span class="si">{</span><span class="n">title</span><span class="si">}</span><span class="se">\n</span><span class="s2">...&quot;</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>    <span class="k">return</span> <span class="n">title</span><span class="p">,</span> <span class="n">message</span><span class="p">,</span> <span class="kc">None</span>  <span class="c1"># (title, message, error)</span>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="n">register_context_builder</span><span class="p">(</span><span class="s2">&quot;myapp.Order&quot;</span><span class="p">,</span> <span class="n">build_order_context</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="key-files_2">Key Files<a class="headerlink" href="#key-files_2" title="Permanent link">&para;</a></h3>
 <ul>
@@ -6504,43 +6594,43 @@
 <p>There are two ways to register tools: the <code>@tool</code> decorator (preferred) and the <code>register_tool()</code> function.</p>
 <h3 id="the-tool-decorator-preferred">The <code>@tool</code> Decorator (Preferred)<a class="headerlink" href="#the-tool-decorator-preferred" title="Permanent link">&para;</a></h3>
 <p>The decorator registers the function as an assistant tool immediately on import. All built-in tools use this pattern.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.assistant</span><span class="w"> </span><span class="kn">import</span> <span class="n">tool</span>
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>
-<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>
-<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="nd">@tool</span><span class="p">(</span>
-<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;query_orders&quot;</span><span class="p">,</span>
-<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>    <span class="n">domain</span><span class="o">=</span><span class="s2">&quot;orders&quot;</span><span class="p">,</span>
-<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>    <span class="n">permission</span><span class="o">=</span><span class="s2">&quot;view_orders&quot;</span><span class="p">,</span>
-<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>    <span class="n">description</span><span class="o">=</span><span class="s2">&quot;Query orders by status and date range. Returns up to 50 orders.&quot;</span><span class="p">,</span>
-<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>    <span class="n">input_schema</span><span class="o">=</span><span class="p">{</span>
-<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a>        <span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;object&quot;</span><span class="p">,</span>
-<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a>        <span class="s2">&quot;properties&quot;</span><span class="p">:</span> <span class="p">{</span>
-<a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a>            <span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;string&quot;</span><span class="p">,</span> <span class="s2">&quot;description&quot;</span><span class="p">:</span> <span class="s2">&quot;Filter by status&quot;</span><span class="p">},</span>
-<a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a>            <span class="s2">&quot;limit&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;integer&quot;</span><span class="p">,</span> <span class="s2">&quot;description&quot;</span><span class="p">:</span> <span class="s2">&quot;Max results&quot;</span><span class="p">,</span> <span class="s2">&quot;default&quot;</span><span class="p">:</span> <span class="mi">50</span><span class="p">},</span>
-<a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a>        <span class="p">},</span>
-<a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a>    <span class="p">},</span>
-<a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a><span class="p">)</span>
-<a id="__codelineno-7-17" name="__codelineno-7-17" href="#__codelineno-7-17"></a><span class="k">def</span><span class="w"> </span><span class="nf">_tool_query_orders</span><span class="p">(</span><span class="n">params</span><span class="p">,</span> <span class="n">user</span><span class="p">):</span>
-<a id="__codelineno-7-18" name="__codelineno-7-18" href="#__codelineno-7-18"></a>    <span class="kn">from</span><span class="w"> </span><span class="nn">myapp.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">Order</span>
-<a id="__codelineno-7-19" name="__codelineno-7-19" href="#__codelineno-7-19"></a>
-<a id="__codelineno-7-20" name="__codelineno-7-20" href="#__codelineno-7-20"></a>    <span class="n">criteria</span> <span class="o">=</span> <span class="p">{}</span>
-<a id="__codelineno-7-21" name="__codelineno-7-21" href="#__codelineno-7-21"></a>    <span class="k">if</span> <span class="n">params</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;status&quot;</span><span class="p">):</span>
-<a id="__codelineno-7-22" name="__codelineno-7-22" href="#__codelineno-7-22"></a>        <span class="n">criteria</span><span class="p">[</span><span class="s2">&quot;status&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;status&quot;</span><span class="p">]</span>
-<a id="__codelineno-7-23" name="__codelineno-7-23" href="#__codelineno-7-23"></a>
-<a id="__codelineno-7-24" name="__codelineno-7-24" href="#__codelineno-7-24"></a>    <span class="n">limit</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">params</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;limit&quot;</span><span class="p">,</span> <span class="mi">50</span><span class="p">),</span> <span class="mi">50</span><span class="p">)</span>
-<a id="__codelineno-7-25" name="__codelineno-7-25" href="#__codelineno-7-25"></a>    <span class="n">orders</span> <span class="o">=</span> <span class="n">Order</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span>
-<a id="__codelineno-7-26" name="__codelineno-7-26" href="#__codelineno-7-26"></a>        <span class="n">group__in</span><span class="o">=</span><span class="n">user</span><span class="o">.</span><span class="n">get_groups</span><span class="p">(),</span> <span class="o">**</span><span class="n">criteria</span>
-<a id="__codelineno-7-27" name="__codelineno-7-27" href="#__codelineno-7-27"></a>    <span class="p">)</span><span class="o">.</span><span class="n">order_by</span><span class="p">(</span><span class="s2">&quot;-created&quot;</span><span class="p">)[:</span><span class="n">limit</span><span class="p">]</span>
-<a id="__codelineno-7-28" name="__codelineno-7-28" href="#__codelineno-7-28"></a>
-<a id="__codelineno-7-29" name="__codelineno-7-29" href="#__codelineno-7-29"></a>    <span class="k">return</span> <span class="p">[</span>
-<a id="__codelineno-7-30" name="__codelineno-7-30" href="#__codelineno-7-30"></a>        <span class="p">{</span>
-<a id="__codelineno-7-31" name="__codelineno-7-31" href="#__codelineno-7-31"></a>            <span class="s2">&quot;id&quot;</span><span class="p">:</span> <span class="n">o</span><span class="o">.</span><span class="n">pk</span><span class="p">,</span>
-<a id="__codelineno-7-32" name="__codelineno-7-32" href="#__codelineno-7-32"></a>            <span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="n">o</span><span class="o">.</span><span class="n">status</span><span class="p">,</span>
-<a id="__codelineno-7-33" name="__codelineno-7-33" href="#__codelineno-7-33"></a>            <span class="s2">&quot;total&quot;</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">o</span><span class="o">.</span><span class="n">total</span><span class="p">),</span>
-<a id="__codelineno-7-34" name="__codelineno-7-34" href="#__codelineno-7-34"></a>            <span class="s2">&quot;created&quot;</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">o</span><span class="o">.</span><span class="n">created</span><span class="p">),</span>
-<a id="__codelineno-7-35" name="__codelineno-7-35" href="#__codelineno-7-35"></a>        <span class="p">}</span>
-<a id="__codelineno-7-36" name="__codelineno-7-36" href="#__codelineno-7-36"></a>        <span class="k">for</span> <span class="n">o</span> <span class="ow">in</span> <span class="n">orders</span>
-<a id="__codelineno-7-37" name="__codelineno-7-37" href="#__codelineno-7-37"></a>    <span class="p">]</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.assistant</span><span class="w"> </span><span class="kn">import</span> <span class="n">tool</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="nd">@tool</span><span class="p">(</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;query_orders&quot;</span><span class="p">,</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>    <span class="n">domain</span><span class="o">=</span><span class="s2">&quot;orders&quot;</span><span class="p">,</span>
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>    <span class="n">permission</span><span class="o">=</span><span class="s2">&quot;view_orders&quot;</span><span class="p">,</span>
+<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a>    <span class="n">description</span><span class="o">=</span><span class="s2">&quot;Query orders by status and date range. Returns up to 50 orders.&quot;</span><span class="p">,</span>
+<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a>    <span class="n">input_schema</span><span class="o">=</span><span class="p">{</span>
+<a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a>        <span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;object&quot;</span><span class="p">,</span>
+<a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a>        <span class="s2">&quot;properties&quot;</span><span class="p">:</span> <span class="p">{</span>
+<a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a>            <span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;string&quot;</span><span class="p">,</span> <span class="s2">&quot;description&quot;</span><span class="p">:</span> <span class="s2">&quot;Filter by status&quot;</span><span class="p">},</span>
+<a id="__codelineno-9-13" name="__codelineno-9-13" href="#__codelineno-9-13"></a>            <span class="s2">&quot;limit&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;integer&quot;</span><span class="p">,</span> <span class="s2">&quot;description&quot;</span><span class="p">:</span> <span class="s2">&quot;Max results&quot;</span><span class="p">,</span> <span class="s2">&quot;default&quot;</span><span class="p">:</span> <span class="mi">50</span><span class="p">},</span>
+<a id="__codelineno-9-14" name="__codelineno-9-14" href="#__codelineno-9-14"></a>        <span class="p">},</span>
+<a id="__codelineno-9-15" name="__codelineno-9-15" href="#__codelineno-9-15"></a>    <span class="p">},</span>
+<a id="__codelineno-9-16" name="__codelineno-9-16" href="#__codelineno-9-16"></a><span class="p">)</span>
+<a id="__codelineno-9-17" name="__codelineno-9-17" href="#__codelineno-9-17"></a><span class="k">def</span><span class="w"> </span><span class="nf">_tool_query_orders</span><span class="p">(</span><span class="n">params</span><span class="p">,</span> <span class="n">user</span><span class="p">):</span>
+<a id="__codelineno-9-18" name="__codelineno-9-18" href="#__codelineno-9-18"></a>    <span class="kn">from</span><span class="w"> </span><span class="nn">myapp.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">Order</span>
+<a id="__codelineno-9-19" name="__codelineno-9-19" href="#__codelineno-9-19"></a>
+<a id="__codelineno-9-20" name="__codelineno-9-20" href="#__codelineno-9-20"></a>    <span class="n">criteria</span> <span class="o">=</span> <span class="p">{}</span>
+<a id="__codelineno-9-21" name="__codelineno-9-21" href="#__codelineno-9-21"></a>    <span class="k">if</span> <span class="n">params</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;status&quot;</span><span class="p">):</span>
+<a id="__codelineno-9-22" name="__codelineno-9-22" href="#__codelineno-9-22"></a>        <span class="n">criteria</span><span class="p">[</span><span class="s2">&quot;status&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;status&quot;</span><span class="p">]</span>
+<a id="__codelineno-9-23" name="__codelineno-9-23" href="#__codelineno-9-23"></a>
+<a id="__codelineno-9-24" name="__codelineno-9-24" href="#__codelineno-9-24"></a>    <span class="n">limit</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">params</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;limit&quot;</span><span class="p">,</span> <span class="mi">50</span><span class="p">),</span> <span class="mi">50</span><span class="p">)</span>
+<a id="__codelineno-9-25" name="__codelineno-9-25" href="#__codelineno-9-25"></a>    <span class="n">orders</span> <span class="o">=</span> <span class="n">Order</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span>
+<a id="__codelineno-9-26" name="__codelineno-9-26" href="#__codelineno-9-26"></a>        <span class="n">group__in</span><span class="o">=</span><span class="n">user</span><span class="o">.</span><span class="n">get_groups</span><span class="p">(),</span> <span class="o">**</span><span class="n">criteria</span>
+<a id="__codelineno-9-27" name="__codelineno-9-27" href="#__codelineno-9-27"></a>    <span class="p">)</span><span class="o">.</span><span class="n">order_by</span><span class="p">(</span><span class="s2">&quot;-created&quot;</span><span class="p">)[:</span><span class="n">limit</span><span class="p">]</span>
+<a id="__codelineno-9-28" name="__codelineno-9-28" href="#__codelineno-9-28"></a>
+<a id="__codelineno-9-29" name="__codelineno-9-29" href="#__codelineno-9-29"></a>    <span class="k">return</span> <span class="p">[</span>
+<a id="__codelineno-9-30" name="__codelineno-9-30" href="#__codelineno-9-30"></a>        <span class="p">{</span>
+<a id="__codelineno-9-31" name="__codelineno-9-31" href="#__codelineno-9-31"></a>            <span class="s2">&quot;id&quot;</span><span class="p">:</span> <span class="n">o</span><span class="o">.</span><span class="n">pk</span><span class="p">,</span>
+<a id="__codelineno-9-32" name="__codelineno-9-32" href="#__codelineno-9-32"></a>            <span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="n">o</span><span class="o">.</span><span class="n">status</span><span class="p">,</span>
+<a id="__codelineno-9-33" name="__codelineno-9-33" href="#__codelineno-9-33"></a>            <span class="s2">&quot;total&quot;</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">o</span><span class="o">.</span><span class="n">total</span><span class="p">),</span>
+<a id="__codelineno-9-34" name="__codelineno-9-34" href="#__codelineno-9-34"></a>            <span class="s2">&quot;created&quot;</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">o</span><span class="o">.</span><span class="n">created</span><span class="p">),</span>
+<a id="__codelineno-9-35" name="__codelineno-9-35" href="#__codelineno-9-35"></a>        <span class="p">}</span>
+<a id="__codelineno-9-36" name="__codelineno-9-36" href="#__codelineno-9-36"></a>        <span class="k">for</span> <span class="n">o</span> <span class="ow">in</span> <span class="n">orders</span>
+<a id="__codelineno-9-37" name="__codelineno-9-37" href="#__codelineno-9-37"></a>    <span class="p">]</span>
 </code></pre></div>
 <h4 id="tool-parameters"><code>@tool</code> Parameters<a class="headerlink" href="#tool-parameters" title="Permanent link">&para;</a></h4>
 <table>
@@ -6592,30 +6682,30 @@
 <h4 id="organizing-tools-in-modules">Organizing Tools in Modules<a class="headerlink" href="#organizing-tools-in-modules" title="Permanent link">&para;</a></h4>
 <p>For external projects, create an <code>assistant_tools.py</code> file in any installed Django app. The assistant auto-discovers these on startup. Each <code>@tool</code>-decorated function in that module self-registers on import — no additional wiring needed.</p>
 <p>For apps with many tools, split into a <code>tools/</code> package with submodules per domain and import them from <code>__init__.py</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>myapp/
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>  assistant_tools/
-<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>    __init__.py      # from . import orders, shipping
-<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>    orders.py        # @tool-decorated functions
-<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>    shipping.py      # @tool-decorated functions
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>myapp/
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>  assistant_tools/
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>    __init__.py      # from . import orders, shipping
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>    orders.py        # @tool-decorated functions
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>    shipping.py      # @tool-decorated functions
 </code></pre></div>
 <p>This is how the built-in security tools are organized — <code>mojo/apps/assistant/services/tools/security/</code> contains submodules for incidents, events, tickets, rules, and IPs.</p>
 <h3 id="register_tool-function"><code>register_tool()</code> Function<a class="headerlink" href="#register_tool-function" title="Permanent link">&para;</a></h3>
 <p>The imperative alternative — useful when tool configuration is dynamic or loaded from data.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.assistant</span><span class="w"> </span><span class="kn">import</span> <span class="n">register_tool</span>
-<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>
-<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>
-<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="k">def</span><span class="w"> </span><span class="nf">query_orders</span><span class="p">(</span><span class="n">params</span><span class="p">,</span> <span class="n">user</span><span class="p">):</span>
-<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>    <span class="o">...</span>
-<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>
-<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="n">register_tool</span><span class="p">(</span>
-<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a>    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;query_orders&quot;</span><span class="p">,</span>
-<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a>    <span class="n">description</span><span class="o">=</span><span class="s2">&quot;Query orders by status and date range.&quot;</span><span class="p">,</span>
-<a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a>    <span class="n">input_schema</span><span class="o">=</span><span class="p">{</span><span class="o">...</span><span class="p">},</span>
-<a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a>    <span class="n">handler</span><span class="o">=</span><span class="n">query_orders</span><span class="p">,</span>
-<a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a>    <span class="n">permission</span><span class="o">=</span><span class="s2">&quot;view_orders&quot;</span><span class="p">,</span>
-<a id="__codelineno-9-13" name="__codelineno-9-13" href="#__codelineno-9-13"></a>    <span class="n">mutates</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
-<a id="__codelineno-9-14" name="__codelineno-9-14" href="#__codelineno-9-14"></a>    <span class="n">domain</span><span class="o">=</span><span class="s2">&quot;orders&quot;</span><span class="p">,</span>
-<a id="__codelineno-9-15" name="__codelineno-9-15" href="#__codelineno-9-15"></a><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.assistant</span><span class="w"> </span><span class="kn">import</span> <span class="n">register_tool</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="k">def</span><span class="w"> </span><span class="nf">query_orders</span><span class="p">(</span><span class="n">params</span><span class="p">,</span> <span class="n">user</span><span class="p">):</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>    <span class="o">...</span>
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>
+<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="n">register_tool</span><span class="p">(</span>
+<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a>    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;query_orders&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a>    <span class="n">description</span><span class="o">=</span><span class="s2">&quot;Query orders by status and date range.&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a>    <span class="n">input_schema</span><span class="o">=</span><span class="p">{</span><span class="o">...</span><span class="p">},</span>
+<a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a>    <span class="n">handler</span><span class="o">=</span><span class="n">query_orders</span><span class="p">,</span>
+<a id="__codelineno-11-12" name="__codelineno-11-12" href="#__codelineno-11-12"></a>    <span class="n">permission</span><span class="o">=</span><span class="s2">&quot;view_orders&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-13" name="__codelineno-11-13" href="#__codelineno-11-13"></a>    <span class="n">mutates</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+<a id="__codelineno-11-14" name="__codelineno-11-14" href="#__codelineno-11-14"></a>    <span class="n">domain</span><span class="o">=</span><span class="s2">&quot;orders&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-15" name="__codelineno-11-15" href="#__codelineno-11-15"></a><span class="p">)</span>
 </code></pre></div>
 <h4 id="register_tool-parameters"><code>register_tool()</code> Parameters<a class="headerlink" href="#register_tool-parameters" title="Permanent link">&para;</a></h4>
 <table>
@@ -6701,25 +6791,25 @@
 </tbody>
 </table>
 <p>Both kwargs are keyword-only (<code>*</code> in the signature):</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="nd">@tool</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;my_tool&quot;</span><span class="p">,</span> <span class="n">domain</span><span class="o">=</span><span class="s2">&quot;myapp&quot;</span><span class="p">,</span> <span class="n">permission</span><span class="o">=</span><span class="s2">&quot;view_admin&quot;</span><span class="p">,</span> <span class="n">mutates</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
-<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>      <span class="n">description</span><span class="o">=</span><span class="s2">&quot;...&quot;</span><span class="p">,</span> <span class="n">input_schema</span><span class="o">=</span><span class="p">{</span><span class="o">...</span><span class="p">})</span>
-<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="k">def</span><span class="w"> </span><span class="nf">_tool_my_tool</span><span class="p">(</span><span class="n">params</span><span class="p">,</span> <span class="n">user</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">request_meta</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">conversation</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
-<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>    <span class="c1"># request_meta.ip is the originating client IP (or None)</span>
-<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>    <span class="c1"># conversation.pk links audit records to the turn</span>
-<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>    <span class="o">...</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="nd">@tool</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;my_tool&quot;</span><span class="p">,</span> <span class="n">domain</span><span class="o">=</span><span class="s2">&quot;myapp&quot;</span><span class="p">,</span> <span class="n">permission</span><span class="o">=</span><span class="s2">&quot;view_admin&quot;</span><span class="p">,</span> <span class="n">mutates</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>      <span class="n">description</span><span class="o">=</span><span class="s2">&quot;...&quot;</span><span class="p">,</span> <span class="n">input_schema</span><span class="o">=</span><span class="p">{</span><span class="o">...</span><span class="p">})</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="k">def</span><span class="w"> </span><span class="nf">_tool_my_tool</span><span class="p">(</span><span class="n">params</span><span class="p">,</span> <span class="n">user</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">request_meta</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">conversation</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>    <span class="c1"># request_meta.ip is the originating client IP (or None)</span>
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>    <span class="c1"># conversation.pk links audit records to the turn</span>
+<a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a>    <span class="o">...</span>
 </code></pre></div>
 <p><code>run_assistant()</code> now accepts an optional <code>request=None</code> parameter. When the REST endpoint passes the Django request through, <code>request_meta</code> is populated automatically for all tool handlers that opt in. WebSocket calls do not pass a request; <code>request_meta</code> is <code>None</code> in that path.</p>
 <h3 id="other-registry-functions">Other Registry Functions<a class="headerlink" href="#other-registry-functions" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.assistant</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
-<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>    <span class="n">tool</span><span class="p">,</span>                        <span class="c1"># @tool decorator (preferred)</span>
-<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>    <span class="n">register_tool</span><span class="p">,</span>               <span class="c1"># Register a single tool imperatively</span>
-<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>    <span class="n">register_tools</span><span class="p">,</span>              <span class="c1"># Register multiple tools from a list of dicts</span>
-<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>    <span class="n">get_registry</span><span class="p">,</span>                <span class="c1"># Get the full registry dict (all tools, unfiltered)</span>
-<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>    <span class="n">get_tools_for_user</span><span class="p">,</span>          <span class="c1"># All tools the user has permission for (backward compat)</span>
-<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a>    <span class="n">get_core_tools_for_user</span><span class="p">,</span>     <span class="c1"># Core tools only (tier 1, always sent)</span>
-<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a>    <span class="n">get_domain_tools_for_user</span><span class="p">,</span>   <span class="c1"># Tools for specific domains, filtered by perms</span>
-<a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a>    <span class="n">get_available_domains</span><span class="p">,</span>       <span class="c1"># Domains the user has access to, with tool counts</span>
-<a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.assistant</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>    <span class="n">tool</span><span class="p">,</span>                        <span class="c1"># @tool decorator (preferred)</span>
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>    <span class="n">register_tool</span><span class="p">,</span>               <span class="c1"># Register a single tool imperatively</span>
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>    <span class="n">register_tools</span><span class="p">,</span>              <span class="c1"># Register multiple tools from a list of dicts</span>
+<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a>    <span class="n">get_registry</span><span class="p">,</span>                <span class="c1"># Get the full registry dict (all tools, unfiltered)</span>
+<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a>    <span class="n">get_tools_for_user</span><span class="p">,</span>          <span class="c1"># All tools the user has permission for (backward compat)</span>
+<a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a>    <span class="n">get_core_tools_for_user</span><span class="p">,</span>     <span class="c1"># Core tools only (tier 1, always sent)</span>
+<a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a>    <span class="n">get_domain_tools_for_user</span><span class="p">,</span>   <span class="c1"># Tools for specific domains, filtered by perms</span>
+<a id="__codelineno-13-9" name="__codelineno-13-9" href="#__codelineno-13-9"></a>    <span class="n">get_available_domains</span><span class="p">,</span>       <span class="c1"># Domains the user has access to, with tool counts</span>
+<a id="__codelineno-13-10" name="__codelineno-13-10" href="#__codelineno-13-10"></a><span class="p">)</span>
 </code></pre></div>
 <p><code>get_domain_tools_for_user(user, domains)</code> accepts a list or single string. Returns only tools where <code>entry["domain"] in domains</code> and the user has permission.</p>
 <p><code>get_available_domains(user)</code> returns a dict keyed by domain name, each with <code>count</code>, <code>description</code>, and <code>examples</code> (first 3 tool names). Domains where every tool is already core are excluded — they're always loaded and don't need to be "activated".</p>
@@ -6800,18 +6890,18 @@
 </tbody>
 </table>
 <p>The <code>detail</code> graph includes nested messages using the message <code>default</code> graph:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="s2">&quot;detail&quot;</span><span class="p">:</span> <span class="p">{</span>
-<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>    <span class="s2">&quot;fields&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;id&quot;</span><span class="p">,</span> <span class="s2">&quot;title&quot;</span><span class="p">,</span> <span class="s2">&quot;created&quot;</span><span class="p">,</span> <span class="s2">&quot;modified&quot;</span><span class="p">,</span> <span class="s2">&quot;messages&quot;</span><span class="p">],</span>
-<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>    <span class="s2">&quot;graphs&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;messages&quot;</span><span class="p">:</span> <span class="s2">&quot;default&quot;</span><span class="p">},</span>
-<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="s2">&quot;detail&quot;</span><span class="p">:</span> <span class="p">{</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>    <span class="s2">&quot;fields&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;id&quot;</span><span class="p">,</span> <span class="s2">&quot;title&quot;</span><span class="p">,</span> <span class="s2">&quot;created&quot;</span><span class="p">,</span> <span class="s2">&quot;modified&quot;</span><span class="p">,</span> <span class="s2">&quot;messages&quot;</span><span class="p">],</span>
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>    <span class="s2">&quot;graphs&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;messages&quot;</span><span class="p">:</span> <span class="s2">&quot;default&quot;</span><span class="p">},</span>
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="p">}</span>
 </code></pre></div>
 <p>Request it with <code>GET /api/assistant/conversation/&lt;pk&gt;?graph=detail</code>.</p>
 <p>The REST handler is standard:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;conversation&#39;</span><span class="p">)</span>
-<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;conversation/&lt;int:pk&gt;&#39;</span><span class="p">)</span>
-<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="nd">@md</span><span class="o">.</span><span class="n">uses_model_security</span><span class="p">(</span><span class="n">Conversation</span><span class="p">)</span>
-<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_conversation</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">pk</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
-<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a>    <span class="k">return</span> <span class="n">Conversation</span><span class="o">.</span><span class="n">on_rest_request</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">pk</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;conversation&#39;</span><span class="p">)</span>
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;conversation/&lt;int:pk&gt;&#39;</span><span class="p">)</span>
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="nd">@md</span><span class="o">.</span><span class="n">uses_model_security</span><span class="p">(</span><span class="n">Conversation</span><span class="p">)</span>
+<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_conversation</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">pk</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a>    <span class="k">return</span> <span class="n">Conversation</span><span class="o">.</span><span class="n">on_rest_request</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">pk</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="message">Message<a class="headerlink" href="#message" title="Permanent link">&para;</a></h3>
 <p>A single message in a conversation.</p>
@@ -6860,17 +6950,17 @@
 <h2 id="websocket-interface">WebSocket Interface<a class="headerlink" href="#websocket-interface" title="Permanent link">&para;</a></h2>
 <p>The assistant also supports a WebSocket transport for real-time chat UIs. This uses the existing realtime system — no new WebSocket endpoint needed.</p>
 <h3 id="architecture_1">Architecture<a class="headerlink" href="#architecture_1" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>Client sends WS message {type: &quot;assistant_message&quot;, message: &quot;...&quot;, conversation_id: N}
-<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>  → User.on_realtime_message() dispatches to assistant handler
-<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>  → Handler validates, stores message, returns {type: &quot;assistant_thinking&quot;} immediately
-<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>  → Background job runs run_assistant_ws() with on_event callback
-<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a>  → Callback publishes WS events back to the user:
-<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a>      assistant_text       (intermediate prose from a turn that also calls tools)
-<a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a>      assistant_tool_call  (per tool)
-<a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a>      assistant_plan       (when LLM creates a task plan)
-<a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a>      assistant_plan_update (per plan step status change)
-<a id="__codelineno-14-10" name="__codelineno-14-10" href="#__codelineno-14-10"></a>      assistant_response   (final answer, terminal)
-<a id="__codelineno-14-11" name="__codelineno-14-11" href="#__codelineno-14-11"></a>      assistant_error      (on failure, terminal)
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>Client sends WS message {type: &quot;assistant_message&quot;, message: &quot;...&quot;, conversation_id: N}
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>  → User.on_realtime_message() dispatches to assistant handler
+<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>  → Handler validates, stores message, returns {type: &quot;assistant_thinking&quot;} immediately
+<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a>  → Background job runs run_assistant_ws() with on_event callback
+<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a>  → Callback publishes WS events back to the user:
+<a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a>      assistant_text       (intermediate prose from a turn that also calls tools)
+<a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a>      assistant_tool_call  (per tool)
+<a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a>      assistant_plan       (when LLM creates a task plan)
+<a id="__codelineno-16-9" name="__codelineno-16-9" href="#__codelineno-16-9"></a>      assistant_plan_update (per plan step status change)
+<a id="__codelineno-16-10" name="__codelineno-16-10" href="#__codelineno-16-10"></a>      assistant_response   (final answer, terminal)
+<a id="__codelineno-16-11" name="__codelineno-16-11" href="#__codelineno-16-11"></a>      assistant_error      (on failure, terminal)
 </code></pre></div>
 <h3 id="key-files_3">Key Files<a class="headerlink" href="#key-files_3" title="Permanent link">&para;</a></h3>
 <ul>
@@ -6884,21 +6974,21 @@
 <p>LLM calls are too slow to block the WebSocket handler. The handler publishes a job via <code>mojo.apps.jobs</code> and returns immediately. The job function (<code>execute_assistant_job</code>) runs the agent loop and uses <code>send_to_user()</code> from the realtime manager to push events back to the user's WebSocket connections.</p>
 <h3 id="assistant_response-event-payload"><code>assistant_response</code> Event Payload<a class="headerlink" href="#assistant_response-event-payload" title="Permanent link">&para;</a></h3>
 <p><code>run_assistant_ws()</code> returns a dict that becomes the WS event payload. As of v1.1.8 it always includes:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="p">{</span>
-<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>    <span class="s2">&quot;message_id&quot;</span><span class="p">:</span> <span class="n">msg</span><span class="o">.</span><span class="n">pk</span><span class="p">,</span>          <span class="c1"># int — PK of the saved Message record</span>
-<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>    <span class="s2">&quot;created&quot;</span><span class="p">:</span> <span class="n">msg</span><span class="o">.</span><span class="n">created</span><span class="o">.</span><span class="n">isoformat</span><span class="p">(),</span>  <span class="c1"># ISO 8601 string</span>
-<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a>    <span class="s2">&quot;response&quot;</span><span class="p">:</span> <span class="n">response_text</span><span class="p">,</span>     <span class="c1"># narrative text, block fences stripped</span>
-<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a>    <span class="s2">&quot;blocks&quot;</span><span class="p">:</span> <span class="n">blocks</span> <span class="ow">or</span> <span class="kc">None</span><span class="p">,</span>      <span class="c1"># parsed blocks, or None when absent</span>
-<a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a>    <span class="s2">&quot;tool_calls_made&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">...</span><span class="p">],</span>       <span class="c1"># list of {tool, input} dicts</span>
-<a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a>    <span class="s2">&quot;conversation_id&quot;</span><span class="p">:</span> <span class="n">conversation</span><span class="o">.</span><span class="n">pk</span><span class="p">,</span>
-<a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="p">{</span>
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>    <span class="s2">&quot;message_id&quot;</span><span class="p">:</span> <span class="n">msg</span><span class="o">.</span><span class="n">pk</span><span class="p">,</span>          <span class="c1"># int — PK of the saved Message record</span>
+<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a>    <span class="s2">&quot;created&quot;</span><span class="p">:</span> <span class="n">msg</span><span class="o">.</span><span class="n">created</span><span class="o">.</span><span class="n">isoformat</span><span class="p">(),</span>  <span class="c1"># ISO 8601 string</span>
+<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a>    <span class="s2">&quot;response&quot;</span><span class="p">:</span> <span class="n">response_text</span><span class="p">,</span>     <span class="c1"># narrative text, block fences stripped</span>
+<a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a>    <span class="s2">&quot;blocks&quot;</span><span class="p">:</span> <span class="n">blocks</span> <span class="ow">or</span> <span class="kc">None</span><span class="p">,</span>      <span class="c1"># parsed blocks, or None when absent</span>
+<a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a>    <span class="s2">&quot;tool_calls_made&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">...</span><span class="p">],</span>       <span class="c1"># list of {tool, input} dicts</span>
+<a id="__codelineno-17-7" name="__codelineno-17-7" href="#__codelineno-17-7"></a>    <span class="s2">&quot;conversation_id&quot;</span><span class="p">:</span> <span class="n">conversation</span><span class="o">.</span><span class="n">pk</span><span class="p">,</span>
+<a id="__codelineno-17-8" name="__codelineno-17-8" href="#__codelineno-17-8"></a><span class="p">}</span>
 </code></pre></div>
 <p><code>blocks</code> is always included in the dict (<code>None</code> when empty) rather than conditionally omitted, making the shape consistent with the REST detail graph and easier for clients to handle.</p>
 <h2 id="structured-data-blocks">Structured Data Blocks<a class="headerlink" href="#structured-data-blocks" title="Permanent link">&para;</a></h2>
 <p>Responses can include a <code>blocks</code> array with structured data for frontend rendering. The LLM decides when to include blocks based on the data — tables for query results, charts for trends, stat cards for key metrics.</p>
 <h3 id="how-it-works_1">How It Works<a class="headerlink" href="#how-it-works_1" title="Permanent link">&para;</a></h3>
 <ol>
-<li>The system prompt defines seven block types: <code>table</code>, <code>chart</code>, <code>stat</code>, <code>action</code>, <code>list</code>, <code>alert</code>, <code>progress</code></li>
+<li>The system prompt defines seven LLM-authored block types: <code>table</code>, <code>chart</code>, <code>stat</code>, <code>action</code>, <code>list</code>, <code>alert</code>, <code>progress</code>. The agent loop also injects a <code>context</code> block when <code>add_context</code> was called during the turn.</li>
 <li>The LLM wraps structured data in <code>```assistant_block</code> code fences within its text response</li>
 <li><code>_parse_blocks()</code> in <code>agent.py</code> extracts valid blocks, runs <code>_validate_block()</code>, and strips the fences from the text</li>
 <li>The response includes both clean <code>response</code> text and a <code>blocks</code> array</li>
@@ -6915,6 +7005,7 @@
 <li><strong><code>action</code></strong> — <code>{type, title, description, actions: [{label, value}], action_id}</code> — user confirmation dialogs for mutating operations</li>
 <li><strong><code>list</code></strong> — <code>{type, title, items: [{label, value}]}</code> — single-record key/value summaries</li>
 <li><strong><code>alert</code></strong> — <code>{type, level, title, message}</code> — important warnings, errors, success notices</li>
+<li><strong><code>context</code></strong> — <code>{type, references: [{app_name, model_name, pk, label}]}</code> — injected by the agent loop when <code>add_context</code> was called; not authored directly by the LLM in block fences</li>
 </ul>
 <h3 id="block-validation">Block Validation<a class="headerlink" href="#block-validation" title="Permanent link">&para;</a></h3>
 <p><code>_validate_block()</code> in <code>agent.py</code> enforces structural requirements beyond just the type check. Invalid blocks are silently dropped.</p>
@@ -6946,43 +7037,47 @@
 <td><code>progress</code></td>
 <td>No extra validation beyond type membership.</td>
 </tr>
+<tr>
+<td><code>context</code></td>
+<td><code>references</code> must be a non-empty list. The block is injected by the agent loop, not parsed from LLM text.</td>
+</tr>
 </tbody>
 </table>
 <h3 id="action-block"><code>action</code> Block<a class="headerlink" href="#action-block" title="Permanent link">&para;</a></h3>
 <p>Used for mutating operations that need user confirmation. The LLM presents an action card; the user clicks a button; the choice is sent back as a message.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="p">{</span>
-<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="w">    </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;action&quot;</span><span class="p">,</span>
-<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a><span class="w">    </span><span class="nt">&quot;title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Block IP&quot;</span><span class="p">,</span>
-<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="w">    </span><span class="nt">&quot;description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Block 1.2.3.4 on all firewall sets for 24 hours&quot;</span><span class="p">,</span>
-<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a><span class="w">    </span><span class="nt">&quot;actions&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-<a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a><span class="w">        </span><span class="p">{</span><span class="nt">&quot;label&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Confirm&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;confirm&quot;</span><span class="p">},</span>
-<a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a><span class="w">        </span><span class="p">{</span><span class="nt">&quot;label&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Cancel&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;cancel&quot;</span><span class="p">}</span>
-<a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a><span class="w">    </span><span class="p">],</span>
-<a id="__codelineno-16-9" name="__codelineno-16-9" href="#__codelineno-16-9"></a><span class="w">    </span><span class="nt">&quot;action_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;f47ac10b-58cc-4372-a567-0e02b2c3d479&quot;</span>
-<a id="__codelineno-16-10" name="__codelineno-16-10" href="#__codelineno-16-10"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="p">{</span>
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="w">    </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;action&quot;</span><span class="p">,</span>
+<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="w">    </span><span class="nt">&quot;title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Block IP&quot;</span><span class="p">,</span>
+<a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a><span class="w">    </span><span class="nt">&quot;description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Block 1.2.3.4 on all firewall sets for 24 hours&quot;</span><span class="p">,</span>
+<a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a><span class="w">    </span><span class="nt">&quot;actions&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-18-6" name="__codelineno-18-6" href="#__codelineno-18-6"></a><span class="w">        </span><span class="p">{</span><span class="nt">&quot;label&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Confirm&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;confirm&quot;</span><span class="p">},</span>
+<a id="__codelineno-18-7" name="__codelineno-18-7" href="#__codelineno-18-7"></a><span class="w">        </span><span class="p">{</span><span class="nt">&quot;label&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Cancel&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;cancel&quot;</span><span class="p">}</span>
+<a id="__codelineno-18-8" name="__codelineno-18-8" href="#__codelineno-18-8"></a><span class="w">    </span><span class="p">],</span>
+<a id="__codelineno-18-9" name="__codelineno-18-9" href="#__codelineno-18-9"></a><span class="w">    </span><span class="nt">&quot;action_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;f47ac10b-58cc-4372-a567-0e02b2c3d479&quot;</span>
+<a id="__codelineno-18-10" name="__codelineno-18-10" href="#__codelineno-18-10"></a><span class="p">}</span>
 </code></pre></div>
 <p><code>action_id</code> is injected by the parser — the LLM does not set it. The frontend uses it to correlate the button click with the block.</p>
 <p>The system prompt instructs the LLM to use action blocks instead of asking "type yes to confirm". Always include a Cancel option.</p>
 <h3 id="list-block"><code>list</code> Block<a class="headerlink" href="#list-block" title="Permanent link">&para;</a></h3>
 <p>Used for single-record key/value summaries instead of a one-row table.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="p">{</span>
-<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="w">    </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;list&quot;</span><span class="p">,</span>
-<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a><span class="w">    </span><span class="nt">&quot;title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;User Detail&quot;</span><span class="p">,</span>
-<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a><span class="w">    </span><span class="nt">&quot;items&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-<a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a><span class="w">        </span><span class="p">{</span><span class="nt">&quot;label&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Email&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;admin@example.com&quot;</span><span class="p">},</span>
-<a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a><span class="w">        </span><span class="p">{</span><span class="nt">&quot;label&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Role&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Admin&quot;</span><span class="p">},</span>
-<a id="__codelineno-17-7" name="__codelineno-17-7" href="#__codelineno-17-7"></a><span class="w">        </span><span class="p">{</span><span class="nt">&quot;label&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Last Login&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-04-01 09:30 UTC&quot;</span><span class="p">}</span>
-<a id="__codelineno-17-8" name="__codelineno-17-8" href="#__codelineno-17-8"></a><span class="w">    </span><span class="p">]</span>
-<a id="__codelineno-17-9" name="__codelineno-17-9" href="#__codelineno-17-9"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="p">{</span>
+<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a><span class="w">    </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;list&quot;</span><span class="p">,</span>
+<a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a><span class="w">    </span><span class="nt">&quot;title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;User Detail&quot;</span><span class="p">,</span>
+<a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a><span class="w">    </span><span class="nt">&quot;items&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a><span class="w">        </span><span class="p">{</span><span class="nt">&quot;label&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Email&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;admin@example.com&quot;</span><span class="p">},</span>
+<a id="__codelineno-19-6" name="__codelineno-19-6" href="#__codelineno-19-6"></a><span class="w">        </span><span class="p">{</span><span class="nt">&quot;label&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Role&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Admin&quot;</span><span class="p">},</span>
+<a id="__codelineno-19-7" name="__codelineno-19-7" href="#__codelineno-19-7"></a><span class="w">        </span><span class="p">{</span><span class="nt">&quot;label&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Last Login&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-04-01 09:30 UTC&quot;</span><span class="p">}</span>
+<a id="__codelineno-19-8" name="__codelineno-19-8" href="#__codelineno-19-8"></a><span class="w">    </span><span class="p">]</span>
+<a id="__codelineno-19-9" name="__codelineno-19-9" href="#__codelineno-19-9"></a><span class="p">}</span>
 </code></pre></div>
 <h3 id="alert-block"><code>alert</code> Block<a class="headerlink" href="#alert-block" title="Permanent link">&para;</a></h3>
 <p>Used for permission denials, rate limit warnings, error conditions, and success confirmations that need visual distinction from narrative text.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="p">{</span>
-<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="w">    </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;alert&quot;</span><span class="p">,</span>
-<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="w">    </span><span class="nt">&quot;level&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;warning&quot;</span><span class="p">,</span>
-<a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a><span class="w">    </span><span class="nt">&quot;title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Rate Limited&quot;</span><span class="p">,</span>
-<a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a><span class="w">    </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;User exceeded 100 req/min threshold. Current rate: 142 req/min.&quot;</span>
-<a id="__codelineno-18-6" name="__codelineno-18-6" href="#__codelineno-18-6"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="p">{</span>
+<a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a><span class="w">    </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;alert&quot;</span><span class="p">,</span>
+<a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a><span class="w">    </span><span class="nt">&quot;level&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;warning&quot;</span><span class="p">,</span>
+<a id="__codelineno-20-4" name="__codelineno-20-4" href="#__codelineno-20-4"></a><span class="w">    </span><span class="nt">&quot;title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Rate Limited&quot;</span><span class="p">,</span>
+<a id="__codelineno-20-5" name="__codelineno-20-5" href="#__codelineno-20-5"></a><span class="w">    </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;User exceeded 100 req/min threshold. Current rate: 142 req/min.&quot;</span>
+<a id="__codelineno-20-6" name="__codelineno-20-6" href="#__codelineno-20-6"></a><span class="p">}</span>
 </code></pre></div>
 <p>Valid levels: <code>info</code>, <code>success</code>, <code>warning</code>, <code>error</code>.</p>
 <h3 id="customizing">Customizing<a class="headerlink" href="#customizing" title="Permanent link">&para;</a></h3>
@@ -7000,29 +7095,29 @@
 <li>After all steps complete, the LLM synthesizes findings into a final response</li>
 </ol>
 <h3 id="plan-structure">Plan Structure<a class="headerlink" href="#plan-structure" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="c1"># Stored in conversation.metadata[&quot;plan&quot;]</span>
-<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a><span class="p">{</span>
-<a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a>    <span class="s2">&quot;plan_id&quot;</span><span class="p">:</span> <span class="s2">&quot;f47ac10b-...&quot;</span><span class="p">,</span>   <span class="c1"># UUID string</span>
-<a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a>    <span class="s2">&quot;title&quot;</span><span class="p">:</span> <span class="s2">&quot;Security Audit (24h)&quot;</span><span class="p">,</span>
-<a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a>    <span class="s2">&quot;steps&quot;</span><span class="p">:</span> <span class="p">[</span>
-<a id="__codelineno-19-6" name="__codelineno-19-6" href="#__codelineno-19-6"></a>        <span class="p">{</span>
-<a id="__codelineno-19-7" name="__codelineno-19-7" href="#__codelineno-19-7"></a>            <span class="s2">&quot;id&quot;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>                    <span class="c1"># 1-indexed, assigned by create_plan</span>
-<a id="__codelineno-19-8" name="__codelineno-19-8" href="#__codelineno-19-8"></a>            <span class="s2">&quot;description&quot;</span><span class="p">:</span> <span class="s2">&quot;Check open incidents&quot;</span><span class="p">,</span>
-<a id="__codelineno-19-9" name="__codelineno-19-9" href="#__codelineno-19-9"></a>            <span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="s2">&quot;done&quot;</span><span class="p">,</span>           <span class="c1"># pending | in_progress | done | skipped</span>
-<a id="__codelineno-19-10" name="__codelineno-19-10" href="#__codelineno-19-10"></a>            <span class="s2">&quot;summary&quot;</span><span class="p">:</span> <span class="s2">&quot;14 open&quot;</span><span class="p">,</span>       <span class="c1"># set when done</span>
-<a id="__codelineno-19-11" name="__codelineno-19-11" href="#__codelineno-19-11"></a>            <span class="s2">&quot;parallel&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>
-<a id="__codelineno-19-12" name="__codelineno-19-12" href="#__codelineno-19-12"></a>            <span class="s2">&quot;tool&quot;</span><span class="p">:</span> <span class="s2">&quot;query_incidents&quot;</span><span class="p">,</span>
-<a id="__codelineno-19-13" name="__codelineno-19-13" href="#__codelineno-19-13"></a>            <span class="s2">&quot;tool_input&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="s2">&quot;open&quot;</span><span class="p">},</span>
-<a id="__codelineno-19-14" name="__codelineno-19-14" href="#__codelineno-19-14"></a>        <span class="p">},</span>
-<a id="__codelineno-19-15" name="__codelineno-19-15" href="#__codelineno-19-15"></a>        <span class="p">{</span>
-<a id="__codelineno-19-16" name="__codelineno-19-16" href="#__codelineno-19-16"></a>            <span class="s2">&quot;id&quot;</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
-<a id="__codelineno-19-17" name="__codelineno-19-17" href="#__codelineno-19-17"></a>            <span class="s2">&quot;description&quot;</span><span class="p">:</span> <span class="s2">&quot;Synthesize findings&quot;</span><span class="p">,</span>
-<a id="__codelineno-19-18" name="__codelineno-19-18" href="#__codelineno-19-18"></a>            <span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="s2">&quot;pending&quot;</span><span class="p">,</span>
-<a id="__codelineno-19-19" name="__codelineno-19-19" href="#__codelineno-19-19"></a>            <span class="s2">&quot;summary&quot;</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>
-<a id="__codelineno-19-20" name="__codelineno-19-20" href="#__codelineno-19-20"></a>            <span class="s2">&quot;parallel&quot;</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span>
-<a id="__codelineno-19-21" name="__codelineno-19-21" href="#__codelineno-19-21"></a>        <span class="p">},</span>
-<a id="__codelineno-19-22" name="__codelineno-19-22" href="#__codelineno-19-22"></a>    <span class="p">],</span>
-<a id="__codelineno-19-23" name="__codelineno-19-23" href="#__codelineno-19-23"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="c1"># Stored in conversation.metadata[&quot;plan&quot;]</span>
+<a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a><span class="p">{</span>
+<a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a>    <span class="s2">&quot;plan_id&quot;</span><span class="p">:</span> <span class="s2">&quot;f47ac10b-...&quot;</span><span class="p">,</span>   <span class="c1"># UUID string</span>
+<a id="__codelineno-21-4" name="__codelineno-21-4" href="#__codelineno-21-4"></a>    <span class="s2">&quot;title&quot;</span><span class="p">:</span> <span class="s2">&quot;Security Audit (24h)&quot;</span><span class="p">,</span>
+<a id="__codelineno-21-5" name="__codelineno-21-5" href="#__codelineno-21-5"></a>    <span class="s2">&quot;steps&quot;</span><span class="p">:</span> <span class="p">[</span>
+<a id="__codelineno-21-6" name="__codelineno-21-6" href="#__codelineno-21-6"></a>        <span class="p">{</span>
+<a id="__codelineno-21-7" name="__codelineno-21-7" href="#__codelineno-21-7"></a>            <span class="s2">&quot;id&quot;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>                    <span class="c1"># 1-indexed, assigned by create_plan</span>
+<a id="__codelineno-21-8" name="__codelineno-21-8" href="#__codelineno-21-8"></a>            <span class="s2">&quot;description&quot;</span><span class="p">:</span> <span class="s2">&quot;Check open incidents&quot;</span><span class="p">,</span>
+<a id="__codelineno-21-9" name="__codelineno-21-9" href="#__codelineno-21-9"></a>            <span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="s2">&quot;done&quot;</span><span class="p">,</span>           <span class="c1"># pending | in_progress | done | skipped</span>
+<a id="__codelineno-21-10" name="__codelineno-21-10" href="#__codelineno-21-10"></a>            <span class="s2">&quot;summary&quot;</span><span class="p">:</span> <span class="s2">&quot;14 open&quot;</span><span class="p">,</span>       <span class="c1"># set when done</span>
+<a id="__codelineno-21-11" name="__codelineno-21-11" href="#__codelineno-21-11"></a>            <span class="s2">&quot;parallel&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>
+<a id="__codelineno-21-12" name="__codelineno-21-12" href="#__codelineno-21-12"></a>            <span class="s2">&quot;tool&quot;</span><span class="p">:</span> <span class="s2">&quot;query_incidents&quot;</span><span class="p">,</span>
+<a id="__codelineno-21-13" name="__codelineno-21-13" href="#__codelineno-21-13"></a>            <span class="s2">&quot;tool_input&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="s2">&quot;open&quot;</span><span class="p">},</span>
+<a id="__codelineno-21-14" name="__codelineno-21-14" href="#__codelineno-21-14"></a>        <span class="p">},</span>
+<a id="__codelineno-21-15" name="__codelineno-21-15" href="#__codelineno-21-15"></a>        <span class="p">{</span>
+<a id="__codelineno-21-16" name="__codelineno-21-16" href="#__codelineno-21-16"></a>            <span class="s2">&quot;id&quot;</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
+<a id="__codelineno-21-17" name="__codelineno-21-17" href="#__codelineno-21-17"></a>            <span class="s2">&quot;description&quot;</span><span class="p">:</span> <span class="s2">&quot;Synthesize findings&quot;</span><span class="p">,</span>
+<a id="__codelineno-21-18" name="__codelineno-21-18" href="#__codelineno-21-18"></a>            <span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="s2">&quot;pending&quot;</span><span class="p">,</span>
+<a id="__codelineno-21-19" name="__codelineno-21-19" href="#__codelineno-21-19"></a>            <span class="s2">&quot;summary&quot;</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>
+<a id="__codelineno-21-20" name="__codelineno-21-20" href="#__codelineno-21-20"></a>            <span class="s2">&quot;parallel&quot;</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span>
+<a id="__codelineno-21-21" name="__codelineno-21-21" href="#__codelineno-21-21"></a>        <span class="p">},</span>
+<a id="__codelineno-21-22" name="__codelineno-21-22" href="#__codelineno-21-22"></a>    <span class="p">],</span>
+<a id="__codelineno-21-23" name="__codelineno-21-23" href="#__codelineno-21-23"></a><span class="p">}</span>
 </code></pre></div>
 <h3 id="when-the-llm-should-plan">When the LLM Should Plan<a class="headerlink" href="#when-the-llm-should-plan" title="Permanent link">&para;</a></h3>
 <p>The system prompt provides guidance — do not plan for simple queries. Examples where planning is appropriate:
@@ -7066,7 +7161,7 @@
 <li>Results are returned to the LLM in completion order.</li>
 </ol>
 <h3 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="n">LLM_ADMIN_MAX_PARALLEL_TOOLS</span> <span class="o">=</span> <span class="mi">4</span>  <span class="c1"># default</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="n">LLM_ADMIN_MAX_PARALLEL_TOOLS</span> <span class="o">=</span> <span class="mi">4</span>  <span class="c1"># default</span>
 </code></pre></div>
 <p>The pool size is <code>min(LLM_ADMIN_MAX_PARALLEL_TOOLS, number_of_tools_in_batch)</code>.</p>
 <h3 id="thread-safety">Thread Safety<a class="headerlink" href="#thread-safety" title="Permanent link">&para;</a></h3>
@@ -7082,7 +7177,7 @@
 <li><code>mojo/apps/assistant/services/agent.py</code> — <code>_execute_tool()</code>, <code>_execute_tools()</code>, <code>_execute_parallel_plan_steps()</code></li>
 </ul>
 <h2 id="tests">Tests<a class="headerlink" href="#tests" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>./bin/run_tests<span class="w"> </span>-t<span class="w"> </span>test_assistant
+<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>./bin/run_tests<span class="w"> </span>-t<span class="w"> </span>test_assistant
 </code></pre></div>
 <p>Test files:
 - <code>tests/test_assistant/1_test_permissions.py</code> — Registry, permission gate, feature flag, sensitive field exclusion
@@ -7097,7 +7192,8 @@
 - <code>tests/test_assistant/11_test_context.py</code> — Context conversations: ticket, incident, generic model, duplicate prevention, permission checks
 - <code>tests/test_assistant/12_test_incident_reporting.py</code> — Incident event reporting: permission denied events, mutating tool events, error events, category conventions
 - <code>tests/test_assistant/13_test_memory.py</code> — Memory service: read/write/delete, tier permissions, key validation, secret detection, size limits, build_memory_prompt, onboarding flag
-- <code>tests/test_assistant/14_test_memory_cleanup.py</code> — Nightly cleanup: mechanical phase (orphans, size prune, suspicious scan), dreaming phase (should_dream, dream_tier, apply_dream_actions)</p>
+- <code>tests/test_assistant/14_test_memory_cleanup.py</code> — Nightly cleanup: mechanical phase (orphans, size prune, suspicious scan), dreaming phase (should_dream, dream_tier, apply_dream_actions)
+- <code>tests/test_assistant/32_test_context_refs.py</code> — <code>add_context</code> tool: valid refs, invalid model/app/pk filtering, DENY_AI_VIEW filtering, mixed refs, empty input, <code>_validate_block</code> for context type, <code>_extract_context_refs</code> helper</p>
 
 
 

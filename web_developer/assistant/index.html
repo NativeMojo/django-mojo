@@ -4082,6 +4082,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#context" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        context
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#alert" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4429,7 +4440,7 @@
 </tr>
 <tr>
 <td><code>blocks</code></td>
-<td>Pre-parsed structured data blocks (table/chart/stat/file/etc.). <code>null</code> when not present. Stored at write time — never re-parsed on read.</td>
+<td>Pre-parsed structured data blocks (table/chart/stat/file/context/etc.). <code>null</code> when not present. Stored at write time — never re-parsed on read.</td>
 </tr>
 <tr>
 <td><code>created</code></td>
@@ -5411,14 +5422,63 @@
 </tbody>
 </table>
 <p><strong>Rendering guidance</strong>: Show a card with a file-type icon, the filename, row count, and a prominent Download button linking to <code>url</code>. Display the size formatted (e.g. <code>44 KB</code>) and a note that the link expires. The URL is a pre-signed or shortlink — no auth header needed.</p>
+<h4 id="context"><code>context</code><a class="headerlink" href="#context" title="Permanent link">&para;</a></h4>
+<p>Injected automatically by the server when the assistant calls <code>add_context</code> during a turn. Contains clickable references to specific model instances the assistant mentioned. Always appears at the end of the <code>blocks</code> array.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-54-1" name="__codelineno-54-1" href="#__codelineno-54-1"></a><span class="p">{</span>
+<a id="__codelineno-54-2" name="__codelineno-54-2" href="#__codelineno-54-2"></a><span class="w">    </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;context&quot;</span><span class="p">,</span>
+<a id="__codelineno-54-3" name="__codelineno-54-3" href="#__codelineno-54-3"></a><span class="w">    </span><span class="nt">&quot;references&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-54-4" name="__codelineno-54-4" href="#__codelineno-54-4"></a><span class="w">        </span><span class="p">{</span><span class="nt">&quot;app_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;incident&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;model_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;RuleSet&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;pk&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">42</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;label&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;SSH brute force blocker&quot;</span><span class="p">},</span>
+<a id="__codelineno-54-5" name="__codelineno-54-5" href="#__codelineno-54-5"></a><span class="w">        </span><span class="p">{</span><span class="nt">&quot;app_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;account&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;model_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;User&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;pk&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">7</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;label&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;john@example.com&quot;</span><span class="p">}</span>
+<a id="__codelineno-54-6" name="__codelineno-54-6" href="#__codelineno-54-6"></a><span class="w">    </span><span class="p">]</span>
+<a id="__codelineno-54-7" name="__codelineno-54-7" href="#__codelineno-54-7"></a><span class="p">}</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>references</code></td>
+<td>object[]</td>
+<td>Validated model references. Non-empty — block is absent when all refs were invalid.</td>
+</tr>
+<tr>
+<td><code>references[].app_name</code></td>
+<td>string</td>
+<td>Django app label (e.g. <code>"incident"</code>)</td>
+</tr>
+<tr>
+<td><code>references[].model_name</code></td>
+<td>string</td>
+<td>Model class name (e.g. <code>"RuleSet"</code>)</td>
+</tr>
+<tr>
+<td><code>references[].pk</code></td>
+<td>integer</td>
+<td>Primary key</td>
+</tr>
+<tr>
+<td><code>references[].label</code></td>
+<td>string</td>
+<td>Display label. Falls back to <code>"{model_name} #{pk}"</code> if empty.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>REST URL convention</strong>: <code>/api/{app_name}/{model_name_lowercase}/{pk}</code> (e.g. <code>/api/incident/ruleset/42</code>).</p>
+<p><strong>Rendering guidance</strong>: Render as a compact horizontal strip of linked chips below the message. Each chip shows the <code>label</code> and <code>app_name.model_name</code> as a sub-label. On click: open via <code>Modal.showModel(instance)</code> or navigate to the detail view. All references have been server-validated — dead links are not possible.</p>
+<p>See <a href="blocks/#context--clickable-model-reference-cards">blocks.md</a> for the full rendering reference and CSS.</p>
 <h4 id="alert"><code>alert</code><a class="headerlink" href="#alert" title="Permanent link">&para;</a></h4>
 <p>For permission denials, important warnings, error conditions, and success confirmations that need visual distinction from narrative text. Used sparingly — only for genuinely important information.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-54-1" name="__codelineno-54-1" href="#__codelineno-54-1"></a><span class="p">{</span>
-<a id="__codelineno-54-2" name="__codelineno-54-2" href="#__codelineno-54-2"></a><span class="w">    </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;alert&quot;</span><span class="p">,</span>
-<a id="__codelineno-54-3" name="__codelineno-54-3" href="#__codelineno-54-3"></a><span class="w">    </span><span class="nt">&quot;level&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;warning&quot;</span><span class="p">,</span>
-<a id="__codelineno-54-4" name="__codelineno-54-4" href="#__codelineno-54-4"></a><span class="w">    </span><span class="nt">&quot;title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Rate Limited&quot;</span><span class="p">,</span>
-<a id="__codelineno-54-5" name="__codelineno-54-5" href="#__codelineno-54-5"></a><span class="w">    </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;User exceeded 100 req/min threshold. Current rate: 142 req/min.&quot;</span>
-<a id="__codelineno-54-6" name="__codelineno-54-6" href="#__codelineno-54-6"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-55-1" name="__codelineno-55-1" href="#__codelineno-55-1"></a><span class="p">{</span>
+<a id="__codelineno-55-2" name="__codelineno-55-2" href="#__codelineno-55-2"></a><span class="w">    </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;alert&quot;</span><span class="p">,</span>
+<a id="__codelineno-55-3" name="__codelineno-55-3" href="#__codelineno-55-3"></a><span class="w">    </span><span class="nt">&quot;level&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;warning&quot;</span><span class="p">,</span>
+<a id="__codelineno-55-4" name="__codelineno-55-4" href="#__codelineno-55-4"></a><span class="w">    </span><span class="nt">&quot;title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Rate Limited&quot;</span><span class="p">,</span>
+<a id="__codelineno-55-5" name="__codelineno-55-5" href="#__codelineno-55-5"></a><span class="w">    </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;User exceeded 100 req/min threshold. Current rate: 142 req/min.&quot;</span>
+<a id="__codelineno-55-6" name="__codelineno-55-6" href="#__codelineno-55-6"></a><span class="p">}</span>
 </code></pre></div>
 <table>
 <thead>
@@ -5448,46 +5508,49 @@
 </table>
 <p><strong>Rendering guidance</strong>: Map <code>level</code> to a color/icon: <code>info</code> (blue/info icon), <code>success</code> (green/checkmark), <code>warning</code> (yellow/triangle), <code>error</code> (red/X). Render as a banner or callout — distinct from narrative text.</p>
 <h3 id="rendering-example">Rendering Example<a class="headerlink" href="#rendering-example" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-55-1" name="__codelineno-55-1" href="#__codelineno-55-1"></a><span class="kd">function</span><span class="w"> </span><span class="nx">renderBlocks</span><span class="p">(</span><span class="nx">blocks</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-55-2" name="__codelineno-55-2" href="#__codelineno-55-2"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kd">const</span><span class="w"> </span><span class="nx">block</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="nx">blocks</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-55-3" name="__codelineno-55-3" href="#__codelineno-55-3"></a><span class="w">        </span><span class="k">switch</span><span class="w"> </span><span class="p">(</span><span class="nx">block</span><span class="p">.</span><span class="nx">type</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-55-4" name="__codelineno-55-4" href="#__codelineno-55-4"></a><span class="w">            </span><span class="k">case</span><span class="w"> </span><span class="s1">&#39;table&#39;</span><span class="o">:</span>
-<a id="__codelineno-55-5" name="__codelineno-55-5" href="#__codelineno-55-5"></a><span class="w">                </span><span class="nx">renderTable</span><span class="p">(</span><span class="nx">block</span><span class="p">.</span><span class="nx">title</span><span class="p">,</span><span class="w"> </span><span class="nx">block</span><span class="p">.</span><span class="nx">columns</span><span class="p">,</span><span class="w"> </span><span class="nx">block</span><span class="p">.</span><span class="nx">rows</span><span class="p">);</span>
-<a id="__codelineno-55-6" name="__codelineno-55-6" href="#__codelineno-55-6"></a><span class="w">                </span><span class="k">break</span><span class="p">;</span>
-<a id="__codelineno-55-7" name="__codelineno-55-7" href="#__codelineno-55-7"></a><span class="w">            </span><span class="k">case</span><span class="w"> </span><span class="s1">&#39;chart&#39;</span><span class="o">:</span>
-<a id="__codelineno-55-8" name="__codelineno-55-8" href="#__codelineno-55-8"></a><span class="w">                </span><span class="nx">renderChart</span><span class="p">(</span><span class="nx">block</span><span class="p">.</span><span class="nx">chart_type</span><span class="p">,</span><span class="w"> </span><span class="nx">block</span><span class="p">.</span><span class="nx">title</span><span class="p">,</span><span class="w"> </span><span class="nx">block</span><span class="p">.</span><span class="nx">labels</span><span class="p">,</span><span class="w"> </span><span class="nx">block</span><span class="p">.</span><span class="nx">series</span><span class="p">);</span>
-<a id="__codelineno-55-9" name="__codelineno-55-9" href="#__codelineno-55-9"></a><span class="w">                </span><span class="k">break</span><span class="p">;</span>
-<a id="__codelineno-55-10" name="__codelineno-55-10" href="#__codelineno-55-10"></a><span class="w">            </span><span class="k">case</span><span class="w"> </span><span class="s1">&#39;stat&#39;</span><span class="o">:</span>
-<a id="__codelineno-55-11" name="__codelineno-55-11" href="#__codelineno-55-11"></a><span class="w">                </span><span class="nx">renderStatCards</span><span class="p">(</span><span class="nx">block</span><span class="p">.</span><span class="nx">items</span><span class="p">);</span>
-<a id="__codelineno-55-12" name="__codelineno-55-12" href="#__codelineno-55-12"></a><span class="w">                </span><span class="k">break</span><span class="p">;</span>
-<a id="__codelineno-55-13" name="__codelineno-55-13" href="#__codelineno-55-13"></a><span class="w">            </span><span class="k">case</span><span class="w"> </span><span class="s1">&#39;action&#39;</span><span class="o">:</span>
-<a id="__codelineno-55-14" name="__codelineno-55-14" href="#__codelineno-55-14"></a><span class="w">                </span><span class="nx">renderActionCard</span><span class="p">(</span><span class="nx">block</span><span class="p">);</span><span class="w">   </span><span class="c1">// see Action Block Interaction Flow</span>
-<a id="__codelineno-55-15" name="__codelineno-55-15" href="#__codelineno-55-15"></a><span class="w">                </span><span class="k">break</span><span class="p">;</span>
-<a id="__codelineno-55-16" name="__codelineno-55-16" href="#__codelineno-55-16"></a><span class="w">            </span><span class="k">case</span><span class="w"> </span><span class="s1">&#39;list&#39;</span><span class="o">:</span>
-<a id="__codelineno-55-17" name="__codelineno-55-17" href="#__codelineno-55-17"></a><span class="w">                </span><span class="nx">renderListCard</span><span class="p">(</span><span class="nx">block</span><span class="p">.</span><span class="nx">title</span><span class="p">,</span><span class="w"> </span><span class="nx">block</span><span class="p">.</span><span class="nx">items</span><span class="p">);</span>
-<a id="__codelineno-55-18" name="__codelineno-55-18" href="#__codelineno-55-18"></a><span class="w">                </span><span class="k">break</span><span class="p">;</span>
-<a id="__codelineno-55-19" name="__codelineno-55-19" href="#__codelineno-55-19"></a><span class="w">            </span><span class="k">case</span><span class="w"> </span><span class="s1">&#39;alert&#39;</span><span class="o">:</span>
-<a id="__codelineno-55-20" name="__codelineno-55-20" href="#__codelineno-55-20"></a><span class="w">                </span><span class="nx">renderAlert</span><span class="p">(</span><span class="nx">block</span><span class="p">.</span><span class="nx">level</span><span class="p">,</span><span class="w"> </span><span class="nx">block</span><span class="p">.</span><span class="nx">title</span><span class="p">,</span><span class="w"> </span><span class="nx">block</span><span class="p">.</span><span class="nx">message</span><span class="p">);</span>
-<a id="__codelineno-55-21" name="__codelineno-55-21" href="#__codelineno-55-21"></a><span class="w">                </span><span class="k">break</span><span class="p">;</span>
-<a id="__codelineno-55-22" name="__codelineno-55-22" href="#__codelineno-55-22"></a><span class="w">            </span><span class="k">case</span><span class="w"> </span><span class="s1">&#39;file&#39;</span><span class="o">:</span>
-<a id="__codelineno-55-23" name="__codelineno-55-23" href="#__codelineno-55-23"></a><span class="w">                </span><span class="nx">renderFileCard</span><span class="p">(</span><span class="nx">block</span><span class="p">.</span><span class="nx">filename</span><span class="p">,</span><span class="w"> </span><span class="nx">block</span><span class="p">.</span><span class="nx">url</span><span class="p">,</span><span class="w"> </span><span class="nx">block</span><span class="p">.</span><span class="nx">size</span><span class="p">,</span><span class="w"> </span><span class="nx">block</span><span class="p">.</span><span class="nx">row_count</span><span class="p">,</span><span class="w"> </span><span class="nx">block</span><span class="p">.</span><span class="nx">expires_in</span><span class="p">);</span>
-<a id="__codelineno-55-24" name="__codelineno-55-24" href="#__codelineno-55-24"></a><span class="w">                </span><span class="k">break</span><span class="p">;</span>
-<a id="__codelineno-55-25" name="__codelineno-55-25" href="#__codelineno-55-25"></a><span class="w">        </span><span class="p">}</span>
-<a id="__codelineno-55-26" name="__codelineno-55-26" href="#__codelineno-55-26"></a><span class="w">    </span><span class="p">}</span>
-<a id="__codelineno-55-27" name="__codelineno-55-27" href="#__codelineno-55-27"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-56-1" name="__codelineno-56-1" href="#__codelineno-56-1"></a><span class="kd">function</span><span class="w"> </span><span class="nx">renderBlocks</span><span class="p">(</span><span class="nx">blocks</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-56-2" name="__codelineno-56-2" href="#__codelineno-56-2"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kd">const</span><span class="w"> </span><span class="nx">block</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="nx">blocks</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-56-3" name="__codelineno-56-3" href="#__codelineno-56-3"></a><span class="w">        </span><span class="k">switch</span><span class="w"> </span><span class="p">(</span><span class="nx">block</span><span class="p">.</span><span class="nx">type</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-56-4" name="__codelineno-56-4" href="#__codelineno-56-4"></a><span class="w">            </span><span class="k">case</span><span class="w"> </span><span class="s1">&#39;table&#39;</span><span class="o">:</span>
+<a id="__codelineno-56-5" name="__codelineno-56-5" href="#__codelineno-56-5"></a><span class="w">                </span><span class="nx">renderTable</span><span class="p">(</span><span class="nx">block</span><span class="p">.</span><span class="nx">title</span><span class="p">,</span><span class="w"> </span><span class="nx">block</span><span class="p">.</span><span class="nx">columns</span><span class="p">,</span><span class="w"> </span><span class="nx">block</span><span class="p">.</span><span class="nx">rows</span><span class="p">);</span>
+<a id="__codelineno-56-6" name="__codelineno-56-6" href="#__codelineno-56-6"></a><span class="w">                </span><span class="k">break</span><span class="p">;</span>
+<a id="__codelineno-56-7" name="__codelineno-56-7" href="#__codelineno-56-7"></a><span class="w">            </span><span class="k">case</span><span class="w"> </span><span class="s1">&#39;chart&#39;</span><span class="o">:</span>
+<a id="__codelineno-56-8" name="__codelineno-56-8" href="#__codelineno-56-8"></a><span class="w">                </span><span class="nx">renderChart</span><span class="p">(</span><span class="nx">block</span><span class="p">.</span><span class="nx">chart_type</span><span class="p">,</span><span class="w"> </span><span class="nx">block</span><span class="p">.</span><span class="nx">title</span><span class="p">,</span><span class="w"> </span><span class="nx">block</span><span class="p">.</span><span class="nx">labels</span><span class="p">,</span><span class="w"> </span><span class="nx">block</span><span class="p">.</span><span class="nx">series</span><span class="p">);</span>
+<a id="__codelineno-56-9" name="__codelineno-56-9" href="#__codelineno-56-9"></a><span class="w">                </span><span class="k">break</span><span class="p">;</span>
+<a id="__codelineno-56-10" name="__codelineno-56-10" href="#__codelineno-56-10"></a><span class="w">            </span><span class="k">case</span><span class="w"> </span><span class="s1">&#39;stat&#39;</span><span class="o">:</span>
+<a id="__codelineno-56-11" name="__codelineno-56-11" href="#__codelineno-56-11"></a><span class="w">                </span><span class="nx">renderStatCards</span><span class="p">(</span><span class="nx">block</span><span class="p">.</span><span class="nx">items</span><span class="p">);</span>
+<a id="__codelineno-56-12" name="__codelineno-56-12" href="#__codelineno-56-12"></a><span class="w">                </span><span class="k">break</span><span class="p">;</span>
+<a id="__codelineno-56-13" name="__codelineno-56-13" href="#__codelineno-56-13"></a><span class="w">            </span><span class="k">case</span><span class="w"> </span><span class="s1">&#39;action&#39;</span><span class="o">:</span>
+<a id="__codelineno-56-14" name="__codelineno-56-14" href="#__codelineno-56-14"></a><span class="w">                </span><span class="nx">renderActionCard</span><span class="p">(</span><span class="nx">block</span><span class="p">);</span><span class="w">   </span><span class="c1">// see Action Block Interaction Flow</span>
+<a id="__codelineno-56-15" name="__codelineno-56-15" href="#__codelineno-56-15"></a><span class="w">                </span><span class="k">break</span><span class="p">;</span>
+<a id="__codelineno-56-16" name="__codelineno-56-16" href="#__codelineno-56-16"></a><span class="w">            </span><span class="k">case</span><span class="w"> </span><span class="s1">&#39;list&#39;</span><span class="o">:</span>
+<a id="__codelineno-56-17" name="__codelineno-56-17" href="#__codelineno-56-17"></a><span class="w">                </span><span class="nx">renderListCard</span><span class="p">(</span><span class="nx">block</span><span class="p">.</span><span class="nx">title</span><span class="p">,</span><span class="w"> </span><span class="nx">block</span><span class="p">.</span><span class="nx">items</span><span class="p">);</span>
+<a id="__codelineno-56-18" name="__codelineno-56-18" href="#__codelineno-56-18"></a><span class="w">                </span><span class="k">break</span><span class="p">;</span>
+<a id="__codelineno-56-19" name="__codelineno-56-19" href="#__codelineno-56-19"></a><span class="w">            </span><span class="k">case</span><span class="w"> </span><span class="s1">&#39;alert&#39;</span><span class="o">:</span>
+<a id="__codelineno-56-20" name="__codelineno-56-20" href="#__codelineno-56-20"></a><span class="w">                </span><span class="nx">renderAlert</span><span class="p">(</span><span class="nx">block</span><span class="p">.</span><span class="nx">level</span><span class="p">,</span><span class="w"> </span><span class="nx">block</span><span class="p">.</span><span class="nx">title</span><span class="p">,</span><span class="w"> </span><span class="nx">block</span><span class="p">.</span><span class="nx">message</span><span class="p">);</span>
+<a id="__codelineno-56-21" name="__codelineno-56-21" href="#__codelineno-56-21"></a><span class="w">                </span><span class="k">break</span><span class="p">;</span>
+<a id="__codelineno-56-22" name="__codelineno-56-22" href="#__codelineno-56-22"></a><span class="w">            </span><span class="k">case</span><span class="w"> </span><span class="s1">&#39;file&#39;</span><span class="o">:</span>
+<a id="__codelineno-56-23" name="__codelineno-56-23" href="#__codelineno-56-23"></a><span class="w">                </span><span class="nx">renderFileCard</span><span class="p">(</span><span class="nx">block</span><span class="p">.</span><span class="nx">filename</span><span class="p">,</span><span class="w"> </span><span class="nx">block</span><span class="p">.</span><span class="nx">url</span><span class="p">,</span><span class="w"> </span><span class="nx">block</span><span class="p">.</span><span class="nx">size</span><span class="p">,</span><span class="w"> </span><span class="nx">block</span><span class="p">.</span><span class="nx">row_count</span><span class="p">,</span><span class="w"> </span><span class="nx">block</span><span class="p">.</span><span class="nx">expires_in</span><span class="p">);</span>
+<a id="__codelineno-56-24" name="__codelineno-56-24" href="#__codelineno-56-24"></a><span class="w">                </span><span class="k">break</span><span class="p">;</span>
+<a id="__codelineno-56-25" name="__codelineno-56-25" href="#__codelineno-56-25"></a><span class="w">            </span><span class="k">case</span><span class="w"> </span><span class="s1">&#39;context&#39;</span><span class="o">:</span>
+<a id="__codelineno-56-26" name="__codelineno-56-26" href="#__codelineno-56-26"></a><span class="w">                </span><span class="nx">renderContextStrip</span><span class="p">(</span><span class="nx">block</span><span class="p">.</span><span class="nx">references</span><span class="p">);</span><span class="w">   </span><span class="c1">// see blocks.md for full implementation</span>
+<a id="__codelineno-56-27" name="__codelineno-56-27" href="#__codelineno-56-27"></a><span class="w">                </span><span class="k">break</span><span class="p">;</span>
+<a id="__codelineno-56-28" name="__codelineno-56-28" href="#__codelineno-56-28"></a><span class="w">        </span><span class="p">}</span>
+<a id="__codelineno-56-29" name="__codelineno-56-29" href="#__codelineno-56-29"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-56-30" name="__codelineno-56-30" href="#__codelineno-56-30"></a><span class="p">}</span>
 </code></pre></div>
 <h2 id="plan-tracker">Plan Tracker<a class="headerlink" href="#plan-tracker" title="Permanent link">&para;</a></h2>
 <p>When the assistant handles a complex multi-step request, it may create an execution plan. You receive <code>assistant_plan</code> once (when the plan is created) and then a stream of <code>assistant_plan_update</code> events as each step progresses.</p>
 <p><strong>Rendering guidance</strong>: Render the plan as a vertical list of steps. Each step has a <code>status</code> badge (<code>pending</code> → grey, <code>in_progress</code> → blue/spinner, <code>done</code> → green, <code>skipped</code> → grey strikethrough). Show <code>summary</code> next to a completed step as a brief sub-label.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-56-1" name="__codelineno-56-1" href="#__codelineno-56-1"></a><span class="nx">ws</span><span class="p">.</span><span class="nx">on</span><span class="p">(</span><span class="s1">&#39;assistant_plan&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="nx">data</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-56-2" name="__codelineno-56-2" href="#__codelineno-56-2"></a><span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">plan_id</span><span class="p">,</span><span class="w"> </span><span class="nx">title</span><span class="p">,</span><span class="w"> </span><span class="nx">steps</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">data</span><span class="p">.</span><span class="nx">plan</span><span class="p">;</span>
-<a id="__codelineno-56-3" name="__codelineno-56-3" href="#__codelineno-56-3"></a><span class="w">    </span><span class="nx">renderPlanTracker</span><span class="p">(</span><span class="nx">plan_id</span><span class="p">,</span><span class="w"> </span><span class="nx">title</span><span class="p">,</span><span class="w"> </span><span class="nx">steps</span><span class="p">);</span>
-<a id="__codelineno-56-4" name="__codelineno-56-4" href="#__codelineno-56-4"></a><span class="p">});</span>
-<a id="__codelineno-56-5" name="__codelineno-56-5" href="#__codelineno-56-5"></a>
-<a id="__codelineno-56-6" name="__codelineno-56-6" href="#__codelineno-56-6"></a><span class="nx">ws</span><span class="p">.</span><span class="nx">on</span><span class="p">(</span><span class="s1">&#39;assistant_plan_update&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="nx">data</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-56-7" name="__codelineno-56-7" href="#__codelineno-56-7"></a><span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">plan_id</span><span class="p">,</span><span class="w"> </span><span class="nx">step_id</span><span class="p">,</span><span class="w"> </span><span class="nx">status</span><span class="p">,</span><span class="w"> </span><span class="nx">summary</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">data</span><span class="p">;</span>
-<a id="__codelineno-56-8" name="__codelineno-56-8" href="#__codelineno-56-8"></a><span class="w">    </span><span class="nx">updatePlanStep</span><span class="p">(</span><span class="nx">plan_id</span><span class="p">,</span><span class="w"> </span><span class="nx">step_id</span><span class="p">,</span><span class="w"> </span><span class="nx">status</span><span class="p">,</span><span class="w"> </span><span class="nx">summary</span><span class="p">);</span>
-<a id="__codelineno-56-9" name="__codelineno-56-9" href="#__codelineno-56-9"></a><span class="p">});</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-57-1" name="__codelineno-57-1" href="#__codelineno-57-1"></a><span class="nx">ws</span><span class="p">.</span><span class="nx">on</span><span class="p">(</span><span class="s1">&#39;assistant_plan&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="nx">data</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-57-2" name="__codelineno-57-2" href="#__codelineno-57-2"></a><span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">plan_id</span><span class="p">,</span><span class="w"> </span><span class="nx">title</span><span class="p">,</span><span class="w"> </span><span class="nx">steps</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">data</span><span class="p">.</span><span class="nx">plan</span><span class="p">;</span>
+<a id="__codelineno-57-3" name="__codelineno-57-3" href="#__codelineno-57-3"></a><span class="w">    </span><span class="nx">renderPlanTracker</span><span class="p">(</span><span class="nx">plan_id</span><span class="p">,</span><span class="w"> </span><span class="nx">title</span><span class="p">,</span><span class="w"> </span><span class="nx">steps</span><span class="p">);</span>
+<a id="__codelineno-57-4" name="__codelineno-57-4" href="#__codelineno-57-4"></a><span class="p">});</span>
+<a id="__codelineno-57-5" name="__codelineno-57-5" href="#__codelineno-57-5"></a>
+<a id="__codelineno-57-6" name="__codelineno-57-6" href="#__codelineno-57-6"></a><span class="nx">ws</span><span class="p">.</span><span class="nx">on</span><span class="p">(</span><span class="s1">&#39;assistant_plan_update&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="nx">data</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-57-7" name="__codelineno-57-7" href="#__codelineno-57-7"></a><span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">plan_id</span><span class="p">,</span><span class="w"> </span><span class="nx">step_id</span><span class="p">,</span><span class="w"> </span><span class="nx">status</span><span class="p">,</span><span class="w"> </span><span class="nx">summary</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">data</span><span class="p">;</span>
+<a id="__codelineno-57-8" name="__codelineno-57-8" href="#__codelineno-57-8"></a><span class="w">    </span><span class="nx">updatePlanStep</span><span class="p">(</span><span class="nx">plan_id</span><span class="p">,</span><span class="w"> </span><span class="nx">step_id</span><span class="p">,</span><span class="w"> </span><span class="nx">status</span><span class="p">,</span><span class="w"> </span><span class="nx">summary</span><span class="p">);</span>
+<a id="__codelineno-57-9" name="__codelineno-57-9" href="#__codelineno-57-9"></a><span class="p">});</span>
 </code></pre></div>
 <p>The plan tracker is informational — no user interaction is needed. The assistant drives all step transitions automatically. When <code>assistant_response</code> arrives, the plan is complete.</p>
 
