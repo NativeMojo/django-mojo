@@ -2,6 +2,11 @@
 
 ## v1.2.1 - May 06, 2026
 
+MORE AI improvements
+
+
+## v1.2.1 - May 06, 2026
+
 assistant `add_context` tool — clickable model references on messages
 
 ### Added
