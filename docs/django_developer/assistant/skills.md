@@ -101,6 +101,20 @@ results = find_skills(user, "rebuild sales reports", group=group)
 
 Returns an empty list when no match is found or when skills are disabled.
 
+### `get_skill(user, skill_id, group=None)`
+
+Load a single skill by primary key with permission check. Returns the full detail dict (same shape as `find_skills` results) or an error dict.
+
+```python
+from mojo.apps.assistant.services.skills import get_skill
+
+result = get_skill(user, skill_id=42, group=group)
+# Returns: {"id": 42, "tier": "user", "name": "...", "steps": [...], ...}
+# Or: {"error": "Skill 42 not found"}
+```
+
+User-tier skills are scoped to their owner — a non-superuser cannot load another user's skill by ID.
+
 ### `save_skill(user, tier, name, description, triggers, steps, group=None, auto_execute=False)`
 
 Create or update a skill. Skills with the same name in the same scope are updated (upsert).
@@ -124,6 +138,34 @@ result = save_skill(
 ```
 
 Returns a dict with either `message` + `skill` (summary view) or `error`.
+
+### `update_skill(user, skill_id, group=None, **fields)`
+
+Partial update of an existing skill by ID. Only the keyword arguments provided are written — all other fields are left unchanged. Accepted field names: `name`, `description`, `triggers`, `steps`, `auto_execute`, `is_active`.
+
+```python
+from mojo.apps.assistant.services.skills import update_skill
+
+result = update_skill(user, skill_id=42, description="Updated description", auto_execute=True)
+# Returns: {"message": "Skill 'rebuild sales reports' updated", "skill": {...}}
+# Or: {"error": "..."}
+```
+
+The same permission rules as `save_skill` apply. User-tier skills are owner-only (non-superusers cannot update another user's skill).
+
+### `build_skill_catalog(user, group=None)`
+
+Build a markdown-formatted catalog of all accessible active skills for injection into the agent system prompt. Returns an empty string when no skills exist or when skills are disabled.
+
+```python
+from mojo.apps.assistant.services.skills import build_skill_catalog
+
+catalog = build_skill_catalog(user, group=group)
+# Returns:
+# "- **rebuild sales reports** (ID: 42, user): Finds failed report jobs and retries them | Triggers: rebuild sales reports, regenerate monthly reports"
+```
+
+This is called automatically by `_get_system_prompt` in `agent.py` at the start of every conversation turn. The catalog is injected into the `{skill_catalog}` placeholder in `SYSTEM_PROMPT`.
 
 ### `list_skills(user, group=None, tier=None)`
 
@@ -180,23 +222,40 @@ result = delete_skill(user, skill_id=42)
 
 ## Assistant Tools
 
-Four core tools expose skills to the LLM. All require `assistant` permission and are in the `skills` domain.
+Five core tools expose skills to the LLM. All require `assistant` permission and are in the `skills` domain.
 
 | Tool | Mutates | Description |
 |---|---|---|
-| `find_skill` | No | Search by keywords. Returns full step definitions. |
-| `save_skill` | Yes | Create or update a skill. |
+| `find_skill` | No | Load a skill by ID (from the catalog), or search by keywords. Returns full step definitions. |
+| `save_skill` | Yes | Create or update a skill (full upsert by name). |
+| `update_skill` | Yes | Partial update of a skill by ID — only the provided fields are changed. |
 | `list_skills` | No | List all accessible skills, grouped by tier (no step details). |
 | `delete_skill` | Yes | Delete a skill by ID. |
 
-All four are `core=True` tools — they are always available to the LLM without calling `load_tools`.
+All five are `core=True` tools — they are always available to the LLM without calling `load_tools`.
+
+### `find_skill` — ID lookup and keyword search
+
+`find_skill` accepts two mutually exclusive inputs:
+
+- `skill_id` (integer) — load a specific skill by its ID. Calls `get_skill()` internally. Use this when the skill is already known from the catalog injected in the system prompt.
+- `query` (string) — keyword search across name, description, and triggers. Calls `find_skills()` internally.
+
+When `skill_id` is provided, `query` is ignored.
+
+### `update_skill` — partial update
+
+`update_skill` takes a required `skill_id` plus any subset of `name`, `description`, `triggers`, `steps`, `auto_execute`, `is_active`. Fields omitted from the call are not changed. This is the preferred tool when the user wants to adjust one attribute of an existing skill without rewriting the whole thing (contrast with `save_skill`, which always replaces the full definition when the name matches).
 
 ### Agent Behavior (System Prompt)
 
+At the start of each conversation turn, `_get_system_prompt()` calls `build_skill_catalog()` and injects the result into the `{skill_catalog}` placeholder in `SYSTEM_PROMPT`. The catalog lists every accessible active skill with its ID, tier, description, and trigger phrases.
+
 The system prompt instructs the LLM to:
 
-- Call `find_skill` when a user's request sounds like a stored procedure or references a skill by name.
-- Ask before executing steps unless `auto_execute` is true.
+- Recognize skills from the injected catalog and call `find_skill(skill_id=<id>)` to load full steps when the user's request matches.
+- Fall back to `find_skill(query=...)` for keyword search when no catalog match is obvious.
+- Ask before executing steps unless `auto_execute` is true (marked `AUTO-EXECUTE` in the catalog).
 - Execute each step in order using the referenced tools, evaluating conditions against the previous step's result.
 
 ---

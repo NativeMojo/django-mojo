@@ -1,8 +1,20 @@
 ## v1.1.0 - (current)
 
+### Added
+- **Assistant skill catalog in system prompt** — `build_skill_catalog()` now runs at the start of every conversation turn and injects a markdown list of all accessible active skills (name, ID, tier, description, triggers, auto-execute flag) into the system prompt. The LLM can recognize skills from the catalog and load their steps with `find_skill(skill_id=<id>)` without a keyword search round-trip.
+- **`get_skill(user, skill_id, group=None)`** — new service function in `mojo.apps.assistant.services.skills` that loads a single skill by primary key with permission checks (tier scoping and user-tier owner guard).
+- **`update_skill(user, skill_id, group=None, **fields)`** — new service function for partial updates. Only the keyword arguments provided are written; all other fields are left unchanged. Validates each supplied field with the same rules as `save_skill`.
+- **`find_skill` tool — `skill_id` parameter** — the `find_skill` assistant tool now accepts an optional `skill_id` integer. When provided it calls `get_skill()` directly instead of running a keyword search. The `query` parameter still works as before and is used when `skill_id` is omitted.
+- **`update_skill` tool** — new core tool (`domain="skills"`, `mutates=True`) that exposes `update_skill()` to the LLM. Accepts `skill_id` (required) plus any subset of `name`, `description`, `triggers`, `steps`, `auto_execute`, `is_active`.
+
 ## v1.2.2 - May 07, 2026
 
 ticket status changes
+
+### Changed
+- **LLM agent `create_ticket` — two-layer deduplication** — ticket dedup now checks both the current incident and all open tickets for the same incident category. Previously only same-incident duplicates were suppressed; now a second incident in the same category appends its findings to the existing open ticket instead of creating a new one.
+- **LLM agent prompt — open tickets section** — the per-incident prompt now includes an "Open Tickets for This Category" section listing up to 10 open `llm_review` tickets for the current category. The agent is instructed to prefer `add_ticket_note` over `create_ticket` when a matching ticket exists.
+- **`add_ticket_note` — `incident_id` parameter** — the tool now accepts an optional `incident_id` that auto-appends a clickable incident reference card to the note, making it easy for human reviewers to navigate from a ticket note back to the triggering incident.
 
 
 ## v1.2.1 - May 06, 2026

@@ -139,9 +139,17 @@ The assistant calls `save_skill` internally. The response will confirm:
 
 No `assistant_tool_call` events need special handling for skill tools — they appear the same as any other tool call.
 
+### Editing a Skill
+
+The user can ask the assistant to update part of an existing skill without rewriting the whole thing:
+
+> "Update the 'rebuild sales reports' skill to also run on weekends — add 'rebuild weekend reports' as a trigger."
+
+The assistant calls `update_skill` internally, changing only the fields the user specified. Other fields stay the same. You will see `update_skill` in `tool_calls_made` when this happens.
+
 ### Triggering a Skill
 
-When the user sends a message that matches a stored skill's name or trigger phrases, the assistant calls `find_skill` first. If a match is found and `auto_execute` is false, it presents an `action` block:
+When the user sends a message that matches a stored skill's name or trigger phrases, the assistant recognizes it from the skill catalog embedded in its system prompt and calls `find_skill` with the skill's ID to load its steps. If a match is found and `auto_execute` is false, it presents an `action` block:
 
 ```json
 {
@@ -190,8 +198,9 @@ When the assistant works with skills, these tools appear in `tool_calls_made`:
 
 | Tool | When you see it |
 |---|---|
-| `find_skill` | The assistant searched for a matching skill |
-| `save_skill` | A skill was created or updated |
+| `find_skill` | The assistant loaded a skill by ID from the catalog, or searched by keyword |
+| `save_skill` | A skill was created or fully replaced by name |
+| `update_skill` | Part of an existing skill was changed (only the specified fields) |
 | `list_skills` | The user asked to see available skills |
 | `delete_skill` | A skill was deleted |
 
