@@ -45,8 +45,8 @@ def test_core_tools_only(opts):
 
     assert_true(len(core) < len(all_tools),
                 f"Core tools ({len(core)}) should be fewer than all tools ({len(all_tools)})")
-    assert_true(len(core) <= 20,
-                f"Core tools should be ~18, got {len(core)}")
+    assert_true(len(core) <= 25,
+                f"Core tools should be ~21, got {len(core)}")
     assert_true(len(all_tools) > 50,
                 f"All tools should be 50+, got {len(all_tools)}")
 

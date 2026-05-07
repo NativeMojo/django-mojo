@@ -1561,11 +1561,15 @@ def _tool_add_context(params, user):
         if not app_name or not model_name or pk is None:
             continue
 
+        if not isinstance(pk, int):
+            continue
+
         model, err = _resolve_model(app_name, model_name)
         if err:
             continue
 
-        if _check_ai_access(model, "view", user):
+        err = _check_ai_access(model, "view", user)
+        if err:
             continue
 
         if not model.objects.filter(pk=pk).exists():
@@ -1575,7 +1579,7 @@ def _tool_add_context(params, user):
             "app_name": app_name,
             "model_name": model_name,
             "pk": pk,
-            "label": ref.get("label", ""),
+            "label": ref.get("label", "")[:200],
         })
 
     logger.info("add_context", f"refs={len(valid_refs)}/{len(references)}", f"user={user.id}")
