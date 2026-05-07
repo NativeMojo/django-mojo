@@ -1,5 +1,8 @@
 ## v1.1.0 - (current)
 
+### Added
+- **Metrics fan-out across child groups** — `/api/metrics/fetch` now accepts a `child_kind` query parameter. When set with `account=group-<parent_id>`, the endpoint resolves all active descendants of the parent group whose `kind` matches and returns the per-bucket sum of the metric across every matching child. Permission is checked once on the parent; members of the parent or any ancestor group are authorized via the existing `Group.user_has_permission` parent-chain walk. The descendant set is capped at `METRICS_FANOUT_MAX_CHILDREN` (default 200). Empty descendant sets return zero-filled series. Implemented as `mojo.apps.metrics.rest.helpers.fetch_group_fanout`. See `docs/web_developer/metrics/metrics.md` (Parent-Group Fan-Out) and `docs/django_developer/metrics/fetching.md` (Group Fan-Out).
+
 ## v1.2.3 - May 07, 2026
 
 FIX in how AI Assistant discovers skills

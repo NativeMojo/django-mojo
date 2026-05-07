@@ -30,6 +30,7 @@ GET /api/metrics/fetch?slug=page_views&granularity=days&dr_start=2024-01-01&dr_e
 | `dr_end` | auto | End datetime |
 | `account` | `global` | Account namespace |
 | `with_labels` | `false` | Include time labels in response |
+| `child_kind` | unset | When set with `account=group-<parent_id>`, sums the metric across all active descendants of the parent whose `kind` matches. See [Parent-Group Fan-Out](#parent-group-fan-out). |
 
 **Response (single slug):**
 
@@ -142,6 +143,37 @@ Notes:
 - `delta_pct` is omitted when `prev_value` is 0 (avoids Infinity).
 - The response shape is identical to the non-delta response when `with_delta` is absent or `false` — fully backwards compatible.
 - `prev_when` is one bucket back from `when` at the given granularity.
+
+## Parent-Group Fan-Out
+
+When a metric is recorded per child group (`account=group-<child_id>`) and you want a parent-level rollup, pass `child_kind` to fan out across every active descendant of the parent group that matches the kind. Per-bucket values are summed across children.
+
+```
+GET /api/metrics/fetch?slug=visits&account=group-42&child_kind=location&granularity=days&with_labels=true
+```
+
+- `account` must be of the form `group-<parent_id>`. Other accounts (`public`, `global`, `user-*`) return 400 when combined with `child_kind`.
+- Permission is checked once on the parent group. Members of the parent or any of its ancestor groups (via `Group.user_has_permission` parent-chain walk) are authorized — no per-child permission check.
+- The descendant set is recursive: grandchildren of the matching kind are summed too.
+- Inactive children are excluded.
+- An empty descendant set returns a zero-filled series of the correct length, not an error.
+- The fan-out is capped at `METRICS_FANOUT_MAX_CHILDREN` (default 200). Requests resolving more children return 400.
+
+The response shape matches the multi-slug shape of the regular fetch:
+
+```json
+{
+  "status": true,
+  "data": {
+    "labels": ["2024-01-01", "2024-01-02", "2024-01-03"],
+    "data": {
+      "visits": [320, 415, 380]
+    }
+  }
+}
+```
+
+`slug`, `slugs`, and `category` all work with `child_kind` — slugs are resolved once (from the parent's category index when `category` is used) and then summed per slug across children.
 
 ## Fetch by Category
 

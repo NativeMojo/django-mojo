@@ -112,9 +112,26 @@ metrics.set_view_perms("group-123", "view_metrics")
 metrics.set_write_perms("group-123", "record_metrics")
 ```
 
+## Group Fan-Out
+
+`/api/metrics/fetch` supports a `child_kind` query param that sums a metric across all active descendants of a parent group whose `kind` matches:
+
+```
+GET /api/metrics/fetch?slug=visits&account=group-42&child_kind=location
+```
+
+The fan-out is implemented in `mojo.apps.metrics.rest.helpers.fetch_group_fanout` (REST-layer only — not re-exported on the `metrics` package). Permission is checked once on the parent via `_check_group_account_permission`, which walks the parent chain via `Group.user_has_permission(check_parents=True)`. The descendant set comes from `Group.get_children(is_active=True, kind=child_kind)`.
+
+Constraints:
+- `account` must be `group-<parent_id>`; other accounts combined with `child_kind` return 400.
+- The descendant set is capped at `METRICS_FANOUT_MAX_CHILDREN` (default 200). Exceeding the cap returns 400.
+- Sum is the only supported aggregation.
+- An empty descendant set returns a zero-filled series, not an error.
+
 ## Settings
 
 | Setting | Default | Description |
 |---|---|---|
 | `METRICS_TIMEZONE` | `"America/Los_Angeles"` | Default timezone for metric recording |
 | `METRICS_TRACK_USER_ACTIVITY` | `False` | Auto-record per-user activity metrics |
+| `METRICS_FANOUT_MAX_CHILDREN` | `200` | Hard cap on the number of child groups a single fan-out fetch will dispatch to. Requests resolving more children return 400. |

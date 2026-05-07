@@ -4,7 +4,7 @@ from mojo.helpers.response import JsonResponse
 import mojo.errors
 
 import datetime
-from .helpers import check_view_permissions, check_write_permissions
+from .helpers import check_view_permissions, check_write_permissions, fetch_group_fanout
 @md.POST('record', docs={
     "summary": "Record metrics data",
     "description": "Records metrics data for specified slug for the specified account, increments by 1 each call.",
@@ -129,6 +129,7 @@ def on_metrics_data(request):
     dt_end = request.DATA.get_typed("dt_end", typed=datetime.datetime)
     account = request.DATA.get("account", "public")
     granularity = request.DATA.get("granularity", "hours")
+    child_kind = request.DATA.get("child_kind", None)
     check_view_permissions(request, account)
 
     category = request.DATA.get("category", None)
@@ -145,6 +146,25 @@ def on_metrics_data(request):
         slugs = list(metrics.get_category_slugs(category, account=account))
     else:
         raise mojo.errors.ValueException("missing required parameter: slug, slugs, or category")
+
+    if child_kind:
+        if not account.startswith("group-"):
+            raise mojo.errors.ValueException(
+                "child_kind requires account=group-<parent_id>"
+            )
+        try:
+            parent_id = int(account.split("-", 1)[1])
+        except (ValueError, IndexError):
+            raise mojo.errors.ValueException(
+                f"invalid group account: {account}"
+            )
+        records = fetch_group_fanout(
+            parent_id, child_kind, slugs,
+            dt_start=dt_start, dt_end=dt_end,
+            granularity=granularity, with_labels=True,
+        )
+        return JsonResponse(dict(status=True, data=records))
+
     if len(slugs) == 1:
         slugs = slugs[0]
     records = metrics.fetch(slugs, dt_start=dt_start, dt_end=dt_end,
