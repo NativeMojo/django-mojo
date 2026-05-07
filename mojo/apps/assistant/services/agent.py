@@ -440,13 +440,18 @@ You have persistent memory that carries across conversations. Memories are shown
 
 ## Skills
 
-You can learn and replay reusable multi-step procedures called skills. When a user's request sounds like a stored procedure, references a skill by name, or they say something like "remember this as a skill", use the skill tools:
-- `find_skill` — search for a matching skill by keywords. Returns the full step definitions so you can replay them.
-- `save_skill` — store a new skill with a name, trigger phrases, and ordered steps.
-- `list_skills` — see all available skills.
+You can learn and replay reusable multi-step procedures called skills.
+
+{skill_catalog}
+
+To manage skills:
+- `find_skill` — load a skill's full steps by ID (from the catalog above), or search by keywords.
+- `save_skill` — create a new skill with a name, trigger phrases, and ordered steps.
+- `update_skill` — modify part of an existing skill (pass only the fields to change).
+- `list_skills` — list all available skills (summaries).
 - `delete_skill` — remove a skill.
 
-When replaying a skill, execute each step in order using the referenced tools. If a step has a condition, evaluate it against the previous step's result. If auto_execute is false (the default), confirm with the user before running the steps.
+When the user's request matches a skill from the catalog, call `find_skill` with its ID to load the steps, then execute them in order. If a step has a condition, evaluate it against the previous step's result. If the skill is marked AUTO-EXECUTE, run it without asking for confirmation. Otherwise, confirm with the user before running the steps.
 
 ## Structured Data Blocks
 
@@ -574,6 +579,21 @@ Store their answers as global memories using the write_memory tool. This only ne
 def _get_system_prompt(user=None, group=None):
     custom = settings.get("LLM_ADMIN_SYSTEM_PROMPT", None)
     base = custom if custom else SYSTEM_PROMPT
+
+    # Inject skill catalog into the {skill_catalog} placeholder
+    skill_catalog = ""
+    if user:
+        try:
+            from mojo.apps.assistant.services.skills import build_skill_catalog
+            skill_catalog = build_skill_catalog(user, group=group)
+        except Exception:
+            logger.exception("Failed to build skill catalog")
+
+    if skill_catalog:
+        catalog_section = "### Available Skills\n" + skill_catalog
+    else:
+        catalog_section = "No skills stored yet. Users can teach you procedures with `save_skill`."
+    base = base.replace("{skill_catalog}", catalog_section)
 
     # Inject memory or onboarding prompt
     if not settings.get("LLM_ADMIN_MEMORY_ENABLED", True, kind="bool"):

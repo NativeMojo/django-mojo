@@ -8,31 +8,44 @@ from mojo.apps.assistant import tool
     permission="assistant",
     core=True,
     description=(
-        "Search for a learned skill by keywords. Pass the user's intent or key "
-        "phrases and this tool searches skill names, descriptions, and trigger "
-        "phrases. Returns matching skills with their full step definitions so "
-        "you can replay them. Use this when a user's request sounds like a "
-        "stored procedure or they reference a skill by name."
+        "Load a skill's full details (including steps) by ID, or search by "
+        "keywords. Use skill_id when you know the skill from the catalog. "
+        "Use query for keyword search. Returns full step definitions so "
+        "you can replay them."
     ),
     input_schema={
         "type": "object",
         "properties": {
+            "skill_id": {
+                "type": "integer",
+                "description": "Load a specific skill by its ID (from the skill catalog).",
+            },
             "query": {
                 "type": "string",
-                "description": "Search keywords from the user's request (e.g., 'rebuild sales reports').",
+                "description": "Search keywords (e.g., 'rebuild sales reports'). Used when skill_id is not provided.",
             },
         },
-        "required": ["query"],
     },
 )
 def _tool_find_skill(params, user):
-    from mojo.apps.assistant.services.skills import find_skills
+    from mojo.apps.assistant.services.skills import find_skills, get_skill
 
     group = getattr(user, "_assistant_group", None)
+    skill_id = params.get("skill_id")
+
+    if skill_id is not None:
+        result = get_skill(user, skill_id, group=group)
+        if "error" in result:
+            return result
+        return {
+            "message": f"Loaded skill '{result['name']}'. Review the steps and execute them if relevant.",
+            "skill": result,
+        }
+
     query = params.get("query", "")
     results = find_skills(user, query, group=group)
     if not results:
-        return {"message": "No matching skills found", "results": []}
+        return {"message": "No matching skills found.", "results": []}
     return {
         "message": f"Found {len(results)} matching skill(s). Review the steps and execute them if relevant.",
         "results": results,
@@ -146,6 +159,71 @@ def _tool_list_skills(params, user):
         return {"message": "No skills stored"}
     total = sum(len(v) for v in result.values())
     return {"message": f"{total} skill(s) found", "skills": result}
+
+
+@tool(
+    name="update_skill",
+    domain="skills",
+    permission="assistant",
+    core=True,
+    mutates=True,
+    description=(
+        "Update part of an existing skill. Pass only the fields you want to "
+        "change — everything else stays the same. Use find_skill first to "
+        "see the current definition if needed."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "skill_id": {
+                "type": "integer",
+                "description": "The ID of the skill to update.",
+            },
+            "name": {
+                "type": "string",
+                "description": "New name for the skill.",
+            },
+            "description": {
+                "type": "string",
+                "description": "New description.",
+            },
+            "triggers": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Replacement trigger phrases (replaces entire list).",
+            },
+            "steps": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "tool": {"type": "string", "description": "Tool name to call."},
+                        "params": {"type": "object", "description": "Parameters for the tool call."},
+                        "condition": {"type": "string", "description": "Condition for executing this step."},
+                        "description": {"type": "string", "description": "What this step does."},
+                    },
+                    "required": ["tool", "description"],
+                },
+                "description": "Replacement steps (replaces entire list).",
+            },
+            "auto_execute": {
+                "type": "boolean",
+                "description": "Whether to execute without confirmation.",
+            },
+            "is_active": {
+                "type": "boolean",
+                "description": "Enable or disable the skill.",
+            },
+        },
+        "required": ["skill_id"],
+    },
+)
+def _tool_update_skill(params, user):
+    from mojo.apps.assistant.services.skills import update_skill
+
+    group = getattr(user, "_assistant_group", None)
+    skill_id = params.pop("skill_id")
+    return update_skill(user, skill_id, group=group, **params)
 
 
 @tool(

@@ -257,6 +257,138 @@ def save_skill(user, tier, name, description, triggers, steps,
         return {"message": f"Skill '{name}' saved", "skill": _skill_to_summary(skill)}
 
 
+def get_skill(user, skill_id, group=None):
+    """
+    Load a single skill by ID with permission check.
+
+    Returns full detail dict or error dict.
+    """
+    if not settings.get("LLM_ADMIN_SKILLS_ENABLED", True, kind="bool"):
+        return {"error": "Skills are disabled"}
+
+    from mojo.apps.assistant.models import Skill
+
+    try:
+        skill = Skill.objects.get(pk=skill_id)
+    except Skill.DoesNotExist:
+        return {"error": f"Skill {skill_id} not found"}
+
+    if not _can_read_tier(skill.tier, user, group):
+        return {"error": "You don't have permission to view this skill"}
+
+    # User-tier skills are scoped to owner
+    if skill.tier == "user" and not user.is_superuser and skill.user_id != user.pk:
+        return {"error": "You don't have permission to view this skill"}
+
+    return _skill_to_detail(skill)
+
+
+def update_skill(user, skill_id, group=None, **fields):
+    """
+    Partial update of a skill by ID.
+
+    Only updates provided fields. Accepts any subset of:
+    name, description, triggers, steps, auto_execute, is_active.
+
+    Returns dict with updated skill summary or error.
+    """
+    if not settings.get("LLM_ADMIN_SKILLS_ENABLED", True, kind="bool"):
+        return {"error": "Skills are disabled"}
+
+    from mojo.apps.assistant.models import Skill
+
+    try:
+        skill = Skill.objects.get(pk=skill_id)
+    except Skill.DoesNotExist:
+        return {"error": f"Skill {skill_id} not found"}
+
+    if not _can_write_tier(skill.tier, user, group):
+        return {"error": f"You don't have permission to modify {skill.tier} skills"}
+
+    # User-tier: only owner or superuser
+    if skill.tier == "user" and not user.is_superuser and skill.user_id != user.pk:
+        return {"error": "You can only modify your own skills"}
+
+    UPDATABLE = {"name", "description", "triggers", "steps", "auto_execute", "is_active"}
+    to_update = {k: v for k, v in fields.items() if k in UPDATABLE and v is not None}
+
+    if not to_update:
+        return {"error": "No valid fields provided to update"}
+
+    # Validate each field that's being changed
+    if "name" in to_update:
+        name = to_update["name"]
+        if not name or not str(name).strip():
+            return {"error": "Skill name is required"}
+        name = str(name).strip()
+        if len(name) > 128:
+            return {"error": "Skill name too long (max 128 characters)"}
+        # Check uniqueness within scope
+        scope = _scope_filter(skill.tier, user if skill.tier == "user" else None,
+                              skill.group if skill.tier == "group" else None)
+        from mojo.apps.assistant.models import Skill as SkillModel
+        collision = SkillModel.objects.filter(**scope, name=name).exclude(pk=skill_id).exists()
+        if collision:
+            return {"error": f"A skill named '{name}' already exists in this scope"}
+        to_update["name"] = name
+
+    if "description" in to_update:
+        desc = to_update["description"]
+        if not desc or not str(desc).strip():
+            return {"error": "Skill description is required"}
+        if len(str(desc).strip()) > MAX_DESCRIPTION_LENGTH:
+            return {"error": f"Description too long (max {MAX_DESCRIPTION_LENGTH} characters)"}
+        to_update["description"] = str(desc).strip()
+
+    if "triggers" in to_update:
+        err = _validate_triggers(to_update["triggers"])
+        if err:
+            return {"error": err}
+
+    if "steps" in to_update:
+        _, _, _, max_steps = _get_limits()
+        err = _validate_steps(to_update["steps"], max_steps)
+        if err:
+            return {"error": err}
+
+    for field, value in to_update.items():
+        setattr(skill, field, value)
+
+    update_fields = list(to_update.keys()) + ["modified"]
+    skill.save(update_fields=update_fields)
+
+    return {"message": f"Skill '{skill.name}' updated", "skill": _skill_to_summary(skill)}
+
+
+def build_skill_catalog(user, group=None):
+    """
+    Build a markdown catalog of all accessible skills for injection
+    into the system prompt.
+
+    Returns markdown string or "" if no skills or skills disabled.
+    """
+    if not settings.get("LLM_ADMIN_SKILLS_ENABLED", True, kind="bool"):
+        return ""
+
+    qs = _scoped_queryset(user, group).filter(is_active=True)
+    skills = list(qs)
+    if not skills:
+        return ""
+
+    lines = []
+    for s in skills:
+        triggers_str = ""
+        if s.triggers:
+            triggers_str = " | Triggers: " + ", ".join(s.triggers)
+        auto = " | AUTO-EXECUTE" if s.auto_execute else ""
+        lines.append(
+            f"- **{s.name}** (ID: {s.pk}, {s.tier}): "
+            f"{s.description}{triggers_str}{auto}"
+        )
+
+    return "\n".join(lines)
+
+
 def list_skills(user, group=None, tier=None):
     """
     List all skills accessible to the user.

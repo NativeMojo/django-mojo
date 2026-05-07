@@ -597,3 +597,286 @@ def test_tier_limit_enforced(opts):
     )
     assert_true("error" in result, "Should reject skill when tier limit is reached")
     assert_true("limit" in result["error"].lower(), "Error should mention limit")
+
+
+# ---------------------------------------------------------------------------
+# get_skill tests
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test()
+@th.requires_app("mojo.apps.assistant")
+def test_get_skill_by_id(opts):
+    """get_skill loads a skill by ID with full details."""
+    from mojo.apps.assistant.services.skills import save_skill, get_skill
+    from mojo.apps.assistant.models import Skill
+    _cleanup()
+    _, user, _ = _load_users()
+
+    save_skill(
+        user, tier="user", name="test-skill-get-by-id",
+        description="Skill to load by ID",
+        triggers=["load me"],
+        steps=SAMPLE_STEPS,
+    )
+    skill = Skill.objects.get(tier="user", user=user, name="test-skill-get-by-id")
+    result = get_skill(user, skill.pk)
+    assert_true("error" not in result, "get_skill should succeed for own skill")
+    assert_eq(result["name"], "test-skill-get-by-id", "Name should match")
+    assert_true("steps" in result, "Should include full step definitions")
+    assert_eq(len(result["steps"]), 2, "Should have 2 steps")
+    assert_true("triggers" in result, "Should include triggers")
+
+
+@th.django_unit_test()
+@th.requires_app("mojo.apps.assistant")
+def test_get_skill_not_found(opts):
+    """get_skill returns error for nonexistent ID."""
+    from mojo.apps.assistant.services.skills import get_skill
+    _, user, _ = _load_users()
+
+    result = get_skill(user, 999999)
+    assert_true("error" in result, "Should return error for nonexistent skill")
+
+
+@th.django_unit_test()
+@th.requires_app("mojo.apps.assistant")
+def test_get_skill_permission_denied(opts):
+    """Cannot load another user's skill."""
+    from mojo.apps.assistant.services.skills import save_skill, get_skill
+    from mojo.apps.assistant.models import Skill
+    _cleanup()
+    _, user, other = _load_users()
+
+    save_skill(
+        user, tier="user", name="test-skill-private-get",
+        description="Private skill",
+        triggers=["private"],
+        steps=SAMPLE_STEPS,
+    )
+    skill = Skill.objects.get(tier="user", user=user, name="test-skill-private-get")
+    result = get_skill(other, skill.pk)
+    assert_true("error" in result, "Other user should not be able to load user-tier skill")
+
+
+# ---------------------------------------------------------------------------
+# update_skill tests
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test()
+@th.requires_app("mojo.apps.assistant")
+def test_update_skill_description(opts):
+    """update_skill can change just the description."""
+    from mojo.apps.assistant.services.skills import save_skill, update_skill
+    from mojo.apps.assistant.models import Skill
+    _cleanup()
+    _, user, _ = _load_users()
+
+    save_skill(
+        user, tier="user", name="test-skill-update-desc",
+        description="Original description",
+        triggers=["original"],
+        steps=SAMPLE_STEPS,
+    )
+    skill = Skill.objects.get(tier="user", user=user, name="test-skill-update-desc")
+    result = update_skill(user, skill.pk, description="Updated description")
+    assert_true("error" not in result, "update_skill should succeed")
+    assert_true("updated" in result["message"].lower(), "Should confirm update")
+
+    skill.refresh_from_db()
+    assert_eq(skill.description, "Updated description", "Description should be changed")
+    assert_eq(skill.triggers, ["original"], "Triggers should be unchanged")
+
+
+@th.django_unit_test()
+@th.requires_app("mojo.apps.assistant")
+def test_update_skill_triggers(opts):
+    """update_skill can change just the triggers."""
+    from mojo.apps.assistant.services.skills import save_skill, update_skill
+    from mojo.apps.assistant.models import Skill
+    _cleanup()
+    _, user, _ = _load_users()
+
+    save_skill(
+        user, tier="user", name="test-skill-update-triggers",
+        description="Trigger test",
+        triggers=["old trigger"],
+        steps=SAMPLE_STEPS,
+    )
+    skill = Skill.objects.get(tier="user", user=user, name="test-skill-update-triggers")
+    result = update_skill(user, skill.pk, triggers=["old trigger", "new trigger"])
+    assert_true("error" not in result, "update_skill should succeed")
+
+    skill.refresh_from_db()
+    assert_eq(skill.triggers, ["old trigger", "new trigger"], "Triggers should be updated")
+    assert_eq(skill.description, "Trigger test", "Description should be unchanged")
+
+
+@th.django_unit_test()
+@th.requires_app("mojo.apps.assistant")
+def test_update_skill_auto_execute(opts):
+    """update_skill can toggle auto_execute."""
+    from mojo.apps.assistant.services.skills import save_skill, update_skill
+    from mojo.apps.assistant.models import Skill
+    _cleanup()
+    _, user, _ = _load_users()
+
+    save_skill(
+        user, tier="user", name="test-skill-update-auto",
+        description="Auto test",
+        triggers=["auto"],
+        steps=SAMPLE_STEPS,
+    )
+    skill = Skill.objects.get(tier="user", user=user, name="test-skill-update-auto")
+    assert_true(not skill.auto_execute, "Should start with auto_execute=False")
+
+    result = update_skill(user, skill.pk, auto_execute=True)
+    assert_true("error" not in result, "update_skill should succeed")
+
+    skill.refresh_from_db()
+    assert_true(skill.auto_execute, "auto_execute should now be True")
+
+
+@th.django_unit_test()
+@th.requires_app("mojo.apps.assistant")
+def test_update_skill_name_collision(opts):
+    """update_skill rejects name that collides with another skill in same scope."""
+    from mojo.apps.assistant.services.skills import save_skill, update_skill
+    from mojo.apps.assistant.models import Skill
+    _cleanup()
+    _, user, _ = _load_users()
+
+    save_skill(
+        user, tier="user", name="test-skill-name-a",
+        description="Skill A",
+        triggers=["a"],
+        steps=SAMPLE_STEPS,
+    )
+    save_skill(
+        user, tier="user", name="test-skill-name-b",
+        description="Skill B",
+        triggers=["b"],
+        steps=SAMPLE_STEPS,
+    )
+    skill_b = Skill.objects.get(tier="user", user=user, name="test-skill-name-b")
+    result = update_skill(user, skill_b.pk, name="test-skill-name-a")
+    assert_true("error" in result, "Should reject name that collides with existing skill")
+    assert_true("already exists" in result["error"].lower(), "Error should mention collision")
+
+
+@th.django_unit_test()
+@th.requires_app("mojo.apps.assistant")
+def test_update_skill_permission_denied(opts):
+    """Cannot update another user's skill."""
+    from mojo.apps.assistant.services.skills import save_skill, update_skill
+    from mojo.apps.assistant.models import Skill
+    _cleanup()
+    _, user, other = _load_users()
+
+    save_skill(
+        user, tier="user", name="test-skill-update-denied",
+        description="Private",
+        triggers=["private"],
+        steps=SAMPLE_STEPS,
+    )
+    skill = Skill.objects.get(tier="user", user=user, name="test-skill-update-denied")
+    result = update_skill(other, skill.pk, description="Hacked")
+    assert_true("error" in result, "Non-owner should not be able to update user-tier skill")
+
+
+@th.django_unit_test()
+@th.requires_app("mojo.apps.assistant")
+def test_update_skill_not_found(opts):
+    """update_skill returns error for nonexistent ID."""
+    from mojo.apps.assistant.services.skills import update_skill
+    _, user, _ = _load_users()
+
+    result = update_skill(user, 999999, description="Nope")
+    assert_true("error" in result, "Should return error for nonexistent skill")
+
+
+@th.django_unit_test()
+@th.requires_app("mojo.apps.assistant")
+def test_update_skill_no_fields(opts):
+    """update_skill with no valid fields returns error."""
+    from mojo.apps.assistant.services.skills import save_skill, update_skill
+    from mojo.apps.assistant.models import Skill
+    _cleanup()
+    _, user, _ = _load_users()
+
+    save_skill(
+        user, tier="user", name="test-skill-update-nofields",
+        description="No change",
+        triggers=["noop"],
+        steps=SAMPLE_STEPS,
+    )
+    skill = Skill.objects.get(tier="user", user=user, name="test-skill-update-nofields")
+    result = update_skill(user, skill.pk)
+    assert_true("error" in result, "Should return error when no fields provided")
+
+
+# ---------------------------------------------------------------------------
+# build_skill_catalog tests
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test()
+@th.requires_app("mojo.apps.assistant")
+def test_build_skill_catalog_with_skills(opts):
+    """build_skill_catalog returns markdown listing accessible skills."""
+    from mojo.apps.assistant.services.skills import save_skill, build_skill_catalog
+    _cleanup()
+    admin, user, _ = _load_users()
+
+    save_skill(
+        user, tier="user", name="test-skill-catalog-user",
+        description="A user skill for catalog test",
+        triggers=["catalog test"],
+        steps=SAMPLE_STEPS,
+    )
+    save_skill(
+        admin, tier="global", name="test-skill-catalog-global",
+        description="A global skill for catalog test",
+        triggers=["global catalog"],
+        steps=SAMPLE_STEPS,
+        auto_execute=True,
+    )
+
+    catalog = build_skill_catalog(user)
+    assert_true(len(catalog) > 0, "Catalog should not be empty when skills exist")
+    assert_true("test-skill-catalog-user" in catalog, "Catalog should include user skill")
+    assert_true("test-skill-catalog-global" in catalog, "Catalog should include global skill")
+    assert_true("AUTO-EXECUTE" in catalog, "Catalog should mark auto_execute skills")
+    assert_true("catalog test" in catalog, "Catalog should include trigger phrases")
+
+
+@th.django_unit_test()
+@th.requires_app("mojo.apps.assistant")
+def test_build_skill_catalog_empty(opts):
+    """build_skill_catalog returns empty string when no skills exist."""
+    from mojo.apps.assistant.services.skills import build_skill_catalog
+    _cleanup()
+    _, user, _ = _load_users()
+
+    catalog = build_skill_catalog(user)
+    assert_eq(catalog, "", "Catalog should be empty string when no skills exist")
+
+
+@th.django_unit_test()
+@th.requires_app("mojo.apps.assistant")
+def test_build_skill_catalog_tier_scoping(opts):
+    """build_skill_catalog respects tier permissions."""
+    from mojo.apps.assistant.services.skills import save_skill, build_skill_catalog
+    _cleanup()
+    _, user, other = _load_users()
+
+    save_skill(
+        user, tier="user", name="test-skill-catalog-scoped",
+        description="Only visible to owner",
+        triggers=["scoped"],
+        steps=SAMPLE_STEPS,
+    )
+
+    catalog_user = build_skill_catalog(user)
+    assert_true("test-skill-catalog-scoped" in catalog_user, "Owner should see own skill in catalog")
+
+    catalog_other = build_skill_catalog(other)
+    assert_true("test-skill-catalog-scoped" not in catalog_other, "Other user should not see user-tier skill")
