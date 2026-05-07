@@ -50,6 +50,7 @@ You have access to tools that let you query the system and take actions.
 - When blocking an IP, always provide a clear reason.
 - For critical issues (active intrusion, data exfiltration indicators), send SMS alerts.
 - For concerning issues that need human attention, create a ticket and send email/notify alerts.
+- Before creating a ticket, check the "Open Tickets for This Category" section in the incident context. If a ticket already covers this pattern, use add_ticket_note to append your findings to it instead of creating a duplicate ticket.
 - Read the agent_memory for this rule type — it contains your past learnings.
 - Update agent_memory when you learn something new about a pattern.
 - Before creating a new rule, check the existing active rules shown in the prompt context. If an existing rule covers a similar pattern but missed this event, use suggest_rule_update to propose modifications to that rule instead of creating a new one.
@@ -203,7 +204,7 @@ TOOLS = [
     },
     {
         "name": "create_ticket",
-        "description": "Create a ticket for human review. Use when you need human input or approval. The ticket is automatically linked to the LLM agent — when the human responds, you'll be re-invoked.",
+        "description": "Create a ticket for human review. IMPORTANT: Check the 'Open Tickets' section first — if an existing ticket covers this pattern, use add_ticket_note instead. The tool auto-deduplicates within the same incident category, but preferring add_ticket_note avoids unnecessary API calls. The ticket is automatically linked to the LLM agent — when the human responds, you'll be re-invoked.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -304,12 +305,13 @@ TOOLS = [
     },
     {
         "name": "add_ticket_note",
-        "description": "Add a note to a ticket, optionally with context references that render as clickable model links in the UI. Use references when you mention specific objects (rulesets, incidents, IPs) so admins can click through to them directly.",
+        "description": "Add a note to a ticket, optionally with context references that render as clickable model links in the UI. Use references when you mention specific objects (rulesets, incidents, IPs) so admins can click through to them directly. When appending to an existing ticket for a related incident, pass incident_id to auto-add an incident reference.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "ticket_id": {"type": "integer", "description": "The ticket to add the note to"},
                 "note": {"type": "string", "description": "The note text (your message to the admin)"},
+                "incident_id": {"type": "integer", "description": "Optional incident ID — auto-adds a clickable reference to this incident on the note"},
                 "references": {
                     "type": "array",
                     "description": "Optional model references for clickable context cards. Each reference renders as a linked card in the UI.",
@@ -634,6 +636,52 @@ def _append_ticket_note(ticket, note_text, system_user=None):
     )
 
 
+def _find_open_category_ticket(incident_category):
+    """Find an open LLM-linked ticket for the same incident category."""
+    from mojo.apps.incident.models import Ticket
+    if not incident_category:
+        return None
+    return (
+        Ticket.objects.filter(
+            category="llm_review",
+            metadata__llm_linked=True,
+            incident__category=incident_category,
+            incident__isnull=False,
+        )
+        .exclude(status__in=TICKET_CLOSED_STATUSES)
+        .exclude(metadata__has_key="update_suggestion")
+        .exclude(metadata__has_key="requires_approval")
+        .order_by("-modified")
+        .first()
+    )
+
+
+def _dedup_to_existing_ticket(existing, incident, params):
+    """Append a note to an existing ticket and record history on the incident."""
+    note_text = (
+        f"Related incident #{incident.pk}: {params['title']}\n\n"
+        f"{params['note']}"
+    )
+    note = _append_ticket_note(existing, note_text)
+    if note:
+        note.metadata = {
+            "action": {
+                "type": "context",
+                "references": [{
+                    "model": "incident.Incident",
+                    "pk": incident.pk,
+                    "label": f"Incident #{incident.pk}",
+                }],
+            }
+        }
+        note.save(update_fields=["metadata"])
+    incident.add_history(
+        "handler:llm",
+        note=f"[LLM Agent] Appended to existing ticket #{existing.pk}: {params['title']}",
+    )
+    return {"ok": True, "ticket_id": existing.pk, "deduplicated": True}
+
+
 def _tool_create_ticket(params):
     from mojo.apps.incident.models import Ticket
 
@@ -645,8 +693,7 @@ def _tool_create_ticket(params):
         except Exception:
             pass
 
-    # Dedup: if this incident already has an open LLM-linked ticket, append a note
-    # to that ticket instead of spawning a duplicate.
+    # Dedup layer 1: same incident already has an open LLM-linked ticket
     if incident is not None:
         existing = (
             incident.tickets
@@ -656,12 +703,13 @@ def _tool_create_ticket(params):
             .first()
         )
         if existing is not None:
-            _append_ticket_note(existing, params["note"])
-            incident.add_history(
-                "handler:llm",
-                note=f"[LLM Agent] Appended to existing ticket #{existing.pk}: {params['title']}",
-            )
-            return {"ok": True, "ticket_id": existing.pk, "deduplicated": True}
+            return _dedup_to_existing_ticket(existing, incident, params)
+
+    # Dedup layer 2: another incident in the same category has an open ticket
+    if incident is not None:
+        existing = _find_open_category_ticket(incident.category)
+        if existing is not None:
+            return _dedup_to_existing_ticket(existing, incident, params)
 
     metadata = {"llm_linked": True, "llm_enabled": True}
     if params.get("ruleset_id"):
@@ -1024,7 +1072,15 @@ def _tool_add_ticket_note(params):
     ticket = Ticket.objects.get(pk=params["ticket_id"])
     note = _append_ticket_note(ticket, params["note"])
 
-    references = params.get("references")
+    references = list(params.get("references") or [])
+
+    if params.get("incident_id"):
+        references.append({
+            "model": "incident.Incident",
+            "pk": params["incident_id"],
+            "label": f"Incident #{params['incident_id']}",
+        })
+
     if note and references:
         valid_refs = [
             ref for ref in references
@@ -1279,6 +1335,39 @@ def _build_pending_proposals_section(category):
     return "\n".join(lines)
 
 
+def _build_open_tickets_section(category):
+    """Return a prompt section listing open LLM tickets for this incident category."""
+    from mojo.apps.incident.models import Ticket
+    if not category:
+        return ""
+    tickets = list(
+        Ticket.objects.filter(
+            category="llm_review",
+            metadata__llm_linked=True,
+            incident__category=category,
+            incident__isnull=False,
+        )
+        .exclude(status__in=TICKET_CLOSED_STATUSES)
+        .exclude(metadata__has_key="update_suggestion")
+        .exclude(metadata__has_key="requires_approval")
+        .select_related("incident")
+        .order_by("-modified")[:10]
+    )
+    if not tickets:
+        return ""
+    lines = ["\n## Open Tickets for This Category"]
+    lines.append("A ticket already exists for this incident category.")
+    lines.append("Do NOT call create_ticket if an existing ticket covers the same pattern.")
+    lines.append("Use add_ticket_note with the ticket_id and incident_id to append your findings instead.\n")
+    for t in tickets:
+        inc = t.incident
+        lines.append(
+            f"- **Ticket #{t.pk}** \"{t.title}\" — incident #{inc.pk}, "
+            f"priority={t.priority}, created={t.created}"
+        )
+    return "\n".join(lines)
+
+
 def _build_active_rules_section(category):
     """Return a prompt section listing active rules for this category."""
     from mojo.apps.incident.models import RuleSet
@@ -1348,6 +1437,10 @@ def _build_incident_message(event, incident):
     pending_section = _build_pending_proposals_section(event.category)
     if pending_section:
         parts.append(pending_section)
+
+    tickets_section = _build_open_tickets_section(event.category)
+    if tickets_section:
+        parts.append(tickets_section)
 
     parts.append("\nPlease investigate this incident. Start by setting it to 'investigating', "
                  "then use the available tools to gather context before making a decision.")
