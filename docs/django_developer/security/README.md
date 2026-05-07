@@ -498,7 +498,14 @@ The standard triage agent (`execute_llm_handler`) has 12 tools. The analysis age
 
 ### Tool Deduplication
 
-`create_ticket` — If an open, `llm_linked` ticket already exists on the incident, the tool reuses it (appends a `TicketNote` and an incident history entry) instead of creating a duplicate. The tool response includes `deduplicated: true` in this case.
+`create_ticket` — Deduplication runs in two layers before creating a new ticket:
+
+1. **Same-incident check** — If an open, `llm_linked` ticket already exists directly on the incident, the tool appends a `TicketNote` and an incident history entry to that ticket instead of spawning a duplicate.
+2. **Same-category check** — If no ticket exists on the incident itself, but another open `llm_review` ticket is linked to a different incident in the same `incident.category`, the tool appends findings to that ticket instead. The note includes the related incident number and title so the human reviewer can see the full context.
+
+In both dedup cases the tool response includes `deduplicated: true`. The agent's system prompt also receives an "Open Tickets for This Category" section listing up to 10 open tickets for the same category, with explicit instructions to prefer `add_ticket_note` over `create_ticket` when a matching ticket already exists.
+
+`add_ticket_note` — Accepts an optional `incident_id` parameter. When provided, the tool automatically appends a clickable incident reference card to the note's context references, linking the note back to the specific incident that triggered it. This is the preferred approach when the LLM is adding findings from a new incident to an existing ticket.
 
 `create_rule` — Before creating a new `RuleSet`, the tool computes a canonical signature from `category | handler | sorted rule conditions` and scans existing `llm_proposed` RuleSets in the same category. If a pending match is found, its `metadata.occurrence_count` is incremented and a note is appended to the existing approval ticket rather than spawning a second one. If an active (enabled) match is found, the proposal is silently skipped. If the pending rule's approval ticket has been closed, a fresh ticket is opened on the existing RuleSet.
 

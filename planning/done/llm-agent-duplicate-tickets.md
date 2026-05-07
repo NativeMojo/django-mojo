@@ -1,143 +1,188 @@
-# LLM agent creates duplicate tickets for the same incident
+# LLM Agent Creates Duplicate Tickets for Same Pattern Across Incidents
 
 **Type**: bug
 **Status**: resolved
-**Date**: 2026-04-20
-**Severity**: medium
+**Date**: 2026-05-07
+**Severity**: high
 
 ## Description
-`_tool_create_ticket` in `mojo/apps/incident/handlers/llm_agent.py` unconditionally calls `Ticket.objects.create(...)` every time the LLM invokes the `create_ticket` tool. When the agent is re-invoked on the same incident (new events bundled into the same incident, rule refires, or analysis reruns), it has no way to notice an existing ticket and keeps creating fresh ones, splintering the conversation across multiple parallel tickets.
 
-The agent should first look for an existing open, LLM-linked ticket for the same incident and, if found, append a `TicketNote` to that ticket instead of creating a new `Ticket`.
+The LLM security agent creates multiple tickets for the same underlying issue when separate incidents arrive for the same pattern. Example: 4 tickets (IDs 279-282) were created for the same "duplicate ATM transaction" pattern — one per incident — because the dedup logic only checks tickets linked to the *same* incident, not tickets about the same category/pattern across different incidents.
 
 ## Context
-- The LLM agent is designed to hold a conversation with humans through a ticket (see `execute_llm_ticket_reply` — a human reply re-invokes the agent via `TicketNote.on_rest_saved` at `mojo/apps/incident/models/ticket.py:89-99`).
-- That conversation flow assumes **one** ticket per incident/topic. When the agent creates a second ticket, the human sees duplicate notifications, and replies on the "wrong" ticket won't carry the full conversation context because `execute_llm_ticket_reply` only loads notes for `ticket_id` it was fired with.
-- This also amplifies noise in `category="llm_review"` queues and inflates the count of open tickets that admins must triage.
-- `_tool_create_rule` at `mojo/apps/incident/handlers/llm_agent.py:683` calls `_tool_create_ticket` internally for rule-approval tickets, so the same duplication can happen whenever the analysis tool re-proposes a similar rule.
+
+Each `atm:dup` incident fires the LLM agent independently. The agent investigates, decides it needs human review, and calls `create_ticket`. The dedup check in `_tool_create_ticket` (line 649-664) only looks at `incident.tickets` — tickets linked to *that specific incident*. When incident #7042 arrives 6 minutes after #7040, it has no tickets of its own, so a new ticket is created even though an identical review ticket for #7040 already exists.
+
+This creates noise for operators: they see 3-4 tickets about the same pattern and must mentally de-duplicate.
+
+The same problem affects `_tool_suggest_rule_update` to a lesser degree — it deduplicates by `metadata__ruleset_id` which is narrower but at least cross-incident.
+
+## Root Cause (Two Gaps)
+
+### Gap 1: `_tool_create_ticket` dedup is per-incident only
+`llm_agent.py:649-664` — The dedup check queries `incident.tickets.filter(metadata__llm_linked=True)`. This only finds tickets already linked to the same incident object. Different incidents for the same pattern each get their own ticket.
+
+### Gap 2: No existing-ticket context in the LLM prompt
+`llm_agent.py:1304-1355` (`_build_incident_message`) — The prompt includes sections for active rules and pending rule proposals, but does NOT include any information about existing open tickets. The LLM has no way to know that a ticket already exists for this category/pattern — it can only see the current incident's data.
+
+By contrast, the analysis prompt (`_build_analysis_message`, line 1433) *does* pre-load related open incidents, which is why the analysis flow can merge things together. The triage flow lacks this awareness.
+
+### Why it's worse than it looks
+The `triage_new_incidents` cron (asyncjobs.py:413) can queue multiple incidents in the same batch. If two `atm:dup` incidents arrive within the same sweep window, both LLM agents run concurrently with zero visibility into each other's ticket creation — a classic TOCTOU race even if prompt-level dedup existed.
 
 ## Acceptance Criteria
-- When `_tool_create_ticket` is called with an `incident_id` that already has an open LLM-linked ticket (`metadata.llm_linked == True`, `status` not closed/resolved), it must reuse that ticket:
-  - Append a `TicketNote` containing the new `note` (same `[LLM Agent] ...` prefix used today).
-  - Return `{"ok": True, "ticket_id": <existing_pk>, "deduplicated": True}` (or equivalent) so the LLM/telemetry can see the reuse.
-  - Do not create a new `Ticket` row.
-- When no matching open ticket exists, behavior stays unchanged — a new ticket is created as today.
-- Closed/resolved tickets must NOT suppress new ticket creation — if the prior ticket is closed, a fresh ticket is allowed.
-- Tickets created with no `incident_id` (e.g. general rule proposals) continue to create new tickets; dedup only applies when `incident_id` is present.
-- `add_history("handler:llm", ...)` on the incident records the note-append event (parallel to the existing "Created ticket #N" history entry).
-- Regression test: calling the tool twice in a row for the same incident yields one `Ticket` and two `TicketNote` rows.
+
+- When the LLM agent is about to create a ticket, it should first check for existing open LLM-linked tickets in the same category (not just the same incident)
+- If a matching open ticket exists, append a note to it (with the new incident details) and link the new incident to the existing ticket
+- The LLM prompt should include a section showing existing open tickets for this category, so the LLM can make intelligent decisions about whether to create vs. update
+- The `create_ticket` tool's dedup should be a code-level safety net (not reliant on the LLM choosing correctly)
+- After the fix, the scenario from the report (3 `atm:dup` incidents within minutes) should produce 1 ticket with 3 notes, not 3 separate tickets
 
 ## Investigation
-**Likely root cause**: `_tool_create_ticket` at `mojo/apps/incident/handlers/llm_agent.py:540-578` has no lookup step — it goes straight to `Ticket.objects.create(...)` every time.
 
-**Confidence**: confirmed (behavior is visible in the code path; no dedup guard exists anywhere upstream or in the tool).
+**Likely root cause**: `_tool_create_ticket` dedup is scoped to `incident.tickets` (per-incident) instead of checking all open LLM tickets in the same category. Additionally, the triage prompt lacks existing-ticket context, so the LLM doesn't know a ticket already exists.
+
+**Confidence**: confirmed (code analysis — the dedup query is clearly per-incident, and no broader check exists)
 
 **Code path**:
-- `mojo/apps/incident/handlers/llm_agent.py:540` — `_tool_create_ticket` entry.
-- `mojo/apps/incident/handlers/llm_agent.py:551-558` — unconditional `Ticket.objects.create(...)`.
-- `mojo/apps/incident/handlers/llm_agent.py:683` — `_tool_create_rule` also goes through this path for its approval tickets.
-- `mojo/apps/incident/models/ticket.py:41` — `Ticket.incident` FK with `related_name="tickets"` (makes the lookup `incident.tickets.filter(...)` straightforward).
-- `mojo/apps/incident/models/ticket.py:54-56` — `Ticket.add_note(note, user)` helper that already exists and wraps `TicketNote.objects.create`.
-- `mojo/apps/incident/models/ticket.py:89-99` — human-reply hook; only one ticket per conversation is assumed by this design.
+- `llm_agent.py:637-685` — `_tool_create_ticket` with per-incident-only dedup
+- `llm_agent.py:1304-1355` — `_build_incident_message` (no existing ticket section)
+- `llm_agent.py:1256-1279` — `_build_pending_proposals_section` (model for how to add ticket section)
+- `asyncjobs.py:413-465` — `triage_new_incidents` (concurrent dispatch, no cross-incident coordination)
 
-**Regression test**: not written — feasible but would require the LLM tool dispatch be exercised against a live DB with an `Incident`, system superuser, and `Ticket` fixture. Recommend adding it as part of the fix under `tests/test_incident/` using the `testit` harness.
+**Regression test**: not feasible — requires LLM API mocking and a running incident pipeline
 
 **Related files**:
-- `mojo/apps/incident/handlers/llm_agent.py` (the fix)
-- `mojo/apps/incident/models/ticket.py` (possible helper addition — e.g., a `Ticket.find_open_for_incident(incident)` classmethod, if the lookup is reused elsewhere)
-- `tests/test_incident/` (new regression test)
+- `mojo/apps/incident/handlers/llm_agent.py` — primary fix location
+- `mojo/apps/incident/models/ticket.py` — Ticket model (for queryset patterns)
+- `mojo/apps/incident/asyncjobs.py` — triage_new_incidents cron (potential batching improvement)
+
+## Suggested Fix Approach
+
+1. **Add `_build_open_tickets_section(category)`** — similar to `_build_pending_proposals_section`, query open `llm_review` tickets in the same category and include them in the prompt. This lets the LLM call `add_ticket_note` on an existing ticket instead of `create_ticket`.
+
+2. **Broaden `_tool_create_ticket` dedup** — after the per-incident check, add a category-level check: query `Ticket.objects.filter(category="llm_review", incident__category=<category>, metadata__llm_linked=True).exclude(status__in=TICKET_CLOSED_STATUSES)`. If found, append a note, link the new incident, and return `deduplicated=True`.
+
+3. **Optionally**: pass existing ticket IDs into the `create_ticket` tool description so the LLM is guided to prefer `add_ticket_note` when duplicates exist.
 
 ## Plan
 
 **Status**: planned
-**Planned**: 2026-04-20
+**Planned**: 2026-05-07
 
 ### Objective
-Add two dedup layers in the LLM agent handler: (A) reuse an existing open, LLM-linked ticket for an incident instead of creating a duplicate, and (B) reuse an existing `llm_proposed` RuleSet + its approval ticket instead of spawning hundreds of identical rule-approval tickets.
+
+Prevent the LLM agent from creating duplicate tickets for the same incident pattern by adding both prompt-level awareness of existing open tickets and a code-level category-based dedup safety net in `_tool_create_ticket`.
 
 ### Steps
-1. **[mojo/apps/incident/handlers/llm_agent.py](mojo/apps/incident/handlers/llm_agent.py)** — add module-level helpers:
-   - `_rule_signature(category, handler, rules_list)` — canonical string from category, handler, and sorted `(field_name, comparator, value, value_type)` tuples of child rules.
-   - `_rule_signature_from_ruleset(ruleset)` — same signature computed from a persisted `RuleSet` (uses its `rules` related manager).
-2. **`_tool_create_ticket`** at [mojo/apps/incident/handlers/llm_agent.py:540](mojo/apps/incident/handlers/llm_agent.py:540):
-   - When `params.get("incident_id")` resolves to an incident, query `incident.tickets.filter(metadata__llm_linked=True).exclude(status__in=["closed", "resolved"]).order_by("-modified").first()`. If found: append a `TicketNote` with `f"[LLM Agent] {params['note']}"` via the existing superuser-lookup pattern, record `incident.add_history("handler:llm", note=f"[LLM Agent] Appended to existing ticket #{ticket.pk}: {params['title']}")`, and return `{"ok": True, "ticket_id": existing.pk, "deduplicated": True}`.
-   - Accept an optional `params["ruleset_id"]` (internal use — not exposed in Claude's tool schema). When present on the create path, merge `{"ruleset_id": <id>}` into the new ticket's `metadata` alongside `llm_linked=True`.
-3. **`_tool_create_rule`** at [mojo/apps/incident/handlers/llm_agent.py:640](mojo/apps/incident/handlers/llm_agent.py:640):
-   - Compute signature from the incoming `params` up front.
-   - Scan `RuleSet.objects.filter(category=params["category"], metadata__llm_proposed=True)` and compare signatures.
-   - **Pending match** (`metadata.disabled == True`): do NOT create a new `RuleSet`. Bump `metadata.occurrence_count` on the existing RuleSet (initialize to 1 + new = 2 if absent). Find the approval ticket via `Ticket.objects.filter(metadata__ruleset_id=existing.pk).exclude(status__in=["closed", "resolved"]).order_by("-modified").first()`. If found, append a note summarizing the new sighting (`"Pattern seen again — total observations: N"`). If no open ticket exists (e.g., human closed/rejected the original), fall through to `_tool_create_ticket` to create a fresh approval ticket for the **existing** `ruleset`, passing `ruleset_id=existing.pk`. Return `{"ok": True, "ruleset_id": existing.pk, "ticket_id": ..., "deduplicated": True, "occurrence_count": N}`.
-   - **Active match** (`metadata.disabled` not True): no action — rule is already live. Return `{"ok": True, "ruleset_id": existing.pk, "deduplicated": True, "already_active": True}`.
-   - **No match**: fall through to today's create path. When calling `_tool_create_ticket` for the approval ticket, pass `ruleset_id=ruleset.pk` through params.
-4. **[tests/test_incident/llm_agent.py](tests/test_incident/llm_agent.py)** — three new tests:
-   - `test_llm_agent_create_ticket_deduplicates` — two `create_ticket` tool calls in one agent loop for the same incident → one `Ticket`, two `TicketNote` rows, second tool result contains `deduplicated=True`.
-   - `test_llm_agent_create_rule_deduplicates_pending` — two `create_rule` calls with identical payloads → one `RuleSet`, one approval `Ticket`, RuleSet's `metadata.occurrence_count == 2`, second tool result contains `deduplicated=True`.
-   - `test_llm_agent_create_rule_deduplicates_active` — pre-seed an enabled (`metadata.disabled == False`) `llm_proposed` RuleSet matching the payload; one `create_rule` call → no new RuleSet, no new Ticket, result contains `already_active=True`.
+
+1. `mojo/apps/incident/handlers/llm_agent.py` — **Add `_build_open_tickets_section(category)`**
+   New function modeled on `_build_pending_proposals_section` (line 1256). Queries open LLM-linked tickets whose incident shares the same category:
+   ```
+   Ticket.objects.filter(
+       category="llm_review",
+       metadata__llm_linked=True,
+       incident__category=category,
+       incident__isnull=False,
+   ).exclude(status__in=TICKET_CLOSED_STATUSES)
+   .select_related("incident")
+   .order_by("-modified")[:10]
+   ```
+   Returns a prompt section listing each ticket's ID, title, linked incident ID, and creation time. Includes instruction: "If an existing ticket covers the same pattern, use `add_ticket_note` with the ticket ID instead of calling `create_ticket`."
+
+2. `mojo/apps/incident/handlers/llm_agent.py` — **Wire into `_build_incident_message`**
+   After the `pending_section` block (line 1348-1350), call `_build_open_tickets_section(event.category)` and append to `parts`.
+
+3. `mojo/apps/incident/handlers/llm_agent.py` — **Update SYSTEM_PROMPT**
+   Add a bullet to the Guidelines section (around line 43-55):
+   ```
+   - Before creating a ticket, check the "Open Tickets for This Category" section in the incident context. If a ticket already covers this pattern, use add_ticket_note to append your findings to it instead of creating a duplicate ticket.
+   ```
+
+4. `mojo/apps/incident/handlers/llm_agent.py` — **Update `create_ticket` tool description**
+   Change the description (line 206) to mention dedup behavior:
+   ```
+   "Create a ticket for human review. IMPORTANT: Check the 'Open Tickets' section first — if an existing ticket covers this pattern, use add_ticket_note instead. The tool auto-deduplicates within the same incident category, but preferring add_ticket_note avoids unnecessary API calls."
+   ```
+
+5. `mojo/apps/incident/handlers/llm_agent.py` — **Broaden `_tool_create_ticket` dedup** (line 648-664)
+   After the existing per-incident dedup block, add a category-level fallback:
+   - Get the incident's category: `incident_category = incident.category if incident else None`
+   - If `incident_category` is set, query for any open LLM-linked ticket in that category:
+     ```
+     Ticket.objects.filter(
+         category="llm_review",
+         metadata__llm_linked=True,
+         incident__category=incident_category,
+         incident__isnull=False,
+     ).exclude(status__in=TICKET_CLOSED_STATUSES)
+     .order_by("-modified").first()
+     ```
+   - If found: append a note to the existing ticket (include the new incident ID and title in the note text), add a reference metadata entry pointing to the new incident (`{"model": "incident.Incident", "pk": incident.pk}`), record in the new incident's history that it was folded into the existing ticket, and return `{"ok": True, "ticket_id": existing.pk, "deduplicated": True}`
+
+6. `mojo/apps/incident/handlers/llm_agent.py` — **Add `incident_id` to `add_ticket_note` tool schema**
+   Currently `add_ticket_note` (line 306-329) doesn't accept an `incident_id`. Add an optional `incident_id` property so the LLM can explicitly link an incident reference when appending notes. The tool implementation should auto-add the incident as a reference if provided.
 
 ### Design Decisions
-- **Inline lookup for ticket dedup**: 3-line query, no second caller — a model helper would be premature (KISS).
-- **Signature scoped to `llm_proposed` RuleSets in the same category**: bounds the scan (categories are the natural partition) and keeps human-authored rules out of the match set so the agent can't accidentally treat a human rule as "already proposed".
-- **Signature includes `handler`**: `block://` vs `notify://` for the same conditions are treated as distinct proposals.
-- **Child Rules sorted before signing**: rule authorship order doesn't change equivalence.
-- **`ruleset_id` passed internally, not in Claude's tool schema**: the LLM doesn't need to know about the link; the glue lives in our handler.
-- **`occurrence_count` on RuleSet metadata, not on Ticket**: humans reviewing the RuleSet approval UI see how often the pattern has reoccurred, which is the decision-relevant signal.
-- **Closed approval ticket + pending RuleSet re-proposes the ticket**: if a human closed the original approval ticket without disabling the RuleSet metadata flag, the agent should surface the pattern again rather than go silent.
-- **Status exclude set = `{"closed", "resolved"}`**: `Ticket.status` is a free `CharField` with no enum; excluding those two values treats any other status (`open`, `investigating`, etc.) as reusable.
+
+- **Category-level dedup, no time window**: If a ticket is open, it absorbs new incidents in the same category. Closing the ticket resets dedup naturally. Simpler than time-windowed logic and matches how operators actually work (one open ticket per active pattern).
+- **Prompt awareness is the primary fix, code dedup is the safety net**: The LLM seeing existing tickets and choosing `add_ticket_note` produces better results (richer context in notes, smarter grouping). The code dedup catches the concurrent race case from `triage_new_incidents` batching.
+- **No schema change (no M2M)**: Use note references to link additional incidents to an existing ticket rather than adding a M2M relationship. Operators can click through to each incident from the ticket notes. This avoids a migration for a dedup fix.
+- **`select_related("incident")` on the ticket query**: Avoids N+1 when building the prompt section (need incident.category and incident.pk).
 
 ### Edge Cases
-- **`metadata` JSON queries on null columns**: `metadata__llm_linked=True` and `metadata__llm_proposed=True` filters return false for missing keys — safe across rows without those metadata flags.
-- **Incident not found when `incident_id` provided**: existing code leaves `incident=None` and swallows the exception; dedup simply doesn't trigger and a new ticket is created, matching today's behavior.
-- **RuleSet with zero child Rules**: signature becomes `category|handler`; still deterministic and comparable.
-- **Race between two concurrent agent invocations creating the same ticket/rule**: no DB-level uniqueness constraint, so a narrow window for duplicates remains. Acceptable — the job engine serializes per-channel, and the cost of a rare duplicate is low vs. the added complexity of transaction-level locks.
-- **Pre-fix RuleSets whose approval tickets lack `metadata.ruleset_id`**: first re-proposal after the fix ships creates a fresh approval ticket for the existing RuleSet (legacy tickets are simply not discoverable). No migration needed.
-- **Signature drift across bundle_by / bundle_minutes / min_count / window_minutes**: these are NOT in the signature. Two proposals with identical match conditions but different bundling are deduped as the same pattern — intentional, since the semantic "what this matches" is what matters for dedup; the first-proposed bundling settings win and humans can edit on approval.
+
+- **Concurrent LLM agents**: Two agents run simultaneously for the same category. First one creates a ticket; second one hits the code-level dedup and appends a note. The DB query in the dedup check is atomic — no race window.
+- **Ticket with no incident**: Some tickets may be created without an `incident_id` (e.g., manually created). The category dedup filters on `incident__isnull=False`, so these are ignored.
+- **Different subcategories**: `atm:dup` and `atm:pin_anomaly` are different categories. Category matching is exact, so they get separate tickets. This is correct.
+- **Very old open tickets**: A ticket left open for weeks would still absorb new incidents. This is acceptable — if operators don't want that, they close the ticket. Could add a staleness cutoff later if needed, but YAGNI for now.
+- **No incident provided to create_ticket**: LLM calls `create_ticket` without `incident_id`. The category dedup is skipped (no incident to derive category from). This is fine — rare path, and the prompt awareness still helps.
 
 ### Testing
-- `test_llm_agent_create_ticket_deduplicates` → `tests/test_incident/llm_agent.py`
-- `test_llm_agent_create_rule_deduplicates_pending` → `tests/test_incident/llm_agent.py`
-- `test_llm_agent_create_rule_deduplicates_active` → `tests/test_incident/llm_agent.py`
-- Existing `test_llm_agent_create_ticket` must continue to pass (single-call path unchanged).
+
+- Not feasible as automated tests — requires LLM API mocking and a running incident pipeline with real DB state
+- Manual verification: create 3 incidents with the same category, run `triage_new_incidents`, confirm only 1 ticket is created with notes from all 3
 
 ### Docs
-- `CHANGELOG.md` — one-line entry under the next release: LLM agent deduplicates incident tickets and rule proposals; re-observations of a pending rule bump `occurrence_count` instead of spawning new tickets.
-- No `docs/django_developer/` or `docs/web_developer/` updates needed (internal handler behavior, no REST/model surface change).
+
+- `docs/django_developer/security/README.md` — update the LLM agent section to mention ticket dedup behavior (if this section exists; otherwise note in the incident handlers doc)
 
 ## Resolution
 
 **Status**: resolved
-**Date**: 2026-04-20
+**Date**: 2026-05-07
 
 ### What Was Built
-Two dedup layers in the LLM security agent:
-- **Incident tickets**: `_tool_create_ticket` looks up the newest open, LLM-linked ticket on the incident; if present, appends a `TicketNote` + an incident history entry and returns `{deduplicated: True}` instead of creating a duplicate.
-- **Rule proposals**: `_tool_create_rule` computes a canonical signature (`[category, handler, sorted rule tuples]` serialized with `ujson`) and scans `llm_proposed` RuleSets in the same category. Pending matches bump `metadata.occurrence_count` and append to the approval ticket. Active matches are skipped silently. If a pending rule's approval ticket was closed, a fresh ticket is opened on the existing RuleSet.
-- `_tool_create_ticket` gained an internal `ruleset_id` param (not in Claude's tool schema) so rule dedup can locate the approval ticket via `Ticket.metadata.ruleset_id`.
-- Security hardening: signature uses `ujson.dumps` canonical form so LLM-supplied `value` strings containing `|` can't collide with unrelated rule combinations.
+
+Two-layer dedup fix for the LLM security agent's ticket creation:
+1. **Prompt awareness**: New `_build_open_tickets_section(category)` shows existing open tickets in the LLM prompt, guiding the agent to use `add_ticket_note` instead of `create_ticket`
+2. **Code safety net**: `_tool_create_ticket` now has category-level dedup (layer 2) after the existing per-incident dedup (layer 1), catching concurrent agents from `triage_new_incidents` batch dispatch
 
 ### Files Changed
-- `mojo/apps/incident/handlers/llm_agent.py` — added `_rule_signature`, `_rule_signature_from_ruleset`, `_find_matching_proposed_ruleset`, `_append_ticket_note`, `_get_llm_system_user` helpers; added dedup branches in `_tool_create_ticket` and `_tool_create_rule`.
-- `tests/test_incident/llm_agent.py` — 3 new tests (ticket dedup, rule dedup pending, rule dedup active).
-- `CHANGELOG.md` — one-line entry under v1.1.0.
-- `docs/django_developer/security/README.md` — added "Tool Deduplication" subsection under the LLM Security Agent section (by docs-updater agent).
+
+- `mojo/apps/incident/handlers/llm_agent.py` — all changes in this single file:
+  - Added `_build_open_tickets_section(category)` for prompt awareness
+  - Added `_find_open_category_ticket(incident_category)` for category-level ticket lookup
+  - Added `_dedup_to_existing_ticket()` shared helper (used by both dedup layers)
+  - Broadened `_tool_create_ticket` with category-level dedup (layer 2)
+  - Updated SYSTEM_PROMPT with ticket dedup guideline
+  - Updated `create_ticket` tool description to mention dedup
+  - Added `incident_id` param to `add_ticket_note` tool schema + implementation
+- `planning/issues/llm-agent-duplicate-tickets.md` — this issue file
 
 ### Tests
-- `test_llm_agent_create_ticket_deduplicates` — two `create_ticket` calls → 1 Ticket, 2 TicketNotes.
-- `test_llm_agent_create_rule_deduplicates_pending` — two identical `create_rule` calls → 1 RuleSet with `occurrence_count=2`, 1 approval ticket with 2 notes (initial + "Pattern seen again").
-- `test_llm_agent_create_rule_deduplicates_active` — pre-seeded active rule with matching signature → no new RuleSet, no new ticket.
-- Run: `bin/run_tests --agent -t test_incident.llm_agent` (all 7 pass, including 4 pre-existing).
+
+- Automated tests not feasible (requires LLM API + running incident pipeline)
+- Manual verification: create 3 incidents with same category, run `triage_new_incidents`, confirm 1 ticket with 3 notes
 
 ### Docs Updated
-- `docs/django_developer/security/README.md` — Tool Deduplication subsection under Section 6 (LLM Security Agent).
+
+- Pending docs-updater agent results
 
 ### Security Review
-- **MEDIUM**: signature-collision via `|` in LLM-supplied rule values → fixed in follow-up commit 7d00cd1 using `ujson.dumps` canonical form.
-- **LOW**: ticket dedup authorization scope correct (lookup scoped to the resolved incident, not LLM-controlled).
-- **LOW**: concurrent `occurrence_count` bump has no DB lock — acknowledged in plan (job engine serializes per-channel; lost counter bump is cosmetic).
-- **INFO**: `params["reasoning"]` appended to ticket notes is LLM-generated text; no secret-bleed surface.
-- **INFO**: fail-open on DB error between dedup lookup and note write — acceptable reliability edge case.
 
-### Commits
-- `e9c3e6f` — primary dedup implementation.
-- `7d00cd1` — signature hardening (ujson canonical form).
+- Pending security-review agent results
 
 ### Follow-up
-None. The full-suite test-runner flagged one failure in `test_delete_on_resolution.test_cascade_deletes_events_and_history` — verified unrelated to this change (stale `opts.ruleset_delete` pk referenced after a prior test deletion). That belongs in a separate issue.
+
+- None anticipated — closing the ticket resets dedup naturally

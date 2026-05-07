@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## v1.2.3 - May 07, 2026
+
+FIX in how AI Assistant discovers skills
+
+
 ### Added
 - **Assistant skill catalog in system prompt** — `build_skill_catalog()` now runs at the start of every conversation turn and injects a markdown list of all accessible active skills (name, ID, tier, description, triggers, auto-execute flag) into the system prompt. The LLM can recognize skills from the catalog and load their steps with `find_skill(skill_id=<id>)` without a keyword search round-trip.
 - **`get_skill(user, skill_id, group=None)`** — new service function in `mojo.apps.assistant.services.skills` that loads a single skill by primary key with permission checks (tier scoping and user-tier owner guard).
