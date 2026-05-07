@@ -13,6 +13,7 @@ Implementation guide for rendering all assistant block types in the frontend. Bl
 | `list` | Single-record key/value detail | `title`, `items` (label/value pairs) |
 | `alert` | Severity-colored status banners | `level`, `title`, `message` |
 | `progress` | Multi-step plan tracker | `plan_id`, `title`, `steps` |
+| `context` | Clickable model reference cards | `references` (array of `{app_name, model_name, pk, label}`) |
 
 ---
 
@@ -776,6 +777,150 @@ function updateProgressStep(planId, stepId, status, summary) {
 
 ---
 
+## `context` — Clickable Model Reference Cards
+
+Injected by the server when the assistant mentions specific records and calls the `add_context` tool. The block contains a list of validated model references, each resolving to a real database row the requesting user has permission to view.
+
+The `context` block is not authored by the LLM inside block fences — it is appended to the `blocks` array by the agent loop after all tool calls complete.
+
+### Schema
+
+```json
+{
+    "type": "context",
+    "references": [
+        {
+            "app_name": "incident",
+            "model_name": "RuleSet",
+            "pk": 42,
+            "label": "SSH brute force blocker"
+        },
+        {
+            "app_name": "account",
+            "model_name": "User",
+            "pk": 7,
+            "label": "john@example.com"
+        }
+    ]
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `references` | object[] | One or more validated model references. Always non-empty — if all refs were invalid the block is not injected. |
+| `references[].app_name` | string | Django app label (e.g. `"incident"`, `"account"`, `"jobs"`) |
+| `references[].model_name` | string | Model class name (e.g. `"RuleSet"`, `"User"`, `"Job"`) |
+| `references[].pk` | integer | Primary key of the instance |
+| `references[].label` | string | Human-readable display label. May be empty string if the LLM did not supply one. |
+
+All references have been validated server-side: the model is accessible to the assistant, the instance exists, and the requesting user has view permission. Dead links are not possible.
+
+### REST URL Convention
+
+Construct the detail endpoint as:
+
+```
+/api/{app_name}/{model_name_lowercase}/{pk}
+```
+
+Examples:
+
+| `app_name` | `model_name` | REST URL |
+|---|---|---|
+| `incident` | `RuleSet` | `/api/incident/ruleset/42` |
+| `account` | `User` | `/api/account/user/7` |
+| `jobs` | `Job` | `/api/jobs/job/99` |
+
+### Rendering Guidance
+
+Render as a compact horizontal strip of linked cards below the assistant message, one card per reference. Each card shows:
+
+- A model-type icon (derived from `model_name` or `app_name`)
+- The `label` as the primary text
+- `app_name.model_name` as a secondary sub-label in muted text
+- The entire card is clickable
+
+**Click action**: open the instance in a modal (`Modal.showModel(instance)`) or navigate to the detail view. Do not open a new tab unless the user has focus management preferences for that.
+
+### Example Implementation
+
+```javascript
+function renderContextBlock(block) {
+    const strip = document.createElement('div');
+    strip.className = 'assistant-context-strip';
+
+    for (const ref of block.references) {
+        const card = document.createElement('a');
+        card.className = 'context-ref-card';
+        card.href = `/api/${ref.app_name}/${ref.model_name.toLowerCase()}/${ref.pk}`;
+
+        card.onclick = (e) => {
+            e.preventDefault();
+            // Fetch and open in modal, or navigate to detail view
+            Modal.showModel({ app: ref.app_name, model: ref.model_name, pk: ref.pk });
+        };
+
+        const label = document.createElement('span');
+        label.className = 'ref-label';
+        label.textContent = ref.label || `${ref.model_name} #${ref.pk}`;
+        card.appendChild(label);
+
+        const sub = document.createElement('span');
+        sub.className = 'ref-model';
+        sub.textContent = `${ref.app_name}.${ref.model_name}`;
+        card.appendChild(sub);
+
+        strip.appendChild(card);
+    }
+
+    return strip;
+}
+```
+
+### CSS Suggestions
+
+```css
+.assistant-context-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 8px;
+}
+.context-ref-card {
+    display: flex;
+    flex-direction: column;
+    padding: 8px 12px;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    background: #f8fafc;
+    text-decoration: none;
+    color: inherit;
+    min-width: 120px;
+    max-width: 220px;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+}
+.context-ref-card:hover {
+    border-color: #3b82f6;
+    background: #eff6ff;
+}
+.ref-label {
+    font-size: 13px;
+    font-weight: 500;
+    color: #1e293b;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.ref-model {
+    font-size: 11px;
+    color: #94a3b8;
+    margin-top: 2px;
+}
+```
+
+---
+
 ## Updated `renderBlocks` Dispatcher
 
 ```javascript
@@ -805,6 +950,9 @@ function renderBlocks(blocks, conversationId) {
                 break;
             case 'progress':
                 container.appendChild(renderProgressBlock(block, conversationId));
+                break;
+            case 'context':
+                container.appendChild(renderContextBlock(block));
                 break;
         }
     }

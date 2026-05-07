@@ -53,6 +53,7 @@ Core tools are sent to the LLM on every turn regardless of domain. They handle u
 | `logs` | `query_logs` |
 | `files` | `query_files`, `get_file`, `analyze_image` |
 | `skills` | `find_skill`, `save_skill`, `list_skills`, `delete_skill` |
+| `models` (extended) | `add_context` |
 
 ### Domain Tools (loaded on demand)
 
@@ -306,6 +307,69 @@ The AI gate runs **before** the REST permission check, so denied requests return
 The tool delegates to `instance.on_rest_save(request, data)` so all model-level save hooks, validators, and `POST_SAVE_ACTIONS` fire exactly as they would through the REST API. The `action_response` from `POST_SAVE_ACTIONS` is included in the return dict when present. Setting `CAN_CREATE = False` in `RestMeta` blocks creates; setting `CAN_UPDATE = False` blocks updates to existing instances.
 
 All five tools enforce the same permission and owner/group scoping as the REST layer via `rest_check_permission` and `_apply_owner_group_filter`. Attempts to filter or aggregate on sensitive fields are blocked and reported as security events.
+
+#### `add_context` — Clickable model references
+
+`add_context` is a core tool that lets the LLM attach validated clickable model references to its response. When the LLM mentions specific records (users, jobs, incidents, rulesets, etc.) it can call `add_context` to give admins a direct link to each record instead of having to search for it.
+
+| Attribute | Value |
+|---|---|
+| Name | `add_context` |
+| Domain | `models` |
+| Permission | `view_admin` |
+| Core | Yes (always sent) |
+| Mutates | No |
+
+**Input schema:**
+
+```python
+{
+    "type": "object",
+    "properties": {
+        "references": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "app_name":   {"type": "string"},   # Django app label, e.g. "incident"
+                    "model_name": {"type": "string"},   # Model class name, e.g. "RuleSet"
+                    "pk":         {"type": "integer"},  # Primary key of the instance
+                    "label":      {"type": "string"},   # Display label, e.g. "SSH brute force blocker"
+                },
+                "required": ["app_name", "model_name", "pk"],
+            },
+        },
+    },
+    "required": ["references"],
+}
+```
+
+**Validation pipeline** (per reference, silent filter on failure):
+
+1. `app_name`, `model_name`, and `pk` must be present and non-empty
+2. `_resolve_model(app_name, model_name)` must succeed (model exists, has RestMeta, no `NO_REST`)
+3. `_check_ai_access(model, "view", user)` must pass (honors `DENY_AI_VIEW` / `DENY_AI` flags)
+4. `model.objects.filter(pk=pk).exists()` must return True
+
+Invalid references are silently dropped. The tool never errors — if all references fail validation it returns `{"references": []}` and no block is injected.
+
+Maximum 20 references per call. Multiple `add_context` calls in one agent turn are merged into a single `context` block.
+
+**Agent loop behavior:**
+
+- After each tool turn, `_extract_context_refs()` collects validated refs from any `add_context` results
+- Refs are accumulated across all turns in `context_refs`
+- Before saving the final assistant `Message`, if `context_refs` is non-empty, the agent appends `{"type": "context", "references": context_refs}` to the `blocks` list
+- The context block is stored on the `Message.blocks` field alongside any other structured blocks
+
+**System prompt guidance (built in):**
+
+```
+When you reference specific records in your responses (users, jobs, incidents, rulesets, etc.),
+use add_context to attach clickable links. This lets admins click through directly instead of
+having to search for the record you're discussing. Call add_context alongside your final
+response — invalid references are silently filtered.
+```
 
 ### Logs Domain (`view_logs`)
 
@@ -926,7 +990,7 @@ Responses can include a `blocks` array with structured data for frontend renderi
 
 ### How It Works
 
-1. The system prompt defines seven block types: `table`, `chart`, `stat`, `action`, `list`, `alert`, `progress`
+1. The system prompt defines seven LLM-authored block types: `table`, `chart`, `stat`, `action`, `list`, `alert`, `progress`. The agent loop also injects a `context` block when `add_context` was called during the turn.
 2. The LLM wraps structured data in ` ```assistant_block ` code fences within its text response
 3. `_parse_blocks()` in `agent.py` extracts valid blocks, runs `_validate_block()`, and strips the fences from the text
 4. The response includes both clean `response` text and a `blocks` array
@@ -946,6 +1010,7 @@ This is enforced via the system prompt, not code. Override `LLM_ADMIN_SYSTEM_PRO
 - **`action`** — `{type, title, description, actions: [{label, value}], action_id}` — user confirmation dialogs for mutating operations
 - **`list`** — `{type, title, items: [{label, value}]}` — single-record key/value summaries
 - **`alert`** — `{type, level, title, message}` — important warnings, errors, success notices
+- **`context`** — `{type, references: [{app_name, model_name, pk, label}]}` — injected by the agent loop when `add_context` was called; not authored directly by the LLM in block fences
 
 ### Block Validation
 
@@ -958,6 +1023,7 @@ This is enforced via the system prompt, not code. Override `LLM_ADMIN_SYSTEM_PRO
 | `list` | `items` must be a non-empty list. |
 | `chart` | `chart_type` must be one of `line`, `bar`, `pie`, `area`. `labels` must be a non-empty list. `series` must be a non-empty list of `{name, values}` dicts; every `series[i].values` length must equal `len(labels)`. Recoverable fields are coerced rather than dropping the chart: `cutout` is clamped to `[0, 1]`; `stacked` is stripped if not in `{True, False, "auto"}`; `crosshair_tracking` is coerced to `bool`; `colors` is stripped if non-list and non-null. Unknown top-level fields pass through unchanged for forward compatibility. |
 | `progress` | No extra validation beyond type membership. |
+| `context` | `references` must be a non-empty list. The block is injected by the agent loop, not parsed from LLM text. |
 
 ### `action` Block
 
@@ -1131,3 +1197,4 @@ Test files:
 - `tests/test_assistant/12_test_incident_reporting.py` — Incident event reporting: permission denied events, mutating tool events, error events, category conventions
 - `tests/test_assistant/13_test_memory.py` — Memory service: read/write/delete, tier permissions, key validation, secret detection, size limits, build_memory_prompt, onboarding flag
 - `tests/test_assistant/14_test_memory_cleanup.py` — Nightly cleanup: mechanical phase (orphans, size prune, suspicious scan), dreaming phase (should_dream, dream_tier, apply_dream_actions)
+- `tests/test_assistant/32_test_context_refs.py` — `add_context` tool: valid refs, invalid model/app/pk filtering, DENY_AI_VIEW filtering, mixed refs, empty input, `_validate_block` for context type, `_extract_context_refs` helper

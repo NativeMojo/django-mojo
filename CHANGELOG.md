@@ -1,5 +1,15 @@
 ## v1.1.0 - (current)
 
+## v1.2.1 - May 06, 2026
+
+assistant `add_context` tool — clickable model references on messages
+
+### Added
+- **Assistant `add_context` tool** — new core tool (`domain="models"`, always sent) that lets the LLM attach validated clickable model references to its response. The LLM calls `add_context` with a list of `{app_name, model_name, pk, label}` objects when it mentions specific records; each reference is validated through `_resolve_model()` + `_check_ai_access()` + `pk.exists()` before being returned. Invalid references are silently filtered. Max 20 refs per call.
+- **`context` block type** — agent loop accumulates validated refs from all `add_context` calls in a turn and injects `{"type": "context", "references": [...]}` onto the final `Message.blocks` array. Multiple `add_context` calls in one turn merge into a single block. No block is injected when all refs fail validation.
+- **System prompt guidance** — built-in system prompt instructs the LLM to use `add_context` when referencing specific records so admins can click through rather than searching.
+- **Frontend rendering contract** — `context` block: render as a compact strip of linked cards per reference. REST URL: `/api/{app_name}/{model_name_lowercase}/{pk}`. Click action: `Modal.showModel(instance)` or navigate to detail view. See `docs/web_developer/assistant/blocks.md`.
+
 ## v1.2.0 - May 06, 2026
 
 significant recent chants cause for a version bump

@@ -9,7 +9,7 @@ def on_ticket(request, pk=None):
 
 
 @md.URL('ticket/note')
-@md.URL('ticket/<int:pk>/note')
+@md.URL('ticket/note/<int:pk>')
 def on_ticket_note(request, pk=None):
     return TicketNote.on_rest_request(request, pk)
 

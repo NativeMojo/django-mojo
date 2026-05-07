@@ -1,7 +1,7 @@
 # Assistant Context References
 
 **Type**: request
-**Status**: planned
+**Status**: resolved
 **Date**: 2026-05-06
 **Priority**: medium
 
@@ -179,3 +179,39 @@ Add an `add_context` tool to the assistant that attaches validated, clickable mo
 
 - `docs/django_developer/assistant/README.md` — add_context tool, context block type, system prompt guidance
 - `docs/web_developer/assistant/` — context block rendering contract for frontend consumers
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-05-06
+
+### What Was Built
+
+Added `add_context` core tool to the assistant's models domain. The tool validates model references through the existing `_resolve_model()` + `_check_ai_access()` chain, checks pk existence, and returns validated refs. The agent loop accumulates refs across tool calls and injects a single `{"type": "context", "references": [...]}` block on the final assistant message. System prompt updated to guide LLM usage.
+
+### Files Changed
+
+- `mojo/apps/assistant/services/tools/models.py` — `_tool_add_context` handler with `@tool` registration, pk type enforcement, label truncation
+- `mojo/apps/assistant/services/agent.py` — `"context"` in VALID_BLOCK_TYPES, `_validate_block` context case, `_extract_context_refs` helper, ref accumulation in both `run_assistant` and `run_assistant_ws`, system prompt addition
+- `tests/test_assistant/32_test_context_refs.py` — 14 tests covering validation, filtering, block validation, and ref extraction
+- `tests/test_assistant/15_test_two_tier_tools.py` — bumped core tools assertion from 20 to 25
+
+### Tests
+
+- `tests/test_assistant/32_test_context_refs.py` — 14 tests, all passing
+- Run: `bin/run_tests --agent -t test_assistant.32_test_context_refs`
+
+### Docs Updated
+
+- Docs updates handled by docs-updater agent post-commit
+
+### Security Review
+
+- pk type enforcement (`isinstance(pk, int)`) prevents ValueError on `.filter(pk=pk)`
+- Label truncation (`[:200]`) prevents unbounded string storage
+- Access check aligned to idiomatic `err = _check_ai_access(...); if err:` pattern
+
+### Follow-up
+
+- Frontend rendering: `web-mojo/planning/requests/assistant-context-blocks-ui.md` (separate request for UI developer)
+- Additional MODEL_REF registrations for models beyond incident/account (incremental, as needed)
