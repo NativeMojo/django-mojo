@@ -647,6 +647,7 @@ def _find_open_category_ticket(incident_category):
             metadata__llm_linked=True,
             incident__category=incident_category,
             incident__isnull=False,
+            incident__status__in=["new", "open", "investigating"],
         )
         .exclude(status__in=TICKET_CLOSED_STATUSES)
         .exclude(metadata__has_key="update_suggestion")
@@ -1075,11 +1076,13 @@ def _tool_add_ticket_note(params):
     references = list(params.get("references") or [])
 
     if params.get("incident_id"):
-        references.append({
-            "model": "incident.Incident",
-            "pk": params["incident_id"],
-            "label": f"Incident #{params['incident_id']}",
-        })
+        from mojo.apps.incident.models import Incident
+        if Incident.objects.filter(pk=params["incident_id"]).exists():
+            references.append({
+                "model": "incident.Incident",
+                "pk": params["incident_id"],
+                "label": f"Incident #{params['incident_id']}",
+            })
 
     if note and references:
         valid_refs = [
@@ -1346,6 +1349,7 @@ def _build_open_tickets_section(category):
             metadata__llm_linked=True,
             incident__category=category,
             incident__isnull=False,
+            incident__status__in=["new", "open", "investigating"],
         )
         .exclude(status__in=TICKET_CLOSED_STATUSES)
         .exclude(metadata__has_key="update_suggestion")
