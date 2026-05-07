@@ -1,7 +1,7 @@
 # Assistant Skill Discovery is Fundamentally Broken
 
 **Type**: bug
-**Status**: planned
+**Status**: resolved
 **Date**: 2026-05-07
 **Severity**: critical
 
@@ -157,3 +157,40 @@ Inject a skill catalog into the system prompt so the LLM knows what skills exist
 
 - `docs/django_developer/assistant/skills.md` — Update discovery section: catalog injection, `find_skill` dual-mode, new `update_skill` tool
 - `docs/web_developer/assistant/` — Update if REST skill endpoints are documented there
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-05-07
+
+### What Was Built
+
+Skill catalog injection into system prompt so the LLM knows what skills exist at conversation start. Added `get_skill` (load by ID), `update_skill` (partial updates), reworked `find_skill` to accept `skill_id`, and added `update_skill` tool. Fixed boolean falsiness bug and group-tier permission check per security review.
+
+### Files Changed
+
+- `mojo/apps/assistant/services/skills.py` — Added `build_skill_catalog()`, `get_skill()`, `update_skill()` with full validation and permission checks
+- `mojo/apps/assistant/services/tools/skills.py` — `find_skill` now accepts `skill_id`; new `update_skill` tool; type validation on skill_id params
+- `mojo/apps/assistant/services/agent.py` — System prompt `## Skills` section rewritten with `{skill_catalog}` placeholder; `_get_system_prompt()` injects catalog
+
+### Tests
+
+- `tests/test_assistant/21_test_skills.py` — 15 new tests (get_skill, update_skill partial updates, boolean toggle, deactivation, name collision, permission denied, catalog output/scoping/empty)
+- Run: `bin/run_tests -t test_assistant.21_test_skills`
+
+### Docs Updated
+
+- `docs/django_developer/assistant/skills.md` — Service API, tools table, agent behavior section
+- `docs/web_developer/assistant/skills.md` — Editing flow, triggering section, tool table
+- `CHANGELOG.md` — Skill catalog injection, new functions and tools
+
+### Security Review
+
+- Fixed: boolean falsiness bug that made `auto_execute=True` irrevocable via `update_skill`
+- Fixed: group-tier permission check used caller's ambient group instead of `skill.group`
+- Added: `skill_id` type validation in tool layer
+- Remaining advisory: skill content in system prompt is user-controlled — prompt injection risk is mitigated by the fact that only users with `assistant`/`view_admin` permissions can create skills
+
+### Follow-up
+
+- None
