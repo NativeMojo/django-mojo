@@ -54,6 +54,7 @@ You have access to tools that let you query the system and take actions.
 - Update agent_memory when you learn something new about a pattern.
 - Before creating a new rule, check the existing active rules shown in the prompt context. If an existing rule covers a similar pattern but missed this event, use suggest_rule_update to propose modifications to that rule instead of creating a new one.
 - Use request_approval when you want human confirmation before taking a destructive action (blocking IPs, escalations). This creates a structured approval request on the ticket.
+- Use add_ticket_note with references when discussing specific objects (rulesets, incidents, IPs). This creates clickable context cards in the UI so admins can quickly navigate to the referenced items without searching.
 
 ## Incident Deletion Lifecycle
 - RuleSets can have `metadata.delete_on_resolution = true` — incidents matching that rule are auto-deleted when resolved or closed. Use `delete_on_resolution` when proposing rules for noise patterns (bot scanning, brute-force, health blips) where the incident has no long-term value.
@@ -299,6 +300,31 @@ TOOLS = [
                 "memory": {"type": "string", "description": "What you learned (appended to existing memory)"},
             },
             "required": ["ruleset_id", "memory"],
+        },
+    },
+    {
+        "name": "add_ticket_note",
+        "description": "Add a note to a ticket, optionally with context references that render as clickable model links in the UI. Use references when you mention specific objects (rulesets, incidents, IPs) so admins can click through to them directly.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticket_id": {"type": "integer", "description": "The ticket to add the note to"},
+                "note": {"type": "string", "description": "The note text (your message to the admin)"},
+                "references": {
+                    "type": "array",
+                    "description": "Optional model references for clickable context cards. Each reference renders as a linked card in the UI.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "model": {"type": "string", "description": "Model path (e.g., 'incident.RuleSet', 'incident.Incident', 'account.GeoLocatedIP')"},
+                            "pk": {"type": "integer", "description": "Primary key of the model instance"},
+                            "label": {"type": "string", "description": "Display label (e.g., 'SSH brute force blocker', 'IP 10.0.0.1')"},
+                        },
+                        "required": ["model", "pk"],
+                    },
+                },
+            },
+            "required": ["ticket_id", "note"],
         },
     },
     {
@@ -986,6 +1012,36 @@ def _tool_query_open_incidents(params):
     ]
 
 
+CONTEXT_ALLOWED_MODELS = {
+    "incident.RuleSet", "incident.Incident", "incident.Event",
+    "incident.Ticket", "account.GeoLocatedIP",
+}
+
+
+def _tool_add_ticket_note(params):
+    from mojo.apps.incident.models import Ticket
+
+    ticket = Ticket.objects.get(pk=params["ticket_id"])
+    note = _append_ticket_note(ticket, params["note"])
+
+    references = params.get("references")
+    if note and references:
+        valid_refs = [
+            ref for ref in references
+            if ref.get("model") in CONTEXT_ALLOWED_MODELS
+        ]
+        if valid_refs:
+            note.metadata = {
+                "action": {
+                    "type": "context",
+                    "references": valid_refs,
+                }
+            }
+            note.save(update_fields=["metadata"])
+
+    return {"ok": True, "ticket_id": ticket.pk, "note_id": note.pk if note else None}
+
+
 def _tool_request_approval(params):
     from mojo.apps.incident.models import Ticket, TicketNote
 
@@ -1116,6 +1172,7 @@ TOOL_DISPATCH = {
     "send_alert": _tool_send_alert,
     "create_rule": _tool_create_rule,
     "update_rule_memory": _tool_update_rule_memory,
+    "add_ticket_note": _tool_add_ticket_note,
     "request_approval": _tool_request_approval,
     "suggest_rule_update": _tool_suggest_rule_update,
     "merge_incidents": _tool_merge_incidents,

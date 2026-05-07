@@ -1343,3 +1343,131 @@ def test_rule_update_approval(opts):
 
     ticket.refresh_from_db()
     assert ticket.status == "resolved", f"Ticket should be resolved, got {ticket.status}"
+
+
+@th.django_unit_test("LLM tool: add_ticket_note with context references")
+def test_add_ticket_note_with_context(opts):
+    from mojo.apps.incident.models import RuleSet, Ticket, TicketNote
+    from django.contrib.auth import get_user_model
+    User = get_user_model()
+
+    Ticket.objects.filter(category="ctx_note_test").delete()
+    RuleSet.objects.filter(category="ctx_note_test").delete()
+
+    if not User.objects.filter(is_superuser=True, is_active=True).exists():
+        User.objects.create_user(
+            username="ctx_note_admin", email="ctx_note@test.com",
+            password="testpass123", is_superuser=True, is_active=True,
+        )
+
+    ruleset = RuleSet.objects.create(
+        name="Context ref target", category="ctx_note_test",
+        handler="block://?ttl=3600", is_active=True,
+    )
+
+    ticket = Ticket.objects.create(
+        title="Context note test",
+        status="open", priority=5,
+        category="ctx_note_test",
+        metadata={"llm_linked": True, "llm_enabled": True},
+    )
+
+    from mojo.apps.incident.handlers.llm_agent import _tool_add_ticket_note
+    result = _tool_add_ticket_note({
+        "ticket_id": ticket.pk,
+        "note": "I found a relevant ruleset that covers this pattern.",
+        "references": [
+            {"model": "incident.RuleSet", "pk": ruleset.pk, "label": "Context ref target"},
+            {"model": "incident.Incident", "pk": 999, "label": "Related incident"},
+        ],
+    })
+
+    assert result["ok"] is True, "add_ticket_note should succeed"
+    assert result["note_id"] is not None, "Should return a note ID"
+
+    note = TicketNote.objects.get(pk=result["note_id"])
+    assert note.note.startswith("[LLM Agent]"), \
+        f"Note should be tagged as LLM Agent, got: {note.note[:30]}"
+    assert note.metadata is not None, "Note should have metadata"
+    assert note.metadata["action"]["type"] == "context", \
+        f"Action type should be 'context', got: {note.metadata['action']['type']}"
+    assert len(note.metadata["action"]["references"]) == 2, \
+        f"Should have 2 references, got {len(note.metadata['action']['references'])}"
+    assert note.metadata["action"]["references"][0]["model"] == "incident.RuleSet", \
+        "First reference should be RuleSet"
+    assert note.metadata["action"]["references"][0]["label"] == "Context ref target", \
+        "First reference should have the label"
+
+
+@th.django_unit_test("LLM tool: add_ticket_note filters disallowed model refs")
+def test_add_ticket_note_filters_bad_refs(opts):
+    from mojo.apps.incident.models import Ticket, TicketNote
+    from django.contrib.auth import get_user_model
+    User = get_user_model()
+
+    Ticket.objects.filter(category="ctx_filter_test").delete()
+
+    if not User.objects.filter(is_superuser=True, is_active=True).exists():
+        User.objects.create_user(
+            username="ctx_filter_admin", email="ctx_filter@test.com",
+            password="testpass123", is_superuser=True, is_active=True,
+        )
+
+    ticket = Ticket.objects.create(
+        title="Context filter test",
+        status="open", priority=5,
+        category="ctx_filter_test",
+        metadata={"llm_linked": True, "llm_enabled": True},
+    )
+
+    from mojo.apps.incident.handlers.llm_agent import _tool_add_ticket_note
+    result = _tool_add_ticket_note({
+        "ticket_id": ticket.pk,
+        "note": "Testing with a disallowed model ref.",
+        "references": [
+            {"model": "auth.User", "pk": 1, "label": "Should be filtered"},
+            {"model": "incident.RuleSet", "pk": 1, "label": "Should be kept"},
+        ],
+    })
+
+    assert result["ok"] is True, "add_ticket_note should succeed"
+
+    note = TicketNote.objects.get(pk=result["note_id"])
+    refs = note.metadata["action"]["references"]
+    assert len(refs) == 1, f"Should have 1 reference (auth.User filtered out), got {len(refs)}"
+    assert refs[0]["model"] == "incident.RuleSet", \
+        f"Only allowed model should remain, got: {refs[0]['model']}"
+
+
+@th.django_unit_test("LLM tool: add_ticket_note without references has no action metadata")
+def test_add_ticket_note_plain(opts):
+    from mojo.apps.incident.models import Ticket, TicketNote
+    from django.contrib.auth import get_user_model
+    User = get_user_model()
+
+    Ticket.objects.filter(category="ctx_plain_test").delete()
+
+    if not User.objects.filter(is_superuser=True, is_active=True).exists():
+        User.objects.create_user(
+            username="ctx_plain_admin", email="ctx_plain@test.com",
+            password="testpass123", is_superuser=True, is_active=True,
+        )
+
+    ticket = Ticket.objects.create(
+        title="Plain note test",
+        status="open", priority=5,
+        category="ctx_plain_test",
+        metadata={"llm_linked": True, "llm_enabled": True},
+    )
+
+    from mojo.apps.incident.handlers.llm_agent import _tool_add_ticket_note
+    result = _tool_add_ticket_note({
+        "ticket_id": ticket.pk,
+        "note": "Just a plain note with no references.",
+    })
+
+    assert result["ok"] is True, "add_ticket_note should succeed"
+
+    note = TicketNote.objects.get(pk=result["note_id"])
+    assert note.metadata == {} or note.metadata is None or "action" not in (note.metadata or {}), \
+        f"Plain note should have no action metadata, got: {note.metadata}"
