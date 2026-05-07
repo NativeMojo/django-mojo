@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## v1.2.2 - May 07, 2026
+
+ticket status changes
+
+
 ## v1.2.1 - May 06, 2026
 
 MORE AI improvements
