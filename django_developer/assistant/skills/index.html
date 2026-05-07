@@ -3694,10 +3694,43 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#get_skilluser-skill_id-groupnone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_skill(user, skill_id, group=None)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#save_skilluser-tier-name-description-triggers-steps-groupnone-auto_executefalse" class="md-nav__link">
     <span class="md-ellipsis">
       
         save_skill(user, tier, name, description, triggers, steps, group=None, auto_execute=False)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#update_skilluser-skill_id-groupnone-fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        update_skill(user, skill_id, group=None, **fields)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#build_skill_cataloguser-groupnone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        build_skill_catalog(user, group=None)
       
     </span>
   </a>
@@ -3764,6 +3797,28 @@
   
     <nav class="md-nav" aria-label="Assistant Tools">
       <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#find_skill-id-lookup-and-keyword-search" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        find_skill — ID lookup and keyword search
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#update_skill-partial-update" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        update_skill — partial update
+      
+    </span>
+  </a>
+  
+</li>
         
           <li class="md-nav__item">
   <a href="#agent-behavior-system-prompt" class="md-nav__link">
@@ -3938,40 +3993,67 @@
 <a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="c1"># Returns: [{&quot;id&quot;: 1, &quot;tier&quot;: &quot;user&quot;, &quot;name&quot;: &quot;...&quot;, &quot;steps&quot;: [...], ...}]</span>
 </code></pre></div>
 <p>Returns an empty list when no match is found or when skills are disabled.</p>
+<h3 id="get_skilluser-skill_id-groupnone"><code>get_skill(user, skill_id, group=None)</code><a class="headerlink" href="#get_skilluser-skill_id-groupnone" title="Permanent link">&para;</a></h3>
+<p>Load a single skill by primary key with permission check. Returns the full detail dict (same shape as <code>find_skills</code> results) or an error dict.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.assistant.services.skills</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_skill</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="n">result</span> <span class="o">=</span> <span class="n">get_skill</span><span class="p">(</span><span class="n">user</span><span class="p">,</span> <span class="n">skill_id</span><span class="o">=</span><span class="mi">42</span><span class="p">,</span> <span class="n">group</span><span class="o">=</span><span class="n">group</span><span class="p">)</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="c1"># Returns: {&quot;id&quot;: 42, &quot;tier&quot;: &quot;user&quot;, &quot;name&quot;: &quot;...&quot;, &quot;steps&quot;: [...], ...}</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="c1"># Or: {&quot;error&quot;: &quot;Skill 42 not found&quot;}</span>
+</code></pre></div>
+<p>User-tier skills are scoped to their owner — a non-superuser cannot load another user's skill by ID.</p>
 <h3 id="save_skilluser-tier-name-description-triggers-steps-groupnone-auto_executefalse"><code>save_skill(user, tier, name, description, triggers, steps, group=None, auto_execute=False)</code><a class="headerlink" href="#save_skilluser-tier-name-description-triggers-steps-groupnone-auto_executefalse" title="Permanent link">&para;</a></h3>
 <p>Create or update a skill. Skills with the same name in the same scope are updated (upsert).</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.assistant.services.skills</span><span class="w"> </span><span class="kn">import</span> <span class="n">save_skill</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="n">result</span> <span class="o">=</span> <span class="n">save_skill</span><span class="p">(</span>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>    <span class="n">user</span><span class="p">,</span>
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>    <span class="n">tier</span><span class="o">=</span><span class="s2">&quot;user&quot;</span><span class="p">,</span>
-<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;rebuild sales reports&quot;</span><span class="p">,</span>
-<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>    <span class="n">description</span><span class="o">=</span><span class="s2">&quot;Finds failed report jobs and retries them&quot;</span><span class="p">,</span>
-<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>    <span class="n">triggers</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;rebuild sales reports&quot;</span><span class="p">,</span> <span class="s2">&quot;regenerate monthly reports&quot;</span><span class="p">],</span>
-<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>    <span class="n">steps</span><span class="o">=</span><span class="p">[</span>
-<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>        <span class="p">{</span><span class="s2">&quot;tool&quot;</span><span class="p">:</span> <span class="s2">&quot;query_jobs&quot;</span><span class="p">,</span> <span class="s2">&quot;description&quot;</span><span class="p">:</span> <span class="s2">&quot;Find failed report jobs&quot;</span><span class="p">,</span> <span class="s2">&quot;params&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="s2">&quot;failed&quot;</span><span class="p">}},</span>
-<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>        <span class="p">{</span><span class="s2">&quot;tool&quot;</span><span class="p">:</span> <span class="s2">&quot;retry_job&quot;</span><span class="p">,</span> <span class="s2">&quot;description&quot;</span><span class="p">:</span> <span class="s2">&quot;Retry the failed job&quot;</span><span class="p">},</span>
-<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a>    <span class="p">],</span>
-<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="p">)</span>
-<a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a><span class="c1"># Returns: {&quot;message&quot;: &quot;Skill &#39;rebuild sales reports&#39; saved&quot;, &quot;skill&quot;: {...}}</span>
-<a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a><span class="c1"># Or: {&quot;error&quot;: &quot;...&quot;}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.assistant.services.skills</span><span class="w"> </span><span class="kn">import</span> <span class="n">save_skill</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">result</span> <span class="o">=</span> <span class="n">save_skill</span><span class="p">(</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>    <span class="n">user</span><span class="p">,</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>    <span class="n">tier</span><span class="o">=</span><span class="s2">&quot;user&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;rebuild sales reports&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>    <span class="n">description</span><span class="o">=</span><span class="s2">&quot;Finds failed report jobs and retries them&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>    <span class="n">triggers</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;rebuild sales reports&quot;</span><span class="p">,</span> <span class="s2">&quot;regenerate monthly reports&quot;</span><span class="p">],</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>    <span class="n">steps</span><span class="o">=</span><span class="p">[</span>
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>        <span class="p">{</span><span class="s2">&quot;tool&quot;</span><span class="p">:</span> <span class="s2">&quot;query_jobs&quot;</span><span class="p">,</span> <span class="s2">&quot;description&quot;</span><span class="p">:</span> <span class="s2">&quot;Find failed report jobs&quot;</span><span class="p">,</span> <span class="s2">&quot;params&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="s2">&quot;failed&quot;</span><span class="p">}},</span>
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>        <span class="p">{</span><span class="s2">&quot;tool&quot;</span><span class="p">:</span> <span class="s2">&quot;retry_job&quot;</span><span class="p">,</span> <span class="s2">&quot;description&quot;</span><span class="p">:</span> <span class="s2">&quot;Retry the failed job&quot;</span><span class="p">},</span>
+<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a>    <span class="p">],</span>
+<a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a><span class="p">)</span>
+<a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a><span class="c1"># Returns: {&quot;message&quot;: &quot;Skill &#39;rebuild sales reports&#39; saved&quot;, &quot;skill&quot;: {...}}</span>
+<a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a><span class="c1"># Or: {&quot;error&quot;: &quot;...&quot;}</span>
 </code></pre></div>
 <p>Returns a dict with either <code>message</code> + <code>skill</code> (summary view) or <code>error</code>.</p>
+<h3 id="update_skilluser-skill_id-groupnone-fields"><code>update_skill(user, skill_id, group=None, **fields)</code><a class="headerlink" href="#update_skilluser-skill_id-groupnone-fields" title="Permanent link">&para;</a></h3>
+<p>Partial update of an existing skill by ID. Only the keyword arguments provided are written — all other fields are left unchanged. Accepted field names: <code>name</code>, <code>description</code>, <code>triggers</code>, <code>steps</code>, <code>auto_execute</code>, <code>is_active</code>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.assistant.services.skills</span><span class="w"> </span><span class="kn">import</span> <span class="n">update_skill</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="n">result</span> <span class="o">=</span> <span class="n">update_skill</span><span class="p">(</span><span class="n">user</span><span class="p">,</span> <span class="n">skill_id</span><span class="o">=</span><span class="mi">42</span><span class="p">,</span> <span class="n">description</span><span class="o">=</span><span class="s2">&quot;Updated description&quot;</span><span class="p">,</span> <span class="n">auto_execute</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="c1"># Returns: {&quot;message&quot;: &quot;Skill &#39;rebuild sales reports&#39; updated&quot;, &quot;skill&quot;: {...}}</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="c1"># Or: {&quot;error&quot;: &quot;...&quot;}</span>
+</code></pre></div>
+<p>The same permission rules as <code>save_skill</code> apply. User-tier skills are owner-only (non-superusers cannot update another user's skill).</p>
+<h3 id="build_skill_cataloguser-groupnone"><code>build_skill_catalog(user, group=None)</code><a class="headerlink" href="#build_skill_cataloguser-groupnone" title="Permanent link">&para;</a></h3>
+<p>Build a markdown-formatted catalog of all accessible active skills for injection into the agent system prompt. Returns an empty string when no skills exist or when skills are disabled.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.assistant.services.skills</span><span class="w"> </span><span class="kn">import</span> <span class="n">build_skill_catalog</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="n">catalog</span> <span class="o">=</span> <span class="n">build_skill_catalog</span><span class="p">(</span><span class="n">user</span><span class="p">,</span> <span class="n">group</span><span class="o">=</span><span class="n">group</span><span class="p">)</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="c1"># Returns:</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="c1"># &quot;- **rebuild sales reports** (ID: 42, user): Finds failed report jobs and retries them | Triggers: rebuild sales reports, regenerate monthly reports&quot;</span>
+</code></pre></div>
+<p>This is called automatically by <code>_get_system_prompt</code> in <code>agent.py</code> at the start of every conversation turn. The catalog is injected into the <code>{skill_catalog}</code> placeholder in <code>SYSTEM_PROMPT</code>.</p>
 <h3 id="list_skillsuser-groupnone-tiernone"><code>list_skills(user, group=None, tier=None)</code><a class="headerlink" href="#list_skillsuser-groupnone-tiernone" title="Permanent link">&para;</a></h3>
 <p>List all active skills the user can read. Returns summaries grouped by tier (no step details).</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.assistant.services.skills</span><span class="w"> </span><span class="kn">import</span> <span class="n">list_skills</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">result</span> <span class="o">=</span> <span class="n">list_skills</span><span class="p">(</span><span class="n">user</span><span class="p">,</span> <span class="n">group</span><span class="o">=</span><span class="n">group</span><span class="p">)</span>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="c1"># Returns: {&quot;user&quot;: [{...}, ...], &quot;global&quot;: [{...}]}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.assistant.services.skills</span><span class="w"> </span><span class="kn">import</span> <span class="n">list_skills</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="n">result</span> <span class="o">=</span> <span class="n">list_skills</span><span class="p">(</span><span class="n">user</span><span class="p">,</span> <span class="n">group</span><span class="o">=</span><span class="n">group</span><span class="p">)</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="c1"># Returns: {&quot;user&quot;: [{...}, ...], &quot;global&quot;: [{...}]}</span>
 </code></pre></div>
 <p>Pass <code>tier</code> to filter to a single tier. Empty tiers are omitted.</p>
 <h3 id="delete_skilluser-skill_id"><code>delete_skill(user, skill_id)</code><a class="headerlink" href="#delete_skilluser-skill_id" title="Permanent link">&para;</a></h3>
 <p>Delete a skill by ID. The skill owner, group members with <code>assistant</code> permission, or a superuser can delete.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.assistant.services.skills</span><span class="w"> </span><span class="kn">import</span> <span class="n">delete_skill</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="n">result</span> <span class="o">=</span> <span class="n">delete_skill</span><span class="p">(</span><span class="n">user</span><span class="p">,</span> <span class="n">skill_id</span><span class="o">=</span><span class="mi">42</span><span class="p">)</span>
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="c1"># Returns: {&quot;message&quot;: &quot;Skill &#39;rebuild sales reports&#39; deleted&quot;}</span>
-<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="c1"># Or: {&quot;error&quot;: &quot;...&quot;}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.assistant.services.skills</span><span class="w"> </span><span class="kn">import</span> <span class="n">delete_skill</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="n">result</span> <span class="o">=</span> <span class="n">delete_skill</span><span class="p">(</span><span class="n">user</span><span class="p">,</span> <span class="n">skill_id</span><span class="o">=</span><span class="mi">42</span><span class="p">)</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="c1"># Returns: {&quot;message&quot;: &quot;Skill &#39;rebuild sales reports&#39; deleted&quot;}</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="c1"># Or: {&quot;error&quot;: &quot;...&quot;}</span>
 </code></pre></div>
 <hr />
 <h2 id="permissions">Permissions<a class="headerlink" href="#permissions" title="Permanent link">&para;</a></h2>
@@ -4061,7 +4143,7 @@
 </table>
 <hr />
 <h2 id="assistant-tools">Assistant Tools<a class="headerlink" href="#assistant-tools" title="Permanent link">&para;</a></h2>
-<p>Four core tools expose skills to the LLM. All require <code>assistant</code> permission and are in the <code>skills</code> domain.</p>
+<p>Five core tools expose skills to the LLM. All require <code>assistant</code> permission and are in the <code>skills</code> domain.</p>
 <table>
 <thead>
 <tr>
@@ -4074,12 +4156,17 @@
 <tr>
 <td><code>find_skill</code></td>
 <td>No</td>
-<td>Search by keywords. Returns full step definitions.</td>
+<td>Load a skill by ID (from the catalog), or search by keywords. Returns full step definitions.</td>
 </tr>
 <tr>
 <td><code>save_skill</code></td>
 <td>Yes</td>
-<td>Create or update a skill.</td>
+<td>Create or update a skill (full upsert by name).</td>
+</tr>
+<tr>
+<td><code>update_skill</code></td>
+<td>Yes</td>
+<td>Partial update of a skill by ID — only the provided fields are changed.</td>
 </tr>
 <tr>
 <td><code>list_skills</code></td>
@@ -4093,12 +4180,23 @@
 </tr>
 </tbody>
 </table>
-<p>All four are <code>core=True</code> tools — they are always available to the LLM without calling <code>load_tools</code>.</p>
+<p>All five are <code>core=True</code> tools — they are always available to the LLM without calling <code>load_tools</code>.</p>
+<h3 id="find_skill-id-lookup-and-keyword-search"><code>find_skill</code> — ID lookup and keyword search<a class="headerlink" href="#find_skill-id-lookup-and-keyword-search" title="Permanent link">&para;</a></h3>
+<p><code>find_skill</code> accepts two mutually exclusive inputs:</p>
+<ul>
+<li><code>skill_id</code> (integer) — load a specific skill by its ID. Calls <code>get_skill()</code> internally. Use this when the skill is already known from the catalog injected in the system prompt.</li>
+<li><code>query</code> (string) — keyword search across name, description, and triggers. Calls <code>find_skills()</code> internally.</li>
+</ul>
+<p>When <code>skill_id</code> is provided, <code>query</code> is ignored.</p>
+<h3 id="update_skill-partial-update"><code>update_skill</code> — partial update<a class="headerlink" href="#update_skill-partial-update" title="Permanent link">&para;</a></h3>
+<p><code>update_skill</code> takes a required <code>skill_id</code> plus any subset of <code>name</code>, <code>description</code>, <code>triggers</code>, <code>steps</code>, <code>auto_execute</code>, <code>is_active</code>. Fields omitted from the call are not changed. This is the preferred tool when the user wants to adjust one attribute of an existing skill without rewriting the whole thing (contrast with <code>save_skill</code>, which always replaces the full definition when the name matches).</p>
 <h3 id="agent-behavior-system-prompt">Agent Behavior (System Prompt)<a class="headerlink" href="#agent-behavior-system-prompt" title="Permanent link">&para;</a></h3>
+<p>At the start of each conversation turn, <code>_get_system_prompt()</code> calls <code>build_skill_catalog()</code> and injects the result into the <code>{skill_catalog}</code> placeholder in <code>SYSTEM_PROMPT</code>. The catalog lists every accessible active skill with its ID, tier, description, and trigger phrases.</p>
 <p>The system prompt instructs the LLM to:</p>
 <ul>
-<li>Call <code>find_skill</code> when a user's request sounds like a stored procedure or references a skill by name.</li>
-<li>Ask before executing steps unless <code>auto_execute</code> is true.</li>
+<li>Recognize skills from the injected catalog and call <code>find_skill(skill_id=&lt;id&gt;)</code> to load full steps when the user's request matches.</li>
+<li>Fall back to <code>find_skill(query=...)</code> for keyword search when no catalog match is obvious.</li>
+<li>Ask before executing steps unless <code>auto_execute</code> is true (marked <code>AUTO-EXECUTE</code> in the catalog).</li>
 <li>Execute each step in order using the referenced tools, evaluating conditions against the previous step's result.</li>
 </ul>
 <hr />

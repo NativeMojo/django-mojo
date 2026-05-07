@@ -3716,6 +3716,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#editing-a-skill" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Editing a Skill
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#triggering-a-skill" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3893,8 +3904,14 @@
 <p>"Done. I've saved 'rebuild sales reports' as a personal skill with 2 steps. Next time you say 'rebuild sales reports' I'll run it."</p>
 </blockquote>
 <p>No <code>assistant_tool_call</code> events need special handling for skill tools — they appear the same as any other tool call.</p>
+<h3 id="editing-a-skill">Editing a Skill<a class="headerlink" href="#editing-a-skill" title="Permanent link">&para;</a></h3>
+<p>The user can ask the assistant to update part of an existing skill without rewriting the whole thing:</p>
+<blockquote>
+<p>"Update the 'rebuild sales reports' skill to also run on weekends — add 'rebuild weekend reports' as a trigger."</p>
+</blockquote>
+<p>The assistant calls <code>update_skill</code> internally, changing only the fields the user specified. Other fields stay the same. You will see <code>update_skill</code> in <code>tool_calls_made</code> when this happens.</p>
 <h3 id="triggering-a-skill">Triggering a Skill<a class="headerlink" href="#triggering-a-skill" title="Permanent link">&para;</a></h3>
-<p>When the user sends a message that matches a stored skill's name or trigger phrases, the assistant calls <code>find_skill</code> first. If a match is found and <code>auto_execute</code> is false, it presents an <code>action</code> block:</p>
+<p>When the user sends a message that matches a stored skill's name or trigger phrases, the assistant recognizes it from the skill catalog embedded in its system prompt and calls <code>find_skill</code> with the skill's ID to load its steps. If a match is found and <code>auto_execute</code> is false, it presents an <code>action</code> block:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span>
 <a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">    </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;action&quot;</span><span class="p">,</span>
 <a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">    </span><span class="nt">&quot;title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Run skill: rebuild sales reports&quot;</span><span class="p">,</span>
@@ -3959,11 +3976,15 @@
 <tbody>
 <tr>
 <td><code>find_skill</code></td>
-<td>The assistant searched for a matching skill</td>
+<td>The assistant loaded a skill by ID from the catalog, or searched by keyword</td>
 </tr>
 <tr>
 <td><code>save_skill</code></td>
-<td>A skill was created or updated</td>
+<td>A skill was created or fully replaced by name</td>
+</tr>
+<tr>
+<td><code>update_skill</code></td>
+<td>Part of an existing skill was changed (only the specified fields)</td>
 </tr>
 <tr>
 <td><code>list_skills</code></td>
