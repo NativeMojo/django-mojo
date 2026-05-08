@@ -309,14 +309,15 @@ TOOLS = [
     },
     {
         "name": "update_rule_memory",
-        "description": "Write learnings to the RuleSet's agent_memory. This persists across invocations so you remember past decisions for this rule type.",
+        "description": "Write learnings and/or custom prompt instructions to a RuleSet. agent_memory persists your learnings (appended). agent_prompt sets the custom instructions loaded on every future invocation for this rule type (replaced). Provide one or both.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "ruleset_id": {"type": "integer", "description": "The RuleSet ID"},
                 "memory": {"type": "string", "description": "What you learned (appended to existing memory)"},
+                "agent_prompt": {"type": "string", "description": "Custom instructions for future invocations on this rule type. Replaces the existing agent_prompt. Use this to tell your future self how to handle incidents matching this rule."},
             },
-            "required": ["ruleset_id", "memory"],
+            "required": ["ruleset_id"],
         },
     },
     {
@@ -1068,14 +1069,24 @@ def _tool_update_rule_memory(params):
     if not ruleset.metadata:
         ruleset.metadata = {}
 
-    existing = ruleset.metadata.get("agent_memory", "")
-    if existing:
-        ruleset.metadata["agent_memory"] = existing + "\n" + params["memory"]
-    else:
-        ruleset.metadata["agent_memory"] = params["memory"]
+    updated = []
 
-    ruleset.save(update_fields=["metadata"])
-    return {"ok": True, "ruleset_id": ruleset.pk}
+    if params.get("memory"):
+        existing = ruleset.metadata.get("agent_memory", "")
+        if existing:
+            ruleset.metadata["agent_memory"] = existing + "\n" + params["memory"]
+        else:
+            ruleset.metadata["agent_memory"] = params["memory"]
+        updated.append("agent_memory")
+
+    if "agent_prompt" in params:
+        ruleset.metadata["agent_prompt"] = params["agent_prompt"]
+        updated.append("agent_prompt")
+
+    if updated:
+        ruleset.save(update_fields=["metadata"])
+
+    return {"ok": True, "ruleset_id": ruleset.pk, "updated": updated}
 
 
 def _tool_merge_incidents(params):
