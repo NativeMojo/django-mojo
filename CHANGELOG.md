@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## v1.2.4 - May 07, 2026
+
+new fanout on metrics
+
+
 ### Added
 - **Metrics fan-out across child groups** — `/api/metrics/fetch` now accepts a `child_kind` query parameter. When set with `account=group-<parent_id>`, the endpoint resolves all active descendants of the parent group whose `kind` matches and returns the per-bucket sum of the metric across every matching child. Permission is checked once on the parent; members of the parent or any ancestor group are authorized via the existing `Group.user_has_permission` parent-chain walk. The descendant set is capped at `METRICS_FANOUT_MAX_CHILDREN` (default 200). Empty descendant sets return zero-filled series. Implemented as `mojo.apps.metrics.rest.helpers.fetch_group_fanout`. See `docs/web_developer/metrics/metrics.md` (Parent-Group Fan-Out) and `docs/django_developer/metrics/fetching.md` (Group Fan-Out).
 - **Metrics fan-out — per-child breakdown** — `/api/metrics/fetch?breakdown=true` (with `child_kind`) returns one series per child group instead of the sum, keyed by child `name` (with `name#<id>` disambiguation when names collide). Response includes a top-level `groups` map of `key -> id` so dashboards can resolve names to ids without a second call. Single-slug only — multi-slug + breakdown returns 400.
