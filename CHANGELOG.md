@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## v1.2.5 - May 08, 2026
+
+llm support for updating group in ticket
+
+
 ## v1.2.4 - May 07, 2026
 
 new fanout on metrics
