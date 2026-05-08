@@ -2090,6 +2090,34 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#group-fan-out" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Group Fan-Out
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Group Fan-Out">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#per-child-breakdown" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Per-Child Breakdown
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#settings" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3903,6 +3931,34 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#group-fan-out" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Group Fan-Out
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Group Fan-Out">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#per-child-breakdown" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Per-Child Breakdown
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#settings" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4018,6 +4074,18 @@
 <a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="n">metrics</span><span class="o">.</span><span class="n">set_view_perms</span><span class="p">(</span><span class="s2">&quot;group-123&quot;</span><span class="p">,</span> <span class="s2">&quot;view_metrics&quot;</span><span class="p">)</span>
 <a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="n">metrics</span><span class="o">.</span><span class="n">set_write_perms</span><span class="p">(</span><span class="s2">&quot;group-123&quot;</span><span class="p">,</span> <span class="s2">&quot;record_metrics&quot;</span><span class="p">)</span>
 </code></pre></div>
+<h2 id="group-fan-out">Group Fan-Out<a class="headerlink" href="#group-fan-out" title="Permanent link">&para;</a></h2>
+<p><code>/api/metrics/fetch</code> supports a <code>child_kind</code> query param that sums a metric across all active descendants of a parent group whose <code>kind</code> matches:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>GET /api/metrics/fetch?slug=visits&amp;account=group-42&amp;child_kind=location
+</code></pre></div>
+<p>The fan-out is implemented in <code>mojo.apps.metrics.rest.helpers.fetch_group_fanout</code> (REST-layer only — not re-exported on the <code>metrics</code> package). Permission is checked once on the parent via <code>_check_group_account_permission</code>, which walks the parent chain via <code>Group.user_has_permission(check_parents=True)</code>. The descendant set comes from <code>Group.get_children(is_active=True, kind=child_kind)</code>.</p>
+<p>Constraints:
+- <code>account</code> must be <code>group-&lt;parent_id&gt;</code>; other accounts combined with <code>child_kind</code> return 400.
+- The descendant set is capped at <code>METRICS_FANOUT_MAX_CHILDREN</code> (default 200). Exceeding the cap returns 400.
+- An empty descendant set returns a zero-filled series, not an error.</p>
+<h3 id="per-child-breakdown">Per-Child Breakdown<a class="headerlink" href="#per-child-breakdown" title="Permanent link">&para;</a></h3>
+<p>Pass <code>breakdown=true</code> (or call <code>fetch_group_fanout(..., breakdown=True)</code>) to return one series per child instead of the sum. Single-slug only — multi-slug + breakdown raises <code>ValueException</code>.</p>
+<p>Response keys are child <code>name</code>; when two children share a name both keys become <code>name#&lt;id&gt;</code> to avoid silent merging. The response includes a <code>groups</code> map of <code>key -&gt; id</code>.</p>
 <h2 id="settings">Settings<a class="headerlink" href="#settings" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -4037,6 +4105,11 @@
 <td><code>METRICS_TRACK_USER_ACTIVITY</code></td>
 <td><code>False</code></td>
 <td>Auto-record per-user activity metrics</td>
+</tr>
+<tr>
+<td><code>METRICS_FANOUT_MAX_CHILDREN</code></td>
+<td><code>200</code></td>
+<td>Hard cap on the number of child groups a single fan-out fetch will dispatch to. Requests resolving more children return 400.</td>
 </tr>
 </tbody>
 </table>

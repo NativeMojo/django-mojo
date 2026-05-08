@@ -3501,6 +3501,34 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#parent-group-fan-out" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Parent-Group Fan-Out
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Parent-Group Fan-Out">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#per-child-breakdown" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Per-Child Breakdown
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#fetch-by-category" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3833,6 +3861,34 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#parent-group-fan-out" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Parent-Group Fan-Out
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Parent-Group Fan-Out">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#per-child-breakdown" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Per-Child Breakdown
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#fetch-by-category" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3955,6 +4011,16 @@
 <td><code>false</code></td>
 <td>Include time labels in response</td>
 </tr>
+<tr>
+<td><code>child_kind</code></td>
+<td>unset</td>
+<td>When set with <code>account=group-&lt;parent_id&gt;</code>, sums the metric across all active descendants of the parent whose <code>kind</code> matches. See <a href="#parent-group-fan-out">Parent-Group Fan-Out</a>.</td>
+</tr>
+<tr>
+<td><code>breakdown</code></td>
+<td><code>false</code></td>
+<td>When <code>true</code> (with <code>child_kind</code>), returns one series per child group instead of summing. Single-slug only.</td>
+</tr>
 </tbody>
 </table>
 <p><strong>Response (single slug):</strong></p>
@@ -4069,8 +4135,56 @@
 - <code>delta_pct</code> is omitted when <code>prev_value</code> is 0 (avoids Infinity).
 - The response shape is identical to the non-delta response when <code>with_delta</code> is absent or <code>false</code> — fully backwards compatible.
 - <code>prev_when</code> is one bucket back from <code>when</code> at the given granularity.</p>
+<h2 id="parent-group-fan-out">Parent-Group Fan-Out<a class="headerlink" href="#parent-group-fan-out" title="Permanent link">&para;</a></h2>
+<p>When a metric is recorded per child group (<code>account=group-&lt;child_id&gt;</code>) and you want a parent-level rollup, pass <code>child_kind</code> to fan out across every active descendant of the parent group that matches the kind. Per-bucket values are summed across children.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>GET /api/metrics/fetch?slug=visits&amp;account=group-42&amp;child_kind=location&amp;granularity=days&amp;with_labels=true
+</code></pre></div>
+<ul>
+<li><code>account</code> must be of the form <code>group-&lt;parent_id&gt;</code>. Other accounts (<code>public</code>, <code>global</code>, <code>user-*</code>) return 400 when combined with <code>child_kind</code>.</li>
+<li>Permission is checked once on the parent group. Members of the parent or any of its ancestor groups (via <code>Group.user_has_permission</code> parent-chain walk) are authorized — no per-child permission check.</li>
+<li>The descendant set is recursive: grandchildren of the matching kind are summed too.</li>
+<li>Inactive children are excluded.</li>
+<li>An empty descendant set returns a zero-filled series of the correct length, not an error.</li>
+<li>The fan-out is capped at <code>METRICS_FANOUT_MAX_CHILDREN</code> (default 200). Requests resolving more children return 400.</li>
+</ul>
+<p>The response shape matches the multi-slug shape of the regular fetch:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="p">{</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">    </span><span class="nt">&quot;labels&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;2024-01-01&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;2024-01-02&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;2024-01-03&quot;</span><span class="p">],</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="w">    </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="w">      </span><span class="nt">&quot;visits&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="mi">320</span><span class="p">,</span><span class="w"> </span><span class="mi">415</span><span class="p">,</span><span class="w"> </span><span class="mi">380</span><span class="p">]</span>
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="p">}</span>
+</code></pre></div>
+<p><code>slug</code>, <code>slugs</code>, and <code>category</code> all work with <code>child_kind</code> — slugs are resolved once (from the parent's category index when <code>category</code> is used) and then summed per slug across children.</p>
+<h3 id="per-child-breakdown">Per-Child Breakdown<a class="headerlink" href="#per-child-breakdown" title="Permanent link">&para;</a></h3>
+<p>Pass <code>breakdown=true</code> to return one series per child group instead of the sum. Useful for stacked charts and per-location dashboards.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>GET /api/metrics/fetch?slug=visits&amp;account=group-42&amp;child_kind=location&amp;breakdown=true&amp;granularity=days&amp;with_labels=true
+</code></pre></div>
+<p>Constraints:
+- Single slug only. Multi-slug + breakdown returns 400 (the flat shape can't carry both slug-keyed and child-keyed data).
+- Same permission, descendant, and cap rules as sum-mode fan-out.</p>
+<p>The response uses the same flat <code>{labels, data: {&lt;key&gt;: [int]}}</code> shape, but <code>&lt;key&gt;</code> is the child group's <code>name</code>. When two children share a name, both keys become <code>name#&lt;id&gt;</code> to avoid silent merging. A top-level <code>groups</code> map gives <code>key -&gt; id</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="p">{</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="w">    </span><span class="nt">&quot;labels&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;2026-04-07&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;2026-04-08&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;2026-04-09&quot;</span><span class="p">],</span>
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="w">    </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a><span class="w">      </span><span class="nt">&quot;Downtown&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="mi">10</span><span class="p">,</span><span class="w"> </span><span class="mi">20</span><span class="p">,</span><span class="w"> </span><span class="mi">30</span><span class="p">],</span>
+<a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a><span class="w">      </span><span class="nt">&quot;Uptown&quot;</span><span class="p">:</span><span class="w">   </span><span class="p">[</span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">15</span><span class="p">,</span><span class="w"> </span><span class="mi">25</span><span class="p">]</span>
+<a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a><span class="w">    </span><span class="p">},</span>
+<a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a><span class="w">    </span><span class="nt">&quot;groups&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a><span class="w">      </span><span class="nt">&quot;Downtown&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span>
+<a id="__codelineno-12-11" name="__codelineno-12-11" href="#__codelineno-12-11"></a><span class="w">      </span><span class="nt">&quot;Uptown&quot;</span><span class="p">:</span><span class="w">   </span><span class="mi">13</span>
+<a id="__codelineno-12-12" name="__codelineno-12-12" href="#__codelineno-12-12"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-12-13" name="__codelineno-12-13" href="#__codelineno-12-13"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-12-14" name="__codelineno-12-14" href="#__codelineno-12-14"></a><span class="p">}</span>
+</code></pre></div>
+<p>If two children share the name <code>Downtown</code>, both keys become <code>Downtown#12</code> / <code>Downtown#15</code>; other unique-named children keep their bare name.</p>
 <h2 id="fetch-by-category">Fetch by Category<a class="headerlink" href="#fetch-by-category" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>GET /api/metrics/fetch?category=auth&amp;granularity=days&amp;with_labels=true
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>GET /api/metrics/fetch?category=auth&amp;granularity=days&amp;with_labels=true
 </code></pre></div>
 <h2 id="granularity-reference">Granularity Reference<a class="headerlink" href="#granularity-reference" title="Permanent link">&para;</a></h2>
 <table>
