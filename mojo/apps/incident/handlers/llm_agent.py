@@ -212,8 +212,24 @@ TOOLS = [
                 "note": {"type": "string", "description": "Your question or analysis for the human"},
                 "priority": {"type": "integer", "description": "1-10 priority (default 5)", "default": 5},
                 "incident_id": {"type": "integer", "description": "Associated incident ID"},
+                "group_id": {"type": "integer", "description": "Group to assign the ticket to. If omitted, auto-inherited from the incident's group."},
             },
             "required": ["title", "note"],
+        },
+    },
+    {
+        "name": "update_ticket",
+        "description": "Update fields on an existing ticket (group, assignee, status, priority).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticket_id": {"type": "integer", "description": "The ticket to update"},
+                "group_id": {"type": "integer", "description": "Group to assign the ticket to"},
+                "assignee_id": {"type": "integer", "description": "User ID to assign as the ticket owner"},
+                "status": {"type": "string", "description": "New status (e.g. open, closed, resolved)"},
+                "priority": {"type": "integer", "description": "New priority (1-10)"},
+            },
+            "required": ["ticket_id"],
         },
     },
     {
@@ -716,12 +732,23 @@ def _tool_create_ticket(params):
     if params.get("ruleset_id"):
         metadata["ruleset_id"] = params["ruleset_id"]
 
+    group = None
+    if params.get("group_id"):
+        try:
+            from mojo.apps.account.models import Group
+            group = Group.objects.get(pk=params["group_id"])
+        except Exception:
+            pass
+    if group is None and incident and incident.group_id:
+        group = incident.group
+
     ticket = Ticket.objects.create(
         title=params["title"],
         description=params["note"],
         priority=params.get("priority", 5),
         category="llm_review",
         incident=incident,
+        group=group,
         metadata=metadata,
     )
 
@@ -732,6 +759,49 @@ def _tool_create_ticket(params):
             note=f"[LLM Agent] Created ticket #{ticket.pk}: {params['title']}")
 
     return {"ok": True, "ticket_id": ticket.pk}
+
+
+def _tool_update_ticket(params):
+    from mojo.apps.incident.models import Ticket
+
+    ticket = Ticket.objects.get(pk=params["ticket_id"])
+    updated = []
+
+    if "group_id" in params:
+        try:
+            from mojo.apps.account.models import Group
+            ticket.group = Group.objects.get(pk=params["group_id"])
+            updated.append("group")
+        except Exception:
+            return {"ok": False, "error": f"Group {params['group_id']} not found"}
+
+    if "assignee_id" in params:
+        try:
+            from django.contrib.auth import get_user_model
+            User = get_user_model()
+            ticket.assignee = User.objects.get(pk=params["assignee_id"])
+            updated.append("assignee")
+        except Exception:
+            return {"ok": False, "error": f"User {params['assignee_id']} not found"}
+
+    if "status" in params:
+        old_status = ticket.status
+        ticket.status = params["status"]
+        updated.append("status")
+
+    if "priority" in params:
+        ticket.priority = params["priority"]
+        updated.append("priority")
+
+    if not updated:
+        return {"ok": True, "ticket_id": ticket.pk, "updated": []}
+
+    ticket.save(update_fields=updated + ["modified"])
+
+    note_parts = [f"{f} updated" for f in updated]
+    _append_ticket_note(ticket, f"Ticket updated: {', '.join(note_parts)}")
+
+    return {"ok": True, "ticket_id": ticket.pk, "updated": updated}
 
 
 def _tool_add_note(params):
@@ -1227,6 +1297,7 @@ TOOL_DISPATCH = {
     "update_incident": _tool_update_incident,
     "block_ip": _tool_block_ip,
     "create_ticket": _tool_create_ticket,
+    "update_ticket": _tool_update_ticket,
     "add_note": _tool_add_note,
     "send_alert": _tool_send_alert,
     "create_rule": _tool_create_rule,
