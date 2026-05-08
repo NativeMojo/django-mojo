@@ -260,6 +260,7 @@ class Incident(models.Model, MojoModel):
 
         by = getattr(getattr(self, 'active_request', None), 'user', None)
 
+        merged_total = 0
         for incident in other_incidents:
             event_count = incident.events.count()
             # Move all events from the other incident to this incident
@@ -274,6 +275,13 @@ class Incident(models.Model, MojoModel):
             note += ")"
             self.add_history("merged", note=note, by=by)
 
+            merged_total += event_count
             # Delete the now-empty incident
             incident.delete()
+
+        if merged_total:
+            meta = dict(self.metadata or {})
+            meta["event_count"] = int(meta.get("event_count") or 0) + merged_total
+            self.metadata = meta
+            self.save(update_fields=["metadata"])
         return {"status": True}

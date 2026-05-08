@@ -1,5 +1,8 @@
 ## v1.1.0 - (current)
 
+### Added
+- **Incident `metadata.event_count`** — the incident's `metadata` now carries a running `event_count` that is incremented every time an event links to it (`Event.link_to_incident`). Merge (`Incident.on_action_merge`) adds the moved events to the target's count so it stays accurate after consolidation.
+
 ## v1.2.5 - May 08, 2026
 
 llm support for updating group in ticket

@@ -470,21 +470,26 @@ class Event(models.Model, MojoModel):
         self.save()
 
         try:
+            update_fields = ["metadata"]
+            meta = dict(incident.metadata or {})
+            meta["event_count"] = int(meta.get("event_count") or 0) + 1
+
             event_gid = self.group_id
             inc_gid = incident.group_id
-            mismatched = bool((incident.metadata or {}).get("group_mismatch"))
+            mismatched = bool(meta.get("group_mismatch"))
             if event_gid is not None and inc_gid is None and not mismatched:
                 # First event ever to set the incident's group context.
                 incident.group_id = event_gid
-                incident.save(update_fields=["group"])
+                update_fields.append("group")
             elif event_gid is not None and inc_gid is not None and event_gid != inc_gid:
                 # Heterogeneous mix — flag and downgrade. Audit-stable: once
                 # set, the flag is never cleared even if a later event would
                 # match the original group.
-                meta = dict(incident.metadata or {})
                 meta["group_mismatch"] = True
-                incident.metadata = meta
                 incident.group = None
-                incident.save(update_fields=["group", "metadata"])
+                update_fields.append("group")
+
+            incident.metadata = meta
+            incident.save(update_fields=update_fields)
         except Exception:
             logger.exception("Error reconciling incident group on link (incident=%s)", incident.pk)
