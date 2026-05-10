@@ -199,7 +199,7 @@ member = group.invite("alice@example.com")
 n = group.member_count
 ```
 
-`member_count` is exposed via REST as an `extra` on the `basic` and `default` graphs, so list endpoints can render member counts without fetching the membership collection. Backed by `members.filter(is_active=True).count()` per record — at very large scale, consider an annotated queryset instead.
+`member_count` is exposed via REST as an `extra` on the `default` graph (not `basic` — that stays minimal). List endpoints use `default` by, well, default, so the field appears in list payloads without an explicit `?graph=` parameter. Backed by `members.filter(is_active=True).count()` per record — at very large scale, consider an annotated queryset instead.
 
 ## GroupMember Model
 

@@ -62,7 +62,6 @@ class Group(MojoSecrets, MojoModel):
                 ]
             },
             "basic": {
-                "extra": ["member_count"],
                 "fields": [
                     'id',
                     'name',

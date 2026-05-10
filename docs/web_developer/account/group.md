@@ -48,7 +48,7 @@ This scopes all requests to that group.
 }
 ```
 
-`member_count` is the count of active direct members of the group (does not include descendant groups). Available on the `basic` and `default` graphs, so it appears in both detail and list responses.
+`member_count` is the count of active direct members of the group (does not include descendant groups). Available on the `default` graph only — `basic` stays minimal. List endpoints use `default` by default, so the field appears without needing `?graph=`.
 
 ## List Groups
 
@@ -62,7 +62,7 @@ GET /api/group?kind=organization&sort=name
 
 | Graph | Fields |
 |---|---|
-| `basic` | id, name, created, modified, last_activity, is_active, kind, avatar, member_count |
+| `basic` | id, name, created, modified, last_activity, is_active, kind, avatar |
 | `default` | basic fields + parent, auth_domain, metadata, member_count |
 | `simple` | id, uuid, name, created, modified, is_active, parent, kind |
 

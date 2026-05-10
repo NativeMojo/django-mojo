@@ -81,12 +81,13 @@ def test_member_count_in_list_response(opts):
 
 
 @th.django_unit_test()
-def test_member_count_in_basic_graph(opts):
+def test_member_count_not_in_basic_graph(opts):
+    """`basic` graph stays minimal — member_count is `default`-only."""
     assert opts.client.login(ADMIN_USERNAME, ADMIN_PASSWORD), "admin login failed"
     resp = opts.client.get(f"/api/group/{opts.group_id}?graph=basic")
     opts.client.logout()
 
     assert resp.status_code == 200, f"GET should succeed, got {resp.status_code}"
     body = resp.response.data
-    assert body.get("member_count") == 2, \
-        f"basic graph should include member_count=2, got: {body.get('member_count')}"
+    assert "member_count" not in body, \
+        f"basic graph should NOT include member_count, got: {body.get('member_count')}"
