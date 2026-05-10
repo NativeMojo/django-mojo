@@ -194,7 +194,12 @@ has_perm = group.user_has_permission(user, ["manage_members"])
 
 # Invite a user by email
 member = group.invite("alice@example.com")
+
+# Active direct member count (excludes inactive memberships and descendants)
+n = group.member_count
 ```
+
+`member_count` is exposed via REST as an `extra` on the `basic` and `default` graphs, so list endpoints can render member counts without fetching the membership collection. Backed by `members.filter(is_active=True).count()` per record — at very large scale, consider an annotated queryset instead.
 
 ## GroupMember Model
 

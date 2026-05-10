@@ -62,6 +62,7 @@ class Group(MojoSecrets, MojoModel):
                 ]
             },
             "basic": {
+                "extra": ["member_count"],
                 "fields": [
                     'id',
                     'name',
@@ -76,6 +77,7 @@ class Group(MojoSecrets, MojoModel):
                 }
             },
             "default": {
+                "extra": ["member_count"],
                 "fields": [
                     'id',
                     'name',
@@ -122,6 +124,11 @@ class Group(MojoSecrets, MojoModel):
     @property
     def thumbnail(self):
         return None
+
+    @property
+    def member_count(self):
+        """Count of active direct members (does not include descendant groups)."""
+        return self.members.filter(is_active=True).count()
 
     def get_uuid(self):
         if not self.uuid:

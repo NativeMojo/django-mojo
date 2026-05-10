@@ -42,10 +42,13 @@ This scopes all requests to that group.
     "metadata": {"timezone": "America/New_York"},
     "created": "2024-01-01T00:00:00Z",
     "modified": "2024-01-15T10:00:00Z",
-    "avatar": null
+    "avatar": null,
+    "member_count": 12
   }
 }
 ```
+
+`member_count` is the count of active direct members of the group (does not include descendant groups). Available on the `basic` and `default` graphs, so it appears in both detail and list responses.
 
 ## List Groups
 
@@ -59,8 +62,8 @@ GET /api/group?kind=organization&sort=name
 
 | Graph | Fields |
 |---|---|
-| `basic` | id, name, created, modified, last_activity, is_active, kind, avatar |
-| `default` | basic fields + parent, metadata |
+| `basic` | id, name, created, modified, last_activity, is_active, kind, avatar, member_count |
+| `default` | basic fields + parent, auth_domain, metadata, member_count |
 | `simple` | id, uuid, name, created, modified, is_active, parent, kind |
 
 ## Group Membership
