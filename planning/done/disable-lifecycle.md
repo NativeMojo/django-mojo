@@ -1,7 +1,7 @@
 # Standardize User/Group Disable Lifecycle
 
 **Type**: request
-**Status**: planned
+**Status**: resolved
 **Date**: 2026-05-09
 **Priority**: medium
 
@@ -326,3 +326,60 @@ Centralize User/Group disable state on a single `disable.py` service that owns a
 | `docs/web_developer/account/user.md` | UPDATE — disable/reactivate body shapes; throttle endpoint |
 | `docs/web_developer/account/group.md` | UPDATE — disable/reactivate body shapes |
 | `CHANGELOG.md` | Entry |
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-05-09
+**Commits**: 9b0ac23, fc5e7c8
+
+### What Was Built
+
+Centralized User/Group disable lifecycle on a new `mojo.apps.account.services.disable` module that owns every write to `is_active` and the `metadata.protected.disable.*` namespace. Three callers go through it: REST `disable`/`reactivate` POST_SAVE_ACTIONS, the inactive sweep, and `pii_anonymize`. Atomic flip via conditional `update()` detects races and raises `ValueException` on already-in-target-state. History is FIFO-capped at 20.
+
+Also added a `manage_users`-only `GET /api/auth/manage/throttle` endpoint that exposes the per-account login attempt counter from Redis without modifying it.
+
+Legacy keys (`disable_warned`, `disable_warn_date`, `no_disable`) are still honoured on read for one release. Data migration `0041_disable_lifecycle_migrate` populates the new namespace from legacy keys without removing them.
+
+### Files Changed
+
+**New:**
+- `mojo/apps/account/services/disable.py` — single-source service
+- `mojo/apps/account/migrations/0041_disable_lifecycle_migrate.py` — data migration
+- `tests/test_account/test_disable_lifecycle.py` — 26 tests
+- `docs/django_developer/account/disable_lifecycle.md`
+
+**Modified:**
+- `mojo/apps/account/models/user.py` — `on_action_disable`, `on_action_reactivate`, `pii_anonymize` hook
+- `mojo/apps/account/models/group.py` — `on_action_disable`, `on_action_reactivate` (`manage_groups` only)
+- `mojo/apps/account/rest/user.py` — `GET /api/auth/manage/throttle`
+- `mojo/apps/account/services/inactive.py` — refactored to call disable service
+- `mojo/decorators/limits.py` — added `read_account_attempt`
+- `tests/test_account/test_inactive_sweep.py` — 2 assertions updated to new shape
+- `docs/django_developer/account/{user,group,inactive_sweep,README}.md`
+- `docs/django_developer/assistant/README.md`
+- `docs/web_developer/account/{user,group}.md`
+- `CHANGELOG.md`
+
+### Tests
+
+- `tests/test_account/test_disable_lifecycle.py` — 26 scenarios (service, REST, sweep, throttle, migration). All passing.
+- `tests/test_account/test_inactive_sweep.py` — existing 16 tests still passing after refactor.
+- Full suite (`bin/run_tests --agent`): 2182 total, 1831 passed, 351 opt-in skipped, 0 failed.
+- Run: `bin/run_tests --agent -t test_account.test_disable_lifecycle`
+
+### Docs Updated
+
+Both tracks plus the assistant README. New canonical reference is `docs/django_developer/account/disable_lifecycle.md`. The inactive sweep doc points to it for the schema.
+
+### Security Review
+
+One must-consider finding addressed in commit fc5e7c8: Group `on_action_disable` / `on_action_reactivate` originally accepted `"groups"` (baseline write perm) alongside `"manage_groups"`. Tightened to `manage_groups` only, matching the User pattern. Bare `is_active` writes via REST still work under the broader Group `SAVE_PERMS` for back-compat but don't populate the audit namespace.
+
+Other findings noted (intentional admin-only existence oracle on throttle endpoint; correct atomic-race handling in `disable_entity`; no anonymized-user PII in the preserved disable namespace; idempotent migration) — no action required.
+
+### Follow-up
+
+- **Next release:** remove the legacy `disable_warned` / `disable_warn_date` / `no_disable` reads from `disable_service.is_exempt` / `has_warning` / `get_warning_sent_at`, then a follow-up migration to delete the legacy keys.
+- **Consider later:** auto-reactivate on next login if `disable.reason == "inactive"` and within a grace window — separate request.
+- **Consider later:** GroupMember.is_active cascade audit (grep for permission-check sites that read `member.is_active` without also gating on `user.is_active`).
