@@ -47,12 +47,9 @@ The following users are always skipped — both for warnings and for disable:
 
 For groups, only the `no_disable` flag applies (no staff/superuser concept).
 
-To permanently exempt an entity from the sweep:
-
-```python
-user.set_protected_metadata("no_disable", True)
-group.set_protected_metadata("no_disable", True)
-```
+To permanently exempt an entity from the sweep, set `disable.exempt_from_auto_disable=True`
+under `metadata.protected.disable`. The legacy `protected.no_disable=True` flag
+is still honoured for one release.
 
 ---
 
@@ -84,17 +81,24 @@ These appear in the security incident feed and in the assistant's `query_events`
 
 ---
 
-## Protected Metadata Keys
+## Protected Metadata
 
-The sweep uses `metadata["protected"]` on both `User` and `Group` to track state:
+The sweep writes state under `metadata.protected.disable.*` — see
+[disable_lifecycle.md](disable_lifecycle.md) for the canonical schema.
 
-| Key | Type | Purpose |
-|---|---|---|
-| `no_disable` | `True` | Permanent exemption from the sweep |
-| `disable_warned` | `True` | Set when a warning has been sent; cleared after disable or reactivation |
-| `disable_warn_date` | ISO datetime string | UTC timestamp of when the warning was sent; used to detect reactivation |
+Relevant keys:
 
-These keys are written by the sweep service and are write-protected from REST clients. See [Group protected metadata](group.md#protected-metadata) and the `user.md` protected metadata section.
+| Key | Purpose |
+|---|---|
+| `disable.exempt_from_auto_disable` | Permanent exemption from the sweep |
+| `disable.warning.sent_at` | ISO timestamp of when the warning was sent (used to detect reactivation) |
+| `disable.warning.days_until_disable_at_send` | Days until disable threshold at send time |
+| `disable.reason` (set to `"inactive"`) | Written by the disable phase |
+
+**Legacy keys still honoured for one release**: `protected.no_disable`,
+`protected.disable_warned`, `protected.disable_warn_date`. The 0041 data
+migration populates the new namespace from these. A follow-up release will
+remove the legacy reads + the legacy keys themselves.
 
 ---
 

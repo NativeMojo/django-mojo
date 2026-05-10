@@ -91,8 +91,19 @@ class RestMeta:
     VIEW_PERMS = ["view_groups", "manage_groups", "manage_group"]
     SAVE_PERMS = ["manage_groups", "manage_group"]
     PROTECTED_JSON_PERMS = ["manage_groups"]  # required to write metadata["protected"]
+    POST_SAVE_ACTIONS = ['realtime_message', 'disable', 'reactivate']
     SEARCH_FIELDS = ["name"]
 ```
+
+### Post-Save Actions
+
+| Action | Body example | Effect |
+|---|---|---|
+| `realtime_message` | `{"realtime_message": {"topic": "group:<id>:...", "message": ...}}` | Publishes to a group-scoped realtime topic |
+| `disable` | `{"disable": {"reason": "admin\|abuse\|archived", "note": "..."}}` | Flips `is_active=False`, writes `metadata.protected.disable.*` |
+| `reactivate` | `{"reactivate": {"note": "..."}}` | Flips `is_active=True`, appends to `disable.history` (FIFO cap 20) |
+
+`disable`/`reactivate` require `manage_groups` (or `groups`). See [disable_lifecycle.md](disable_lifecycle.md).
 
 ## Hierarchy
 
@@ -136,7 +147,9 @@ group.metadata = {
         "stripe_account_id": "acct_123",  # requires manage_groups
         "webhook_secret": "whsec_abc",    # requires manage_groups
         "plan": "enterprise",
-        "no_disable": True,               # exempt from auto-disable sweep
+        "disable": {                      # see disable_lifecycle.md
+            "exempt_from_auto_disable": True,
+        },
     }
 }
 ```
@@ -154,15 +167,17 @@ See [MojoModel — Protected JSON Fields](../core/mojo_model.md#protected-json-f
 ```python
 # Read a single key from metadata["protected"]
 plan = group.get_protected_metadata("plan", default=None)
-exempted = group.get_protected_metadata("no_disable", default=False)
 
 # Write a single key (saves immediately via update_fields=["metadata", "modified"])
 group.set_protected_metadata("plan", "enterprise")
-group.set_protected_metadata("no_disable", True)   # exempt from auto-disable sweep
 
 # Delete a key by setting it to None
-group.set_protected_metadata("disable_warned", None)
+group.set_protected_metadata("plan", None)
 ```
+
+For disable lifecycle state (`metadata.protected.disable.*`) use the
+[disable service](disable_lifecycle.md) — `disable_entity`, `reactivate_entity`,
+`mark_warning`, etc. — instead of writing the namespace directly.
 
 `set_protected_metadata` always persists immediately. It does not bypass the REST write-protection — that gate applies only to REST requests. Direct Python calls are unrestricted.
 

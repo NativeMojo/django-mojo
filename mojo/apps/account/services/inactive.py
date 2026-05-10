@@ -1,7 +1,14 @@
-"""Service for auto-disabling inactive users and groups."""
+"""Service for auto-disabling inactive users and groups.
+
+State for this service lives under `metadata.protected.disable.*` (see
+`disable_lifecycle.md`). Legacy keys `disable_warned`, `disable_warn_date`, and
+`no_disable` are still honoured on read for one release; writes always use the
+new namespace.
+"""
 from django.db.models import Q
 from mojo.helpers import dates, logit
 from mojo.helpers.settings import settings
+from mojo.apps.account.services import disable as disable_service
 
 logger = logit.get_logger("inactive_sweep", "inactive_sweep.log")
 
@@ -19,28 +26,28 @@ def _get_group_inactive_days():
 
 
 def _clear_stale_warnings(Model, inactive_days):
-    """Clear warning metadata on entities whose last_activity is more recent than warn date."""
-    warned = Model.objects.filter(
-        is_active=True,
-        metadata__contains={"protected": {"disable_warned": True}},
-    )
+    """Clear warning markers on entities whose last_activity is more recent than warn date.
+
+    Filters candidates in Python rather than via JSONField path lookups so the dual
+    legacy/new shape check is straightforward and version-portable.
+    """
+    candidates = Model.objects.filter(is_active=True, metadata__has_key="protected")
     cleared = 0
-    for entity in warned:
-        warn_date_str = entity.get_protected_metadata("disable_warn_date")
+    for entity in candidates:
+        if not disable_service.has_warning(entity):
+            continue
+        warn_date_str = disable_service.get_warning_sent_at(entity)
         if not warn_date_str:
             continue
-        # If last_activity is after the warn date, user reactivated
-        # Parse warn_date to datetime for reliable comparison (not string ordering)
         warn_date = dates.parse(warn_date_str)
         if warn_date and entity.last_activity and entity.last_activity > warn_date:
-            entity.set_protected_metadata("disable_warned", None)
-            entity.set_protected_metadata("disable_warn_date", None)
+            disable_service.clear_warning(entity)
             cleared += 1
     return cleared
 
 
 def warn_inactive_users():
-    """Send warning emails to users approaching inactivity threshold."""
+    """Send warning emails to users approaching the inactivity threshold."""
     from mojo.apps.account.models import User
     from mojo.apps.incident import report_event
 
@@ -56,14 +63,14 @@ def warn_inactive_users():
         is_superuser=True,
     ).exclude(
         is_staff=True,
-    ).exclude(
-        metadata__contains={"protected": {"no_disable": True}},
-    ).exclude(
-        metadata__contains={"protected": {"disable_warned": True}},
     )
 
     warned = 0
     for user in users:
+        if disable_service.is_exempt(user):
+            continue
+        if disable_service.has_warning(user):
+            continue
         days_until = inactive_days - (dates.utcnow() - user.last_activity).days
         if days_until < 0:
             days_until = 0
@@ -78,8 +85,7 @@ def warn_inactive_users():
         except Exception as err:
             logger.error(f"Failed to send inactive warning to user {user.id}: {err}")
 
-        user.set_protected_metadata("disable_warned", True)
-        user.set_protected_metadata("disable_warn_date", str(dates.utcnow()))
+        disable_service.mark_warning(user, days_until_disable=days_until)
 
         report_event(
             details=f"Inactive warning sent to user {user.username} (id={user.id}), {days_until} days until disable",
@@ -98,7 +104,7 @@ def warn_inactive_users():
 def disable_inactive_users():
     """Disable users past the inactivity threshold."""
     from mojo.apps.account.models import User
-    from mojo.apps.incident import report_event
+    from mojo import errors as merrors
 
     inactive_days = _get_account_inactive_days()
     disable_cutoff = dates.subtract(days=inactive_days)
@@ -111,8 +117,6 @@ def disable_inactive_users():
         is_superuser=True,
     ).exclude(
         is_staff=True,
-    ).exclude(
-        metadata__contains={"protected": {"no_disable": True}},
     )
     # Also catch users with null last_activity but old last_login
     legacy = User.objects.filter(
@@ -124,46 +128,18 @@ def disable_inactive_users():
         is_superuser=True,
     ).exclude(
         is_staff=True,
-    ).exclude(
-        metadata__contains={"protected": {"no_disable": True}},
     )
 
     disabled = 0
     for qs in [users, legacy]:
         for user in qs:
-            # Atomic update to avoid race condition
-            updated = User.objects.filter(
-                pk=user.pk,
-                is_active=True,
-            ).update(is_active=False)
-            if not updated:
+            if disable_service.is_exempt(user):
                 continue
-
-            # Clear warning metadata
-            user.refresh_from_db()
-            if user.get_protected_metadata("disable_warned"):
-                user.set_protected_metadata("disable_warned", None)
-                user.set_protected_metadata("disable_warn_date", None)
-
-            days_inactive = (dates.utcnow() - (user.last_activity or user.last_login)).days
-
-            User.class_logit(
-                None,
-                f"Auto-disabled inactive user {user.username} (id={user.id}), {days_inactive} days inactive",
-                kind="auto_disabled",
-                model_id=user.id,
-                level="warn",
-            )
-
-            report_event(
-                details=f"Auto-disabled user {user.username} (id={user.id}, email={user.email}), {days_inactive} days inactive",
-                title=f"Auto-disabled: {user.username}",
-                category="account:auto_disabled",
-                level=4,
-                uid=user.id,
-                model_name="account.User",
-                model_id=user.id,
-            )
+            try:
+                disable_service.disable_entity(user, reason="inactive", by_user=None)
+            except merrors.ValueException:
+                # Already disabled by a concurrent worker — skip.
+                continue
             disabled += 1
 
     return disabled
@@ -182,10 +158,6 @@ def warn_inactive_groups():
         is_active=True,
         last_activity__lt=warn_cutoff,
         last_activity__isnull=False,
-    ).exclude(
-        metadata__contains={"protected": {"no_disable": True}},
-    ).exclude(
-        metadata__contains={"protected": {"disable_warned": True}},
     )
 
     # Find system users with manage_groups or groups permission
@@ -197,6 +169,10 @@ def warn_inactive_groups():
 
     warned = 0
     for group in groups:
+        if disable_service.is_exempt(group):
+            continue
+        if disable_service.has_warning(group):
+            continue
         days_until = inactive_days - (dates.utcnow() - group.last_activity).days
         if days_until < 0:
             days_until = 0
@@ -218,8 +194,7 @@ def warn_inactive_groups():
                 except Exception as err:
                     logger.error(f"Failed to send group inactive warning to user {admin.id} for group {group.id}: {err}")
 
-        group.set_protected_metadata("disable_warned", True)
-        group.set_protected_metadata("disable_warn_date", str(dates.utcnow()))
+        disable_service.mark_warning(group, days_until_disable=days_until)
 
         report_event(
             details=f"Inactive warning for group {group.name} (id={group.id}), {days_until} days until disable",
@@ -237,7 +212,7 @@ def warn_inactive_groups():
 def disable_inactive_groups():
     """Disable groups past the inactivity threshold."""
     from mojo.apps.account.models import Group
-    from mojo.apps.incident import report_event
+    from mojo import errors as merrors
 
     inactive_days = _get_group_inactive_days()
     disable_cutoff = dates.subtract(days=inactive_days)
@@ -246,43 +221,16 @@ def disable_inactive_groups():
         is_active=True,
         last_activity__lt=disable_cutoff,
         last_activity__isnull=False,
-    ).exclude(
-        metadata__contains={"protected": {"no_disable": True}},
     )
 
     disabled = 0
     for group in groups:
-        updated = Group.objects.filter(
-            pk=group.pk,
-            is_active=True,
-        ).update(is_active=False)
-        if not updated:
+        if disable_service.is_exempt(group):
             continue
-
-        group.refresh_from_db()
-        if group.get_protected_metadata("disable_warned"):
-            group.set_protected_metadata("disable_warned", None)
-            group.set_protected_metadata("disable_warn_date", None)
-
-        days_inactive = (dates.utcnow() - group.last_activity).days
-        member_count = group.members.filter(is_active=True).count()
-
-        Group.class_logit(
-            None,
-            f"Auto-disabled inactive group {group.name} (id={group.id}), {days_inactive} days inactive, {member_count} members",
-            kind="auto_disabled",
-            model_id=group.id,
-            level="warn",
-        )
-
-        report_event(
-            details=f"Auto-disabled group {group.name} (id={group.id}), {days_inactive} days inactive, {member_count} members",
-            title=f"Auto-disabled group: {group.name}",
-            category="group:auto_disabled",
-            level=4,
-            model_name="account.Group",
-            model_id=group.id,
-        )
+        try:
+            disable_service.disable_entity(group, reason="inactive", by_user=None)
+        except merrors.ValueException:
+            continue
         disabled += 1
 
     return disabled

@@ -10,6 +10,10 @@
 | POST/PUT | `/api/user/<id>` | required | Update user |
 | DELETE | `/api/user/<id>` | required | Delete user |
 | GET | `/api/user/me` | required | Get current user |
+| POST | `/api/user/<id>` body `{"disable": {...}}` | `manage_users` | Disable user (block) — see [Disable Lifecycle](#disable-lifecycle) |
+| POST | `/api/user/<id>` body `{"reactivate": {...}}` | `manage_users` | Reactivate a disabled user |
+| GET | `/api/auth/manage/throttle?user_id=N` | `manage_users` | Read login attempt counter |
+| POST | `/api/auth/manage/clear_rate_limit` | `manage_users` | Clear login throttle for a user |
 | POST | `/api/auth/verify/email/send` | required | Send email verification link |
 | GET | `/api/auth/verify/email/confirm` | public | Confirm email via link |
 | POST | `/api/auth/verify/phone/send` | required | Send SMS verification code |
@@ -296,3 +300,72 @@ GET /api/user?is_active=true
 GET /api/user?search=alice
 GET /api/user?org=5
 ```
+
+---
+
+## Disable Lifecycle
+
+Admins manage user `is_active` state through two named POST_SAVE_ACTIONS instead of writing the bare `is_active` flag. Both write structured audit metadata under `metadata.protected.disable.*`.
+
+### Disable a user
+
+**POST** `/api/user/<id>`  · requires `manage_users`
+
+```json
+{"disable": {"reason": "admin", "note": "TOS violation §4"}}
+```
+
+`reason` must be one of: `admin`, `abuse`. Server-set reasons (`inactive`, `anonymized`) are rejected from REST.
+
+Effect: `is_active=False`, populates `metadata.protected.disable` with `{reason, at, by_user_id, by_username, note}`. Also clears any `disable.warning` block.
+
+### Reactivate a user
+
+**POST** `/api/user/<id>`  · requires `manage_users`
+
+```json
+{"reactivate": {"note": "Appeal granted"}}
+```
+
+Effect: `is_active=True`. Appends a history entry to `disable.history` (FIFO cap 20) with the prior disable context plus `reactivated_at`, `reactivated_by_user_id`, `reactivated_by_username`, `reactivated_note`.
+
+### Read disable state
+
+`metadata` is included in the default and list graphs, so `data.metadata.protected.disable` is on every user response. Distinguish admin-disabled vs auto-disabled vs anonymized via `disable.reason`.
+
+| `disable.reason` | Meaning |
+|---|---|
+| `admin` | Admin-disabled |
+| `abuse` | Disabled for TOS / abuse |
+| `inactive` | Auto-disabled by inactivity sweep |
+| `anonymized` | Permanently erased via self-deactivate (irreversible) |
+| `null` and `is_active=true` | Active |
+
+### Read login throttle status
+
+**GET** `/api/auth/manage/throttle?user_id=42`  (or `?username=alice`) · requires `manage_users`
+
+```json
+{
+  "status": true,
+  "data": {
+    "count": 7,
+    "limit": 10,
+    "window": 900,
+    "retry_after_seconds": 0
+  }
+}
+```
+
+`count` is the number of failed-login attempts in the current sliding window. `retry_after_seconds > 0` means the user is currently locked out. Pure read — does not modify the counter. Pass `key=login` (default; only `login` is supported in v1).
+
+### Clear login throttle
+
+**POST** `/api/auth/manage/clear_rate_limit` · requires `manage_users`
+
+```json
+{"key": "login", "user_id": 42}
+```
+
+Use this to manually unlock a user after a failed-login lockout.
+

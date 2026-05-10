@@ -69,6 +69,49 @@ def on_clear_rate_limit(request):
     return JsonResponse({"status": True, "data": {"deleted": deleted}})
 
 
+@md.GET('auth/manage/throttle')
+@md.requires_perms("manage_users")
+def on_read_throttle(request):
+    """Read the per-account login attempt counter for support tooling.
+
+    Query params:
+      user_id  — resolve by user id
+      username — resolve by username (alternative to user_id)
+      key      — limit bucket name (default "login"; only "login" supported in v1)
+
+    Returns: {count, limit, window, retry_after_seconds}.
+    Reading does not affect the counter — use clear_rate_limit to reset.
+    """
+    from mojo.decorators.limits import read_account_attempt
+
+    key = request.DATA.get("key", "login")
+    if key != "login":
+        raise merrors.ValueException("only key='login' is supported")
+
+    user_id = request.DATA.get("user_id")
+    username = request.DATA.get("username")
+
+    if user_id:
+        try:
+            account_id = int(user_id)
+        except (TypeError, ValueError):
+            raise merrors.ValueException("Invalid user_id")
+        if not User.objects.filter(pk=account_id).exists():
+            raise merrors.ValueException("Unknown user_id")
+    elif username:
+        target = User.objects.filter(username=username).first()
+        if target is None:
+            raise merrors.ValueException("Unknown username")
+        account_id = target.pk
+    else:
+        raise merrors.ValueException("user_id or username is required")
+
+    limit = settings.get("LOGIN_USERNAME_LIMIT", 10, kind="int")
+    window = settings.get("LOGIN_USERNAME_WINDOW", 900, kind="int")
+    data = read_account_attempt(key, account_id, limit=limit, window=window)
+    return JsonResponse({"status": True, "data": data})
+
+
 @md.POST('refresh_token')
 @md.POST('token/refresh')
 @md.POST("auth/token/refresh")

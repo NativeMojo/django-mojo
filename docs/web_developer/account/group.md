@@ -8,6 +8,8 @@
 | POST | `/api/group` | Create group |
 | GET | `/api/group/<id>` | Get group |
 | POST/PUT | `/api/group/<id>` | Update group |
+| POST | `/api/group/<id>` body `{"disable": {...}}` | Disable (archive/block) group — see [Disable Lifecycle](#disable-lifecycle) |
+| POST | `/api/group/<id>` body `{"reactivate": {...}}` | Reactivate a disabled group |
 | GET | `/api/group/member` | List group members |
 | POST | `/api/group/member` | Add member |
 | GET | `/api/group/member/<id>` | Get membership |
@@ -119,3 +121,35 @@ Groups can have a parent group. Child groups inherit parent-level permissions fo
 ```
 GET /api/group?parent=7
 ```
+
+---
+
+## Disable Lifecycle
+
+Admins manage group `is_active` state through two named POST_SAVE_ACTIONS instead of writing the bare `is_active` flag. Both write structured audit metadata under `metadata.protected.disable.*`. Requires `manage_groups` (or `groups`).
+
+### Disable a group
+
+**POST** `/api/group/<id>`
+
+```json
+{"disable": {"reason": "archived", "note": "Project sunset 2026 Q2"}}
+```
+
+`reason` must be one of: `admin`, `abuse`, `archived`. Server-set reasons (`inactive`) are rejected from REST.
+
+Effect: `is_active=False`, populates `metadata.protected.disable` with `{reason, at, by_user_id, by_username, note}`. Members are unaffected — `GroupMember.is_active` does not cascade.
+
+### Reactivate a group
+
+**POST** `/api/group/<id>`
+
+```json
+{"reactivate": {"note": "Project resumed"}}
+```
+
+Effect: `is_active=True`. Appends a history entry to `disable.history` (FIFO cap 20) with the prior disable context and `reactivated_*` fields.
+
+### Read disable state
+
+`metadata` is in the default graph, so `data.metadata.protected.disable` is on every group response. `disable.reason` distinguishes admin-disabled, archived, abuse-disabled, and auto-disabled (inactivity sweep) cases.

@@ -43,7 +43,7 @@ class Group(MojoSecrets, MojoModel):
         VIEW_PERMS = ["view_groups", "manage_groups", "manage_group", "groups"]
         SAVE_PERMS = ["manage_groups", "manage_group", "groups"]
         PROTECTED_JSON_PERMS = ["admin_compliance", "admin_verify"]
-        POST_SAVE_ACTIONS = ['realtime_message']
+        POST_SAVE_ACTIONS = ['realtime_message', 'disable', 'reactivate']
         LIST_DEFAULT_FILTERS = {
             "is_active": True
         }
@@ -507,6 +507,39 @@ class Group(MojoSecrets, MojoModel):
                 return {"status": False, "error": "Invalid topic for this group"}
             realtime.publish_topic(topic, value.get("message"))
         return {"status": True}
+
+    def on_action_disable(self, value):
+        from mojo import errors as merrors
+        from mojo.apps.account.services import disable as disable_service
+        if not isinstance(value, dict):
+            value = {}
+        if not self.active_user.has_permission(["manage_groups", "groups"]):
+            raise merrors.PermissionDeniedException("manage_groups required to disable a group")
+        reason = value.get("reason")
+        if reason not in disable_service.GROUP_REST_REASONS:
+            allowed = ", ".join(sorted(disable_service.GROUP_REST_REASONS))
+            raise merrors.ValueException(f"reason must be one of: {allowed}")
+        disable_service.disable_entity(
+            self,
+            reason=reason,
+            note=value.get("note"),
+            by_user=self.active_user,
+            request=self.active_request,
+        )
+
+    def on_action_reactivate(self, value):
+        from mojo import errors as merrors
+        from mojo.apps.account.services import disable as disable_service
+        if not isinstance(value, dict):
+            value = {}
+        if not self.active_user.has_permission(["manage_groups", "groups"]):
+            raise merrors.PermissionDeniedException("manage_groups required to reactivate a group")
+        disable_service.reactivate_entity(
+            self,
+            note=value.get("note"),
+            by_user=self.active_user,
+            request=self.active_request,
+        )
 
     def on_rest_created(self):
         metrics.set_value("total_groups", Group.objects.filter(is_active=True).count(), account="global")

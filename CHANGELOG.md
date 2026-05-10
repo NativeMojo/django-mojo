@@ -2,6 +2,8 @@
 
 ### Added
 - **Incident `metadata.event_count`** — the incident's `metadata` now carries a running `event_count` that is incremented every time an event links to it (`Event.link_to_incident`). Merge (`Incident.on_action_merge`) adds the moved events to the target's count so it stays accurate after consolidation.
+- **Disable lifecycle for User and Group** — unified state and audit metadata for `is_active=False` under `metadata.protected.disable.*`. New `disable` and `reactivate` POST_SAVE_ACTIONS on both models capture `reason`, `at`, `by_user_id`, `by_username`, `note`, with FIFO-capped `history` of prior cycles. The inactive sweep, `pii_anonymize()`, and admin REST writes all flow through a single `mojo.apps.account.services.disable` service. Legacy keys (`disable_warned`, `disable_warn_date`, `no_disable`) are still honoured on read for one release; data migration `0041_disable_lifecycle_migrate` populates the new namespace from legacy keys without removing them. See `docs/django_developer/account/disable_lifecycle.md`.
+- **`GET /api/auth/manage/throttle`** — admin-only support endpoint that reads the per-account login attempt counter from Redis without modifying it. Returns `{count, limit, window, retry_after_seconds}`. Pairs with the existing `clear_rate_limit` POST endpoint. New `read_account_attempt` helper in `mojo.decorators.limits`.
 
 ## v1.2.5 - May 08, 2026
 

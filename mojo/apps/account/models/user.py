@@ -123,7 +123,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
 
     class RestMeta:
         LOG_CHANGES = True
-        POST_SAVE_ACTIONS = ['send_invite']
+        POST_SAVE_ACTIONS = ['send_invite', 'disable', 'reactivate']
         NO_SHOW_FIELDS = ["password", "auth_key", "onetime_code"]
         # auth_key and last_activity must never be writable via REST by anyone.
         # auth_key is the JWT signing secret — writing it is a session-invalidation
@@ -784,6 +784,37 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
     def on_action_send_invite(self, value):
         self.send_invite()
 
+    def on_action_disable(self, value):
+        from mojo.apps.account.services import disable as disable_service
+        if not isinstance(value, dict):
+            value = {}
+        if not self.active_user.has_permission("manage_users"):
+            raise merrors.PermissionDeniedException("manage_users required to disable a user")
+        reason = value.get("reason")
+        if reason not in disable_service.USER_REST_REASONS:
+            allowed = ", ".join(sorted(disable_service.USER_REST_REASONS))
+            raise merrors.ValueException(f"reason must be one of: {allowed}")
+        disable_service.disable_entity(
+            self,
+            reason=reason,
+            note=value.get("note"),
+            by_user=self.active_user,
+            request=self.active_request,
+        )
+
+    def on_action_reactivate(self, value):
+        from mojo.apps.account.services import disable as disable_service
+        if not isinstance(value, dict):
+            value = {}
+        if not self.active_user.has_permission("manage_users"):
+            raise merrors.PermissionDeniedException("manage_users required to reactivate a user")
+        disable_service.reactivate_entity(
+            self,
+            note=value.get("note"),
+            by_user=self.active_user,
+            request=self.active_request,
+        )
+
     def pii_anonymize(self):
         """
         Anonymize all personally identifiable information on this user row.
@@ -805,7 +836,10 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         self.first_name = ""
         self.last_name = ""
         self.dob = None
-        self.metadata = {}
+        # Record anonymization in disable namespace; preserves any prior disable
+        # cycle in history while wiping all other metadata keys (PII).
+        from mojo.apps.account.services import disable as disable_service
+        disable_service.record_anonymize(self)
         self.onetime_code = None
         self.avatar = None
         self.org = None

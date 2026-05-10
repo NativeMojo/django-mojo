@@ -9,7 +9,7 @@ from mojo.apps import metrics
 
 logger = logit.get_logger("error", "error.log")
 
-__all__ = ["rate_limit", "strict_rate_limit", "endpoint_metrics", "clear_rate_limits", "check_account_attempt"]
+__all__ = ["rate_limit", "strict_rate_limit", "endpoint_metrics", "clear_rate_limits", "check_account_attempt", "read_account_attempt"]
 
 
 def _hash_key(value):
@@ -332,6 +332,54 @@ def check_account_attempt(key, account_id, limit, window, request=None,
     except Exception as err:
         logger.error(f"check_account_attempt: Redis error for key '{key}' account '{account_id}': {err}")
         return 0, None
+
+
+def read_account_attempt(key, account_id, limit=None, window=None):
+    """Read the current per-account sliding-window attempt count from Redis.
+
+    Pure read — does not increment, does not clean up old entries. Used by
+    support tooling that wants to know whether a user is currently throttled
+    without affecting their counter.
+
+    Args:
+        key:        Rate limit bucket name (e.g. "login")
+        account_id: Resolved user/account identifier
+        limit:      Caller-known limit (used to compute retry_after when over)
+        window:     Caller-known window in seconds (required for any meaningful read)
+
+    Returns:
+        dict with keys: count, limit, window, retry_after_seconds.
+        retry_after_seconds is 0 when the caller is under the limit or when
+        window is None. Fail-open on Redis errors — returns count=0.
+    """
+    result = {
+        "count": 0,
+        "limit": limit,
+        "window": window,
+        "retry_after_seconds": 0,
+    }
+    if window is None:
+        return result
+    try:
+        r = get_connection()
+        if not r:
+            return result
+        redis_key = f"srl:{key}:account:{account_id}"
+        now = time.time()
+        cutoff = now - window
+        count = r.zcount(redis_key, cutoff, "+inf")
+        result["count"] = count
+        if limit is not None and count >= limit:
+            oldest = r.zrangebyscore(redis_key, cutoff, "+inf", start=0, num=1, withscores=True)
+            if oldest:
+                _, oldest_score = oldest[0]
+                retry_after = int(oldest_score + window - now) + 1
+                result["retry_after_seconds"] = max(1, retry_after)
+            else:
+                result["retry_after_seconds"] = max(1, int(window))
+    except Exception as err:
+        logger.error(f"read_account_attempt: Redis error for key '{key}' account '{account_id}': {err}")
+    return result
 
 
 def clear_rate_limits(ip=None, key=None, duid=None, muid=None, account_id=None):

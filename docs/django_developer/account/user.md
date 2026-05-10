@@ -43,7 +43,7 @@ class RestMeta:
     NO_SHOW_FIELDS = ["password", "auth_key", "onetime_code"]
     NO_SAVE_FIELDS = ["auth_key", "last_activity", "is_dob_verified"]
     SEARCH_FIELDS = ["username", "email", "display_name"]
-    POST_SAVE_ACTIONS = ["send_invite"]
+    POST_SAVE_ACTIONS = ["send_invite", "disable", "reactivate"]
     GRAPHS = {
         "basic": {"fields": ["id", "display_name", "username", "last_activity", "is_active"]},
         "default": {"fields": ["id", "display_name", "username", "email", "phone_number",
@@ -291,7 +291,17 @@ Code TTL is configurable via `PHONE_VERIFY_CODE_TTL` (default 600 seconds). Code
 
 ## Post-Save Actions
 
-Add `send_invite` to `POST_SAVE_ACTIONS`. When creating a user with `send_invite=true` in the POST body, `on_action_send_invite` is called after save.
+`POST_SAVE_ACTIONS = ['send_invite', 'disable', 'reactivate']`. The body key IS the action name. Each action requires `manage_users` (re-checked inside the handler).
+
+| Action | Body example | Effect |
+|---|---|---|
+| `send_invite` | `{"send_invite": true}` | Sends an invite email |
+| `disable` | `{"disable": {"reason": "admin\|abuse", "note": "..."}}` | Flips `is_active=False`, writes `metadata.protected.disable.*`, emits incident event |
+| `reactivate` | `{"reactivate": {"note": "..."}}` | Flips `is_active=True`, appends to `disable.history` (FIFO cap 20) |
+
+The full schema and service API are in [disable_lifecycle.md](disable_lifecycle.md).
+
+`pii_anonymize()` records `reason="anonymized"` in the namespace before flipping the flag, preserving any prior cycle in `history`.
 
 ## Settings
 

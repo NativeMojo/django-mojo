@@ -155,8 +155,9 @@ def test_warn_inactive_user(opts):
     opts.warn_user.refresh_from_db()
     assert opts.warn_user.is_active is True, "Warned user should still be active"
     assert warned >= 1, f"Should warn at least 1 user, got: {warned}"
-    assert opts.warn_user.get_protected_metadata("disable_warned") is True, \
-        "Warned user should have disable_warned metadata set"
+    warning = (opts.warn_user.metadata or {}).get("protected", {}).get("disable", {}).get("warning") or {}
+    assert warning.get("sent_at"), \
+        f"Warned user should have disable.warning.sent_at set, got metadata: {opts.warn_user.metadata}"
 
 
 @th.django_unit_test()
@@ -262,8 +263,9 @@ def test_warn_inactive_group(opts):
     opts.warn_group.refresh_from_db()
     assert opts.warn_group.is_active is True, "Warned group should still be active"
     assert warned >= 1, f"Should warn at least 1 group, got: {warned}"
-    assert opts.warn_group.get_protected_metadata("disable_warned") is True, \
-        "Warned group should have disable_warned metadata set"
+    warning = (opts.warn_group.metadata or {}).get("protected", {}).get("disable", {}).get("warning") or {}
+    assert warning.get("sent_at"), \
+        f"Warned group should have disable.warning.sent_at set, got metadata: {opts.warn_group.metadata}"
 
 
 @th.django_unit_test()
