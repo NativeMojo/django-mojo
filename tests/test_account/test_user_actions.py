@@ -253,6 +253,85 @@ def test_disable_totp_via_action(opts):
 
 
 @th.django_unit_test()
+def test_admin_can_change_email_on_other_user(opts):
+    """Admin with manage_users can change another user's email via direct field write."""
+    from mojo.apps.account.models import User
+
+    new_email = "user_actions_renamed_email@test.com"
+    User.objects.filter(email=new_email).delete()
+
+    assert opts.client.login(OTHER_USERNAME, "other_pw_99"), "admin login failed"
+    resp = opts.client.post(f"/api/user/{opts.user_id}", {"email": new_email})
+    opts.client.logout()
+
+    assert resp.status_code == 200, \
+        f"manage_users admin should be able to change email, got {resp.status_code}: {opts.client.last_response.body}"
+    user = User.objects.get(pk=opts.user_id)
+    assert user.email == new_email, f"email should be updated, got {user.email}"
+
+    # Restore for downstream tests
+    User.objects.filter(pk=opts.user_id).update(email=USERNAME, username=USERNAME)
+
+
+@th.django_unit_test()
+def test_users_perm_can_change_email_on_other_user(opts):
+    """A caller with the `users` domain category perm (no manage_users) can change credentials."""
+    from mojo.apps.account.models import User
+
+    User.objects.filter(email__in=["user_actions_users_perm@test.com"]).delete()
+    bare_admin = User.objects.create_user(
+        username="user_actions_users_perm@test.com",
+        email="user_actions_users_perm@test.com",
+        password="bare_pw_99")
+    bare_admin.is_active = True
+    bare_admin.is_email_verified = True
+    bare_admin.save()
+    bare_admin.add_permission("users")
+    # explicitly NOT manage_users
+
+    new_email = "user_actions_users_perm_renamed@test.com"
+    User.objects.filter(email=new_email).delete()
+
+    assert opts.client.login("user_actions_users_perm@test.com", "bare_pw_99"), "bare admin login failed"
+    resp = opts.client.post(f"/api/user/{opts.user_id}", {"email": new_email})
+    opts.client.logout()
+
+    assert resp.status_code == 200, \
+        f"caller with `users` perm should be able to change credentials, got {resp.status_code}: {opts.client.last_response.body}"
+
+    # Restore + cleanup
+    User.objects.filter(pk=opts.user_id).update(email=USERNAME, username=USERNAME)
+    User.objects.filter(pk=bare_admin.pk).delete()
+
+
+@th.django_unit_test()
+def test_owner_only_cannot_direct_change_email(opts):
+    """A self-acting user without users/manage_users perm cannot direct-change email — must use change flow."""
+    from mojo.apps.account.models import User
+
+    User.objects.filter(email__in=["user_actions_owner_only@test.com"]).delete()
+    plain_user = User.objects.create_user(
+        username="user_actions_owner_only@test.com",
+        email="user_actions_owner_only@test.com",
+        password="plain_pw_99")
+    plain_user.is_active = True
+    plain_user.is_email_verified = True
+    plain_user.save()
+    # No admin perms — only owner-via-self-acting
+
+    assert opts.client.login("user_actions_owner_only@test.com", "plain_pw_99"), "plain user login failed"
+    resp = opts.client.post(
+        f"/api/user/{plain_user.pk}",
+        {"email": "user_actions_owner_only_renamed@test.com"})
+    opts.client.logout()
+
+    assert resp.status_code != 200, \
+        f"owner-only self-acting user should be blocked from direct email change, got {resp.status_code}"
+
+    User.objects.filter(pk=plain_user.pk).delete()
+
+
+@th.django_unit_test()
 def test_self_service_actions_reject_admin_on_other(opts):
     """All five self-service actions must reject an admin acting on a different user."""
     from mojo.apps.account.models import User

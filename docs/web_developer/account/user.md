@@ -97,9 +97,14 @@ Users can update their own record (owner permission). Admins with `manage_users`
 | `requires_mfa` | Superusers only |
 | `is_email_verified` | Superusers only |
 | `is_phone_verified` | Superusers only |
+| `email`, `username`, `phone_number` (replace) | Admin tier — any caller with `users`, `manage_users`, or `is_superuser` |
+| `phone_number` (clear or first-set) | Anyone with edit access |
+| `is_active`, `org`, `org_id` | `manage_users` only (`MANAGE_USERS_ONLY_FIELDS`) |
 | `permissions` | Users with `manage_users` (or matching `USER_PERMS_PROTECTION` rules) |
 
 Attempts to set these fields without the required permission return `403`.
+
+For credentials: self-service users without an admin perm cannot direct-write `email`/`username`/`phone_number` (replace). They must use the dedicated change flows (`POST /api/auth/{email,phone}/change/request` → `/confirm`, or `POST /api/auth/username/change`) which verify ownership of the new channel via OTP/link.
 
 ### Name Validation
 

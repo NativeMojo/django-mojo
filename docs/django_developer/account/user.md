@@ -142,6 +142,28 @@ These fields can only be written via REST by a superuser:
 
 These fields are readable in the default graph but write-protected.
 
+## Credential Field Writes (email / username / phone)
+
+Direct REST writes to `email`, `username`, or replacing an existing `phone_number`
+are gated by `_handle_existing_user_pre_save`:
+
+- **Allowed** when the caller has `users` (domain category), `manage_users` (strict admin), or is a superuser.
+- **Blocked** when the caller has only `owner` (self-acting on their own record without admin perms) — they must use the change flows (`POST /api/auth/email/change/{request,confirm}` etc.) which verify ownership of the new channel via OTP/link.
+
+Phone clear (setting `phone_number=null`) and first-set (when the user has none) are
+allowed without admin perms. Only **replacing** an existing phone number requires
+either admin perms or the change flow.
+
+```python
+# Admin acting on another user — works for users / manage_users / superuser
+User.objects.filter(pk=42).update(...)  # bypasses gates entirely (programmatic)
+# Or via REST:
+# POST /api/user/42 body: {"email": "new@example.com"}  → 200 if caller has users/manage_users/superuser
+
+# Self-acting user with no admin perms — blocked
+# POST /api/user/me body: {"email": "new@example.com"}  → 403; use POST /api/auth/email/change/request instead
+```
+
 ## Protected Field Setters
 
 The REST framework calls `set_<field>()` before saving if the method exists. These setters enforce permission checks:

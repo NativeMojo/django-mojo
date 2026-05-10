@@ -748,12 +748,18 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             self._handle_existing_user_pre_save(changed_fields)
 
     def _handle_existing_user_pre_save(self, changed_fields):
+        # Credential changes (email / username / phone-replace) require an admin
+        # tier — `users` (domain category) or `manage_users` (strict admin), or
+        # superuser. Self-acting users (only `owner` perm) must use the change
+        # flows that verify ownership of the new channel via OTP/link.
+        admin_caller = (
+            self.active_user.is_superuser
+            or self.active_user.has_permission(["users", "manage_users"])
+        )
         creds_changed = "email" in changed_fields or "username" in changed_fields
-        # only superuser can change email or username (guard already fired in on_rest_pre_save
-        # for the REST path; this catches any direct programmatic call to this method)
-        if creds_changed and not self.active_user.is_superuser:
+        if creds_changed and not admin_caller:
             raise merrors.PermissionDeniedException("You are not allowed to change email or username")
-        if "phone_number" in changed_fields and not self.active_user.is_superuser:
+        if "phone_number" in changed_fields and not admin_caller:
             old_phone = changed_fields.get("phone_number")
             # Block replacing an existing phone number directly — must use the phone change
             # flow (POST /api/auth/phone/change/request → confirm) so ownership of the new
