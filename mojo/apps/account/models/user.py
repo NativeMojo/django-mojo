@@ -123,7 +123,11 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
 
     class RestMeta:
         LOG_CHANGES = True
-        POST_SAVE_ACTIONS = ['send_invite', 'disable', 'reactivate']
+        POST_SAVE_ACTIONS = [
+            'send_invite', 'disable', 'reactivate',
+            'change_username', 'revoke_sessions',
+            'confirm_totp', 'regenerate_totp_codes', 'disable_totp',
+        ]
         NO_SHOW_FIELDS = ["password", "auth_key", "onetime_code"]
         # auth_key and last_activity must never be writable via REST by anyone.
         # auth_key is the JWT signing secret — writing it is a session-invalidation
@@ -814,6 +818,115 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             by_user=self.active_user,
             request=self.active_request,
         )
+
+    # -- Self-service actions (require self-acting; current_password proves ownership) --
+
+    def _require_self_acting(self, action_name):
+        """Self-service actions cannot be triggered by an admin acting on a different user."""
+        if not self.is_request_user():
+            raise merrors.PermissionDeniedException(
+                f"{action_name} is a self-service action and cannot be performed on behalf of another user")
+
+    def on_action_change_username(self, value):
+        if not isinstance(value, dict):
+            raise merrors.ValueException("change_username requires a body with username and current_password")
+        self._require_self_acting("change_username")
+        if not settings.get("ALLOW_USERNAME_CHANGE", True):
+            raise merrors.PermissionDeniedException("Username change is not allowed")
+
+        new_username = (value.get("username") or "").lower().strip()
+        current_password = value.get("current_password") or ""
+        if not new_username:
+            raise merrors.ValueException("username is required")
+        if not self.has_usable_password():
+            raise merrors.ValueException(
+                "No password set on this account. Use password reset to set one first.")
+        if not self.check_password(current_password):
+            self.report_incident(
+                f"{self.username} entered invalid password on username change",
+                "username:change_failed")
+            raise merrors.PermissionDeniedException("Incorrect password", 401, 401)
+        if new_username == self.username:
+            raise merrors.ValueException("New username must be different from current username")
+
+        old_username = self.username
+        self.username = new_username
+        try:
+            self.validate_username()
+        except Exception:
+            self.username = old_username
+            raise
+        if User.objects.filter(username=new_username).exclude(pk=self.pk).exists():
+            self.username = old_username
+            raise merrors.ValueException("Username already taken")
+        self.save(update_fields=["username", "modified"])
+        self.log(f"Username changed from {old_username} to {new_username}", "username:changed")
+        return {"status": True, "data": {"username": self.username}}
+
+    def on_action_revoke_sessions(self, value):
+        if not isinstance(value, dict):
+            value = {}
+        self._require_self_acting("revoke_sessions")
+        current_password = value.get("current_password") or ""
+        if not self.check_password(current_password):
+            self.report_incident(
+                f"{self.username} entered invalid password on session revoke",
+                "sessions:revoke_failed")
+            raise merrors.PermissionDeniedException("Incorrect password", 401, 401)
+        self.auth_key = uuid.uuid4().hex
+        self.save(update_fields=["auth_key", "modified"])
+        self.report_incident(f"{self.username} revoked all sessions", "sessions:revoked")
+        return {
+            "status": True,
+            "message": "Sessions revoked. Re-authenticate to continue.",
+        }
+
+    def on_action_confirm_totp(self, value):
+        from mojo.apps.account.models.totp import UserTOTP
+        from mojo.apps.account.services import totp as totp_service
+        if not isinstance(value, dict):
+            value = {}
+        self._require_self_acting("confirm_totp")
+        totp = UserTOTP.objects.filter(user=self).first()
+        if not totp:
+            raise merrors.ValueException(
+                "TOTP setup not started. Call /api/account/totp/setup first.")
+        secret = totp.get_secret("totp_secret")
+        if not secret:
+            raise merrors.ValueException(
+                "TOTP setup not started. Call /api/account/totp/setup first.")
+        code = (value.get("code") or "").strip()
+        if not totp_service.verify_code(secret, code):
+            self.report_incident("Invalid TOTP confirmation code", "totp:confirm_failed")
+            raise merrors.ValueException("Invalid code")
+        totp.is_enabled = True
+        totp.save()
+        codes = totp.generate_recovery_codes()
+        self.requires_mfa = True
+        self.save(update_fields=["requires_mfa", "modified"])
+        return {"status": True, "data": {"is_enabled": True, "recovery_codes": codes}}
+
+    def on_action_regenerate_totp_codes(self, value):
+        from mojo.apps.account.models.totp import UserTOTP
+        from mojo.apps.account.services import totp as totp_service
+        if not isinstance(value, dict):
+            value = {}
+        self._require_self_acting("regenerate_totp_codes")
+        totp = UserTOTP.objects.filter(user=self, is_enabled=True).first()
+        if not totp:
+            raise merrors.ValueException("TOTP is not enabled for this account")
+        secret = totp.get_secret("totp_secret")
+        code = (value.get("code") or "").strip()
+        if not totp_service.verify_code(secret, code):
+            raise merrors.PermissionDeniedException("Invalid TOTP code", 403, 403)
+        codes = totp.generate_recovery_codes()
+        return {"status": True, "data": {"is_enabled": True, "recovery_codes": codes}}
+
+    def on_action_disable_totp(self, value):
+        from mojo.apps.account.models.totp import UserTOTP
+        self._require_self_acting("disable_totp")
+        UserTOTP.objects.filter(user=self).update(is_enabled=False)
+        return {"status": True}
 
     def pii_anonymize(self):
         """

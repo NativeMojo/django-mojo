@@ -12,6 +12,11 @@
 | GET | `/api/user/me` | required | Get current user |
 | POST | `/api/user/<id>` body `{"disable": {...}}` | `manage_users` | Disable user (block) — see [Disable Lifecycle](#disable-lifecycle) |
 | POST | `/api/user/<id>` body `{"reactivate": {...}}` | `manage_users` | Reactivate a disabled user |
+| POST | `/api/user/me` body `{"change_username": {...}}` | self | Self-service username change (recommended over `/api/auth/username/change`) |
+| POST | `/api/user/me` body `{"revoke_sessions": {...}}` | self | Self-service global logout (recommended over `/api/auth/sessions/revoke`) |
+| POST | `/api/user/me` body `{"confirm_totp": {"code":"..."}}` | self | TOTP enrolment confirm (recommended over `/api/account/totp/confirm`) |
+| POST | `/api/user/me` body `{"regenerate_totp_codes": {"code":"..."}}` | self | Regenerate TOTP recovery codes (recommended over `/api/account/totp/recovery-codes/regenerate`) |
+| POST | `/api/user/me` body `{"disable_totp": true}` | self | Disable TOTP (recommended over `DELETE /api/account/totp`) |
 | GET | `/api/auth/manage/throttle?user_id=N` | `manage_users` | Read login attempt counter |
 | POST | `/api/auth/manage/clear_rate_limit` | `manage_users` | Clear login throttle for a user |
 | POST | `/api/auth/verify/email/send` | required | Send email verification link |
