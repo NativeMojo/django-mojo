@@ -513,7 +513,7 @@ class Group(MojoSecrets, MojoModel):
         from mojo.apps.account.services import disable as disable_service
         if not isinstance(value, dict):
             value = {}
-        if not self.active_user.has_permission(["manage_groups", "groups"]):
+        if not self.active_user.has_permission("manage_groups"):
             raise merrors.PermissionDeniedException("manage_groups required to disable a group")
         reason = value.get("reason")
         if reason not in disable_service.GROUP_REST_REASONS:
@@ -532,7 +532,7 @@ class Group(MojoSecrets, MojoModel):
         from mojo.apps.account.services import disable as disable_service
         if not isinstance(value, dict):
             value = {}
-        if not self.active_user.has_permission(["manage_groups", "groups"]):
+        if not self.active_user.has_permission("manage_groups"):
             raise merrors.PermissionDeniedException("manage_groups required to reactivate a group")
         disable_service.reactivate_entity(
             self,

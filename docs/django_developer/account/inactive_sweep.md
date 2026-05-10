@@ -9,7 +9,7 @@ A nightly cron job (`inactive_sweep`) automatically warns and then disables user
 The sweep runs every night at 03:00 UTC. For each enabled resource type it runs three phases:
 
 1. **Clear stale warnings** — If an entity has a pending warning flag but its `last_activity` is more recent than the warning date, it reactivated. The warning flag is cleared.
-2. **Warn** — Entities whose `last_activity` has passed `inactive_days - warning_days` ago and have not yet been warned get a warning email and a `disable_warned` flag in `metadata["protected"]`.
+2. **Warn** — Entities whose `last_activity` has passed `inactive_days - warning_days` ago and have not yet been warned get a warning email and a `disable.warning` block written to `metadata.protected.disable` via `disable_service.mark_warning()`.
 3. **Disable** — Entities whose `last_activity` has passed `inactive_days` ago are set `is_active = False` atomically. An incident event is emitted at level 4.
 
 ---
@@ -42,14 +42,22 @@ The following users are always skipped — both for warnings and for disable:
 
 - `is_superuser = True`
 - `is_staff = True`
-- `metadata["protected"]["no_disable"] = True`
+- `metadata["protected"]["disable"]["exempt_from_auto_disable"] = True`
 - `last_activity` is null **and** `last_login` is null (never logged in)
 
-For groups, only the `no_disable` flag applies (no staff/superuser concept).
+For groups, only the `exempt_from_auto_disable` flag applies (no staff/superuser concept).
 
-To permanently exempt an entity from the sweep, set `disable.exempt_from_auto_disable=True`
-under `metadata.protected.disable`. The legacy `protected.no_disable=True` flag
-is still honoured for one release.
+For `Group`, use `set_protected_metadata` to write a single key atomically:
+
+```python
+# Exempt a group from the sweep
+group.set_protected_metadata("disable", {"exempt_from_auto_disable": True})
+```
+
+For `User`, write via `metadata["protected"]["disable"]` directly and save with `update_fields`.
+
+The legacy `protected.no_disable=True` flag is still honoured for one release. The 0041
+data migration populates the new key from it. Use the new key for any new code.
 
 ---
 

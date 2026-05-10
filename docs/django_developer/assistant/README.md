@@ -190,8 +190,8 @@ Add `"mojo.apps.assistant"` to `INSTALLED_APPS` and run migrations.
 | `query_rate_limits` | `view_admin` | No | Currently active rate limit entries from Redis |
 | `get_permission_summary` | `view_admin` | No | User permissions breakdown (user-level + group-level) |
 | `update_user_permission` | `manage_users` | Yes | Add or remove a permission from a user |
-| `disable_user` | `manage_users` | Yes | Disable account + rotate auth_key (invalidates all sessions). Cannot disable yourself. |
-| `enable_user` | `manage_users` | Yes | Re-enable a disabled account |
+| `disable_user` | `manage_users` | Yes | Disable account + rotate auth_key (invalidates all sessions). Cannot disable yourself. Does not write `metadata.protected.disable.*` — use the REST `disable` action for audited disables. |
+| `enable_user` | `manage_users` | Yes | Re-enable a disabled account. Does not update `metadata.protected.disable.*` history. |
 | `force_logout` | `manage_users` | Yes | Rotate auth_key to invalidate all sessions (account stays active) |
 
 ### Groups Domain (`view_groups`)

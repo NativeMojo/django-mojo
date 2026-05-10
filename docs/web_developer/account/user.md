@@ -305,7 +305,7 @@ GET /api/user?org=5
 
 ## Disable Lifecycle
 
-Admins manage user `is_active` state through two named POST_SAVE_ACTIONS instead of writing the bare `is_active` flag. Both write structured audit metadata under `metadata.protected.disable.*`.
+Admins manage user `is_active` state through two named POST_SAVE_ACTIONS. Writing the bare `is_active` field directly still works (`{"is_active": false}`), but does not populate the disable namespace or emit audit events — the actions below are the recommended path for any new code.
 
 ### Disable a user
 

@@ -106,8 +106,8 @@ on a race or already-in-target-state collision.
 |---|---|---|---|
 | POST | `/api/user/<id>` | `{"disable": {"reason": "admin", "note": "..."}}` | `manage_users` |
 | POST | `/api/user/<id>` | `{"reactivate": {"note": "..."}}` | `manage_users` |
-| POST | `/api/group/<id>` | `{"disable": {"reason": "admin\|abuse\|archived", "note": "..."}}` | `manage_groups` / `groups` |
-| POST | `/api/group/<id>` | `{"reactivate": {"note": "..."}}` | `manage_groups` / `groups` |
+| POST | `/api/group/<id>` | `{"disable": {"reason": "admin\|abuse\|archived", "note": "..."}}` | `manage_groups` |
+| POST | `/api/group/<id>` | `{"reactivate": {"note": "..."}}` | `manage_groups` |
 | GET | `/api/auth/manage/throttle?user_id=N&key=login` | — | `manage_users` |
 
 The body key (`disable` / `reactivate`) IS the action name — the model's
@@ -182,7 +182,7 @@ A follow-up migration in the next release will remove the legacy keys.
 
 Schema-shaped audit data (reason / note / by_user / history) belongs in JSON
 because the column count would grow indefinitely as we add fields. JSONField
-queries (`metadata__protected__no_disable=True`) are fast enough at expected
+queries (`metadata__protected__disable__reason="inactive"`) are fast enough at expected
 scale, and `metadata.protected` already has write-protection plumbing.
 
 If a hot-path filter later proves slow at very large user counts, individual
