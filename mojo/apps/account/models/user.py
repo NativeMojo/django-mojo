@@ -32,17 +32,24 @@ USER_PERMS_PROTECTION.update(SYS_USER_PERMS_PROTECTION)
 USER_LAST_ACTIVITY_FREQ = settings.get_static("USER_LAST_ACTIVITY_FREQ", 300)
 
 # Fields that only a superuser may write via REST, on both create and update paths.
-#   is_email_verified / is_phone_verified  — set only by internal token flows
-#   requires_mfa                           — disabling MFA is a security policy decision
+#   is_dob_verified — DOB verification is a compliance-tier signal
+#   requires_mfa    — disabling MFA on a target user is account-takeover prep;
+#                     restricted to the highest tier
 #
 # Note: auth_key and last_activity are NOT listed here because they are in
 # NO_SAVE_FIELDS — the REST framework silently ignores them for everyone,
 # which is a stronger guarantee than a permission check.
 SUPERUSER_ONLY_FIELDS = frozenset((
-    "is_email_verified", "is_phone_verified",
     "is_dob_verified",
     "requires_mfa",
 ))
+
+# Fields that require any admin tier — `users` (domain category), `manage_users`
+# (strict admin), or superuser. Force-verify of email/phone is an admin-tier
+# action; deployments that reserve `is_superuser` for a single super-admin still
+# need routine paths to flip these for support / compliance work.
+#   is_email_verified / is_phone_verified  — set by token flows OR by admin override
+ADMIN_ONLY_FIELDS = frozenset(("is_email_verified", "is_phone_verified"))
 
 # Fields that require manage_users permission (superusers implicitly qualify).
 #   is_active       — activating/deactivating an account is an admin action
@@ -612,7 +619,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
     def set_new_password(self, new_password, old_password=None):
         if self.active_request:
             old_password = self.active_request.DATA.get("current_password", None)
-            if not old_password and not self.active_request.user.has_permission("manage_users"):
+            if not old_password and not self.active_request.user.has_permission(["users", "manage_users"]):
                 raise merrors.ValueException("You must provide your current password")
         if old_password and not self.check_password(old_password):
             self.report_incident(f"{self.username} entered an invalid password", "invalid_password")
@@ -626,7 +633,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             return True
         if self.active_user.is_superuser:
             return True
-        if self.active_user.has_permission(["manage_users"]):
+        if self.active_user.has_permission(["users", "manage_users"]):
             return True
         return False
 
@@ -702,6 +709,9 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
     def on_rest_pre_save(self, changed_fields, created):
         for _field in SUPERUSER_ONLY_FIELDS:
             if _field in changed_fields and not self.active_user.is_superuser:
+                raise merrors.PermissionDeniedException(f"You are not allowed to change {_field}")
+        for _field in ADMIN_ONLY_FIELDS:
+            if _field in changed_fields and not self.active_user.has_permission(["users", "manage_users"]):
                 raise merrors.PermissionDeniedException(f"You are not allowed to change {_field}")
         for _field in MANAGE_USERS_ONLY_FIELDS:
             if _field in changed_fields and not self.active_user.has_permission("manage_users"):

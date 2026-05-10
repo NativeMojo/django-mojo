@@ -332,6 +332,131 @@ def test_owner_only_cannot_direct_change_email(opts):
 
 
 @th.django_unit_test()
+def test_admin_can_force_verify_email_on_other_user(opts):
+    """Admin with manage_users can flip is_email_verified on another user."""
+    from mojo.apps.account.models import User
+
+    User.objects.filter(pk=opts.user_id).update(is_email_verified=False)
+
+    assert opts.client.login(OTHER_USERNAME, "other_pw_99"), "admin login failed"
+    resp = opts.client.post(f"/api/user/{opts.user_id}", {"is_email_verified": True})
+    opts.client.logout()
+
+    assert resp.status_code == 200, \
+        f"manage_users admin should be able to force-verify email, got {resp.status_code}: {opts.client.last_response.body}"
+    user = User.objects.get(pk=opts.user_id)
+    assert user.is_email_verified is True, "is_email_verified should be flipped"
+
+
+@th.django_unit_test()
+def test_users_perm_can_force_verify_phone_on_other_user(opts):
+    """A caller with `users` perm (not manage_users) can flip is_phone_verified."""
+    from mojo.apps.account.models import User
+
+    User.objects.filter(email__in=["user_actions_phone_admin@test.com"]).delete()
+    bare_admin = User.objects.create_user(
+        username="user_actions_phone_admin@test.com",
+        email="user_actions_phone_admin@test.com",
+        password="bare_pw_99")
+    bare_admin.is_active = True
+    bare_admin.save()
+    bare_admin.add_permission("users")
+
+    User.objects.filter(pk=opts.user_id).update(is_phone_verified=False)
+
+    assert opts.client.login("user_actions_phone_admin@test.com", "bare_pw_99"), "bare admin login failed"
+    resp = opts.client.post(f"/api/user/{opts.user_id}", {"is_phone_verified": True})
+    opts.client.logout()
+
+    assert resp.status_code == 200, \
+        f"caller with `users` perm should be able to force-verify phone, got {resp.status_code}: {opts.client.last_response.body}"
+    user = User.objects.get(pk=opts.user_id)
+    assert user.is_phone_verified is True, "is_phone_verified should be flipped"
+
+    User.objects.filter(pk=bare_admin.pk).delete()
+
+
+@th.django_unit_test()
+def test_owner_only_cannot_force_verify_email(opts):
+    """A self-acting user without admin perms cannot flip is_email_verified."""
+    from mojo.apps.account.models import User
+
+    User.objects.filter(email__in=["user_actions_owner_verify@test.com"]).delete()
+    plain_user = User.objects.create_user(
+        username="user_actions_owner_verify@test.com",
+        email="user_actions_owner_verify@test.com",
+        password="plain_pw_99")
+    plain_user.is_active = True
+    plain_user.is_email_verified = False
+    plain_user.save()
+
+    assert opts.client.login("user_actions_owner_verify@test.com", "plain_pw_99"), "plain user login failed"
+    resp = opts.client.post(f"/api/user/{plain_user.pk}", {"is_email_verified": True})
+    opts.client.logout()
+
+    assert resp.status_code != 200, \
+        f"owner-only self-acting user should be blocked from force-verify, got {resp.status_code}"
+    user = User.objects.get(pk=plain_user.pk)
+    assert user.is_email_verified is False, "is_email_verified should NOT be flipped by owner-only caller"
+
+    User.objects.filter(pk=plain_user.pk).delete()
+
+
+@th.django_unit_test()
+def test_requires_mfa_still_superuser_only(opts):
+    """requires_mfa stays superuser-only — manage_users must NOT be sufficient."""
+    from mojo.apps.account.models import User
+
+    User.objects.filter(pk=opts.user_id).update(requires_mfa=False)
+
+    assert opts.client.login(OTHER_USERNAME, "other_pw_99"), "admin login failed"
+    resp = opts.client.post(f"/api/user/{opts.user_id}", {"requires_mfa": True})
+    opts.client.logout()
+
+    assert resp.status_code != 200, \
+        f"manage_users admin should NOT be able to flip requires_mfa, got {resp.status_code}"
+    user = User.objects.get(pk=opts.user_id)
+    assert user.requires_mfa is False, "requires_mfa should remain false (superuser-only field)"
+
+
+@th.django_unit_test()
+def test_users_perm_can_set_password_on_other_user(opts):
+    """A caller with `users` perm can set a new_password on another user."""
+    from mojo.apps.account.models import User
+
+    User.objects.filter(email__in=["user_actions_pw_admin@test.com", "user_actions_pw_target@test.com"]).delete()
+    bare_admin = User.objects.create_user(
+        username="user_actions_pw_admin@test.com",
+        email="user_actions_pw_admin@test.com",
+        password="bare_pw_99")
+    bare_admin.is_active = True
+    bare_admin.save()
+    bare_admin.add_permission("users")
+
+    target = User.objects.create_user(
+        username="user_actions_pw_target@test.com",
+        email="user_actions_pw_target@test.com",
+        password="initial_pw_99")
+    target.is_active = True
+    target.is_email_verified = True
+    target.save()
+
+    new_password = "ResetByAdmin##99"
+
+    assert opts.client.login("user_actions_pw_admin@test.com", "bare_pw_99"), "bare admin login failed"
+    resp = opts.client.post(f"/api/user/{target.pk}", {"new_password": new_password})
+    opts.client.logout()
+
+    assert resp.status_code == 200, \
+        f"caller with `users` perm should be able to set new_password, got {resp.status_code}: {opts.client.last_response.body}"
+    target.refresh_from_db()
+    assert target.check_password(new_password), \
+        "target user's password should be the new one set by admin"
+
+    User.objects.filter(pk__in=[bare_admin.pk, target.pk]).delete()
+
+
+@th.django_unit_test()
 def test_self_service_actions_reject_admin_on_other(opts):
     """All five self-service actions must reject an admin acting on a different user."""
     from mojo.apps.account.models import User

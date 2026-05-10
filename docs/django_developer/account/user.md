@@ -135,12 +135,20 @@ class RestMeta:
 
 ## Superuser-Only Fields
 
-These fields can only be written via REST by a superuser:
+These fields can only be written via REST by a superuser (`SUPERUSER_ONLY_FIELDS`):
 
-- `is_email_verified`, `is_phone_verified`, `is_dob_verified`
-- `requires_mfa` — controls whether the user must complete MFA at login
+- `is_dob_verified` — DOB verification compliance signal
+- `requires_mfa` — controls whether the user must complete MFA at login. Disabling MFA on a target user is account-takeover prep, restricted to the strictest tier.
 
-These fields are readable in the default graph but write-protected.
+`is_superuser` and `is_staff` are also superuser-only via the `set_is_superuser` / `set_is_staff` setters.
+
+## Admin-Tier Fields
+
+These fields require any admin tier — `users` (domain category), `manage_users` (strict admin), or `is_superuser` (`ADMIN_ONLY_FIELDS`):
+
+- `is_email_verified`, `is_phone_verified` — force-verify / unverify on behalf of another user. Routine support / compliance work, so does not require superuser.
+
+Both readable in the default graph but write-protected.
 
 ## Credential Field Writes (email / username / phone)
 
@@ -276,7 +284,7 @@ POST /api/user/<target_id>
 {"new_password": "NewPass##123"}
 ```
 
-No `current_password` needed. The `can_change_password()` method allows this for superusers and users with `manage_users`. Password strength validation still applies.
+No `current_password` needed. The `can_change_password()` method allows this for superusers and callers with `users` or `manage_users`. Password strength validation still applies.
 
 ## Password Reset Flow (Forgot Password)
 

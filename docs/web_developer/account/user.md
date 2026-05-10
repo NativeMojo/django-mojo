@@ -94,13 +94,14 @@ Users can update their own record (owner permission). Admins with `manage_users`
 |---|---|
 | `is_superuser` | Superusers only |
 | `is_staff` | Superusers only |
-| `requires_mfa` | Superusers only |
-| `is_email_verified` | Superusers only |
-| `is_phone_verified` | Superusers only |
-| `email`, `username`, `phone_number` (replace) | Admin tier — any caller with `users`, `manage_users`, or `is_superuser` |
+| `requires_mfa` | Superusers only (disabling MFA is account-takeover prep) |
+| `is_dob_verified` | Superusers only |
+| `is_email_verified`, `is_phone_verified` | Admin tier — `users`, `manage_users`, or `is_superuser` (force-verify / unverify) |
+| `email`, `username`, `phone_number` (replace) | Admin tier — `users`, `manage_users`, or `is_superuser` |
 | `phone_number` (clear or first-set) | Anyone with edit access |
 | `is_active`, `org`, `org_id` | `manage_users` only (`MANAGE_USERS_ONLY_FIELDS`) |
 | `permissions` | Users with `manage_users` (or matching `USER_PERMS_PROTECTION` rules) |
+| `new_password` (admin reset) | Admin tier — `users`, `manage_users`, or `is_superuser`. No `current_password` needed. |
 
 Attempts to set these fields without the required permission return `403`.
 
