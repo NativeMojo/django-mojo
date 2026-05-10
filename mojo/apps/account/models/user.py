@@ -11,19 +11,20 @@ from .device import UserDevice
 from objict import objict
 import uuid
 
+_USER_ADMIN = ["users", "manage_users"]
 SYS_USER_PERMS_PROTECTION = {
-    "manage_users": "manage_users",
-    "manage_groups": "manage_users",
-    "view_logs": "manage_users",
-    "view_incidents": "manage_users",
-    "view_admin": "manage_users",
-    "view_taskqueue": "manage_users",
-    "view_global": "manage_users",
-    "manage_notifications": "manage_users",
-    "manage_files": "manage_users",
-    "force_single_session": "manage_users",
-    "file_vault": "manage_users",
-    "manage_aws": "manage_users"
+    "manage_users": _USER_ADMIN,
+    "manage_groups": _USER_ADMIN,
+    "view_logs": _USER_ADMIN,
+    "view_incidents": _USER_ADMIN,
+    "view_admin": _USER_ADMIN,
+    "view_taskqueue": _USER_ADMIN,
+    "view_global": _USER_ADMIN,
+    "manage_notifications": _USER_ADMIN,
+    "manage_files": _USER_ADMIN,
+    "force_single_session": _USER_ADMIN,
+    "file_vault": _USER_ADMIN,
+    "manage_aws": _USER_ADMIN,
 }
 
 USER_PERMS_PROTECTION = settings.get_static("USER_PERMS_PROTECTION", {})
@@ -32,32 +33,35 @@ USER_PERMS_PROTECTION.update(SYS_USER_PERMS_PROTECTION)
 USER_LAST_ACTIVITY_FREQ = settings.get_static("USER_LAST_ACTIVITY_FREQ", 300)
 
 # Fields that only a superuser may write via REST, on both create and update paths.
-#   is_dob_verified — DOB verification is a compliance-tier signal
-#   requires_mfa    — disabling MFA on a target user is account-takeover prep;
-#                     restricted to the highest tier
+#   is_dob_verified — DOB verification is a compliance signal
 #
 # Note: auth_key and last_activity are NOT listed here because they are in
 # NO_SAVE_FIELDS — the REST framework silently ignores them for everyone,
 # which is a stronger guarantee than a permission check.
-SUPERUSER_ONLY_FIELDS = frozenset((
-    "is_dob_verified",
-    "requires_mfa",
-))
+# is_superuser and is_staff are also superuser-only via their dedicated setters.
+SUPERUSER_ONLY_FIELDS = frozenset(("is_dob_verified",))
 
 # Fields that require any admin tier — `users` (domain category), `manage_users`
-# (strict admin), or superuser. Force-verify of email/phone is an admin-tier
-# action; deployments that reserve `is_superuser` for a single super-admin still
-# need routine paths to flip these for support / compliance work.
-#   is_email_verified / is_phone_verified  — set by token flows OR by admin override
-ADMIN_ONLY_FIELDS = frozenset(("is_email_verified", "is_phone_verified"))
+# (strict admin), or superuser. `users` and `manage_users` are treated as
+# equivalent for User admin operations — deployments simplify away the
+# `view_X` / `manage_X` split by holding only `users` for admin work.
+#
+#   is_email_verified / is_phone_verified  — force-verify on behalf of another user
+#   requires_mfa                            — admins manage MFA policy at the
+#                                             admin tier; superuser is reserved
+#                                             for the single super-admin
+#   is_active                               — disable/reactivate (admin lifecycle op)
+#   org / org_id                            — org assignment (token TTLs, push routing)
+ADMIN_ONLY_FIELDS = frozenset((
+    "is_email_verified", "is_phone_verified", "requires_mfa",
+    "is_active", "org", "org_id",
+))
 
-# Fields that require manage_users permission (superusers implicitly qualify).
-#   is_active       — activating/deactivating an account is an admin action
-#   org / org_id    — org assignment controls token TTLs and push config;
-#                     both names checked because Django FK fields appear in
-#                     changed_fields as the attrib name ("org") when set via
-#                     setattr, but REST may also pass "org_id" directly
-MANAGE_USERS_ONLY_FIELDS = frozenset(("is_active", "org", "org_id"))
+# Back-compat alias — historical name retained for any downstream code that
+# imports MANAGE_USERS_ONLY_FIELDS. The split between "manage_users-only" and
+# "any-admin-tier" was collapsed; everything in the old set is now in
+# ADMIN_ONLY_FIELDS.
+MANAGE_USERS_ONLY_FIELDS = ADMIN_ONLY_FIELDS
 METRICS_TIMEZONE = settings.get_static("METRICS_TIMEZONE", "America/Los_Angeles")
 METRICS_TRACK_USER_ACTIVITY = settings.get_static("METRICS_TRACK_USER_ACTIVITY", False)
 
@@ -466,7 +470,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             if key in USER_PERMS_PROTECTION:
                 if not self.active_user.has_permission(USER_PERMS_PROTECTION[key]):
                     raise merrors.PermissionDeniedException()
-            elif not self.active_user.has_permission("manage_users"):
+            elif not self.active_user.has_permission(["users", "manage_users"]):
                 raise merrors.PermissionDeniedException()
             if bool(value[key]):
                 self.add_permission(key, commit=False)
@@ -713,9 +717,6 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         for _field in ADMIN_ONLY_FIELDS:
             if _field in changed_fields and not self.active_user.has_permission(["users", "manage_users"]):
                 raise merrors.PermissionDeniedException(f"You are not allowed to change {_field}")
-        for _field in MANAGE_USERS_ONLY_FIELDS:
-            if _field in changed_fields and not self.active_user.has_permission("manage_users"):
-                raise merrors.PermissionDeniedException(f"You are not allowed to change {_field}")
         if "dob" in changed_fields:
             self.is_dob_verified = False
         if "email" in changed_fields:
@@ -808,8 +809,8 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         from mojo.apps.account.services import disable as disable_service
         if not isinstance(value, dict):
             value = {}
-        if not self.active_user.has_permission("manage_users"):
-            raise merrors.PermissionDeniedException("manage_users required to disable a user")
+        if not self.active_user.has_permission(["users", "manage_users"]):
+            raise merrors.PermissionDeniedException("admin tier (users / manage_users) required to disable a user")
         reason = value.get("reason")
         if reason not in disable_service.USER_REST_REASONS:
             allowed = ", ".join(sorted(disable_service.USER_REST_REASONS))
@@ -826,8 +827,8 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         from mojo.apps.account.services import disable as disable_service
         if not isinstance(value, dict):
             value = {}
-        if not self.active_user.has_permission("manage_users"):
-            raise merrors.PermissionDeniedException("manage_users required to reactivate a user")
+        if not self.active_user.has_permission(["users", "manage_users"]):
+            raise merrors.PermissionDeniedException("admin tier (users / manage_users) required to reactivate a user")
         disable_service.reactivate_entity(
             self,
             note=value.get("note"),

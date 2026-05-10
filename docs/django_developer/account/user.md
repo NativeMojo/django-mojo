@@ -133,44 +133,43 @@ class RestMeta:
 
 ---
 
-## Superuser-Only Fields
+## Permission Tiers for User Field Writes
+
+`users` (domain category) and `manage_users` (strict admin) are treated as
+**equivalent** for User admin operations. Deployments simplify away the
+`view_X` / `manage_X` split by holding only `users` for admin work; the
+framework honours both perms wherever it would honour either.
+
+### Superuser-Only Fields
 
 These fields can only be written via REST by a superuser (`SUPERUSER_ONLY_FIELDS`):
 
-- `is_dob_verified` — DOB verification compliance signal
-- `requires_mfa` — controls whether the user must complete MFA at login. Disabling MFA on a target user is account-takeover prep, restricted to the strictest tier.
+- `is_dob_verified` — DOB verification compliance signal.
 
-`is_superuser` and `is_staff` are also superuser-only via the `set_is_superuser` / `set_is_staff` setters.
+`is_superuser` and `is_staff` flips are also superuser-only via the
+`set_is_superuser` / `set_is_staff` setters.
 
-## Admin-Tier Fields
+### Admin-Tier Fields
 
-These fields require any admin tier — `users` (domain category), `manage_users` (strict admin), or `is_superuser` (`ADMIN_ONLY_FIELDS`):
+These fields require any admin tier — `users`, `manage_users`, or `is_superuser` (`ADMIN_ONLY_FIELDS`):
 
-- `is_email_verified`, `is_phone_verified` — force-verify / unverify on behalf of another user. Routine support / compliance work, so does not require superuser.
+- `is_email_verified`, `is_phone_verified` — force-verify / unverify on behalf of another user.
+- `requires_mfa` — admins manage MFA policy at the admin tier. Superuser is reserved for the single super-admin in deployments that follow that pattern.
+- `is_active` — disable / reactivate (admin lifecycle op).
+- `org`, `org_id` — org assignment (token TTLs, push routing).
 
-Both readable in the default graph but write-protected.
+`MANAGE_USERS_ONLY_FIELDS` is retained as an alias for `ADMIN_ONLY_FIELDS`
+for back-compat with downstream code that imports it.
 
-## Credential Field Writes (email / username / phone)
+### Credential Field Writes (`email` / `username` / `phone_number` replace)
 
-Direct REST writes to `email`, `username`, or replacing an existing `phone_number`
-are gated by `_handle_existing_user_pre_save`:
+Gated by `_handle_existing_user_pre_save`:
 
-- **Allowed** when the caller has `users` (domain category), `manage_users` (strict admin), or is a superuser.
-- **Blocked** when the caller has only `owner` (self-acting on their own record without admin perms) — they must use the change flows (`POST /api/auth/email/change/{request,confirm}` etc.) which verify ownership of the new channel via OTP/link.
+- **Allowed** for any admin tier (`users` / `manage_users` / `is_superuser`).
+- **Blocked** for self-acting users with only `owner` perm — they must use the dedicated change flows (`POST /api/auth/email/change/{request,confirm}` etc.) which verify ownership of the new channel via OTP/link.
 
-Phone clear (setting `phone_number=null`) and first-set (when the user has none) are
-allowed without admin perms. Only **replacing** an existing phone number requires
-either admin perms or the change flow.
-
-```python
-# Admin acting on another user — works for users / manage_users / superuser
-User.objects.filter(pk=42).update(...)  # bypasses gates entirely (programmatic)
-# Or via REST:
-# POST /api/user/42 body: {"email": "new@example.com"}  → 200 if caller has users/manage_users/superuser
-
-# Self-acting user with no admin perms — blocked
-# POST /api/user/me body: {"email": "new@example.com"}  → 403; use POST /api/auth/email/change/request instead
-```
+Phone clear (setting `null`) and first-set (when the user has none) are
+allowed for anyone with edit access.
 
 ## Protected Field Setters
 

@@ -90,18 +90,20 @@ Users can update their own record (owner permission). Admins with `manage_users`
 
 ### Protected Fields
 
+`users` and `manage_users` are treated as equivalent for User admin operations — anywhere "admin tier" is listed, either perm is sufficient (and superusers always qualify).
+
 | Field | Who can set it |
 |---|---|
 | `is_superuser` | Superusers only |
 | `is_staff` | Superusers only |
-| `requires_mfa` | Superusers only (disabling MFA is account-takeover prep) |
 | `is_dob_verified` | Superusers only |
-| `is_email_verified`, `is_phone_verified` | Admin tier — `users`, `manage_users`, or `is_superuser` (force-verify / unverify) |
-| `email`, `username`, `phone_number` (replace) | Admin tier — `users`, `manage_users`, or `is_superuser` |
+| `is_email_verified`, `is_phone_verified` | Admin tier (force-verify / unverify) |
+| `requires_mfa` | Admin tier |
+| `email`, `username`, `phone_number` (replace) | Admin tier |
 | `phone_number` (clear or first-set) | Anyone with edit access |
-| `is_active`, `org`, `org_id` | `manage_users` only (`MANAGE_USERS_ONLY_FIELDS`) |
-| `permissions` | Users with `manage_users` (or matching `USER_PERMS_PROTECTION` rules) |
-| `new_password` (admin reset) | Admin tier — `users`, `manage_users`, or `is_superuser`. No `current_password` needed. |
+| `is_active`, `org`, `org_id` | Admin tier |
+| `permissions` (most keys) | Admin tier (matching `USER_PERMS_PROTECTION` rules) |
+| `new_password` (admin reset) | Admin tier — no `current_password` needed |
 
 Attempts to set these fields without the required permission return `403`.
 

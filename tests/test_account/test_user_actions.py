@@ -403,8 +403,8 @@ def test_owner_only_cannot_force_verify_email(opts):
 
 
 @th.django_unit_test()
-def test_requires_mfa_still_superuser_only(opts):
-    """requires_mfa stays superuser-only — manage_users must NOT be sufficient."""
+def test_admin_can_flip_requires_mfa(opts):
+    """requires_mfa is admin-tier (users / manage_users / superuser), not superuser-only."""
     from mojo.apps.account.models import User
 
     User.objects.filter(pk=opts.user_id).update(requires_mfa=False)
@@ -413,10 +413,34 @@ def test_requires_mfa_still_superuser_only(opts):
     resp = opts.client.post(f"/api/user/{opts.user_id}", {"requires_mfa": True})
     opts.client.logout()
 
-    assert resp.status_code != 200, \
-        f"manage_users admin should NOT be able to flip requires_mfa, got {resp.status_code}"
+    assert resp.status_code == 200, \
+        f"manage_users admin should be able to flip requires_mfa, got {resp.status_code}: {opts.client.last_response.body}"
     user = User.objects.get(pk=opts.user_id)
-    assert user.requires_mfa is False, "requires_mfa should remain false (superuser-only field)"
+    assert user.requires_mfa is True, "requires_mfa should be flipped"
+
+    User.objects.filter(pk=opts.user_id).update(requires_mfa=False)
+
+
+@th.django_unit_test()
+def test_is_dob_verified_silently_ignored_for_non_superuser(opts):
+    """is_dob_verified is in NO_SAVE_FIELDS — silently ignored for everyone via REST.
+
+    The SUPERUSER_ONLY_FIELDS gate is a defense-in-depth backstop; the primary
+    guarantee comes from NO_SAVE_FIELDS dropping the field before it reaches
+    the save path. So the request succeeds with a 200 but the field doesn't
+    change.
+    """
+    from mojo.apps.account.models import User
+
+    User.objects.filter(pk=opts.user_id).update(is_dob_verified=False)
+
+    assert opts.client.login(OTHER_USERNAME, "other_pw_99"), "admin login failed"
+    resp = opts.client.post(f"/api/user/{opts.user_id}", {"is_dob_verified": True})
+    opts.client.logout()
+
+    user = User.objects.get(pk=opts.user_id)
+    assert user.is_dob_verified is False, \
+        f"is_dob_verified should be silently ignored (NO_SAVE_FIELDS), got: {user.is_dob_verified}"
 
 
 @th.django_unit_test()
@@ -452,6 +476,42 @@ def test_users_perm_can_set_password_on_other_user(opts):
     target.refresh_from_db()
     assert target.check_password(new_password), \
         "target user's password should be the new one set by admin"
+
+    User.objects.filter(pk__in=[bare_admin.pk, target.pk]).delete()
+
+
+@th.django_unit_test()
+def test_users_perm_can_disable_other_user(opts):
+    """`users` perm (no manage_users) is now equivalent — can disable / reactivate."""
+    from unittest import mock as _mock
+    from mojo.apps.account.models import User
+
+    User.objects.filter(email__in=["user_actions_disable_admin@test.com", "user_actions_disable_target@test.com"]).delete()
+    bare_admin = User.objects.create_user(
+        username="user_actions_disable_admin@test.com",
+        email="user_actions_disable_admin@test.com",
+        password="bare_pw_99")
+    bare_admin.is_active = True
+    bare_admin.save()
+    bare_admin.add_permission("users")
+
+    target = User.objects.create_user(
+        username="user_actions_disable_target@test.com",
+        email="user_actions_disable_target@test.com",
+        password="target_pw_99")
+    target.is_active = True
+    target.metadata = {}
+    target.save()
+
+    assert opts.client.login("user_actions_disable_admin@test.com", "bare_pw_99"), "bare admin login failed"
+    with _mock.patch("mojo.apps.incident.report_event"):
+        resp = opts.client.post(f"/api/user/{target.pk}", {"disable": {"reason": "admin", "note": "users-perm test"}})
+    opts.client.logout()
+
+    assert resp.status_code == 200, \
+        f"caller with `users` perm should be able to disable, got {resp.status_code}: {opts.client.last_response.body}"
+    target.refresh_from_db()
+    assert target.is_active is False, "target user should be disabled"
 
     User.objects.filter(pk__in=[bare_admin.pk, target.pk]).delete()
 
