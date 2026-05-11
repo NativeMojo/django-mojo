@@ -113,11 +113,36 @@ class ImageRenderer(BaseRenderer):
         options = options or {}
         quality = options.get('quality', self.default_quality)
 
+        # Formats that natively support alpha/transparency
+        ALPHA_SUPPORTING_FORMATS = {'PNG', 'WEBP', 'GIF'}
+
         try:
             # Open the image
             with Image.open(source_path, formats=["JPEG", "PNG", "WEBP", "GIF", "BMP", "TIFF"]) as img:
-                # Convert to RGB if RGBA (unless PNG or format with alpha support)
-                if img.mode == 'RGBA' and options.get('format', '').upper() != 'PNG':
+                # Determine output format early so we know whether alpha is supported
+                format_name, extension = self._get_output_format(source_path, options)
+
+                # Handle transparency based on output format
+                if img.mode in ('RGBA', 'LA', 'P'):
+                    # Normalise palette images that may carry transparency
+                    if img.mode == 'P':
+                        img = img.convert('RGBA')
+
+                    if format_name in ALPHA_SUPPORTING_FORMATS:
+                        # Keep alpha — output format supports it
+                        if img.mode == 'LA':
+                            img = img.convert('RGBA')
+                    else:
+                        # Composite onto a white background instead of letting
+                        # Pillow map alpha=0 → black during RGB conversion
+                        if img.mode == 'LA':
+                            img = img.convert('RGBA')
+                        background = Image.new('RGB', img.size, (255, 255, 255))
+                        background.paste(img, mask=img.split()[3])  # alpha channel as mask
+                        img = background
+
+                elif img.mode != 'RGB':
+                    # Convert any other exotic modes (e.g. CMYK, L) to RGB
                     img = img.convert('RGB')
 
                 # Process based on mode
@@ -130,9 +155,6 @@ class ImageRenderer(BaseRenderer):
                 elif mode == 'stretch':
                     # Stretch to fill dimensions
                     img = img.resize((width, height), Image.Resampling.LANCZOS)
-
-                # Determine output format
-                format_name, extension = self._get_output_format(source_path, options)
 
                 # Save to buffer
                 buffer = io.BytesIO()

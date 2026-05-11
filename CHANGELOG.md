@@ -1,5 +1,9 @@
 ## v1.1.0 - (current)
 
+## v1.2.10 - May 11, 2026
+
+**fileman** — fix transparent images rendering with a black background when creating renditions. Transparent areas in PNG, WEBP, and GIF files are now preserved correctly; when converting to a non-alpha format (e.g. JPEG) transparent areas are composited onto a white background instead of black. Also handles palette-mode (`P`) and grayscale+alpha (`LA`) images correctly.
+
 ## v1.2.9 - May 11, 2026
 
 LLM fix for GeoIP refrence
