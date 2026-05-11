@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## v1.2.10 - May 11, 2026
+
+bugfix in catchall rules
+
+
 ## v1.2.11 - May 11, 2026
 
 **incident** — a `RuleSet` with no conditions now matches every event in its category, acting as a catch-all. Previously both `check_all_match` and `check_any_match` returned `False` when there were no rules, making condition-free rulesets unreachable.
