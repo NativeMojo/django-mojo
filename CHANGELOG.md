@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## v1.2.7 - May 11, 2026
+
+ticket AI not responding fix
+
+
 ## v1.2.6 - May 11, 2026
 
 security updates

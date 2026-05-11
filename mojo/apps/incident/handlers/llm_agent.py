@@ -1757,23 +1757,39 @@ def execute_llm_ticket_reply(job):
         note_id: ID of the new TicketNote that triggered this
     """
     if not _get_llm_api_key():
+        job.add_log("no API key configured — skipping", kind="warn")
         return
 
     payload = job.payload
     ticket_id = payload.get("ticket_id")
+    note_id = payload.get("note_id")
 
+    if not ticket_id:
+        job.add_log("missing ticket_id in payload", kind="error")
+        return
+
+    # Load ticket
     try:
         from mojo.apps.incident.models import Ticket, TicketNote
         ticket = Ticket.objects.get(pk=ticket_id)
-    except Exception:
-        logger.exception("LLM ticket reply: failed to load ticket %s", ticket_id)
+    except Ticket.DoesNotExist:
+        job.add_log(f"ticket #{ticket_id} not found", kind="error")
+        return
+    except Exception as e:
+        job.add_log(f"failed to load ticket #{ticket_id}: {e}", kind="error")
         return
 
     if not ticket.is_llm_enabled():
+        job.add_log(f"ticket #{ticket_id} has LLM disabled — skipping", kind="info")
         return
 
-    # Build conversation from all notes
-    notes = TicketNote.objects.filter(parent=ticket).order_by("created")
+    job.add_log(f"ticket #{ticket_id}: {ticket.title!r} note={note_id}")
+
+    # ------------------------------------------------------------------
+    # Build conversation context — works for ALL ticket types, not just
+    # incident-linked ones (rule updates, approvals, standalone tickets).
+    # ------------------------------------------------------------------
+    meta = ticket.metadata or {}
 
     conversation = [
         f"## Ticket #{ticket.pk}: {ticket.title}\n",
@@ -1782,53 +1798,110 @@ def execute_llm_ticket_reply(job):
         f"- **Category**: {ticket.category}",
     ]
 
+    # Incident context (optional — not all tickets are incident-linked)
     if ticket.incident:
-        conversation.append(f"- **Incident ID**: {ticket.incident_id}")
+        inc = ticket.incident
+        conversation.append(f"- **Incident ID**: {inc.pk}")
+        conversation.append(f"- **Incident Category**: {inc.category}")
+        conversation.append(f"- **Incident Status**: {inc.status}")
+        if inc.source_ip:
+            conversation.append(f"- **Source IP**: {inc.source_ip}")
+
+    # Ticket-type hints from metadata
+    if meta.get("ruleset_id"):
+        conversation.append(f"- **RuleSet ID**: {meta['ruleset_id']}")
+    if meta.get("update_suggestion"):
+        conversation.append("- **Ticket Type**: Rule update proposal — review the proposed changes and reasoning")
+    elif meta.get("requires_approval"):
+        conversation.append("- **Ticket Type**: Approval required — review the pending action in the notes below")
 
     conversation.append("\n## Conversation History\n")
 
+    notes = TicketNote.objects.filter(parent=ticket).order_by("created")
+    note_count = notes.count()
     for note in notes:
-        speaker = "LLM Agent" if note.note and note.note.startswith("[LLM Agent]") else f"Human ({note.user.username if note.user else 'unknown'})"
+        is_llm = note.note and note.note.startswith("[LLM Agent]")
+        speaker = "LLM Agent" if is_llm else f"Human ({note.user.username if note.user else 'unknown'})"
         conversation.append(f"**{speaker}** ({note.created}):\n{note.note}\n")
 
     conversation.append(
-        "\nA human has responded to this ticket. Please review their response "
-        "and continue the investigation. If they've approved a proposed action, "
-        "execute it. If they have questions, answer them."
+        f"\nA human has responded to this ticket. "
+        f"Review their message and post your reply using the add_ticket_note tool "
+        f"(ticket_id={ticket.pk}). You have access to the full investigation tool set — "
+        f"query events, check IP history, look up related incidents, and take action as needed. "
+        f"If the human approved a pending action, execute it and report back."
     )
 
-    # Load ruleset for prompt context if incident is linked
+    # ------------------------------------------------------------------
+    # Load ruleset for custom prompt context.
+    # Check ticket metadata first (works for rule-update tickets that have
+    # no incident), then fall back to the linked incident's ruleset.
+    # ------------------------------------------------------------------
     ruleset = None
-    if ticket.incident and ticket.incident.rule_set_id:
+    ruleset_id = meta.get("ruleset_id") or (
+        ticket.incident.rule_set_id if ticket.incident else None
+    )
+    if ruleset_id:
         try:
             from mojo.apps.incident.models import RuleSet
-            ruleset = RuleSet.objects.get(pk=ticket.incident.rule_set_id)
-        except Exception:
-            pass
+            ruleset = RuleSet.objects.get(pk=ruleset_id)
+        except Exception as e:
+            job.add_log(f"could not load ruleset #{ruleset_id}: {e}", kind="warn")
 
     system_prompt = _build_system_prompt(ruleset)
     messages = [{"role": "user", "content": "\n".join(conversation)}]
 
-    try:
-        result = _run_agent_loop(messages, system_prompt)
+    # Full tool set — investigation + analysis + ticket + rule tools
+    reply_tools = TOOLS + ANALYSIS_TOOLS
 
-        # Post LLM's response as a ticket note
-        if result and result.get("content"):
-            text_parts = []
-            for block in result["content"]:
-                if block.get("type") == "text":
-                    text_parts.append(block["text"])
-            if text_parts:
-                response_text = "\n".join(text_parts)[:5000]
-                from django.contrib.auth import get_user_model
-                User = get_user_model()
-                system_user = User.objects.filter(is_superuser=True, is_active=True).first()
-                if system_user:
-                    TicketNote.objects.create(
-                        parent=ticket,
-                        user=system_user,
-                        note=f"[LLM Agent] {response_text}",
-                        group=ticket.group,
-                    )
-    except Exception:
-        logger.exception("LLM ticket reply failed for ticket %s", ticket_id)
+    job.add_log(f"invoking agent: {note_count} notes, {len(reply_tools)} tools available")
+    try:
+        result = _run_agent_loop(messages, system_prompt, tools=reply_tools)
+    except Exception as e:
+        msg = f"agent loop raised an exception: {e}"
+        job.add_log(msg, kind="error")
+        _append_ticket_note(
+            ticket,
+            "I encountered an error while processing your message and could not respond. "
+            f"The job log has details. Error: {e}",
+        )
+        return
+
+    if result is None:
+        job.add_log("agent hit max iterations without completing", kind="warn")
+        _append_ticket_note(
+            ticket,
+            "I was unable to complete my analysis — the investigation exceeded the "
+            "maximum number of reasoning steps. Try rephrasing your question or "
+            "breaking it into smaller requests.",
+        )
+        return
+
+    # ------------------------------------------------------------------
+    # Post any final text response as a ticket note.
+    # Notes from add_ticket_note tool calls are already persisted during
+    # the loop — we only need to handle a plain text closing response here.
+    # ------------------------------------------------------------------
+    text_parts = [
+        block["text"]
+        for block in (result.get("content") or [])
+        if block.get("type") == "text" and block.get("text", "").strip()
+    ]
+
+    if text_parts:
+        response_text = "\n".join(text_parts)[:5000]
+        system_user = _get_llm_system_user()
+        if not system_user:
+            job.add_log("no system user found — cannot post final text response", kind="warn")
+        else:
+            TicketNote.objects.create(
+                parent=ticket,
+                user=system_user,
+                note=f"[LLM Agent] {response_text}",
+                group=ticket.group,
+            )
+            job.add_log(f"posted final text response ({len(response_text)} chars) to ticket #{ticket_id}")
+    else:
+        job.add_log("agent replied via tool calls (no standalone text response)")
+
+    job.add_log("done")
