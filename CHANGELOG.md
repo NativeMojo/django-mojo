@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## v1.2.9 - May 11, 2026
+
+LLM fix for GeoIP refrence
+
+
 ## v1.2.8 - May 11, 2026
 
 security patch for use of system user

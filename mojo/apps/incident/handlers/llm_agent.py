@@ -494,6 +494,7 @@ def _tool_query_ip_history(params):
     try:
         geo = GeoLocatedIP.objects.get(ip_address=ip)
         ip_data = {
+            "id": geo.pk,
             "ip": geo.ip_address,
             "country_code": geo.country_code,
             "city": geo.city,
@@ -1868,21 +1869,34 @@ def execute_llm_ticket_reply(job):
         return
 
     # ------------------------------------------------------------------
-    # Post any final text response as a ticket note.
-    # Notes from add_ticket_note tool calls are already persisted during
-    # the loop — we only need to handle a plain text closing response here.
+    # Post the final text response as a ticket note — but only if the
+    # agent did NOT already reply via add_ticket_note during the loop.
+    # When the tool is used the final text is always a meta-commentary
+    # ("I've posted a detailed reply...") that would create a duplicate.
+    # _run_agent_loop mutates `messages` in place so we can scan it.
     # ------------------------------------------------------------------
+    tool_note_posted = any(
+        isinstance(block, dict)
+        and block.get("type") == "tool_use"
+        and block.get("name") == "add_ticket_note"
+        for msg in messages
+        if msg.get("role") == "assistant"
+        for block in (msg.get("content") or [])
+    )
+
     text_parts = [
         block["text"]
         for block in (result.get("content") or [])
         if block.get("type") == "text" and block.get("text", "").strip()
     ]
 
-    if text_parts:
+    if tool_note_posted:
+        job.add_log("agent replied via add_ticket_note tool — skipping final text to avoid duplicate")
+    elif text_parts:
         response_text = "\n".join(text_parts)[:5000]
         _append_ticket_note(ticket, response_text)
         job.add_log(f"posted final text response ({len(response_text)} chars) to ticket #{ticket_id}")
     else:
-        job.add_log("agent replied via tool calls (no standalone text response)")
+        job.add_log("agent completed with no text response and no tool note — nothing to post", kind="warn")
 
     job.add_log("done")
