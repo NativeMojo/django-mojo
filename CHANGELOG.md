@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## v1.2.8 - May 11, 2026
+
+security patch for use of system user
+
+
 ## v1.2.7 - May 11, 2026
 
 ticket AI not responding fix

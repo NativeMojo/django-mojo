@@ -633,21 +633,11 @@ def _tool_block_ip(params):
 TICKET_CLOSED_STATUSES = ("closed", "resolved")
 
 
-def _get_llm_system_user():
-    from django.contrib.auth import get_user_model
-    User = get_user_model()
-    return User.objects.filter(is_superuser=True, is_active=True).first()
-
-
-def _append_ticket_note(ticket, note_text, system_user=None):
+def _append_ticket_note(ticket, note_text):
     from mojo.apps.incident.models import TicketNote
-    if system_user is None:
-        system_user = _get_llm_system_user()
-    if not system_user:
-        return None
     return TicketNote.objects.create(
         parent=ticket,
-        user=system_user,
+        user=None,
         note=f"[LLM Agent] {note_text}",
         group=ticket.group,
     )
@@ -1890,17 +1880,8 @@ def execute_llm_ticket_reply(job):
 
     if text_parts:
         response_text = "\n".join(text_parts)[:5000]
-        system_user = _get_llm_system_user()
-        if not system_user:
-            job.add_log("no system user found — cannot post final text response", kind="warn")
-        else:
-            TicketNote.objects.create(
-                parent=ticket,
-                user=system_user,
-                note=f"[LLM Agent] {response_text}",
-                group=ticket.group,
-            )
-            job.add_log(f"posted final text response ({len(response_text)} chars) to ticket #{ticket_id}")
+        _append_ticket_note(ticket, response_text)
+        job.add_log(f"posted final text response ({len(response_text)} chars) to ticket #{ticket_id}")
     else:
         job.add_log("agent replied via tool calls (no standalone text response)")
 

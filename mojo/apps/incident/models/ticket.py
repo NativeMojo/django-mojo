@@ -116,7 +116,7 @@ class TicketNote(models.Model, MojoModel):
     created = models.DateTimeField(auto_now_add=True, editable=False)
 
     group = models.ForeignKey("account.Group", related_name="+", on_delete=models.CASCADE, blank=True, null=True, default=None)
-    user = models.ForeignKey("account.User", related_name="+", on_delete=models.CASCADE)
+    user = models.ForeignKey("account.User", related_name="+", null=True, blank=True, default=None, on_delete=models.SET_NULL)
     note = models.TextField(blank=True, null=True)
     media = models.ForeignKey("fileman.File", related_name="+", null=True, blank=True, default=None, on_delete=models.SET_NULL)
     metadata = models.JSONField(default=dict, blank=True)

@@ -85,15 +85,9 @@ def dispatch_action(ticket, note, response_meta):
 def _add_system_note(ticket, text):
     """Add an [LLM Agent] note to the ticket."""
     from mojo.apps.incident.models import TicketNote
-    from django.contrib.auth import get_user_model
-    User = get_user_model()
-    system_user = User.objects.filter(is_superuser=True, is_active=True).first()
-    if not system_user:
-        logger.warning("No system user available for action note on ticket %s", ticket.pk)
-        return
     TicketNote.objects.create(
         parent=ticket,
-        user=system_user,
+        user=None,
         note=f"[LLM Agent] {text}",
         group=ticket.group,
     )
