@@ -659,6 +659,7 @@ class RuleSet(models.Model, MojoModel):
     def check_all_match(self, event):
         """
         Checks if an event satisfies all rules in this RuleSet.
+        A RuleSet with no conditions matches every event in its category.
 
         Args:
             event (Event): The event to check.
@@ -666,13 +667,15 @@ class RuleSet(models.Model, MojoModel):
         Returns:
             bool: True if the event matches all rules, False otherwise.
         """
-        if not self.rules.exists():
-            return False
-        return all(rule.check_rule(event) for rule in self.rules.order_by("index"))
+        rules = list(self.rules.order_by("index"))
+        if not rules:
+            return True  # no conditions — catch-all for the category
+        return all(rule.check_rule(event) for rule in rules)
 
     def check_any_match(self, event):
         """
         Checks if an event satisfies any rule in this RuleSet.
+        A RuleSet with no conditions matches every event in its category.
 
         Args:
             event (Event): The event to check.
@@ -680,9 +683,10 @@ class RuleSet(models.Model, MojoModel):
         Returns:
             bool: True if the event matches any rule, False otherwise.
         """
-        if not self.rules.exists():
-            return False
-        return any(rule.check_rule(event) for rule in self.rules.order_by("index"))
+        rules = list(self.rules.order_by("index"))
+        if not rules:
+            return True  # no conditions — catch-all for the category
+        return any(rule.check_rule(event) for rule in rules)
 
     @classmethod
     def check_by_category(cls, category, event):
