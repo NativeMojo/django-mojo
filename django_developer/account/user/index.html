@@ -1272,6 +1272,18 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#permission-tiers-for-user-field-writes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Permission Tiers for User Field Writes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Permission Tiers for User Field Writes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
   <a href="#superuser-only-fields" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1279,6 +1291,33 @@
       
     </span>
   </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#admin-tier-fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Admin-Tier Fields
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#credential-field-writes-email-username-phone_number-replace" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Credential Field Writes (email / username / phone_number replace)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -4158,6 +4197,18 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#permission-tiers-for-user-field-writes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Permission Tiers for User Field Writes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Permission Tiers for User Field Writes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
   <a href="#superuser-only-fields" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4165,6 +4216,33 @@
       
     </span>
   </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#admin-tier-fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Admin-Tier Fields
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#credential-field-writes-email-username-phone_number-replace" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Credential Field Writes (email / username / phone_number replace)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -4486,7 +4564,7 @@
 <a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>    <span class="n">NO_SHOW_FIELDS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;password&quot;</span><span class="p">,</span> <span class="s2">&quot;auth_key&quot;</span><span class="p">,</span> <span class="s2">&quot;onetime_code&quot;</span><span class="p">]</span>
 <a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>    <span class="n">NO_SAVE_FIELDS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;auth_key&quot;</span><span class="p">,</span> <span class="s2">&quot;last_activity&quot;</span><span class="p">,</span> <span class="s2">&quot;is_dob_verified&quot;</span><span class="p">]</span>
 <a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>    <span class="n">SEARCH_FIELDS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;username&quot;</span><span class="p">,</span> <span class="s2">&quot;email&quot;</span><span class="p">,</span> <span class="s2">&quot;display_name&quot;</span><span class="p">]</span>
-<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>    <span class="n">POST_SAVE_ACTIONS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;send_invite&quot;</span><span class="p">]</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>    <span class="n">POST_SAVE_ACTIONS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;send_invite&quot;</span><span class="p">,</span> <span class="s2">&quot;disable&quot;</span><span class="p">,</span> <span class="s2">&quot;reactivate&quot;</span><span class="p">]</span>
 <a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>    <span class="n">GRAPHS</span> <span class="o">=</span> <span class="p">{</span>
 <a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>        <span class="s2">&quot;basic&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;fields&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;id&quot;</span><span class="p">,</span> <span class="s2">&quot;display_name&quot;</span><span class="p">,</span> <span class="s2">&quot;username&quot;</span><span class="p">,</span> <span class="s2">&quot;last_activity&quot;</span><span class="p">,</span> <span class="s2">&quot;is_active&quot;</span><span class="p">]},</span>
 <a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>        <span class="s2">&quot;default&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;fields&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;id&quot;</span><span class="p">,</span> <span class="s2">&quot;display_name&quot;</span><span class="p">,</span> <span class="s2">&quot;username&quot;</span><span class="p">,</span> <span class="s2">&quot;email&quot;</span><span class="p">,</span> <span class="s2">&quot;phone_number&quot;</span><span class="p">,</span>
@@ -4545,13 +4623,36 @@
 <a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>    <span class="n">PROTECTED_JSON_PERMS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;manage_users&quot;</span><span class="p">]</span>
 </code></pre></div>
 <hr />
-<h2 id="superuser-only-fields">Superuser-Only Fields<a class="headerlink" href="#superuser-only-fields" title="Permanent link">&para;</a></h2>
-<p>These fields can only be written via REST by a superuser:</p>
+<h2 id="permission-tiers-for-user-field-writes">Permission Tiers for User Field Writes<a class="headerlink" href="#permission-tiers-for-user-field-writes" title="Permanent link">&para;</a></h2>
+<p><code>users</code> (domain category) and <code>manage_users</code> (strict admin) are treated as
+<strong>equivalent</strong> for User admin operations. Deployments simplify away the
+<code>view_X</code> / <code>manage_X</code> split by holding only <code>users</code> for admin work; the
+framework honours both perms wherever it would honour either.</p>
+<h3 id="superuser-only-fields">Superuser-Only Fields<a class="headerlink" href="#superuser-only-fields" title="Permanent link">&para;</a></h3>
+<p>These fields can only be written via REST by a superuser (<code>SUPERUSER_ONLY_FIELDS</code>):</p>
 <ul>
-<li><code>is_email_verified</code>, <code>is_phone_verified</code>, <code>is_dob_verified</code></li>
-<li><code>requires_mfa</code> — controls whether the user must complete MFA at login</li>
+<li><code>is_dob_verified</code> — DOB verification compliance signal.</li>
 </ul>
-<p>These fields are readable in the default graph but write-protected.</p>
+<p><code>is_superuser</code> and <code>is_staff</code> flips are also superuser-only via the
+<code>set_is_superuser</code> / <code>set_is_staff</code> setters.</p>
+<h3 id="admin-tier-fields">Admin-Tier Fields<a class="headerlink" href="#admin-tier-fields" title="Permanent link">&para;</a></h3>
+<p>These fields require any admin tier — <code>users</code>, <code>manage_users</code>, or <code>is_superuser</code> (<code>ADMIN_ONLY_FIELDS</code>):</p>
+<ul>
+<li><code>is_email_verified</code>, <code>is_phone_verified</code> — force-verify / unverify on behalf of another user.</li>
+<li><code>requires_mfa</code> — admins manage MFA policy at the admin tier. Superuser is reserved for the single super-admin in deployments that follow that pattern.</li>
+<li><code>is_active</code> — disable / reactivate (admin lifecycle op).</li>
+<li><code>org</code>, <code>org_id</code> — org assignment (token TTLs, push routing).</li>
+</ul>
+<p><code>MANAGE_USERS_ONLY_FIELDS</code> is retained as an alias for <code>ADMIN_ONLY_FIELDS</code>
+for back-compat with downstream code that imports it.</p>
+<h3 id="credential-field-writes-email-username-phone_number-replace">Credential Field Writes (<code>email</code> / <code>username</code> / <code>phone_number</code> replace)<a class="headerlink" href="#credential-field-writes-email-username-phone_number-replace" title="Permanent link">&para;</a></h3>
+<p>Gated by <code>_handle_existing_user_pre_save</code>:</p>
+<ul>
+<li><strong>Allowed</strong> for any admin tier (<code>users</code> / <code>manage_users</code> / <code>is_superuser</code>).</li>
+<li><strong>Blocked</strong> for self-acting users with only <code>owner</code> perm — they must use the dedicated change flows (<code>POST /api/auth/email/change/{request,confirm}</code> etc.) which verify ownership of the new channel via OTP/link.</li>
+</ul>
+<p>Phone clear (setting <code>null</code>) and first-set (when the user has none) are
+allowed for anyone with edit access.</p>
 <h2 id="protected-field-setters">Protected Field Setters<a class="headerlink" href="#protected-field-setters" title="Permanent link">&para;</a></h2>
 <p>The REST framework calls <code>set_&lt;field&gt;()</code> before saving if the method exists. These setters enforce permission checks:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># Only a superuser can grant superuser or staff status</span>
@@ -4624,7 +4725,7 @@
 <div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="n">POST</span> <span class="o">/</span><span class="n">api</span><span class="o">/</span><span class="n">user</span><span class="o">/&lt;</span><span class="n">target_id</span><span class="o">&gt;</span>
 <a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="p">{</span><span class="s2">&quot;new_password&quot;</span><span class="p">:</span> <span class="s2">&quot;NewPass##123&quot;</span><span class="p">}</span>
 </code></pre></div>
-<p>No <code>current_password</code> needed. The <code>can_change_password()</code> method allows this for superusers and users with <code>manage_users</code>. Password strength validation still applies.</p>
+<p>No <code>current_password</code> needed. The <code>can_change_password()</code> method allows this for superusers and callers with <code>users</code> or <code>manage_users</code>. Password strength validation still applies.</p>
 <h2 id="password-reset-flow-forgot-password">Password Reset Flow (Forgot Password)<a class="headerlink" href="#password-reset-flow-forgot-password" title="Permanent link">&para;</a></h2>
 <ol>
 <li>Call <code>POST /api/auth/forgot</code> with <code>email</code> and <code>method=code</code> or <code>method=link</code></li>
@@ -4647,7 +4748,70 @@
 <p>The phone number is normalized via <code>phonehub.normalize()</code> before the SMS is sent. An invalid or un-normalizable number returns a <code>ValueException</code> before any Twilio call is made.</p>
 <p>Code TTL is configurable via <code>PHONE_VERIFY_CODE_TTL</code> (default 600 seconds). Codes are single-use and consumed on successful verification.</p>
 <h2 id="post-save-actions">Post-Save Actions<a class="headerlink" href="#post-save-actions" title="Permanent link">&para;</a></h2>
-<p>Add <code>send_invite</code> to <code>POST_SAVE_ACTIONS</code>. When creating a user with <code>send_invite=true</code> in the POST body, <code>on_action_send_invite</code> is called after save.</p>
+<p><code>POST_SAVE_ACTIONS = ['send_invite', 'disable', 'reactivate']</code>. The body key IS the action name. Each action requires <code>manage_users</code> (re-checked inside the handler).</p>
+<table>
+<thead>
+<tr>
+<th>Action</th>
+<th>Body example</th>
+<th>Effect</th>
+<th>Permission</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>send_invite</code></td>
+<td><code>{"send_invite": true}</code></td>
+<td>Sends an invite email</td>
+<td><code>manage_users</code></td>
+</tr>
+<tr>
+<td><code>disable</code></td>
+<td><code>{"disable": {"reason": "admin\|abuse", "note": "..."}}</code></td>
+<td>Flips <code>is_active=False</code>, writes <code>metadata.protected.disable.*</code>, emits incident event</td>
+<td><code>manage_users</code></td>
+</tr>
+<tr>
+<td><code>reactivate</code></td>
+<td><code>{"reactivate": {"note": "..."}}</code></td>
+<td>Flips <code>is_active=True</code>, appends to <code>disable.history</code> (FIFO cap 20)</td>
+<td><code>manage_users</code></td>
+</tr>
+<tr>
+<td><code>change_username</code></td>
+<td><code>{"change_username": {"username": "new", "current_password": "..."}}</code></td>
+<td>Self-service username change. Mirrors <code>POST /api/auth/username/change</code></td>
+<td>self only</td>
+</tr>
+<tr>
+<td><code>revoke_sessions</code></td>
+<td><code>{"revoke_sessions": {"current_password": "..."}}</code></td>
+<td>Self-service global logout — rotates <code>auth_key</code>. Mirrors <code>POST /api/auth/sessions/revoke</code>. NOTE: returns a status only, not a fresh JWT — caller must re-authenticate.</td>
+<td>self only</td>
+</tr>
+<tr>
+<td><code>confirm_totp</code></td>
+<td><code>{"confirm_totp": {"code": "123456"}}</code></td>
+<td>Self-service TOTP enrolment confirm. Mirrors <code>POST /api/account/totp/confirm</code>. Sets <code>requires_mfa=True</code> and returns recovery codes.</td>
+<td>self only</td>
+</tr>
+<tr>
+<td><code>regenerate_totp_codes</code></td>
+<td><code>{"regenerate_totp_codes": {"code": "123456"}}</code></td>
+<td>Self-service regenerate of recovery codes (requires valid TOTP code). Mirrors <code>POST /api/account/totp/recovery-codes/regenerate</code>.</td>
+<td>self only</td>
+</tr>
+<tr>
+<td><code>disable_totp</code></td>
+<td><code>{"disable_totp": true}</code></td>
+<td>Self-service TOTP disable. Mirrors <code>DELETE /api/account/totp</code>.</td>
+<td>self only</td>
+</tr>
+</tbody>
+</table>
+<p>The full disable-lifecycle schema and service API are in <a href="../disable_lifecycle/">disable_lifecycle.md</a>.</p>
+<p><code>pii_anonymize()</code> records <code>reason="anonymized"</code> in the namespace before flipping the flag, preserving any prior cycle in <code>history</code>.</p>
+<p><strong>"Self only"</strong> means <code>self.is_request_user()</code> must be true — admins acting on another user record cannot trigger these actions even with <code>manage_users</code>. The dedicated <code>/api/auth/*</code> and <code>/api/account/totp/*</code> endpoints remain available for back-compat; new code should prefer the POST_SAVE_ACTIONS form.</p>
 <h2 id="settings">Settings<a class="headerlink" href="#settings" title="Permanent link">&para;</a></h2>
 <table>
 <thead>

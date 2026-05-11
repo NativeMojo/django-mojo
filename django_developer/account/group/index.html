@@ -1258,6 +1258,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="RestMeta">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#post-save-actions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Post-Save Actions
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -3994,6 +4011,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="RestMeta">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#post-save-actions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Post-Save Actions
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4230,8 +4264,37 @@ group is detected. This preserves the default branding for the default flow.</p>
 <a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>    <span class="n">VIEW_PERMS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;view_groups&quot;</span><span class="p">,</span> <span class="s2">&quot;manage_groups&quot;</span><span class="p">,</span> <span class="s2">&quot;manage_group&quot;</span><span class="p">]</span>
 <a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>    <span class="n">SAVE_PERMS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;manage_groups&quot;</span><span class="p">,</span> <span class="s2">&quot;manage_group&quot;</span><span class="p">]</span>
 <a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>    <span class="n">PROTECTED_JSON_PERMS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;manage_groups&quot;</span><span class="p">]</span>  <span class="c1"># required to write metadata[&quot;protected&quot;]</span>
-<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>    <span class="n">SEARCH_FIELDS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;name&quot;</span><span class="p">]</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>    <span class="n">POST_SAVE_ACTIONS</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;realtime_message&#39;</span><span class="p">,</span> <span class="s1">&#39;disable&#39;</span><span class="p">,</span> <span class="s1">&#39;reactivate&#39;</span><span class="p">]</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>    <span class="n">SEARCH_FIELDS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;name&quot;</span><span class="p">]</span>
 </code></pre></div>
+<h3 id="post-save-actions">Post-Save Actions<a class="headerlink" href="#post-save-actions" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Action</th>
+<th>Body example</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>realtime_message</code></td>
+<td><code>{"realtime_message": {"topic": "group:&lt;id&gt;:...", "message": ...}}</code></td>
+<td>Publishes to a group-scoped realtime topic</td>
+</tr>
+<tr>
+<td><code>disable</code></td>
+<td><code>{"disable": {"reason": "admin\|abuse\|archived", "note": "..."}}</code></td>
+<td>Flips <code>is_active=False</code>, writes <code>metadata.protected.disable.*</code></td>
+</tr>
+<tr>
+<td><code>reactivate</code></td>
+<td><code>{"reactivate": {"note": "..."}}</code></td>
+<td>Flips <code>is_active=True</code>, appends to <code>disable.history</code> (FIFO cap 20)</td>
+</tr>
+</tbody>
+</table>
+<p><code>disable</code>/<code>reactivate</code> require <code>manage_groups</code> (stricter than the broader Group <code>SAVE_PERMS</code> since these are destructive). See <a href="../disable_lifecycle/">disable_lifecycle.md</a>.</p>
 <h2 id="hierarchy">Hierarchy<a class="headerlink" href="#hierarchy" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="n">group</span><span class="o">.</span><span class="n">parent</span>          <span class="c1"># immediate parent</span>
 <a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="n">group</span><span class="o">.</span><span class="n">groups</span>          <span class="c1"># direct children (related_name)</span>
@@ -4260,9 +4323,11 @@ group is detected. This preserves the default branding for the default flow.</p>
 <a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>        <span class="s2">&quot;stripe_account_id&quot;</span><span class="p">:</span> <span class="s2">&quot;acct_123&quot;</span><span class="p">,</span>  <span class="c1"># requires manage_groups</span>
 <a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>        <span class="s2">&quot;webhook_secret&quot;</span><span class="p">:</span> <span class="s2">&quot;whsec_abc&quot;</span><span class="p">,</span>    <span class="c1"># requires manage_groups</span>
 <a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>        <span class="s2">&quot;plan&quot;</span><span class="p">:</span> <span class="s2">&quot;enterprise&quot;</span><span class="p">,</span>
-<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a>        <span class="s2">&quot;no_disable&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>               <span class="c1"># exempt from auto-disable sweep</span>
-<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a>    <span class="p">}</span>
-<a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a><span class="p">}</span>
+<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a>        <span class="s2">&quot;disable&quot;</span><span class="p">:</span> <span class="p">{</span>                      <span class="c1"># see disable_lifecycle.md</span>
+<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a>            <span class="s2">&quot;exempt_from_auto_disable&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>
+<a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a>        <span class="p">},</span>
+<a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a>    <span class="p">}</span>
+<a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a><span class="p">}</span>
 </code></pre></div>
 <p><strong>Audit trail:</strong> Every successful write to <code>metadata["protected"]</code> is unconditionally logged with <code>kind="meta:protected_changed"</code>, recording the username, changed keys, and instance pk — regardless of the <code>LOG_CHANGES</code> or <code>LOG_META_CHANGES</code> settings.</p>
 <p>When <code>LOG_META_CHANGES = True</code>, all root-level key changes across the entire <code>metadata</code> field are also logged with <code>kind="meta:changed"</code>.</p>
@@ -4271,15 +4336,16 @@ group is detected. This preserves the default branding for the default flow.</p>
 <p><code>Group</code> provides helpers to read and write individual keys within <code>metadata["protected"]</code> without loading and re-saving the whole metadata dict:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># Read a single key from metadata[&quot;protected&quot;]</span>
 <a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="n">plan</span> <span class="o">=</span> <span class="n">group</span><span class="o">.</span><span class="n">get_protected_metadata</span><span class="p">(</span><span class="s2">&quot;plan&quot;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
-<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="n">exempted</span> <span class="o">=</span> <span class="n">group</span><span class="o">.</span><span class="n">get_protected_metadata</span><span class="p">(</span><span class="s2">&quot;no_disable&quot;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
-<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>
-<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="c1"># Write a single key (saves immediately via update_fields=[&quot;metadata&quot;, &quot;modified&quot;])</span>
-<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="n">group</span><span class="o">.</span><span class="n">set_protected_metadata</span><span class="p">(</span><span class="s2">&quot;plan&quot;</span><span class="p">,</span> <span class="s2">&quot;enterprise&quot;</span><span class="p">)</span>
-<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="n">group</span><span class="o">.</span><span class="n">set_protected_metadata</span><span class="p">(</span><span class="s2">&quot;no_disable&quot;</span><span class="p">,</span> <span class="kc">True</span><span class="p">)</span>   <span class="c1"># exempt from auto-disable sweep</span>
-<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a>
-<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="c1"># Delete a key by setting it to None</span>
-<a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a><span class="n">group</span><span class="o">.</span><span class="n">set_protected_metadata</span><span class="p">(</span><span class="s2">&quot;disable_warned&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="c1"># Write a single key (saves immediately via update_fields=[&quot;metadata&quot;, &quot;modified&quot;])</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="n">group</span><span class="o">.</span><span class="n">set_protected_metadata</span><span class="p">(</span><span class="s2">&quot;plan&quot;</span><span class="p">,</span> <span class="s2">&quot;enterprise&quot;</span><span class="p">)</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="c1"># Delete a key by setting it to None</span>
+<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="n">group</span><span class="o">.</span><span class="n">set_protected_metadata</span><span class="p">(</span><span class="s2">&quot;plan&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
 </code></pre></div>
+<p>For disable lifecycle state (<code>metadata.protected.disable.*</code>) use the
+<a href="../disable_lifecycle/">disable service</a> — <code>disable_entity</code>, <code>reactivate_entity</code>,
+<code>mark_warning</code>, etc. — instead of writing the namespace directly.</p>
 <p><code>set_protected_metadata</code> always persists immediately. It does not bypass the REST write-protection — that gate applies only to REST requests. Direct Python calls are unrestricted.</p>
 <h2 id="membership">Membership<a class="headerlink" href="#membership" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">GroupMember</span>
@@ -4292,7 +4358,11 @@ group is detected. This preserves the default branding for the default flow.</p>
 <a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a>
 <a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a><span class="c1"># Invite a user by email</span>
 <a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a><span class="n">member</span> <span class="o">=</span> <span class="n">group</span><span class="o">.</span><span class="n">invite</span><span class="p">(</span><span class="s2">&quot;alice@example.com&quot;</span><span class="p">)</span>
+<a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a>
+<a id="__codelineno-11-12" name="__codelineno-11-12" href="#__codelineno-11-12"></a><span class="c1"># Active direct member count (excludes inactive memberships and descendants)</span>
+<a id="__codelineno-11-13" name="__codelineno-11-13" href="#__codelineno-11-13"></a><span class="n">n</span> <span class="o">=</span> <span class="n">group</span><span class="o">.</span><span class="n">member_count</span>
 </code></pre></div>
+<p><code>member_count</code> is exposed via REST as an <code>extra</code> on the <code>default</code> graph (not <code>basic</code> — that stays minimal). List endpoints use <code>default</code> by, well, default, so the field appears in list payloads without an explicit <code>?graph=</code> parameter. Backed by <code>members.filter(is_active=True).count()</code> per record — at very large scale, consider an annotated queryset instead.</p>
 <h2 id="groupmember-model">GroupMember Model<a class="headerlink" href="#groupmember-model" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">GroupMember</span><span class="p">(</span><span class="n">models</span><span class="o">.</span><span class="n">Model</span><span class="p">,</span> <span class="n">MojoModel</span><span class="p">):</span>
 <a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>    <span class="n">group</span> <span class="o">=</span> <span class="n">models</span><span class="o">.</span><span class="n">ForeignKey</span><span class="p">(</span><span class="n">Group</span><span class="p">,</span> <span class="n">related_name</span><span class="o">=</span><span class="s2">&quot;members&quot;</span><span class="p">,</span> <span class="o">...</span><span class="p">)</span>

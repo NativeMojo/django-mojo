@@ -5278,13 +5278,13 @@
 <td><code>disable_user</code></td>
 <td><code>manage_users</code></td>
 <td>Yes</td>
-<td>Disable account + rotate auth_key (invalidates all sessions). Cannot disable yourself.</td>
+<td>Disable account + rotate auth_key (invalidates all sessions). Cannot disable yourself. Does not write <code>metadata.protected.disable.*</code> — use the REST <code>disable</code> action for audited disables.</td>
 </tr>
 <tr>
 <td><code>enable_user</code></td>
 <td><code>manage_users</code></td>
 <td>Yes</td>
-<td>Re-enable a disabled account</td>
+<td>Re-enable a disabled account. Does not update <code>metadata.protected.disable.*</code> history.</td>
 </tr>
 <tr>
 <td><code>force_logout</code></td>

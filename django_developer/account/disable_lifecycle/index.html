@@ -10,7 +10,7 @@
       
       
       
-        <link rel="canonical" href="https://NativeMojo.github.io/django-mojo/django_developer/account/inactive_sweep/">
+        <link rel="canonical" href="https://NativeMojo.github.io/django-mojo/django_developer/account/disable_lifecycle/">
       
       
       
@@ -23,7 +23,7 @@
     
     
       
-        <title>Auto-Disable Inactive Users and Groups - Django-MOJO</title>
+        <title>Disable Lifecycle (User and Group) - Django-MOJO</title>
       
     
     
@@ -74,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#auto-disable-inactive-users-and-groups" class="md-skip">
+        <a href="#disable-lifecycle-user-and-group" class="md-skip">
           Skip to content
         </a>
       
@@ -108,7 +108,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Auto-Disable Inactive Users and Groups
+              Disable Lifecycle (User and Group)
             
           </span>
         </div>
@@ -3621,68 +3621,52 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#how-it-works" class="md-nav__link">
+  <a href="#schema" class="md-nav__link">
     <span class="md-ellipsis">
       
-        How It Works
+        Schema
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Schema">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#reason-enums" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reason enums
       
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#settings" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#history-cap" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Settings
+        History cap
       
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#exemptions" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#anonymize-and-history" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Exemptions
+        Anonymize and history
       
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#warning-emails" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Warning Emails
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#incident-events" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Incident Events
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#protected-metadata" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Protected Metadata
-      
-    </span>
-  </a>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -3698,10 +3682,82 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#cron-schedule" class="md-nav__link">
+  <a href="#rest-surface" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Cron Schedule
+        REST Surface
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="REST Surface">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#throttle-read-endpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Throttle read endpoint
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#inactive-sweep-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Inactive Sweep Integration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pii_anonymize-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pii_anonymize Integration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#back-compat-for-legacy-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Back-Compat for Legacy Keys
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#permissions-and-audit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Permissions and Audit
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-jsonfield-not-new-columns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why JSONField, not new columns?
       
     </span>
   </a>
@@ -3739,204 +3795,239 @@
   
 
 
-<h1 id="auto-disable-inactive-users-and-groups">Auto-Disable Inactive Users and Groups<a class="headerlink" href="#auto-disable-inactive-users-and-groups" title="Permanent link">&para;</a></h1>
-<p>A nightly cron job (<code>inactive_sweep</code>) automatically warns and then disables users and groups that have not been active for a configurable number of days. The feature is opt-in via settings flags and affects both <code>User</code> and <code>Group</code> independently.</p>
-<hr />
-<h2 id="how-it-works">How It Works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
-<p>The sweep runs every night at 03:00 UTC. For each enabled resource type it runs three phases:</p>
+<h1 id="disable-lifecycle-user-and-group">Disable Lifecycle (User and Group)<a class="headerlink" href="#disable-lifecycle-user-and-group" title="Permanent link">&para;</a></h1>
+<p>A single service owns all writes to <code>User.is_active</code> / <code>Group.is_active</code> plus the
+audit metadata that explains <em>why</em>, <em>when</em>, <em>by whom</em>, and <em>with what note</em>. The
+metadata lives under <code>metadata.protected.disable.*</code>.</p>
+<p>Three callers go through this service:</p>
 <ol>
-<li><strong>Clear stale warnings</strong> — If an entity has a pending warning flag but its <code>last_activity</code> is more recent than the warning date, it reactivated. The warning flag is cleared.</li>
-<li><strong>Warn</strong> — Entities whose <code>last_activity</code> has passed <code>inactive_days - warning_days</code> ago and have not yet been warned get a warning email and a <code>disable.warning</code> block written to <code>metadata.protected.disable</code> via <code>disable_service.mark_warning()</code>.</li>
-<li><strong>Disable</strong> — Entities whose <code>last_activity</code> has passed <code>inactive_days</code> ago are set <code>is_active = False</code> atomically. An incident event is emitted at level 4.</li>
+<li><strong>REST POST_SAVE_ACTIONS</strong> — <code>disable</code> and <code>reactivate</code> on User and Group</li>
+<li><strong>Inactive sweep</strong> — auto-disables stale users / groups using <code>reason="inactive"</code></li>
+<li><strong><code>pii_anonymize()</code></strong> — terminal anonymization, records <code>reason="anonymized"</code></li>
 </ol>
+<p>Direct writes to <code>is_active</code> via REST still work (<code>{"is_active": false}</code>) but do
+not write the namespace and are no longer the recommended path.</p>
 <hr />
-<h2 id="settings">Settings<a class="headerlink" href="#settings" title="Permanent link">&para;</a></h2>
+<h2 id="schema">Schema<a class="headerlink" href="#schema" title="Permanent link">&para;</a></h2>
+<p><code>metadata.protected.disable</code> (visible in graphs, write-protected):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>{
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>  &quot;reason&quot;: &quot;admin|abuse|archived|inactive|anonymized|self|null&quot;,
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>  &quot;at&quot;: &quot;2026-05-09T14:22:01Z&quot;,
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>  &quot;by_user_id&quot;: 42,                         // null for system-driven (sweep, anonymize)
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>  &quot;by_username&quot;: &quot;alice&quot;,                   // captured at action time
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>  &quot;note&quot;: &quot;Violated TOS §4. Refunded.&quot;,
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>  &quot;exempt_from_auto_disable&quot;: false,
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>  &quot;warning&quot;: {                              // present during inactivity warning window
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    &quot;sent_at&quot;: &quot;2026-05-02T...&quot;,
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    &quot;days_until_disable_at_send&quot;: 7
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>  },
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>  &quot;history&quot;: [                              // FIFO cap, see HISTORY_CAP
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>    {
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>      &quot;at&quot;: &quot;...&quot;, &quot;reason&quot;: &quot;...&quot;, &quot;by_user_id&quot;: ..., &quot;by_username&quot;: &quot;...&quot;, &quot;note&quot;: &quot;...&quot;,
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>      &quot;reactivated_at&quot;: &quot;...|null&quot;,
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>      &quot;reactivated_by_user_id&quot;: ..., &quot;reactivated_by_username&quot;: &quot;...&quot;,
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>      &quot;reactivated_note&quot;: &quot;...&quot;
+<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>    }
+<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>  ]
+<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>}
+</code></pre></div>
+<p><code>is_active</code> is the single source of truth. The namespace adds context, never
+overrides the field.</p>
+<h3 id="reason-enums">Reason enums<a class="headerlink" href="#reason-enums" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
 <tr>
-<th>Setting</th>
-<th>Default</th>
+<th>Reason</th>
+<th>Source</th>
 <th>Description</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>ACCOUNT_AUTO_DISABLE_ENABLED</code></td>
-<td><code>False</code></td>
-<td>Enable/disable the user sweep. Off by default.</td>
+<td><code>admin</code></td>
+<td>REST</td>
+<td>Admin manually disabled the user/group</td>
 </tr>
 <tr>
-<td><code>ACCOUNT_INACTIVE_DAYS</code></td>
-<td><code>90</code></td>
-<td>Days of inactivity before a user is disabled</td>
+<td><code>abuse</code></td>
+<td>REST</td>
+<td>Abuse / TOS violation</td>
 </tr>
 <tr>
-<td><code>ACCOUNT_INACTIVE_WARNING_DAYS</code></td>
-<td><code>7</code></td>
-<td>Days before disable threshold to send the warning email</td>
+<td><code>archived</code></td>
+<td>REST (Group only)</td>
+<td>Group archived as part of operations cleanup</td>
 </tr>
 <tr>
-<td><code>GROUP_AUTO_DISABLE_ENABLED</code></td>
-<td><code>False</code></td>
-<td>Enable/disable the group sweep. Off by default.</td>
+<td><code>inactive</code></td>
+<td>Sweep (server-only)</td>
+<td>Auto-disabled after N days of inactivity</td>
 </tr>
 <tr>
-<td><code>GROUP_INACTIVE_DAYS</code></td>
-<td><code>90</code></td>
-<td>Days of inactivity before a group is disabled</td>
+<td><code>anonymized</code></td>
+<td><code>pii_anonymize</code> (server-only)</td>
+<td>GDPR right-to-erasure</td>
+</tr>
+<tr>
+<td><code>self</code></td>
+<td>Reserved for future self-deactivation flow</td>
+<td>—</td>
 </tr>
 </tbody>
 </table>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># settings.py</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">ACCOUNT_AUTO_DISABLE_ENABLED</span> <span class="o">=</span> <span class="kc">True</span>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">ACCOUNT_INACTIVE_DAYS</span> <span class="o">=</span> <span class="mi">90</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="n">ACCOUNT_INACTIVE_WARNING_DAYS</span> <span class="o">=</span> <span class="mi">7</span>
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="n">GROUP_AUTO_DISABLE_ENABLED</span> <span class="o">=</span> <span class="kc">True</span>
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="n">GROUP_INACTIVE_DAYS</span> <span class="o">=</span> <span class="mi">90</span>
-</code></pre></div>
-<hr />
-<h2 id="exemptions">Exemptions<a class="headerlink" href="#exemptions" title="Permanent link">&para;</a></h2>
-<p>The following users are always skipped — both for warnings and for disable:</p>
-<ul>
-<li><code>is_superuser = True</code></li>
-<li><code>is_staff = True</code></li>
-<li><code>metadata["protected"]["disable"]["exempt_from_auto_disable"] = True</code></li>
-<li><code>last_activity</code> is null <strong>and</strong> <code>last_login</code> is null (never logged in)</li>
-</ul>
-<p>For groups, only the <code>exempt_from_auto_disable</code> flag applies (no staff/superuser concept).</p>
-<p>For <code>Group</code>, use <code>set_protected_metadata</code> to write a single key atomically:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># Exempt a group from the sweep</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="n">group</span><span class="o">.</span><span class="n">set_protected_metadata</span><span class="p">(</span><span class="s2">&quot;disable&quot;</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;exempt_from_auto_disable&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">})</span>
-</code></pre></div>
-<p>For <code>User</code>, write via <code>metadata["protected"]["disable"]</code> directly and save with <code>update_fields</code>.</p>
-<p>The legacy <code>protected.no_disable=True</code> flag is still honoured for one release. The 0041
-data migration populates the new key from it. Use the new key for any new code.</p>
-<hr />
-<h2 id="warning-emails">Warning Emails<a class="headerlink" href="#warning-emails" title="Permanent link">&para;</a></h2>
-<p>The sweep sends template emails when warning. Both templates ship as seed files and are auto-loaded from <code>mojo/apps/aws/seeds/email_templates/</code> on first use.</p>
-<table>
-<thead>
-<tr>
-<th>Template</th>
-<th>Sent To</th>
-<th>Context Variables</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>account_inactive_warning</code></td>
-<td>The user directly</td>
-<td><code>days_until_disable</code>, <code>inactive_days</code></td>
-</tr>
-<tr>
-<td><code>group_inactive_warning</code></td>
-<td>All active users with <code>manage_groups</code> or <code>groups</code> permission</td>
-<td><code>group_name</code>, <code>group_id</code>, <code>days_until_disable</code>, <code>inactive_days</code></td>
-</tr>
-</tbody>
-</table>
-<p>Customize or override either template by creating or editing the <code>EmailTemplate</code> database record with the same name.</p>
-<hr />
-<h2 id="incident-events">Incident Events<a class="headerlink" href="#incident-events" title="Permanent link">&para;</a></h2>
-<p>Each warning and disable action emits an incident event via <code>incident.report_event()</code>:</p>
-<table>
-<thead>
-<tr>
-<th>Action</th>
-<th>Category</th>
-<th>Level</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>User warned</td>
-<td><code>account:inactive_warning</code></td>
-<td>2</td>
-</tr>
-<tr>
-<td>User disabled</td>
-<td><code>account:auto_disabled</code></td>
-<td>4</td>
-</tr>
-<tr>
-<td>Group warned</td>
-<td><code>group:inactive_warning</code></td>
-<td>2</td>
-</tr>
-<tr>
-<td>Group disabled</td>
-<td><code>group:auto_disabled</code></td>
-<td>4</td>
-</tr>
-</tbody>
-</table>
-<p>These appear in the security incident feed and in the assistant's <code>query_events</code> tool.</p>
-<hr />
-<h2 id="protected-metadata">Protected Metadata<a class="headerlink" href="#protected-metadata" title="Permanent link">&para;</a></h2>
-<p>The sweep writes state under <code>metadata.protected.disable.*</code> — see
-<a href="../disable_lifecycle/">disable_lifecycle.md</a> for the canonical schema.</p>
-<p>Relevant keys:</p>
-<table>
-<thead>
-<tr>
-<th>Key</th>
-<th>Purpose</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>disable.exempt_from_auto_disable</code></td>
-<td>Permanent exemption from the sweep</td>
-</tr>
-<tr>
-<td><code>disable.warning.sent_at</code></td>
-<td>ISO timestamp of when the warning was sent (used to detect reactivation)</td>
-</tr>
-<tr>
-<td><code>disable.warning.days_until_disable_at_send</code></td>
-<td>Days until disable threshold at send time</td>
-</tr>
-<tr>
-<td><code>disable.reason</code> (set to <code>"inactive"</code>)</td>
-<td>Written by the disable phase</td>
-</tr>
-</tbody>
-</table>
-<p><strong>Legacy keys still honoured for one release</strong>: <code>protected.no_disable</code>,
-<code>protected.disable_warned</code>, <code>protected.disable_warn_date</code>. The 0041 data
-migration populates the new namespace from these. A follow-up release will
-remove the legacy reads + the legacy keys themselves.</p>
+<p>REST POST_SAVE_ACTIONS reject server-only reasons with a 400.</p>
+<h3 id="history-cap">History cap<a class="headerlink" href="#history-cap" title="Permanent link">&para;</a></h3>
+<p><code>history</code> is FIFO-capped at <code>HISTORY_CAP = 20</code>. Older entries are dropped on
+overflow. Long-term audit lives in <code>incident.Event</code> and <code>logit.Log</code>, not on the
+user record — this cap prevents unbounded JSON growth from repeat-toggle.</p>
+<h3 id="anonymize-and-history">Anonymize and history<a class="headerlink" href="#anonymize-and-history" title="Permanent link">&para;</a></h3>
+<p><code>pii_anonymize()</code> is terminal. If the user has a non-empty live disable block at
+the time of anonymization, the service appends a history entry with
+<code>reactivated_at=null</code> and <code>reactivated_note="Anonymized; not reactivated"</code> so
+the prior disable's reason is preserved. The live block is then overwritten
+with <code>{reason: "anonymized", at, by_user_id, by_username, note: null, history}</code>.
+All other (PII-bearing) metadata keys are wiped.</p>
 <hr />
 <h2 id="service-api">Service API<a class="headerlink" href="#service-api" title="Permanent link">&para;</a></h2>
-<p>The service functions are in <code>mojo.apps.account.services.inactive</code> and can be called directly in code or tests:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.services.inactive</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>    <span class="n">warn_inactive_users</span><span class="p">,</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    <span class="n">disable_inactive_users</span><span class="p">,</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>    <span class="n">warn_inactive_groups</span><span class="p">,</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>    <span class="n">disable_inactive_groups</span><span class="p">,</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>    <span class="n">_clear_stale_warnings</span><span class="p">,</span>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="p">)</span>
-<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">User</span><span class="p">,</span> <span class="n">Group</span>
-<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>
-<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="c1"># Run individual phases manually</span>
-<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="n">cleared</span> <span class="o">=</span> <span class="n">_clear_stale_warnings</span><span class="p">(</span><span class="n">User</span><span class="p">,</span> <span class="n">inactive_days</span><span class="o">=</span><span class="mi">90</span><span class="p">)</span>
-<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="n">warned</span>  <span class="o">=</span> <span class="n">warn_inactive_users</span><span class="p">()</span>
-<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="n">disabled</span> <span class="o">=</span> <span class="n">disable_inactive_users</span><span class="p">()</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.services</span><span class="w"> </span><span class="kn">import</span> <span class="n">disable</span> <span class="k">as</span> <span class="n">disable_service</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="n">disable_service</span><span class="o">.</span><span class="n">disable_entity</span><span class="p">(</span><span class="n">entity</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">reason</span><span class="p">,</span> <span class="n">by_user</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">request</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="n">disable_service</span><span class="o">.</span><span class="n">reactivate_entity</span><span class="p">(</span><span class="n">entity</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">by_user</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">request</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="n">disable_service</span><span class="o">.</span><span class="n">record_anonymize</span><span class="p">(</span><span class="n">entity</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">by_user</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">request</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>  <span class="c1"># called by pii_anonymize</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="n">disable_service</span><span class="o">.</span><span class="n">mark_warning</span><span class="p">(</span><span class="n">entity</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">days_until_disable</span><span class="p">)</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="n">disable_service</span><span class="o">.</span><span class="n">clear_warning</span><span class="p">(</span><span class="n">entity</span><span class="p">)</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="n">disable_service</span><span class="o">.</span><span class="n">is_exempt</span><span class="p">(</span><span class="n">entity</span><span class="p">)</span>        <span class="c1"># honours new + legacy flags</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="n">disable_service</span><span class="o">.</span><span class="n">has_warning</span><span class="p">(</span><span class="n">entity</span><span class="p">)</span>      <span class="c1"># honours new + legacy</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="n">disable_service</span><span class="o">.</span><span class="n">get_warning_sent_at</span><span class="p">(</span><span class="n">entity</span><span class="p">)</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="n">disable_service</span><span class="o">.</span><span class="n">migrate_legacy</span><span class="p">(</span><span class="n">entity</span><span class="p">)</span>   <span class="c1"># idempotent, leaves legacy keys in place</span>
 </code></pre></div>
-<p>Each function returns the count of entities affected.</p>
+<p><code>disable_entity</code> and <code>reactivate_entity</code> are atomic: they use a conditional
+update on <code>is_active</code> to detect concurrent flippers and raise <code>ValueException</code>
+on a race or already-in-target-state collision.</p>
+<p><code>disable_service.HISTORY_CAP</code> and the reason frozensets
+(<code>USER_REST_REASONS</code>, <code>GROUP_REST_REASONS</code>) are exported for callers / tests.</p>
 <hr />
-<h2 id="cron-schedule">Cron Schedule<a class="headerlink" href="#cron-schedule" title="Permanent link">&para;</a></h2>
-<p>The sweep is registered as a cron job in <code>mojo/apps/account/cronjobs.py</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>0 3 * * *   → account.inactive_sweep   (daily at 03:00 UTC)
-</code></pre></div>
-<p>It runs as an async job on the <code>cleanup</code> channel. No action is taken when both <code>ACCOUNT_AUTO_DISABLE_ENABLED</code> and <code>GROUP_AUTO_DISABLE_ENABLED</code> are <code>False</code>.</p>
+<h2 id="rest-surface">REST Surface<a class="headerlink" href="#rest-surface" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>Body</th>
+<th>Permission</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>POST</td>
+<td><code>/api/user/&lt;id&gt;</code></td>
+<td><code>{"disable": {"reason": "admin", "note": "..."}}</code></td>
+<td><code>manage_users</code></td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/api/user/&lt;id&gt;</code></td>
+<td><code>{"reactivate": {"note": "..."}}</code></td>
+<td><code>manage_users</code></td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/api/group/&lt;id&gt;</code></td>
+<td><code>{"disable": {"reason": "admin\|abuse\|archived", "note": "..."}}</code></td>
+<td><code>manage_groups</code></td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/api/group/&lt;id&gt;</code></td>
+<td><code>{"reactivate": {"note": "..."}}</code></td>
+<td><code>manage_groups</code></td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/api/auth/manage/throttle?user_id=N&amp;key=login</code></td>
+<td>—</td>
+<td><code>manage_users</code></td>
+</tr>
+</tbody>
+</table>
+<p>The body key (<code>disable</code> / <code>reactivate</code>) IS the action name — the model's
+<code>POST_SAVE_ACTIONS</code> dispatch invokes <code>on_action_disable</code> / <code>on_action_reactivate</code>.</p>
+<h3 id="throttle-read-endpoint">Throttle read endpoint<a class="headerlink" href="#throttle-read-endpoint" title="Permanent link">&para;</a></h3>
+<p>Returns <code>{count, limit, window, retry_after_seconds}</code> from the per-account login
+sliding-window in Redis. Pure read — does not modify Redis state. Pairs with
+<code>POST /api/auth/manage/clear_rate_limit</code> for the reset operation.</p>
+<p>Only <code>key="login"</code> is supported in v1. Unsupported keys return 400. Lookup by
+<code>user_id</code> or <code>username</code>.</p>
+<hr />
+<h2 id="inactive-sweep-integration">Inactive Sweep Integration<a class="headerlink" href="#inactive-sweep-integration" title="Permanent link">&para;</a></h2>
+<p><code>mojo.apps.account.services.inactive</code> calls into the disable service:</p>
+<ul>
+<li>Warn phase → <code>disable_service.mark_warning(entity, days_until_disable=N)</code></li>
+<li>Disable phase → <code>disable_service.disable_entity(entity, reason="inactive", by_user=None)</code></li>
+<li>Reactivation detection (<code>_clear_stale_warnings</code>) → <code>disable_service.has_warning</code> +
+  <code>disable_service.get_warning_sent_at</code> + <code>disable_service.clear_warning</code></li>
+<li>Exemption check → <code>disable_service.is_exempt</code></li>
+</ul>
+<p>See <a href="../inactive_sweep/">inactive_sweep.md</a> for the cron, settings, and email
+templates that trigger the sweep.</p>
+<hr />
+<h2 id="pii_anonymize-integration"><code>pii_anonymize</code> Integration<a class="headerlink" href="#pii_anonymize-integration" title="Permanent link">&para;</a></h2>
+<p><code>User.pii_anonymize()</code> calls <code>disable_service.record_anonymize(self)</code> before
+flipping <code>is_active=False</code>. The service replaces <code>metadata</code> with a fresh dict
+containing only <code>protected.disable.*</code>, preserving any prior cycle in history
+while wiping every other metadata key (which may carry user PII).</p>
+<hr />
+<h2 id="back-compat-for-legacy-keys">Back-Compat for Legacy Keys<a class="headerlink" href="#back-compat-for-legacy-keys" title="Permanent link">&para;</a></h2>
+<p>Legacy protected metadata keys are still honoured on read for one release:</p>
+<table>
+<thead>
+<tr>
+<th>Legacy key</th>
+<th>New equivalent</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>protected.no_disable=True</code></td>
+<td><code>protected.disable.exempt_from_auto_disable=True</code></td>
+</tr>
+<tr>
+<td><code>protected.disable_warned=True</code> + <code>protected.disable_warn_date="&lt;iso&gt;"</code></td>
+<td><code>protected.disable.warning.sent_at="&lt;iso&gt;"</code> + <code>days_until_disable_at_send</code></td>
+</tr>
+</tbody>
+</table>
+<p><code>disable_service.is_exempt</code>, <code>has_warning</code>, and <code>get_warning_sent_at</code> read both
+shapes. New writes go to the new namespace only.</p>
+<p>The data migration <code>0041_disable_lifecycle_migrate.py</code> walks existing entities
+and populates the new namespace from legacy keys, leaving legacy keys in place.
+A follow-up migration in the next release will remove the legacy keys.</p>
+<hr />
+<h2 id="permissions-and-audit">Permissions and Audit<a class="headerlink" href="#permissions-and-audit" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>is_active</code> is in <code>MANAGE_USERS_ONLY_FIELDS</code> (<a href="../../../mojo/apps/account/models/user.py">user.py</a>),
+  so direct writes via REST already require <code>manage_users</code>.</li>
+<li>The new POST_SAVE_ACTIONS additionally re-check <code>manage_users</code> (User) /
+  <code>manage_groups</code> (Group) inside <code>on_action_*</code> and validate the reason enum.</li>
+<li>The disable service emits <code>model_logit(kind="disabled"|"reactivated"|"auto_disabled")</code>
+  and an <code>incident.report_event</code> per state change. These are the long-term
+  audit records — <code>disable.history</code> is bounded.</li>
+</ul>
+<hr />
+<h2 id="why-jsonfield-not-new-columns">Why JSONField, not new columns?<a class="headerlink" href="#why-jsonfield-not-new-columns" title="Permanent link">&para;</a></h2>
+<p>Schema-shaped audit data (reason / note / by_user / history) belongs in JSON
+because the column count would grow indefinitely as we add fields. JSONField
+queries (<code>metadata__protected__disable__reason="inactive"</code>) are fast enough at expected
+scale, and <code>metadata.protected</code> already has write-protection plumbing.</p>
+<p>If a hot-path filter later proves slow at very large user counts, individual
+fields can be promoted to columns without breaking the namespace contract.</p>
 <hr />
 <h2 id="related">Related<a class="headerlink" href="#related" title="Permanent link">&para;</a></h2>
 <ul>
 <li><a href="../user/">User model</a></li>
 <li><a href="../group/">Group model</a></li>
-<li><a href="../../email/sending/">Email sending</a></li>
+<li><a href="../inactive_sweep/">Inactive sweep</a></li>
+<li><a href="../../../mojo/decorators/limits.py">Login throttling</a> — <code>read_account_attempt</code></li>
 </ul>
 
 

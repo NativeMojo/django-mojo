@@ -2844,6 +2844,56 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#disable-lifecycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Disable Lifecycle
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Disable Lifecycle">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#disable-a-group" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Disable a group
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reactivate-a-group" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reactivate a group
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#read-disable-state" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Read disable state
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -3932,6 +3982,56 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#disable-lifecycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Disable Lifecycle
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Disable Lifecycle">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#disable-a-group" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Disable a group
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reactivate-a-group" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reactivate a group
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#read-disable-state" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Read disable state
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -3984,6 +4084,16 @@
 <td>Update group</td>
 </tr>
 <tr>
+<td>POST</td>
+<td><code>/api/group/&lt;id&gt;</code> body <code>{"disable": {...}}</code></td>
+<td>Disable (archive/block) group — see <a href="#disable-lifecycle">Disable Lifecycle</a></td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/api/group/&lt;id&gt;</code> body <code>{"reactivate": {...}}</code></td>
+<td>Reactivate a disabled group</td>
+</tr>
+<tr>
 <td>GET</td>
 <td><code>/api/group/member</code></td>
 <td>List group members</td>
@@ -4028,10 +4138,12 @@
 <a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">    </span><span class="nt">&quot;metadata&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;timezone&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;America/New_York&quot;</span><span class="p">},</span>
 <a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">    </span><span class="nt">&quot;created&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2024-01-01T00:00:00Z&quot;</span><span class="p">,</span>
 <a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">    </span><span class="nt">&quot;modified&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2024-01-15T10:00:00Z&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">    </span><span class="nt">&quot;avatar&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span>
-<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="w">  </span><span class="p">}</span>
-<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="p">}</span>
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">    </span><span class="nt">&quot;avatar&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span>
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="w">    </span><span class="nt">&quot;member_count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span>
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="p">}</span>
 </code></pre></div>
+<p><code>member_count</code> is the count of active direct members of the group (does not include descendant groups). Available on the <code>default</code> graph only — <code>basic</code> stays minimal. List endpoints use <code>default</code> by default, so the field appears without needing <code>?graph=</code>.</p>
 <h2 id="list-groups">List Groups<a class="headerlink" href="#list-groups" title="Permanent link">&para;</a></h2>
 <p>Requires <code>view_groups</code> or <code>manage_groups</code> permission.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>GET /api/group?kind=organization&amp;sort=name
@@ -4051,7 +4163,7 @@
 </tr>
 <tr>
 <td><code>default</code></td>
-<td>basic fields + parent, metadata</td>
+<td>basic fields + parent, auth_domain, metadata, member_count</td>
 </tr>
 <tr>
 <td><code>simple</code></td>
@@ -4097,6 +4209,22 @@
 <p>Groups can have a parent group. Child groups inherit parent-level permissions for members. Use <code>parent=&lt;id&gt;</code> to filter by parent:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>GET /api/group?parent=7
 </code></pre></div>
+<hr />
+<h2 id="disable-lifecycle">Disable Lifecycle<a class="headerlink" href="#disable-lifecycle" title="Permanent link">&para;</a></h2>
+<p>Admins manage group <code>is_active</code> state through two named POST_SAVE_ACTIONS. Writing the bare <code>is_active</code> field directly still works but does not populate the disable namespace or emit audit events. The actions below are the recommended path for any new code. Requires <code>manage_groups</code> — stricter than the rest of the Group <code>SAVE_PERMS</code> since disable is destructive.</p>
+<h3 id="disable-a-group">Disable a group<a class="headerlink" href="#disable-a-group" title="Permanent link">&para;</a></h3>
+<p><strong>POST</strong> <code>/api/group/&lt;id&gt;</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span><span class="nt">&quot;disable&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;archived&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;note&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Project sunset 2026 Q2&quot;</span><span class="p">}}</span>
+</code></pre></div>
+<p><code>reason</code> must be one of: <code>admin</code>, <code>abuse</code>, <code>archived</code>. Server-set reasons (<code>inactive</code>) are rejected from REST.</p>
+<p>Effect: <code>is_active=False</code>, populates <code>metadata.protected.disable</code> with <code>{reason, at, by_user_id, by_username, note}</code>. Members are unaffected — <code>GroupMember.is_active</code> does not cascade.</p>
+<h3 id="reactivate-a-group">Reactivate a group<a class="headerlink" href="#reactivate-a-group" title="Permanent link">&para;</a></h3>
+<p><strong>POST</strong> <code>/api/group/&lt;id&gt;</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p">{</span><span class="nt">&quot;reactivate&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;note&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Project resumed&quot;</span><span class="p">}}</span>
+</code></pre></div>
+<p>Effect: <code>is_active=True</code>. Appends a history entry to <code>disable.history</code> (FIFO cap 20) with the prior disable context and <code>reactivated_*</code> fields.</p>
+<h3 id="read-disable-state">Read disable state<a class="headerlink" href="#read-disable-state" title="Permanent link">&para;</a></h3>
+<p><code>metadata</code> is in the default graph, so <code>data.metadata.protected.disable</code> is on every group response. <code>disable.reason</code> distinguishes admin-disabled, archived, abuse-disabled, and auto-disabled (inactivity sweep) cases.</p>
 
 
 
