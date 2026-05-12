@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## v1.2.11 - May 12, 2026
+
+add resolve to ticket handler
+
+
 ## v1.2.10 - May 11, 2026
 
 bugfix in catchall rules
