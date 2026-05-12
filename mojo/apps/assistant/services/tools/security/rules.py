@@ -108,7 +108,23 @@ def _tool_get_ruleset(params, user):
         "properties": {
             "name": {"type": "string", "description": "Rule name describing the pattern"},
             "category": {"type": "string", "description": "Event category to match"},
-            "handler": {"type": "string", "description": "Handler chain (e.g. 'ignore://' or 'block://?ttl=3600,notify://perm@manage_security'). Use 'ignore://' to auto-ignore matching events."},
+            "handler": {
+                "type": "string",
+                "description": (
+                    "Handler chain: comma-separated handler specs executed in order. "
+                    "Schemes: "
+                    "notify://perm@<perm> — in-app/push notification; "
+                    "email://perm@<perm> — email users with that permission; "
+                    "sms://perm@<perm> — SMS users with that permission; "
+                    "block://?ttl=3600 — fleet-wide IP block; "
+                    "ticket://?priority=8&status=open&category=security — create a support ticket; "
+                    "resolve://?status=resolved&note=... — resolve (or close) the incident automatically; "
+                    "job://module.function — publish a custom async job; "
+                    "llm:// — invoke LLM agent to triage. "
+                    "Example: 'ticket://?priority=8,resolve://' creates a ticket then auto-resolves the incident. "
+                    "Example: 'block://?ttl=3600,notify://perm@manage_security' blocks the IP and alerts admins."
+                ),
+            },
             "rules": {
                 "type": "array",
                 "description": "Field match rules (conditions that events must satisfy)",
@@ -246,7 +262,22 @@ def _tool_add_rule_condition(params, user):
         "properties": {
             "ruleset_id": {"type": "integer", "description": "The rule set ID to update"},
             "name": {"type": "string", "description": "New name"},
-            "handler": {"type": "string", "description": "New handler chain"},
+            "handler": {
+                "type": "string",
+                "description": (
+                    "New handler chain: comma-separated handler specs. "
+                    "Schemes: "
+                    "notify://perm@<perm>; "
+                    "email://perm@<perm>; "
+                    "sms://perm@<perm>; "
+                    "block://?ttl=3600; "
+                    "ticket://?priority=8&status=open&category=security; "
+                    "resolve://?status=resolved&note=... (auto-resolve the incident); "
+                    "job://module.function; "
+                    "llm://. "
+                    "Example: 'ticket://?priority=8,resolve://' — create ticket then auto-resolve."
+                ),
+            },
             "bundle_by": {
                 "type": "integer",
                 "description": (
