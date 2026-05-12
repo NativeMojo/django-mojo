@@ -5,6 +5,10 @@
 bugfix in catchall rules
 
 
+## v1.2.12 - May 11, 2026
+
+**incident** — new `resolve://` handler scheme. Chaining `resolve://` at the end of a handler string (e.g. `ticket://?priority=8,resolve://`) automatically resolves the incident once all prior handlers have run. Accepts optional `?status=closed` to close instead of resolve, and `?note=...` for a custom history note. Records the status change in incident history and fires the resolved metrics counter, matching the behaviour of a manual REST resolution.
+
 ## v1.2.11 - May 11, 2026
 
 **incident** — a `RuleSet` with no conditions now matches every event in its category, acting as a catch-all. Previously both `check_all_match` and `check_any_match` returned `False` when there were no rules, making condition-free rulesets unreachable.

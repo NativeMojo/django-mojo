@@ -18,6 +18,7 @@ Supported handler schemes:
 - notify://perm@manage_security — in-app + push notification
 - block://?ttl=3600 — fleet-wide IP block
 - ticket://?status=open&priority=8 — create support ticket
+- resolve://?status=resolved&note=Auto-resolved — resolve (or close) the incident
 
 Target resolution (comma-separated, mix and match):
     perm@name       — all active users with that permission
@@ -440,6 +441,77 @@ class TicketHandler:
             return False
 
 
+class ResolveHandler:
+    """
+    Resolve (or close) the incident that triggered the handler chain.
+
+    Useful as a terminal step after handlers that indicate the incident has
+    been fully actioned — e.g. after ticket:// when the ticket *is* the
+    remediation step and no human review of the raw incident is needed.
+
+    Handler syntax:
+        resolve://                         — resolve with a default note
+        resolve://?status=closed           — close instead of resolve
+        resolve://?note=Ticket+created     — custom history note
+    """
+
+    def __init__(self, target=None, **params):
+        self.params = params
+
+    def run(self, event):
+        incident = getattr(event, "incident", None)
+        if not incident:
+            # Try loading via FK in case the in-memory event has no cached relation
+            if getattr(event, "incident_id", None):
+                try:
+                    from mojo.apps.incident.models import Incident
+                    incident = Incident.objects.get(pk=event.incident_id)
+                except Exception:
+                    logger.warning("ResolveHandler: incident %s not found", event.incident_id)
+                    return False
+
+        if not incident:
+            logger.info("ResolveHandler: no incident for event %s — skipping", event.pk)
+            return True
+
+        status = self.params.get("status", "resolved")
+        if status not in ("resolved", "closed"):
+            status = "resolved"
+
+        if incident.status in ("resolved", "closed"):
+            # Already done — nothing to do
+            return True
+
+        note = self.params.get("note") or "Auto-resolved by handler chain"
+
+        try:
+            incident.status = status
+            incident.save(update_fields=["status"])
+            incident.add_history("status_changed", note=note)
+
+            # Mirror the metrics recorded by on_rest_saved
+            if status == "resolved":
+                try:
+                    from mojo.apps import metrics
+                    from mojo.helpers.settings import settings
+                    if settings.INCIDENT_EVENT_METRICS:
+                        metrics.record(
+                            "incidents:resolved",
+                            account="incident",
+                            min_granularity=settings.get_static(
+                                "INCIDENT_METRICS_MIN_GRANULARITY", "hours"
+                            ),
+                        )
+                except Exception:
+                    pass
+
+            incident.check_delete_on_resolution()
+            return True
+        except Exception:
+            logger.exception("ResolveHandler failed for event %s", event.pk)
+            return False
+
+
 class LLMHandler:
     """
     Invoke the LLM security agent to triage an incident.
@@ -499,6 +571,7 @@ HANDLER_MAP = {
     "block": BlockHandler,
     "ticket": TicketHandler,
     "llm": LLMHandler,
+    "resolve": ResolveHandler,
 }
 
 
