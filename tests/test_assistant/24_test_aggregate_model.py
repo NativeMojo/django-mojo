@@ -37,7 +37,13 @@ def setup_aggregate(opts):
     opts.group_b = Group.objects.create(name="aggtest_group_b", kind="aggtest")
 
     # Baseline 6 events with no group (existing flat / non-FK tests).
+    # Also wipe FK fixture rows from prior runs: Event.group uses
+    # SET_NULL, so deleting the prior aggtest_group_* groups would
+    # leave category=fk_test events with group_id=None, polluting
+    # the column-name group_by count assertion (3 distinct groups
+    # instead of 2: new_a, new_b, None).
     Event.objects.filter(title__startswith="aggtest_").delete()
+    Event.objects.filter(title__startswith="aggfk_").delete()
     for i in range(6):
         Event.objects.create(
             title=f"aggtest_event_{i}",

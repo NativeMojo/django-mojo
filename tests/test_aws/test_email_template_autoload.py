@@ -104,14 +104,19 @@ def test_empty_body_not_overwritten(opts):
 @th.django_unit_test()
 def test_malformed_seed_returns_none(opts):
     """Malformed seed JSON -> returns None, doesn't crash."""
+    import inspect
     from mojo.apps.aws.models import EmailTemplate
 
+    # Use inspect.getfile to locate the model's actual on-disk path —
+    # os.path.abspath() of the dotted-module string is relative to the
+    # current working directory, which breaks the test when run from a
+    # consuming project (e.g. wmx_api) rather than from the django-mojo
+    # repo root.
+    model_file = inspect.getfile(EmailTemplate)
     seed_dir = os.path.join(
-        os.path.dirname(os.path.dirname(EmailTemplate.__module__.replace(".", "/"))),
+        os.path.dirname(os.path.dirname(model_file)),
+        "seeds", "email_templates",
     )
-    # Build the actual seed directory path
-    model_file = os.path.abspath(EmailTemplate.__module__.replace(".", "/") + ".py")
-    seed_dir = os.path.join(os.path.dirname(os.path.dirname(model_file)), "seeds", "email_templates")
 
     # Write a malformed JSON seed file
     bad_seed_path = os.path.join(seed_dir, "test_autoload_bad_json.json")
