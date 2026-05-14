@@ -302,7 +302,14 @@ def test_list_metric_categories_permission_denied(opts):
 
 @th.django_unit_test()
 def test_list_metric_slugs_basic(opts):
-    result = _handler("list_metric_slugs")({"account": "global"}, opts.admin)
+    # Scope the assertion to the test's own seed prefix. The global
+    # ``account`` accumulates slugs over the test DB's lifetime (e.g.
+    # ``login_attempts:muid:*`` from auth tests) — without a prefix
+    # filter the limit-bounded response sorts those ahead of the
+    # ``mettools_*`` seed and the assertion mis-fires.
+    result = _handler("list_metric_slugs")(
+        {"account": "global", "prefix": "mettools_"}, opts.admin,
+    )
     assert "error" not in result, f"admin should succeed: {result.get('error')}"
     assert "mettools_global_slug" in result["slugs"], (
         f"should include seeded slug, got: {result['slugs']}"
