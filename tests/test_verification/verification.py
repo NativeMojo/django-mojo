@@ -1224,8 +1224,8 @@ def test_owner_cannot_set_is_phone_verified(opts):
                 "is_phone_verified must remain False after rejected owner write")
 
 
-@th.django_unit_test("write-protect: manage_users admin cannot set is_email_verified")
-def test_manager_cannot_set_is_email_verified(opts):
+@th.django_unit_test("write-protect: manage_users admin can set is_email_verified")
+def test_manager_can_set_is_email_verified(opts):
     from mojo.apps.account.models import User
     from mojo.decorators.limits import clear_rate_limits
     clear_rate_limits(ip="127.0.0.1")
@@ -1235,16 +1235,19 @@ def test_manager_cannot_set_is_email_verified(opts):
     assert opts.client.is_authenticated, "login failed"
 
     resp = opts.client.post(f"/api/user/{opts.wp_target_id}", {"is_email_verified": True})
-    assert resp.status_code in [400, 403], \
-        f"manage_users admin must not set is_email_verified, got {resp.status_code}"
+    assert_eq(resp.status_code, 200,
+              f"manage_users admin must be allowed to set is_email_verified, got {resp.status_code}")
 
     target = User.objects.get(pk=opts.wp_target_id)
-    assert_true(not target.is_email_verified,
-                "is_email_verified must remain False after rejected manager write")
+    assert_true(target.is_email_verified,
+                "is_email_verified must be True after manager write")
+
+    # Restore
+    User.objects.filter(pk=opts.wp_target_id).update(is_email_verified=False)
 
 
-@th.django_unit_test("write-protect: manage_users admin cannot set is_phone_verified")
-def test_manager_cannot_set_is_phone_verified(opts):
+@th.django_unit_test("write-protect: manage_users admin can set is_phone_verified")
+def test_manager_can_set_is_phone_verified(opts):
     from mojo.apps.account.models import User
     from mojo.decorators.limits import clear_rate_limits
     clear_rate_limits(ip="127.0.0.1")
@@ -1254,12 +1257,15 @@ def test_manager_cannot_set_is_phone_verified(opts):
     assert opts.client.is_authenticated, "login failed"
 
     resp = opts.client.post(f"/api/user/{opts.wp_target_id}", {"is_phone_verified": True})
-    assert resp.status_code in [400, 403], \
-        f"manage_users admin must not set is_phone_verified, got {resp.status_code}"
+    assert_eq(resp.status_code, 200,
+              f"manage_users admin must be allowed to set is_phone_verified, got {resp.status_code}")
 
     target = User.objects.get(pk=opts.wp_target_id)
-    assert_true(not target.is_phone_verified,
-                "is_phone_verified must remain False after rejected manager write")
+    assert_true(target.is_phone_verified,
+                "is_phone_verified must be True after manager write")
+
+    # Restore
+    User.objects.filter(pk=opts.wp_target_id).update(is_phone_verified=False)
 
 
 @th.django_unit_test("write-protect: superuser can set is_email_verified=True")
@@ -1480,8 +1486,8 @@ def test_owner_cannot_enable_requires_mfa(opts):
                 "requires_mfa must remain False after rejected owner write")
 
 
-@th.django_unit_test("field-protect: manage_users admin cannot change requires_mfa")
-def test_manager_cannot_change_requires_mfa(opts):
+@th.django_unit_test("field-protect: manage_users admin can change requires_mfa")
+def test_manager_can_change_requires_mfa(opts):
     from mojo.apps.account.models import User
     from mojo.decorators.limits import clear_rate_limits
     clear_rate_limits(ip="127.0.0.1")
@@ -1491,12 +1497,13 @@ def test_manager_cannot_change_requires_mfa(opts):
     assert opts.client.is_authenticated, "login failed"
 
     resp = opts.client.post(f"/api/user/{opts.wp_target_id}", {"requires_mfa": True})
-    assert resp.status_code in [400, 403], \
-        f"manage_users admin must not change requires_mfa, got {resp.status_code}"
+    assert_eq(resp.status_code, 200,
+              f"manage_users admin must be allowed to set requires_mfa, got {resp.status_code}")
 
     target = User.objects.get(pk=opts.wp_target_id)
-    assert_true(not target.requires_mfa,
-                "requires_mfa must remain False after rejected manager write")
+    assert_true(target.requires_mfa,
+                "requires_mfa must be True after manager write")
+    User.objects.filter(pk=opts.wp_target_id).update(requires_mfa=False)
 
 
 @th.django_unit_test("field-protect: superuser can change requires_mfa")
