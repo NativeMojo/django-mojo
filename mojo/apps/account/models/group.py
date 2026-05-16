@@ -43,6 +43,7 @@ class Group(MojoSecrets, MojoModel):
         VIEW_PERMS = ["view_groups", "manage_groups", "manage_group", "groups"]
         SAVE_PERMS = ["manage_groups", "manage_group", "groups"]
         PROTECTED_JSON_PERMS = ["admin_compliance", "admin_verify"]
+        NO_SAVE_FIELDS = ["id", "pk", "created"]
         POST_SAVE_ACTIONS = ['realtime_message', 'disable', 'reactivate']
         LIST_DEFAULT_FILTERS = {
             "is_active": True
@@ -64,6 +65,7 @@ class Group(MojoSecrets, MojoModel):
             "basic": {
                 "fields": [
                     'id',
+                    "uuid",
                     'name',
                     'created',
                     'modified',
@@ -79,6 +81,7 @@ class Group(MojoSecrets, MojoModel):
                 "extra": ["member_count"],
                 "fields": [
                     'id',
+                    "uuid",
                     'name',
                     'created',
                     'modified',
