@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## v1.2.13 - May 16, 2026
+
+bug fixes for multi-tennant config
+
+
 **account** — bouncer-hosted register/login forms now forward `group_uuid` from `_matConfig` to the server so multi-tenant deployments can satisfy `REQUIRE_GROUP_ON_REGISTRATION` from the hosted page, and `USER_LOGIN_HANDLER` receives operator context on password logins. `MojoAuth.login(username, password, options)` accepts an optional third `options` argument; `options.group_uuid` is forwarded into the POST body. Two-arg `MojoAuth.login()` callers are unaffected.
 
 ## v1.2.12 - May 16, 2026
