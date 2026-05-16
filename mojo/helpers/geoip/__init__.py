@@ -14,6 +14,7 @@ from . import ipinfo
 from . import ipstack
 from . import ipapi
 from . import maxmind
+from . import mojo as mojo_provider
 
 
 # Provider registry
@@ -22,6 +23,7 @@ PROVIDERS = {
     'ipinfo': ipinfo.fetch,
     'ipstack': ipstack.fetch,
     'ip-api': ipapi.fetch,
+    'mojo': mojo_provider.fetch,
 }
 
 
@@ -137,6 +139,35 @@ def geolocate_ip(ip_address, check_threats=False):
 
     # 4. If we got data from any provider, enhance it with detections
     if geo_data:
+        # When the upstream is another django-mojo (the `mojo` provider), it
+        # already ran third-party Tor/VPN/proxy/cloud detection and aggregated
+        # external blocklists. Trust those values rather than re-running them
+        # locally. The only local check still meaningful for mojo records is
+        # the internal-event analysis in threat_intel.check_internal_threats().
+        if geo_data.get('provider') == 'mojo':
+            if check_threats:
+                try:
+                    from . import threat_intel
+                    threat_results = threat_intel.perform_threat_check(
+                        ip_address, skip_external=True
+                    )
+                    # OR-merge with upstream values — never downgrade a True
+                    # the upstream already observed.
+                    geo_data['is_known_attacker'] = bool(
+                        geo_data.get('is_known_attacker')
+                        or threat_results['is_known_attacker']
+                    )
+                    geo_data['is_known_abuser'] = bool(
+                        geo_data.get('is_known_abuser')
+                        or threat_results['is_known_abuser']
+                    )
+                    if 'data' not in geo_data:
+                        geo_data['data'] = {}
+                    geo_data['data']['threat_data'] = threat_results['threat_data']
+                except ImportError:
+                    pass
+            return geo_data
+
         # Perform Tor detection
         is_tor = detection.detect_tor(ip_address)
 

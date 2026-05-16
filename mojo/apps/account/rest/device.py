@@ -37,7 +37,7 @@ def on_geo_located_ip(request, pk=None):
 @md.GET('system/geoip/lookup')
 @md.requires_params('ip')
 @md.rate_limit("geoip_lookup", ip_limit=30)
-@md.public_endpoint()
+@md.requires_auth()
 def on_geo_located_ip_lookup(request):
     ip_address = request.DATA.get('ip')
     auto_refresh = request.DATA.get('auto_refresh', True)
@@ -64,6 +64,91 @@ def on_geo_located_ip_time(request):
             "iso": local_time.isoformat()
         }
     }
+
+
+# Per-fleet enforcement fields that are never federated. Reject any inbound
+# sync payload that tries to set them.
+_GEOIP_SYNC_FORBIDDEN_FIELDS = (
+    "is_blocked", "is_whitelisted",
+    "blocked_at", "blocked_until", "blocked_reason", "block_count",
+    "whitelisted_reason",
+)
+
+
+@md.POST('system/geoip/sync')
+@md.requires_params('ip')
+@md.requires_perms('geoip_sync')
+def on_geo_located_ip_sync(request):
+    """
+    Receive abuse-signal updates from a downstream mojo instance.
+
+    Payload: {ip, threat_level?, is_known_attacker?, is_known_abuser?}
+    Any subset of the three signal fields is allowed; at least one must
+    be present.
+
+    Apply semantics:
+      - threat_level: MAX (never downgrade).
+      - is_known_attacker / is_known_abuser: OR (only flip False -> True).
+
+    Per-fleet enforcement state (is_blocked, is_whitelisted, blocked_*,
+    whitelisted_*) is explicitly rejected — that state is not federated.
+
+    Loop prevention: the endpoint applies via raw save(update_fields=...)
+    rather than block()/check_threats()/update_threat_from_incident(), so
+    the _maybe_push_abuse_signals hook never fires on the receiver.
+    """
+    # Reject any per-fleet enforcement fields up-front.
+    for forbidden in _GEOIP_SYNC_FORBIDDEN_FIELDS:
+        if forbidden in request.DATA:
+            return {"status": False, "error": f"Field '{forbidden}' is not federated"}
+
+    ip = request.DATA.get('ip')
+    incoming_level = request.DATA.get('threat_level', None)
+    incoming_attacker = request.DATA.get('is_known_attacker', None)
+    incoming_abuser = request.DATA.get('is_known_abuser', None)
+
+    if incoming_level is None and incoming_attacker is None and incoming_abuser is None:
+        return {"status": False, "error": "At least one signal field is required"}
+
+    if incoming_level is not None and incoming_level not in ('low', 'medium', 'high', 'critical'):
+        return {"status": False, "error": "Invalid threat_level"}
+
+    geo = GeoLocatedIP.geolocate(ip, auto_refresh=False)
+    update_fields = []
+    applied = {}
+
+    if incoming_level is not None:
+        order = GeoLocatedIP.THREAT_LEVEL_ORDER
+        prev_idx = order.index(geo.threat_level) if geo.threat_level in order else 0
+        new_idx = order.index(incoming_level)
+        if new_idx > prev_idx:
+            geo.threat_level = incoming_level
+            update_fields.append('threat_level')
+            applied['threat_level'] = incoming_level
+
+    # OR semantics for boolean abuse flags — never flip True -> False.
+    if incoming_attacker is True and not geo.is_known_attacker:
+        geo.is_known_attacker = True
+        update_fields.append('is_known_attacker')
+        applied['is_known_attacker'] = True
+
+    if incoming_abuser is True and not geo.is_known_abuser:
+        geo.is_known_abuser = True
+        update_fields.append('is_known_abuser')
+        applied['is_known_abuser'] = True
+
+    if update_fields:
+        # Direct save — does NOT call block()/check_threats(), so no outbound
+        # push fires (loop prevention).
+        geo.save(update_fields=update_fields)
+
+    return {"status": True, "data": {
+        "ip": ip,
+        "threat_level": geo.threat_level,
+        "is_known_attacker": geo.is_known_attacker,
+        "is_known_abuser": geo.is_known_abuser,
+        "applied": applied,
+    }}
 
 
 @md.URL('location/address/validate')

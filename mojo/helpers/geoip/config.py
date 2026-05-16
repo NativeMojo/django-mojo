@@ -16,6 +16,12 @@ ENABLE_VPN_DETECTION = settings.get_static('GEOIP_ENABLE_VPN_DETECTION', True)
 ENABLE_CLOUD_DETECTION = settings.get_static('GEOIP_ENABLE_CLOUD_DETECTION', True)
 TOR_EXIT_NODE_LIST_URL = settings.get_static('TOR_EXIT_NODE_LIST_URL', 'https://check.torproject.org/exit-addresses')
 
+# Mojo-as-provider federation settings (mojo provider only).
+# MOJO_PROVIDER_URL — base URL of the upstream django-mojo instance (e.g. https://hub.example.com).
+# MOJO_SYNC_ENABLED — master switch for outbound abuse-signal push-back.
+MOJO_PROVIDER_URL = settings.get_static('GEOIP_MOJO_PROVIDER_URL', None)
+MOJO_SYNC_ENABLED = settings.get_static('GEOIP_MOJO_SYNC_ENABLED', True, kind='bool')
+
 
 def get_api_key(provider):
     """Get API key/credentials for a provider at call time (may be DB-backed)."""
@@ -23,6 +29,7 @@ def get_api_key(provider):
         'ipinfo': 'GEOIP_API_KEY_IPINFO',
         'ipstack': 'GEOIP_API_KEY_IPSTACK',
         'ip-api': 'GEOIP_API_KEY_IP-API',
+        'mojo': 'GEOIP_API_KEY_MOJO',
         'maxmind_account_id': 'MAXMIND_ACCOUNT_ID',
         'maxmind_license_key': 'MAXMIND_LICENSE_KEY',
     }

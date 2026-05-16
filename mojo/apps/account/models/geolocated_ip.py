@@ -227,21 +227,39 @@ class GeoLocatedIP(models.Model, MojoModel):
         self.save()
         return True
 
-    def check_threats(self):
+    def check_threats(self, from_sync=False):
         """
         Perform comprehensive threat intelligence checks on this IP.
         Updates is_known_attacker, is_known_abuser, and threat_level fields.
         Stores detailed threat data in the data JSON field.
 
         This can be called independently or as part of refresh().
+
+        Args:
+            from_sync: When True, suppress outbound push-back to the upstream
+                mojo provider (the trigger arrived via the federation endpoint).
         """
         from mojo.helpers.geoip import threat_intel
 
-        threat_results = threat_intel.perform_threat_check(self.ip_address)
+        prev_snapshot = self._abuse_snapshot()
 
-        # Update threat flags
-        self.is_known_attacker = threat_results['is_known_attacker']
-        self.is_known_abuser = threat_results['is_known_abuser']
+        # For records sourced from a mojo upstream, the upstream already ran
+        # external blocklist checks — only re-run the local internal-events
+        # analysis here. OR-merge with existing values; never downgrade.
+        if self.provider == 'mojo':
+            threat_results = threat_intel.perform_threat_check(
+                self.ip_address, skip_external=True
+            )
+            self.is_known_attacker = bool(
+                self.is_known_attacker or threat_results['is_known_attacker']
+            )
+            self.is_known_abuser = bool(
+                self.is_known_abuser or threat_results['is_known_abuser']
+            )
+        else:
+            threat_results = threat_intel.perform_threat_check(self.ip_address)
+            self.is_known_attacker = threat_results['is_known_attacker']
+            self.is_known_abuser = threat_results['is_known_abuser']
 
         # Store detailed threat data
         if not self.data:
@@ -249,19 +267,114 @@ class GeoLocatedIP(models.Model, MojoModel):
         self.data['threat_data'] = threat_results['threat_data']
         self.data['threat_checked_at'] = dates.utcnow().isoformat()
 
-        # Recalculate threat level with new data
-        self.threat_level = threat_intel.recalculate_threat_level(self)
+        # Recalculate threat level with new data — but never downgrade for
+        # mojo-sourced records (upstream may have set it higher than our local
+        # signals would).
+        recalculated = threat_intel.recalculate_threat_level(self)
+        if self.provider == 'mojo':
+            order = self.THREAT_LEVEL_ORDER
+            cur_idx = order.index(self.threat_level) if self.threat_level in order else 0
+            new_idx = order.index(recalculated) if recalculated in order else 0
+            if new_idx > cur_idx:
+                self.threat_level = recalculated
+        else:
+            self.threat_level = recalculated
 
         self.save()
+
+        if not from_sync:
+            self._maybe_push_abuse_signals(prev_snapshot)
+
         return threat_results
 
     THREAT_LEVEL_ORDER = [None, 'low', 'medium', 'high', 'critical']
 
-    def update_threat_from_incident(self, priority, block=False):
+    def _abuse_snapshot(self):
+        """Capture the federated abuse-signal fields prior to a mutation."""
+        return {
+            'threat_level': self.threat_level,
+            'is_known_attacker': bool(self.is_known_attacker),
+            'is_known_abuser': bool(self.is_known_abuser),
+        }
+
+    def _maybe_push_abuse_signals(self, prev_snapshot):
+        """
+        Enqueue a push-back job to the upstream mojo provider when an abuse
+        signal strictly rises on a record sourced from the `mojo` provider.
+
+        Push-back is always async (jobs.publish) — callers must never block on
+        the HTTP POST. Failure to enqueue is logged and swallowed; local state
+        is never affected.
+
+        Federation rules:
+          - threat_level: pushed when the level strictly rises.
+          - is_known_attacker / is_known_abuser: pushed on False→True flips.
+
+        Gated on:
+          - self.provider == 'mojo'  (only federate records we pulled from a
+                                      mojo upstream)
+          - GEOIP_MOJO_PROVIDER_URL configured
+          - GEOIP_MOJO_SYNC_ENABLED True (master kill switch)
+        """
+        try:
+            if self.provider != 'mojo':
+                return
+            from mojo.helpers.geoip import config as geoip_config
+            if not geoip_config.MOJO_SYNC_ENABLED:
+                return
+            if not geoip_config.MOJO_PROVIDER_URL:
+                return
+
+            order = self.THREAT_LEVEL_ORDER
+            prev_level = prev_snapshot.get('threat_level')
+            prev_idx = order.index(prev_level) if prev_level in order else 0
+            cur_idx = order.index(self.threat_level) if self.threat_level in order else 0
+
+            changed = {}
+            if cur_idx > prev_idx and self.threat_level is not None:
+                changed['threat_level'] = self.threat_level
+            if self.is_known_attacker and not prev_snapshot.get('is_known_attacker'):
+                changed['is_known_attacker'] = True
+            if self.is_known_abuser and not prev_snapshot.get('is_known_abuser'):
+                changed['is_known_abuser'] = True
+
+            if not changed:
+                return
+
+            # Build a deterministic idempotency key from the changed-fields
+            # summary so retries dedupe but distinct upward transitions don't.
+            summary_parts = []
+            if 'threat_level' in changed:
+                summary_parts.append(f"level={changed['threat_level']}")
+            if 'is_known_attacker' in changed:
+                summary_parts.append("attacker=1")
+            if 'is_known_abuser' in changed:
+                summary_parts.append("abuser=1")
+            idempotency_key = f"geoip_sync:{self.ip_address}:{'|'.join(summary_parts)}"
+
+            payload = {"ip": self.ip_address, **changed}
+            jobs.publish(
+                "mojo.apps.account.asyncjobs.push_abuse_signals",
+                payload,
+                idempotency_key=idempotency_key,
+                max_retries=5,
+            )
+        except Exception:
+            logit.exception(
+                "Failed to enqueue geoip push-back for %s", self.ip_address
+            )
+
+    def update_threat_from_incident(self, priority, block=False, from_sync=False):
         """
         Called when a new incident is created for this IP.
         Escalates threat_level based on incident priority (0-15 scale).
         Never downgrades. Whitelisted IPs are never auto-blocked.
+
+        Args:
+            priority: Incident priority (0-15 scale).
+            block: When True, auto-block on high/critical escalations.
+            from_sync: When True, suppress outbound push-back (the change
+                arrived via the federation sync endpoint).
         """
         if priority >= 13:
             new_level = 'critical'
@@ -278,28 +391,40 @@ class GeoLocatedIP(models.Model, MojoModel):
         if new_idx <= current_idx:
             return  # Already at this level or higher, no change needed
 
+        prev = self._abuse_snapshot()
         self.threat_level = new_level
         update_fields = ['threat_level']
 
         # Never auto-block whitelisted IPs
         if self.is_whitelisted or not block:
             self.save(update_fields=update_fields)
+            if not from_sync:
+                self._maybe_push_abuse_signals(prev)
             return
 
         # Auto-block when threat reaches high/critical
         if not self.is_blocked and new_level in ('high', 'critical'):
-            self.block('auto:threat_escalation', ttl=900)
+            self.block('auto:threat_escalation', ttl=900, from_sync=from_sync)
         self.save(update_fields=update_fields)
+        if not from_sync:
+            self._maybe_push_abuse_signals(prev)
 
-    def block(self, reason="manual", ttl=None, broadcast=True):
+    def block(self, reason="manual", ttl=None, broadcast=True, from_sync=False):
         """
         Block this IP fleet-wide. Updates the database AND broadcasts
         the block to all instances via the job system.
+
+        block() always ensures threat_level is at least 'high' — blocking is a
+        strong abuse signal, and centralizing the escalation here lets every
+        block entry point (admin REST, LLM agent, rule engine, asyncjobs)
+        feed the federation loop without changes.
 
         Args:
             reason: Why the IP is being blocked
             ttl: Seconds until auto-unblock (None = permanent)
             broadcast: If True, broadcast to all instances (set False for DB-only updates)
+            from_sync: When True, suppress outbound push-back to the upstream
+                mojo provider (the change arrived via the sync endpoint).
         Returns:
             bool: True if the IP was blocked
         """
@@ -309,6 +434,15 @@ class GeoLocatedIP(models.Model, MojoModel):
         # Idempotency: skip if already blocked and block hasn't expired
         if self.is_blocked and self.block_active:
             return True
+
+        prev_snapshot = self._abuse_snapshot()
+
+        # Escalate threat_level to at least 'high' as part of the same atomic
+        # update — block is a strong abuse signal. Never downgrade.
+        order = self.THREAT_LEVEL_ORDER
+        cur_idx = order.index(self.threat_level) if self.threat_level in order else 0
+        high_idx = order.index('high')
+        new_threat_level = self.threat_level if cur_idx >= high_idx else 'high'
 
         # Atomic conditional update to prevent concurrent workers from
         # double-blocking the same IP (race-safe idempotency).
@@ -326,6 +460,7 @@ class GeoLocatedIP(models.Model, MojoModel):
             blocked_reason=reason,
             block_count=models.F('block_count') + 1,
             blocked_until=blocked_until,
+            threat_level=new_threat_level,
         )
         if not updated:
             # Already actively blocked (by us or a concurrent worker)
@@ -333,6 +468,9 @@ class GeoLocatedIP(models.Model, MojoModel):
             return True
 
         self.refresh_from_db()
+
+        if not from_sync:
+            self._maybe_push_abuse_signals(prev_snapshot)
 
         # Structured logit entry
         trigger = "auto:incident_rule" if reason == "auto:ruleset" else "manual"
