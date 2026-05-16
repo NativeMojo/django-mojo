@@ -106,18 +106,19 @@ See [firewall.md](firewall.md) for full firewall management and security dashboa
 
 ---
 
-## `GET system/geoip/lookup` — Public IP Lookup
+## `GET system/geoip/lookup` — Authenticated IP Lookup
 
 ```
 GET /api/system/geoip/lookup?ip=1.2.3.4
 ```
 
-**Public** — no authentication required. Rate limited to **30 requests/minute** per IP.
+**Requires authentication.** Rate limited to **30 requests/minute** per IP.
 
 | Param | Required | Description |
 |---|---|---|
 | `ip` | Yes | IP address to geolocate |
 | `auto_refresh` | No | Refresh expired cache (default: `true`) |
+| `graph` | No | Response graph (`default`, `basic`, `detailed`) |
 
 ### Response
 
@@ -141,6 +142,58 @@ GET /api/system/geoip/lookup?ip=1.2.3.4
     }
 }
 ```
+
+---
+
+## `POST system/geoip/sync` — Federation Abuse-Signal Receiver
+
+```
+POST /api/system/geoip/sync
+```
+
+**Requires:** ApiKey token with `geoip_sync` permission (group-scoped). This endpoint is used by downstream django-mojo instances to push abuse signals observed locally back to this upstream. You do not call this manually — it is invoked by the `push_abuse_signals` async job.
+
+### Request Body
+
+| Field | Required | Description |
+|---|---|---|
+| `ip` | Yes | IP address |
+| `threat_level` | No* | `low`, `medium`, `high`, or `critical`. Never downgrades. |
+| `is_known_attacker` | No* | `true` only. Never flips back to `false`. |
+| `is_known_abuser` | No* | `true` only. Never flips back to `false`. |
+
+*At least one of the three signal fields is required.
+
+Payloads containing `is_blocked`, `is_whitelisted`, `blocked_*`, or `whitelisted_*` are rejected — those fields are never federated.
+
+### Response
+
+```json
+{
+    "status": true,
+    "data": {
+        "ip": "1.2.3.4",
+        "threat_level": "high",
+        "is_known_attacker": true,
+        "is_known_abuser": false,
+        "applied": {
+            "threat_level": "high",
+            "is_known_attacker": true
+        }
+    }
+}
+```
+
+`applied` contains only fields whose values changed. An empty `applied` means the incoming signals were already met or exceeded on this instance.
+
+### Error Responses
+
+| Condition | Response |
+|---|---|
+| No signal fields in body | `{"status": false, "error": "At least one signal field is required"}` |
+| Invalid `threat_level` value | `{"status": false, "error": "Invalid threat_level"}` |
+| Forbidden field in body | `{"status": false, "error": "Field 'is_blocked' is not federated"}` |
+| Missing `geoip_sync` permission | `403` |
 
 ---
 

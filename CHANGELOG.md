@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+**account** — mojo GeoIP provider and abuse-signal federation. One django-mojo instance can use another as its primary/fallback GeoIP source (`GEOIP_PRIMARY_PROVIDER='mojo'`), and pushes observed threat escalations and attacker/abuser flag flips back to the upstream asynchronously via `POST /api/system/geoip/sync` (requires `geoip_sync` ApiKey permission). `block()` now atomically escalates `threat_level` to at least `high`. Per-fleet firewall state (`is_blocked`, `is_whitelisted`, etc.) is never federated.
+
 **account** — geofencing policy engine. System-wide and per-group rules gate access at the HTTP layer before any view logic runs.
 
 - Rule DSL supports `country` (ISO 3166-1), `region` (ISO 3166-2), and `abuse` (`tor`, `vpn`, `datacenter`, `proxy`) with `in` / `not_in` / `eq` operators. Empty `{}` = allow all.

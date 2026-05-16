@@ -156,8 +156,9 @@ def test_mojo_fetch_success_returns_enriched_dict(opts):
     assert captured["headers"]["Authorization"] == "apikey secret-token", (
         f"wrong Authorization header: {captured['headers']!r}"
     )
-    assert captured["params"]["graph"] == "detailed", (
-        f"must request 'detailed' graph: {captured['params']!r}"
+    assert captured["params"]["graph"] == "federation", (
+        f"must request 'federation' graph (not 'detailed' — that leaks "
+        f"firewall fields): {captured['params']!r}"
     )
     assert captured["params"]["ip"] == "203.0.113.10", "ip param mismatch"
 

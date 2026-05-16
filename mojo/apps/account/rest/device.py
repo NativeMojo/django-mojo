@@ -76,6 +76,7 @@ _GEOIP_SYNC_FORBIDDEN_FIELDS = (
 
 
 @md.POST('system/geoip/sync')
+@md.rate_limit("geoip_sync", ip_limit=60)
 @md.requires_params('ip')
 @md.requires_perms('geoip_sync')
 def on_geo_located_ip_sync(request):

@@ -56,7 +56,10 @@ def fetch(ip_address, api_key=None):
 
     url = f"{base_url.rstrip('/')}/api/system/geoip/lookup"
     headers = {"Authorization": f"apikey {api_key}"}
-    params = {"ip": ip_address, "graph": "detailed"}
+    # `federation` graph is the safe federation surface — abuse signals and
+    # location only, NEVER firewall/whitelist state. The boundary scrub below
+    # is defense in depth in case the upstream is on an older version.
+    params = {"ip": ip_address, "graph": "federation"}
 
     try:
         response = requests.get(url, headers=headers, params=params, timeout=5)

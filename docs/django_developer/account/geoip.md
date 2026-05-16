@@ -62,9 +62,9 @@ Caches geolocation results per IP to reduce redundant API calls. Tracks security
 | `GeoLocatedIP.geolocate(ip_address, auto_refresh=True)` | Get or create a record; refreshes if expired |
 | `GeoLocatedIP.lookup(ip_address)` | Alias for `geolocate()` |
 | `instance.refresh(check_threats=False)` | Re-fetch geolocation data from provider |
-| `instance.check_threats()` | Run threat intelligence checks |
-| `instance.update_threat_from_incident(priority, block=False)` | Escalate threat level from incident priority (0–15 scale). Pass `block=True` to allow auto-blocking when threat reaches `high`/`critical`. |
-| `instance.block(reason, ttl, broadcast)` | Block this IP fleet-wide (DB + broadcast) |
+| `instance.check_threats(from_sync=False)` | Run threat intelligence checks. Pass `from_sync=True` to suppress outbound federation push. |
+| `instance.update_threat_from_incident(priority, block=False, from_sync=False)` | Escalate threat level from incident priority (0–15 scale). Pass `block=True` to allow auto-blocking when threat reaches `high`/`critical`. Pass `from_sync=True` to suppress outbound federation push. |
+| `instance.block(reason, ttl, broadcast, from_sync=False)` | Block this IP fleet-wide (DB + broadcast). Always escalates `threat_level` to at least `high`. Pass `from_sync=True` to suppress outbound federation push. |
 | `instance.unblock(reason, broadcast)` | Unblock this IP fleet-wide |
 | `instance.whitelist(reason)` | Whitelist — also unblocks if currently blocked |
 | `instance.unwhitelist()` | Remove whitelist status |
@@ -80,7 +80,7 @@ Caches geolocation results per IP to reduce redundant API calls. Tracks security
 3. Broadcasts `broadcast_block_ip` to all instances via `jobs.broadcast_execute()`
 4. Each instance's job runner (as `ec2-user`) applies the iptables DROP rule
 
-### block(reason, ttl, broadcast)
+### block(reason, ttl, broadcast, from_sync=False)
 
 ```python
 geo = GeoLocatedIP.geolocate("1.2.3.4")
@@ -92,6 +92,7 @@ geo.block(reason="repeat_offender")             # Permanent block (no ttl)
 - Returns `False` if the IP is whitelisted (whitelisting always wins)
 - `ttl` in seconds. `None` or `0` = permanent (no auto-unblock)
 - `broadcast=False` to update DB only (used during bulk operations)
+- Always escalates `threat_level` to at least `high` atomically in the same UPDATE — never downgrades. This ensures every block entry point (admin REST, LLM agent, rule-engine handler, asyncjobs, manual) feeds the federation signal loop without extra code at each call site.
 
 ### unblock(reason, broadcast)
 
@@ -224,20 +225,62 @@ DELETE /api/system/geoip/123
 
 Requires `manage_users` permission. PUT supports POST_SAVE_ACTIONS for block/unblock/whitelist.
 
-### `GET system/geoip/lookup` — Public IP Lookup
+### `GET system/geoip/lookup` — Authenticated IP Lookup
 
 ```
 GET /api/system/geoip/lookup?ip=1.2.3.4
 ```
 
-**Public endpoint** — no authentication required. Rate limited to 30 requests/minute per IP.
+**Requires authentication** (`@md.requires_auth()`). Rate limited to 30 requests/minute per IP. Used by the `mojo` provider on downstream instances to query the upstream.
 
 | Param | Required | Description |
 |---|---|---|
 | `ip` | Yes | IP address to geolocate |
 | `auto_refresh` | No | Refresh expired cache (default: `true`) |
+| `graph` | No | Response graph (`default`, `basic`, `detailed`). The `mojo` provider requests `graph=detailed`. |
 
-Returns the `GeoLocatedIP` record via `on_rest_get` (default graph).
+Returns the `GeoLocatedIP` record via `on_rest_get`.
+
+### `POST system/geoip/sync` — Federation Abuse-Signal Receiver
+
+```
+POST /api/system/geoip/sync
+```
+
+**Requires:** ApiKey with `geoip_sync` permission (group-scoped). This endpoint is called by downstream mojo instances to push abuse signals observed locally back to this upstream.
+
+| Body field | Required | Description |
+|---|---|---|
+| `ip` | Yes | IP address |
+| `threat_level` | No* | New threat level (`low`, `medium`, `high`, `critical`). Applied as MAX — never downgrades. |
+| `is_known_attacker` | No* | `true` only. OR semantics — never flips `True → False`. |
+| `is_known_abuser` | No* | `true` only. OR semantics — never flips `True → False`. |
+
+*At least one of `threat_level`, `is_known_attacker`, `is_known_abuser` must be present.
+
+Payloads containing per-fleet enforcement fields (`is_blocked`, `is_whitelisted`, `blocked_*`, `whitelisted_*`) are rejected with a 200 error response.
+
+**Loop prevention:** the receiver applies changes via raw `save(update_fields=...)`, not via `block()`/`check_threats()`, so `_maybe_push_abuse_signals` never fires on the receiver side.
+
+**Response:**
+
+```json
+{
+    "status": true,
+    "data": {
+        "ip": "1.2.3.4",
+        "threat_level": "high",
+        "is_known_attacker": true,
+        "is_known_abuser": false,
+        "applied": {
+            "threat_level": "high",
+            "is_known_attacker": true
+        }
+    }
+}
+```
+
+`applied` contains only the fields that actually changed. An empty `applied` dict means the incoming values were already at or above the current values.
 
 ### `GET system/geoip/time` — Public IP Time Lookup
 
@@ -263,12 +306,85 @@ GET /api/system/geoip/time
 
 ---
 
+## GeoIP Providers
+
+`geolocate_ip()` queries the configured primary provider, with an optional fallback. Set the provider name via `GEOIP_PRIMARY_PROVIDER` (or `GEOIP_FALLBACK_PROVIDER`).
+
+Built-in providers: `ipinfo`, `ipstack`, `ip-api`, `maxmind`, `mojo`.
+
+### `mojo` Provider
+
+Use another django-mojo instance as a GeoIP data source. The downstream instance calls the upstream's `GET /api/system/geoip/lookup?graph=detailed` with an ApiKey token and caches the result locally.
+
+**Configuration:**
+
+| Setting | Default | Description |
+|---|---|---|
+| `GEOIP_PRIMARY_PROVIDER` | — | Set to `'mojo'` to use a mojo instance as primary |
+| `GEOIP_MOJO_PROVIDER_URL` | `None` | Base URL of the upstream mojo instance (e.g. `https://hub.example.com`) |
+| `GEOIP_API_KEY_MOJO` | — | ApiKey token sent as `Authorization: apikey <token>` |
+| `GEOIP_MOJO_SYNC_ENABLED` | `True` | Master kill switch for outbound abuse-signal push-back |
+
+**Behavior:**
+
+- The upstream is trusted for all third-party detection: Tor, VPN, proxy, cloud, external blocklists. Local re-detection is skipped for `provider='mojo'` records (`skip_external=True`).
+- Local internal-threat analysis (`check_internal_threats`) still runs so events observed only on this instance are captured.
+- Threat flags are OR-merged with upstream values — `is_known_attacker` and `is_known_abuser` are never downgraded.
+- Per-fleet firewall fields (`is_blocked`, `is_whitelisted`, `blocked_*`, `whitelisted_*`) are stripped at the boundary. Local enforcement state from the upstream never enters this instance's cache.
+
+---
+
+## Federation with Another Mojo Instance
+
+When a downstream uses the `mojo` provider, it pushes newly observed abuse signals back to the upstream so a mesh of instances builds a shared abuse list.
+
+### What is federated
+
+| Signal | Semantics |
+|---|---|
+| `threat_level` | MAX — only pushed when level strictly rises |
+| `is_known_attacker` | OR — only pushed on `False → True` flip |
+| `is_known_abuser` | OR — only pushed on `False → True` flip |
+
+### What is never federated
+
+Per-fleet enforcement decisions stay local and are never pushed upstream:
+
+`is_blocked`, `is_whitelisted`, `blocked_at`, `blocked_until`, `blocked_reason`, `block_count`, `whitelisted_reason`
+
+### How a push is triggered
+
+The following methods call `_maybe_push_abuse_signals()` after a change, provided:
+
+- `self.provider == 'mojo'`
+- `GEOIP_MOJO_PROVIDER_URL` is configured
+- `GEOIP_MOJO_SYNC_ENABLED` is `True`
+
+Triggering methods:
+
+- `block()` — block always escalates `threat_level` to `high`, so a push fires on first block of any `mojo`-sourced IP
+- `update_threat_from_incident()` — fires when incident escalation produces a rise
+- `check_threats()` — fires when local analysis flips an attacker/abuser flag
+
+Pass `from_sync=True` to suppress the push (used by the sync endpoint receiver to prevent loops).
+
+### Push is always async
+
+`_maybe_push_abuse_signals()` enqueues via `jobs.publish` — HTTP is never made inline. `block()` return latency is unaffected by upstream availability. Retries on 5xx with backoff; 4xx (auth, permission, validation) logs and drops without retry.
+
+The async job is `mojo.apps.account.asyncjobs.push_abuse_signals`. It posts `{ip, threat_level?, is_known_attacker?, is_known_abuser?}` to `POST /api/system/geoip/sync` on the upstream.
+
+---
+
 ## Settings
 
 | Setting | Default | Description |
 |---|---|---|
 | `GEOLOCATION_ALLOW_SUBNET_LOOKUP` | `False` | Allow fallback to subnet match when exact IP not found |
 | `GEOLOCATION_CACHE_DURATION_DAYS` | `90` | Days before a cached record expires |
+| `GEOIP_MOJO_PROVIDER_URL` | `None` | Base URL of upstream mojo instance (enables mojo provider) |
+| `GEOIP_API_KEY_MOJO` | — | ApiKey token for upstream mojo instance |
+| `GEOIP_MOJO_SYNC_ENABLED` | `True` | Enable outbound abuse-signal federation push |
 
 ---
 

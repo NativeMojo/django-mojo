@@ -217,6 +217,54 @@ def test_sync_requires_at_least_one_signal(opts):
 
 
 @th.django_unit_test()
+def test_sync_does_not_enqueue_pushback(opts):
+    """
+    Loop-prevention guarantee: a POST to /system/geoip/sync must apply the
+    update directly via raw save() and must NOT trigger the outbound push
+    hook. Otherwise A->B push triggers B->A push triggers A->B... forever.
+
+    The receiving record is created with provider='mojo' to maximize the
+    chance the hook would fire if it were reachable from this code path.
+    """
+    from mojo.apps.account.models.geolocated_ip import GeoLocatedIP
+    from mojo.apps.jobs.models import Job
+
+    GeoLocatedIP.objects.filter(ip_address="203.0.113.37").delete()
+    GeoLocatedIP.objects.create(
+        ip_address="203.0.113.37", provider="mojo", threat_level="low",
+    )
+    # Clear any leftover jobs from prior runs in the test DB
+    Job.objects.filter(func="mojo.apps.account.asyncjobs.push_abuse_signals").delete()
+    starting = Job.objects.filter(
+        func="mojo.apps.account.asyncjobs.push_abuse_signals",
+    ).count()
+    assert starting == 0, f"baseline must be 0 push jobs, got {starting}"
+
+    _use_apikey(opts, opts.sync_token_authz)
+    resp = opts.client.post(
+        "/api/system/geoip/sync",
+        {
+            "ip": "203.0.113.37",
+            "threat_level": "critical",
+            "is_known_attacker": True,
+        },
+    )
+    assert resp.status_code == 200, f"sync failed: {resp.response}"
+    assert resp.response.data.threat_level == "critical", "level not applied"
+
+    # Inbound sync must NOT have enqueued any push_abuse_signals job —
+    # otherwise we'd loop back to whoever sent us this signal.
+    ending = Job.objects.filter(
+        func="mojo.apps.account.asyncjobs.push_abuse_signals",
+    ).count()
+    assert ending == 0, (
+        f"sync endpoint must not enqueue push_abuse_signals; "
+        f"loop-prevention guard broken. job count went 0 -> {ending}"
+    )
+    opts.client.logout()
+
+
+@th.django_unit_test()
 def test_sync_cleanup(opts):
     """Remove test ApiKeys and Group."""
     from mojo.apps.account.models import Group, ApiKey

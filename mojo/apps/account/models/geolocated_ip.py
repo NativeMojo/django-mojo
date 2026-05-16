@@ -119,7 +119,24 @@ class GeoLocatedIP(models.Model, MojoModel):
             'detailed': {
                 # Include all fields including raw data
                 'extra': ['is_threat', 'is_suspicious', 'risk_score']
-            }
+            },
+            'federation': {
+                # Returned to other mojo instances using this one as their
+                # GeoIP provider. Contains only abuse-signal and location
+                # fields — NEVER per-fleet firewall state (is_blocked,
+                # is_whitelisted, blocked_*, whitelisted_*) and NEVER the raw
+                # provider data blob (which can also carry firewall hints).
+                'fields': [
+                    'id', 'ip_address',
+                    'country_code', 'country_name', 'region', 'region_code',
+                    'city', 'postal_code', 'latitude', 'longitude', 'timezone',
+                    'asn', 'asn_org', 'isp', 'connection_type', 'mobile_carrier',
+                    'is_tor', 'is_vpn', 'is_proxy', 'is_cloud',
+                    'is_datacenter', 'is_mobile',
+                    'is_known_attacker', 'is_known_abuser', 'threat_level',
+                    'provider',
+                ],
+            },
         }
 
     def __str__(self):
