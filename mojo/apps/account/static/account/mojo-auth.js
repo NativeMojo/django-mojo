@@ -52,6 +52,8 @@
         oauthBegin:         '/api/auth/oauth/{provider}/begin',
         oauthComplete:      '/api/auth/oauth/{provider}/complete',
         register:           '/api/auth/register',
+        phoneRegisterStart: '/api/auth/phone/register/start',
+        phoneRegisterVerify:'/api/auth/phone/register/verify',
         refreshToken:       '/api/refresh_token',
         handoff:            '/api/auth/handoff',
         exchange:           '/api/auth/exchange'
@@ -237,32 +239,77 @@
         },
 
         // -----------------------------------------------------------------------
+        // Pre-registration phone verification (verify-then-register).
+        // Use these BEFORE calling MojoAuth.register() when the server schema
+        // marks phone with verify="sms". The returned verified_phone_token is
+        // passed back in the register payload.
+        // -----------------------------------------------------------------------
+
+        /**
+         * Send an SMS code to begin pre-registration phone verification.
+         * @param {string} phone - Phone number in any common format; the
+         *                         server normalizes to E.164.
+         * @returns {Promise<{session_token, expires_in}>}
+         */
+        startPhoneRegister: function (phone) {
+            return post(ep('phoneRegisterStart'), _withDevice({ phone: phone }))
+                .then(function (resp) { return resp.data || resp; });
+        },
+
+        /**
+         * Verify the SMS code and obtain a verified_phone_token. The token
+         * is included as `verified_phone_token` in the subsequent
+         * MojoAuth.register() payload.
+         * @param {string} sessionToken - From startPhoneRegister.
+         * @param {string} code         - 6-digit code from the SMS.
+         * @returns {Promise<{verified_phone_token, expires_in}>}
+         */
+        verifyPhoneRegister: function (sessionToken, code) {
+            return post(ep('phoneRegisterVerify'), _withDevice({
+                session_token: sessionToken,
+                code: code,
+            })).then(function (resp) { return resp.data || resp; });
+        },
+
+        // -----------------------------------------------------------------------
         // Password Reset — Code method
         // -----------------------------------------------------------------------
 
         /**
-         * Request a 6-digit reset code sent to the user's email.
-         * @param {string} email
+         * Request a 6-digit reset code. Dispatched via email by default; pass
+         * channel="sms" to force an SMS dispatch (also automatic when the
+         * identifier is a phone-only user with no email on file).
+         * @param {string} identifier - Email or phone number.
+         * @param {string} [channel]  - "email" (default) or "sms".
          * @returns {Promise<object>}
          */
-        forgotPasswordCode: function (email) {
-            return post(ep('forgotPassword'), _withDevice({ email: email, method: 'code' }));
+        forgotPasswordCode: function (identifier, channel) {
+            var ch = channel || (identifier && identifier.indexOf('@') === -1 ? 'sms' : 'email');
+            var payload = { method: 'code' };
+            if (ch === 'sms') {
+                payload.phone_number = identifier;
+                payload.channel = 'sms';
+            } else {
+                payload.email = identifier;
+            }
+            return post(ep('forgotPassword'), _withDevice(payload));
         },
 
         /**
-         * Complete password reset using the emailed code.
+         * Complete password reset using the 6-digit code.
          * Stores tokens on success (logs user in automatically).
-         * @param {string} email
-         * @param {string} code     - 6-digit code from email
+         * @param {string} identifier - Email or phone number used in the forgot request.
+         * @param {string} code        - 6-digit code from email or SMS.
          * @param {string} newPassword
+         * @param {string} [channel]   - "email" (default) or "sms".
          * @returns {Promise<object>}
          */
-        resetWithCode: function (email, code, newPassword) {
-            return post(ep('resetWithCode'), {
-                email: email,
-                code: code,
-                new_password: newPassword
-            }).then(saveTokens);
+        resetWithCode: function (identifier, code, newPassword, channel) {
+            var ch = channel || (identifier && identifier.indexOf('@') === -1 ? 'sms' : 'email');
+            var payload = { code: code, new_password: newPassword };
+            if (ch === 'sms') payload.phone_number = identifier;
+            else payload.email = identifier;
+            return post(ep('resetWithCode'), payload).then(saveTokens);
         },
 
         // -----------------------------------------------------------------------

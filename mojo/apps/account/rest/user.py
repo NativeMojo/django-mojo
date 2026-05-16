@@ -340,7 +340,7 @@ def on_register(request):
             request.DATA["password"] = _password_pop
 
     # Strength check (still framework-side; outside atomic for clarity)
-    User(email=email).check_password_strength(password)
+    User(email=email or None).check_password_strength(password)
 
     # ---- Phone-verify consumption (BEFORE atomic block) --------------------
     # If the schema marks phone with verify="sms", a valid verified-phone
@@ -360,7 +360,7 @@ def on_register(request):
     # or JWT-issuance failure must NOT roll back a user whose register-handler
     # has already fired side effects in consumer downstream systems.
     with transaction.atomic():
-        user = User(email=email or "")
+        user = User(email=email or None)
         if identity_field == "email" and email:
             user.username = user.generate_username_from_email()
         else:

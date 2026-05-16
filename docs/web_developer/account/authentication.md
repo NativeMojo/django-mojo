@@ -13,9 +13,11 @@
 
 | Field | Required | Description |
 |---|---|---|
-| `username` | yes | Email or username. |
+| `username` | yes | Email, phone number, or username. |
 | `password` | yes | User-supplied password. |
 | `group_uuid` | optional | Operator/group UUID. When supplied, `request.group` middleware uses it to resolve multi-tenant context and `USER_LOGIN_HANDLER` receives the group. Best-effort: an unrecognized uuid falls back to other resolvers instead of returning an error. |
+
+Phone-number identity is accepted in the `username` field as well — the server resolves the channel automatically and `USER_LOGIN_HANDLER` receives `source="password"` regardless of which identifier was used.
 
 From JavaScript, pass `group_uuid` via the third `options` arg on the SDK:
 
@@ -392,15 +394,66 @@ Creates a new user account. No authentication required. Rate-limited to 5 reques
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `email` | yes | Must be unique across all accounts |
+| `email` | conditional | Required when `email` is in the server's `AUTH_REGISTER_FIELDS` schema (default config). Unique across all accounts. |
+| `phone` | conditional | Required when `phone` is in the server's `AUTH_REGISTER_FIELDS` schema. Normalized to E.164 server-side. Unique across all accounts. |
 | `password` | yes | Must meet password strength requirements |
-| `first_name` | no | User's first name |
-| `last_name` | no | User's last name |
+| `first_name` | conditional | Required when configured as such in `AUTH_REGISTER_FIELDS` |
+| `last_name` | conditional | Required when configured as such in `AUTH_REGISTER_FIELDS` |
+| `dob` | conditional | ISO `yyyy-mm-dd`. Required when configured. Age-gated against `AUTH_MIN_AGE_YEARS` if that setting is set. |
+| `verified_phone_token` | conditional | Required when the schema marks `phone` with `verify: "sms"`. Obtain via the two-step phone verify endpoints below. |
 | `group_uuid` | conditional | UUID of a group to associate the new user with. Required when the server has `REQUIRE_GROUP_ON_REGISTRATION = True` |
 | `bouncer_token` | conditional | Required when bouncer is active. Must be a token issued with `page_type: "registration"` — a login-scoped token will be rejected |
 | `duid` | conditional | Device UUID, required when bouncer is active |
 
 Additional keys may be included in the payload. The server silently drops any key not present in its `REGISTRATION_EXTRA_FIELDS` allowlist, so safe to forward extra fields without causing errors. `MojoAuth.register()` forwards the full payload as-is.
+
+### Phone-Based Registration (verify-then-register)
+
+When the server's `AUTH_REGISTER_FIELDS` schema marks `phone` with `verify: "sms"`, the client must complete a two-step phone verification before calling `/api/auth/register`. The bouncer-hosted register page does this automatically; SPAs implementing their own form follow the same pattern.
+
+**Step 1 — Start verification**
+
+**POST** `/api/auth/phone/register/start`
+
+```json
+{ "phone": "+14155550123" }
+```
+
+Response:
+
+```json
+{ "status": true, "data": { "session_token": "<32-hex>", "expires_in": 600 } }
+```
+
+The server sends a 6-digit code via SMS. Rate-limited per IP. Returns 400 if a user already owns the phone.
+
+**Step 2 — Verify**
+
+**POST** `/api/auth/phone/register/verify`
+
+```json
+{ "session_token": "<32-hex>", "code": "123456" }
+```
+
+Response:
+
+```json
+{ "status": true, "data": { "verified_phone_token": "<32-hex>", "expires_in": 600 } }
+```
+
+Single-use. Include `verified_phone_token` (and the same `phone`) in the subsequent `/api/auth/register` POST. The server consumes the token, marks `is_phone_verified=True`, and creates the User row in a single transaction.
+
+From JavaScript:
+
+```javascript
+const { session_token } = await MojoAuth.startPhoneRegister(phone);
+// user enters the 6-digit code from SMS
+const { verified_phone_token } = await MojoAuth.verifyPhoneRegister(session_token, code);
+await MojoAuth.register({
+  first_name, last_name, phone, dob, password,
+  verified_phone_token,
+});
+```
 
 ### Response — Auto-Login (default)
 

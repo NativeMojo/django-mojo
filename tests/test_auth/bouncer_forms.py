@@ -159,3 +159,150 @@ def test_mojo_auth_login_signature_accepts_options(opts):
         "mojo-auth.js login() must read options.group_uuid and add it to "
         "the POST payload."
     )
+
+
+# ---------------------------------------------------------------------------
+# Configurable register form (AUTH_REGISTER_FIELDS)
+# ---------------------------------------------------------------------------
+
+def _render_with_test_register_fields(template_name, fields_json, group=None):
+    """Render with a per-request X-Mojo-Test-Register-Fields header override.
+
+    Mirrors how the on_register endpoint reads the schema — the bouncer's
+    _auth_context calls register_schema.resolve_fields, which honors the
+    test-mode header when the gate passes. For RequestFactory-built requests
+    we set REMOTE_ADDR=127.0.0.1 so the loopback gate is satisfied.
+    """
+    from django.test import RequestFactory
+    from django.shortcuts import render
+    from mojo.apps.account.rest.bouncer.views import _auth_context
+    from mojo.apps.account.services import register_schema
+
+    factory = RequestFactory(REMOTE_ADDR='127.0.0.1')
+    request = factory.get('/auth' if 'login' in template_name else '/register',
+                          HTTP_X_MOJO_TEST_REGISTER_FIELDS=fields_json)
+
+    # is_test_request checks MOJO_TEST_MODE; if that's not on in the harness,
+    # call resolve_fields directly so the tests still exercise the rendering.
+    fields = register_schema.resolve_fields(group=group, request=request)
+    rows = register_schema.field_rows(fields)
+    identity_field = register_schema.resolve_identity_field(fields, group=group)
+    forgot_channel = 'sms' if identity_field == 'phone' else 'email'
+
+    ctx = _auth_context(request, group=group)
+    ctx['page_mode'] = 'login' if 'login' in template_name else 'register'
+    ctx['page_title'] = 'Sign In' if 'login' in template_name else 'Create Account'
+    ctx['register_fields'] = fields
+    ctx['register_field_rows'] = rows
+    ctx['identity_field'] = identity_field
+    ctx['forgot_channel'] = forgot_channel
+    response = render(request, template_name, ctx)
+    return response.content.decode('utf-8')
+
+
+PHONE_ONLY_FIELDS_JSON = (
+    '[{"name":"first_name","required":true},'
+    '{"name":"last_name","required":true},'
+    '{"name":"phone","required":true,"verify":"sms"},'
+    '{"name":"dob","required":true},'
+    '{"name":"password","required":true}]'
+)
+
+
+@th.django_unit_test("register.html renders the phone-only field set when configured")
+def test_register_html_phone_only_renders(opts):
+    html = _render_with_test_register_fields(
+        'account/register.html', PHONE_ONLY_FIELDS_JSON, group=opts.group)
+    assert_true('id="reg-phone"' in html,
+                "phone field input must render for the phone-only config")
+    assert_true('type="tel"' in html,
+                "phone field must render with type='tel'")
+    assert_true('id="reg-dob"' in html,
+                "dob field must render for the phone-only config")
+    assert_true('type="date"' in html,
+                "dob field must render with type='date'")
+    assert_true('id="reg-phone-send"' in html,
+                "phone with verify=sms must render the Send-code button")
+    assert_true('verified_phone_token' in html,
+                "phone-verify must render a hidden verified_phone_token input")
+    # Email row is NOT present
+    assert_true('id="reg-email"' not in html,
+                "email input must NOT render when email is not in the field set")
+
+
+@th.django_unit_test("register.html default config still renders the email-based form (regression)")
+def test_register_html_default_renders_email(opts):
+    # Render via the standard helper (no header override → default schema).
+    html = _render('account/register.html', group=opts.group)
+    assert_true('id="reg-email"' in html,
+                "default config must render the email input (regression guard)")
+    assert_true('id="reg-password"' in html,
+                "default config must render the password input")
+    assert_true('id="reg-phone"' not in html,
+                "default config must NOT render a phone input")
+
+
+@th.django_unit_test("register.html emits reg-fields-data JSON for the submit handler")
+def test_register_html_emits_fields_json(opts):
+    html = _render_with_test_register_fields(
+        'account/register.html', PHONE_ONLY_FIELDS_JSON, group=opts.group)
+    assert_true('id="reg-fields-data"' in html,
+                "register.html must emit reg-fields-data JSON for the JS loop")
+    assert_true('"name": "phone"' in html or '"name":"phone"' in html,
+                "reg-fields-data must include the phone field entry")
+
+
+@th.django_unit_test("login.html forgot-subview renders phone mode when forgot_channel=sms")
+def test_login_html_forgot_phone_mode(opts):
+    html = _render_with_test_register_fields(
+        'account/login.html', PHONE_ONLY_FIELDS_JSON, group=opts.group)
+    assert_true('Phone Number' in html,
+                "phone mode must label the forgot field 'Phone Number'")
+    assert_true('id="forgot-phone"' in html,
+                "phone mode must render the forgot-phone input")
+    assert_true('data-forgot-channel="sms"' in html,
+                "view-forgot must carry data-forgot-channel='sms' for the JS to route correctly")
+    # Email-only "Send a link" radio is hidden in phone mode
+    assert_true('value="link"' not in html,
+                "phone-mode forgot subview must NOT include the link-method radio")
+
+
+@th.django_unit_test("login.html forgot-subview defaults to email mode (regression)")
+def test_login_html_forgot_email_mode_default(opts):
+    html = _render('account/login.html', group=opts.group)
+    assert_true('id="forgot-email"' in html,
+                "default config must render the forgot-email input")
+    assert_true('data-forgot-channel="email"' in html,
+                "view-forgot must carry data-forgot-channel='email' by default")
+
+
+@th.django_unit_test("mojo-auth.js exposes startPhoneRegister + verifyPhoneRegister")
+def test_mojo_auth_phone_register_helpers(opts):
+    import mojo.apps.account as account_pkg
+    js_path = os.path.join(
+        os.path.dirname(account_pkg.__file__),
+        'static', 'account', 'mojo-auth.js',
+    )
+    with open(js_path, 'r') as fh:
+        source = fh.read()
+    assert_true('startPhoneRegister: function' in source,
+                "mojo-auth.js must expose startPhoneRegister")
+    assert_true('verifyPhoneRegister: function' in source,
+                "mojo-auth.js must expose verifyPhoneRegister")
+    assert_true('phoneRegisterStart' in source and 'phoneRegisterVerify' in source,
+                "mojo-auth.js DEFAULT_ENDPOINTS must register phoneRegisterStart and phoneRegisterVerify")
+
+
+@th.django_unit_test("mojo-auth.js forgotPasswordCode accepts an optional channel arg")
+def test_mojo_auth_forgot_channel(opts):
+    import mojo.apps.account as account_pkg
+    js_path = os.path.join(
+        os.path.dirname(account_pkg.__file__),
+        'static', 'account', 'mojo-auth.js',
+    )
+    with open(js_path, 'r') as fh:
+        source = fh.read()
+    assert_true('forgotPasswordCode: function (identifier, channel)' in source,
+                "mojo-auth.js forgotPasswordCode must accept (identifier, channel)")
+    assert_true("channel: 'sms'" in source or "channel == 'sms'" in source or "ch === 'sms'" in source,
+                "mojo-auth.js must route channel='sms' into the phone payload")

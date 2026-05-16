@@ -57,9 +57,19 @@
 </div>
 
 <!-- VIEW: Forgot Password -->
-<div id="view-forgot" class="mat-view">
+<div id="view-forgot" class="mat-view" data-forgot-channel="{{ forgot_channel|default:'email' }}">
     <button class="mat-back" type="button" id="btn-back-signin"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg> Back</button>
     <p class="mat-view-title">Reset Your Password</p>
+    {% if forgot_channel == "sms" %}
+    <p class="mat-view-sub">We'll text you a 6-digit reset code.</p>
+    <form id="form-forgot" novalidate>
+        <div class="mat-field">
+            <label class="mat-label" for="forgot-phone">Phone Number</label>
+            <input class="mat-input" type="tel" id="forgot-phone" autocomplete="tel" placeholder="+15555550100" required />
+        </div>
+        <button class="mat-btn mat-btn-primary" type="submit" id="btn-forgot" style="margin-top:.5rem"><span class="mat-btn-text">Send Code</span><span class="mat-spinner"></span></button>
+    </form>
+    {% else %}
     <p class="mat-view-sub">Choose how you'd like to receive your reset instructions.</p>
     <form id="form-forgot" novalidate>
         <div class="mat-field">
@@ -75,6 +85,7 @@
         </div>
         <button class="mat-btn mat-btn-primary" type="submit" id="btn-forgot" style="margin-top:.5rem"><span class="mat-btn-text">Send Reset</span><span class="mat-spinner"></span></button>
     </form>
+    {% endif %}
 </div>
 
 <!-- VIEW: Enter Reset Code -->
@@ -238,31 +249,65 @@
     $("btn-back-forgot").addEventListener("click", function () { showView("forgot"); });
     $("btn-back-signin-magic").addEventListener("click", function () { showView("signin"); });
 
+    var forgotChannel = ($("view-forgot") && $("view-forgot").dataset.forgotChannel) || "email";
+
     $("form-forgot").addEventListener("submit", function (e) {
         e.preventDefault();
+        if (forgotChannel === "sms") {
+            var phone = $("forgot-phone").value.trim();
+            if (!phone) { m.showMessage("Please enter your phone number.", "error"); return; }
+            var btn = $("btn-forgot"); m.setLoading(btn, true); m.hideMessage();
+            MojoAuth.forgotPasswordCode(phone, "sms")
+                .then(function () {
+                    m.setLoading(btn, false);
+                    sessionStorage.setItem("mat_reset_identifier", phone);
+                    sessionStorage.setItem("mat_reset_channel", "sms");
+                    $("reset-email-display").textContent = phone;
+                    showView("resetCode");
+                    m.showMessage("Check your messages for the reset code.", "success");
+                })
+                .catch(function (err) { m.setLoading(btn, false); m.showMessage(MojoAuth.getError(err) || "Something went wrong.", "error"); });
+            return;
+        }
         var email = $("forgot-email").value.trim();
         var method = document.querySelector('input[name="reset-method"]:checked').value;
         if (!email) { m.showMessage("Please enter your email address.", "error"); return; }
-        var btn = $("btn-forgot"); m.setLoading(btn, true); m.hideMessage();
+        var btn2 = $("btn-forgot"); m.setLoading(btn2, true); m.hideMessage();
         (method === "code" ? MojoAuth.forgotPasswordCode(email) : MojoAuth.forgotPasswordLink(email))
             .then(function () {
-                m.setLoading(btn, false);
-                if (method === "code") { sessionStorage.setItem("mat_reset_email", email); $("reset-email-display").textContent = email; showView("resetCode"); m.showMessage("Check your email for the reset code.", "success"); }
-                else { m.showMessage("Reset link sent! Check your email.", "success"); }
+                m.setLoading(btn2, false);
+                if (method === "code") {
+                    sessionStorage.setItem("mat_reset_identifier", email);
+                    sessionStorage.setItem("mat_reset_channel", "email");
+                    // Legacy key — kept so older deep-links still work.
+                    sessionStorage.setItem("mat_reset_email", email);
+                    $("reset-email-display").textContent = email;
+                    showView("resetCode");
+                    m.showMessage("Check your email for the reset code.", "success");
+                } else {
+                    m.showMessage("Reset link sent! Check your email.", "success");
+                }
             })
-            .catch(function (err) { m.setLoading(btn, false); m.showMessage(MojoAuth.getError(err) || "Something went wrong.", "error"); });
+            .catch(function (err) { m.setLoading(btn2, false); m.showMessage(MojoAuth.getError(err) || "Something went wrong.", "error"); });
     });
 
     $("form-reset-code").addEventListener("submit", function (e) {
         e.preventDefault();
         var code = $("reset-code").value.trim(), np = $("reset-password-new").value, cp = $("reset-password-confirm").value;
-        var email = sessionStorage.getItem("mat_reset_email");
-        if (!email) { m.showMessage("Session expired. Please restart.", "error"); showView("forgot"); return; }
+        var identifier = sessionStorage.getItem("mat_reset_identifier")
+            || sessionStorage.getItem("mat_reset_email");
+        var channel = sessionStorage.getItem("mat_reset_channel") || "email";
+        if (!identifier) { m.showMessage("Session expired. Please restart.", "error"); showView("forgot"); return; }
         if (!code || !np) { m.showMessage("Please fill in all fields.", "error"); return; }
         if (np !== cp) { m.showMessage("Passwords do not match.", "error"); return; }
         var btn = $("btn-reset-code"); m.setLoading(btn, true); m.hideMessage();
-        MojoAuth.resetWithCode(email, code, np)
-            .then(function () { sessionStorage.removeItem("mat_reset_email"); m.onAuthSuccess(); })
+        MojoAuth.resetWithCode(identifier, code, np, channel)
+            .then(function () {
+                sessionStorage.removeItem("mat_reset_identifier");
+                sessionStorage.removeItem("mat_reset_channel");
+                sessionStorage.removeItem("mat_reset_email");
+                m.onAuthSuccess();
+            })
             .catch(function (err) { m.setLoading(btn, false); m.showMessage(MojoAuth.getError(err) || "Invalid or expired code.", "error"); });
     });
 

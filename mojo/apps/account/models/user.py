@@ -94,7 +94,10 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
 
     uuid = models.UUIDField(default=uuid.uuid4, editable=False, db_index=True)
     username = models.TextField(unique=True)
-    email = models.EmailField(unique=True)
+    # Phone-only deployments register users with no email. PostgreSQL/SQLite
+    # treat NULL as distinct under UNIQUE so multiple null-email users coexist;
+    # the empty-string fallback would collide on the second insert.
+    email = models.EmailField(unique=True, null=True, blank=True, default=None)
     phone_number = models.CharField(max_length=32, blank=True, null=True, default=None, unique=True)
     is_active = models.BooleanField(default=True, db_index=True)
     display_name = models.CharField(max_length=80, blank=True, null=True, default=None)
@@ -719,7 +722,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
                 raise merrors.PermissionDeniedException(f"You are not allowed to change {_field}")
         if "dob" in changed_fields:
             self.is_dob_verified = False
-        if "email" in changed_fields:
+        if "email" in changed_fields and self.email:
             self.validate_email()
             self.email = self.email.lower()
             self.is_email_verified = False

@@ -322,6 +322,37 @@ not hidden by JS).
 | `AUTH_SUCCESS_REDIRECT` | `'/'` | Redirect target after login |
 | `AUTH_LAYOUT` | `'card'` | `'card'` or `'fullscreen'` |
 
+### Configurable Registration Form
+
+`AUTH_REGISTER_FIELDS` drives both the bouncer-rendered register form and the server-side validator. Group-scoped — different groups can have different signup shapes.
+
+```python
+# settings.py — phone-as-identity project example
+AUTH_REGISTER_FIELDS = [
+    {"name": "first_name", "required": True},
+    {"name": "last_name",  "required": True},
+    {"name": "phone",      "required": True, "verify": "sms"},
+    {"name": "dob",        "required": True},
+    {"name": "password",   "required": True},
+]
+AUTH_MIN_AGE_YEARS = 13   # optional age gate when dob is required
+```
+
+Canonical field set: `first_name`, `last_name`, `email`, `phone`, `dob`, `password`. Unknown names are silently dropped from the config — consumer-specific keys keep using `REGISTRATION_EXTRA_FIELDS`. Password is always required (passwordless registration is a separate flow and out of scope).
+
+**Identity field** — auto-picked: `email` if required + present, else `phone`. `AUTH_REGISTER_IDENTITY_FIELD = "phone"` or `"email"` overrides explicitly. `User.username` is set to the identity value at create time (the existing `User.lookup_from_request(phone_as_username=True)` path then handles phone-based login transparently).
+
+**Phone verification (verify-then-register)** — when a field has `verify: "sms"`, the rendered form includes inline Send-code / Verify controls and the server requires a `verified_phone_token` in the register POST body. Two new endpoints back this flow:
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/api/auth/phone/register/start` | Body `{phone}` → `{session_token, expires_in}`. Generates a 6-digit code, sends via `phonehub.send_sms`. |
+| POST | `/api/auth/phone/register/verify` | Body `{session_token, code}` → `{verified_phone_token, expires_in}`. |
+
+Tokens are Redis-backed (`phone:register:session:*` and `phone:register:verified:*`), single-use, and TTL-bound (`PHONE_REGISTER_SESSION_TTL` / `PHONE_REGISTER_VERIFIED_TTL`, both default 600s). The endpoints are rate-limited per IP. No User row is created until phone ownership is proven — this is intentional spam control on a scarce resource.
+
+**Forgot-password dispatch** — `POST /api/auth/forgot` now routes the 6-digit reset code via SMS automatically when the matched user has no email on file, or when `channel: "sms"` is supplied explicitly. The bouncer's login page forgot-password subview switches to a phone-input UI when `identity_field == "phone"`. Existing email flows are unchanged.
+
 ### Bouncer gate (file-based via `settings.get_static()`)
 
 | Setting | Default | Description |

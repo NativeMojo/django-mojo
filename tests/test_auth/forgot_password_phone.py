@@ -30,7 +30,7 @@ def setup_forgot_phone(opts):
     User.objects.filter(phone_number=opts.phone_only_phone).delete()
     User.objects.filter(username=opts.phone_only_username).delete()
 
-    u = User(username=opts.phone_only_username, email="")
+    u = User(username=opts.phone_only_username, email=None)
     u.phone_number = opts.phone_only_phone
     u.is_phone_verified = True
     u.set_password(opts.phone_only_password)

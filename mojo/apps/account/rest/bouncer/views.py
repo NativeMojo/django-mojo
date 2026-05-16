@@ -223,6 +223,8 @@ def _auth_context(request, group=None):
     fallback → global fallback. Single-tenant deployments (group=None)
     behave identically to before.
     """
+    from mojo.apps.account.services import register_schema
+
     login_path = settings.get_static('BOUNCER_LOGIN_PATH', 'auth')
     register_path = settings.get_static('BOUNCER_REGISTER_PATH', 'register')
     group_uuid = group.uuid if group else ''
@@ -230,6 +232,19 @@ def _auth_context(request, group=None):
     # navigation. The framework dispatcher reserves `?group=` for integer IDs
     # and 400s on UUID values, so cross-links must use `?group_uuid=`.
     group_qs = f'?group_uuid={group_uuid}' if group_uuid else ''
+
+    # Schema-driven register form. The same schema drives the server-side
+    # validator, so what the form collects matches what the API will accept.
+    register_fields = register_schema.resolve_fields(group=group)
+    register_field_rows = register_schema.field_rows(register_fields)
+    try:
+        identity_field = register_schema.resolve_identity_field(register_fields, group=group)
+    except Exception:
+        identity_field = 'email'
+    # When phone is the identity, the forgot-password subview must collect
+    # phone (not email) and use the SMS channel.
+    forgot_channel = 'sms' if identity_field == 'phone' else 'email'
+
     return {
         'api_base': settings.get('AUTH_API_BASE', '', group=group),
         'success_redirect': settings.get('AUTH_SUCCESS_REDIRECT', '/', group=group),
@@ -250,6 +265,10 @@ def _auth_context(request, group=None):
         'custom_css_url': settings.get('AUTH_CUSTOM_CSS_URL', '', group=group),
         'custom_css': settings.get('AUTH_CUSTOM_CSS', '', group=group),
         'group_uuid': group_uuid,
+        'register_fields': register_fields,
+        'register_field_rows': register_field_rows,
+        'identity_field': identity_field,
+        'forgot_channel': forgot_channel,
     }
 
 

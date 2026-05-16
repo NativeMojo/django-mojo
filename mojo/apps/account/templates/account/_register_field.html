@@ -1,0 +1,52 @@
+{% comment %}
+Renders a single register field. Driven by AUTH_REGISTER_FIELDS via
+register_schema.resolve_fields(); see mojo/apps/account/services/register_schema.py
+for the canonical field set and shape.
+
+Input context:
+    f.name      — one of: first_name, last_name, email, phone, dob, password
+    f.required  — bool
+    f.verify    — "sms" / "email" / None
+{% endcomment %}
+{% if f.name == "first_name" %}
+<div class="mat-field">
+    <input class="mat-input" type="text" id="reg-first-name" autocomplete="given-name" placeholder="First name"{% if f.required %} required{% endif %} />
+</div>
+{% elif f.name == "last_name" %}
+<div class="mat-field">
+    <input class="mat-input" type="text" id="reg-last-name" autocomplete="family-name" placeholder="Last name"{% if f.required %} required{% endif %} />
+</div>
+{% elif f.name == "email" %}
+<div class="mat-field">
+    <input class="mat-input" type="email" id="reg-email" autocomplete="email" placeholder="Email"{% if f.required %} required{% endif %} />
+</div>
+{% elif f.name == "phone" %}
+<div class="mat-field" data-mat-phone="1">
+    <input class="mat-input" type="tel" id="reg-phone" autocomplete="tel" placeholder="Phone number"{% if f.required %} required{% endif %} />
+    {% if f.verify == "sms" %}
+    <div class="mat-phone-verify">
+        <button type="button" class="mat-btn mat-btn-outline" id="reg-phone-send"><span class="mat-btn-text">Send code</span></button>
+        <div class="mat-phone-code-row" id="reg-phone-code-row" style="display:none">
+            <input class="mat-input" type="text" inputmode="numeric" pattern="\d*" id="reg-phone-code" placeholder="6-digit code" autocomplete="one-time-code" />
+            <button type="button" class="mat-btn mat-btn-outline" id="reg-phone-verify"><span class="mat-btn-text">Verify</span></button>
+        </div>
+        <input type="hidden" id="reg-phone-session-token" value="" />
+        <input type="hidden" id="reg-phone-token" name="verified_phone_token" value="" />
+        <p class="mat-help-text" id="reg-phone-help" style="display:none"></p>
+    </div>
+    {% endif %}
+</div>
+{% elif f.name == "dob" %}
+<div class="mat-field">
+    <input class="mat-input" type="date" id="reg-dob" autocomplete="bday" placeholder="Date of birth"{% if f.required %} required{% endif %} />
+</div>
+{% elif f.name == "password" %}
+<div class="mat-field">
+    <div class="mat-input-wrap">
+        <input class="mat-input has-eye" type="password" id="reg-password" autocomplete="new-password" placeholder="Enter your password"{% if f.required %} required{% endif %} />
+        <button type="button" class="mat-eye" aria-label="Show password" data-target="reg-password">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+        </button>
+    </div>
+</div>
+{% endif %}
