@@ -240,54 +240,40 @@ def on_auth_exchange(request):
 @md.strict_rate_limit("register", ip_limit=5, ip_window=300)
 @md.requires_bouncer_token('registration')
 @md.requires_geofence(scope="auth")
-@md.requires_params("email", "password")
+@md.requires_params("password")
 def on_register(request):
     """
     Create a new user account.
 
     Gated by the ALLOW_USER_REGISTRATION setting (default False).
 
-    Required body params: email, password
-    Optional body params: first_name, last_name, group_uuid, plus any keys
-                          listed in REGISTRATION_EXTRA_FIELDS.
+    Field set is driven by AUTH_REGISTER_FIELDS (group-scoped); see
+    `mojo.apps.account.services.register_schema`. Default config (when the
+    setting is unset) preserves the legacy email-based form: required email
+    + password, optional first_name + last_name.
 
-    Note: the body param is `group_uuid` (not `group`) because the framework's
-    request dispatcher reserves `group` for integer-id resolution into
-    request.group at the HTTP layer.
+    Required body params: password + every field marked required in the
+    configured schema. The identity field (email or phone, auto-picked) is
+    always required.
 
-    Extension points:
-      PRE_REGISTER_VALIDATOR    — dotted-path callable, raises ValueException
-                                  to reject before any DB write.
-      USER_REGISTERED_HANDLER   — dotted-path callable fired inside the user-
-                                  create transaction. Raising rolls back the
-                                  user row.
-      USER_LOGIN_HANDLER        — fired by jwt_login() at the end of every
-                                  successful authentication.
+    Optional body params: anything not required in the schema, plus any
+    keys listed in REGISTRATION_EXTRA_FIELDS, plus `group_uuid`.
 
-    When REQUIRE_VERIFIED_EMAIL is True the response includes
-    requires_verification=True and no JWT is issued — the user must
-    verify their email before they can log in.
+    When the schema requires phone with verify="sms", the request must
+    include `verified_phone_token` minted by /auth/phone/register/verify.
 
-    When REQUIRE_VERIFIED_EMAIL is False the user is logged in
-    immediately and a verification email is still sent as a nudge.
+    Extension points (unchanged):
+      PRE_REGISTER_VALIDATOR, USER_REGISTERED_HANDLER, USER_LOGIN_HANDLER.
     """
+    from mojo.apps.account.services import register_schema
+    from mojo.apps.account.services import phone_register
+
     allow_registration = account_extensions.bool_setting_with_header(
         request, "X-Mojo-Test-Allow-User-Registration", "ALLOW_USER_REGISTRATION", False)
     if not allow_registration:
         raise merrors.PermissionDeniedException("Registration is not enabled", 403, 403)
 
-    # ---- Pre-validation (no DB writes) -------------------------------------
-    email = request.DATA.email.lower().strip()
-    password = request.DATA.password
-    first_name = request.DATA.get("first_name", "").strip()
-    last_name = request.DATA.get("last_name", "").strip()
-
-    if User.objects.filter(email=email).exists():
-        raise merrors.ValueException("An account with this email already exists")
-
-    # Resolve group from UUID (silent-drop if unset; 400 if unknown/inactive).
-    # The body param is `group_uuid` because the framework dispatcher reserves
-    # `group` for integer-id lookup into request.group.
+    # ---- Resolve group first so schema lookups can be group-scoped ---------
     group = None
     group_uuid = (request.DATA.get("group_uuid") or "").strip()
     require_group = account_extensions.bool_setting_with_header(
@@ -303,7 +289,38 @@ def on_register(request):
     elif require_group:
         raise merrors.ValueException("group_uuid is required")
 
-    # Allowlisted extras — silent-drop unknown keys
+    # ---- Resolve schema + identity for this group --------------------------
+    # Test-mode override mirrors the existing X-Mojo-Test-* pattern so per-
+    # request configs don't require a server reload.
+    fields = register_schema.resolve_fields(group=group, request=request)
+    identity_field = register_schema.resolve_identity_field(fields, group=group)
+    min_age = register_schema.resolve_min_age(group=group, request=request)
+    by_name = {f["name"]: f for f in fields}
+
+    # ---- Build payload dict from request.DATA (only canonical fields) ------
+    raw_payload = {}
+    for name in register_schema.CANONICAL_FIELDS:
+        if name in request.DATA:
+            raw_payload[name] = request.DATA.get(name)
+    sanitized = register_schema.validate_payload(
+        fields, raw_payload, identity_field=identity_field, min_age=min_age)
+
+    email = sanitized.get("email", "")
+    phone = sanitized.get("phone", "")
+    password = sanitized["password"]
+    first_name = sanitized.get("first_name", "")
+    last_name = sanitized.get("last_name", "")
+    dob = sanitized.get("dob")
+
+    # ---- Identity-keyed duplicate check ------------------------------------
+    if identity_field == "email":
+        if email and User.objects.filter(email=email).exists():
+            raise merrors.ValueException("An account with this email already exists")
+    else:  # identity_field == "phone"
+        if phone and User.objects.filter(phone_number=phone).exists():
+            raise merrors.ValueException("An account with this phone number already exists")
+
+    # Allowlisted extras — silent-drop unknown keys (existing contract)
     extras_allow = account_extensions.list_setting_with_header(
         request, "X-Mojo-Test-Registration-Extra-Fields",
         "REGISTRATION_EXTRA_FIELDS", [])
@@ -325,17 +342,39 @@ def on_register(request):
     # Strength check (still framework-side; outside atomic for clarity)
     User(email=email).check_password_strength(password)
 
+    # ---- Phone-verify consumption (BEFORE atomic block) --------------------
+    # If the schema marks phone with verify="sms", a valid verified-phone
+    # token must accompany the register POST. Consumed here, not inside the
+    # atomic block, so a misplaced retry can't roll back a real user row.
+    phone_was_verified = False
+    if "phone" in by_name and by_name["phone"].get("verify") == "sms":
+        verified_token = request.DATA.get("verified_phone_token", "")
+        if not verified_token:
+            raise merrors.ValueException("Phone verification required")
+        if not phone_register.consume(verified_token, phone):
+            raise merrors.ValueException("Invalid or expired phone verification")
+        phone_was_verified = True
+
     # ---- Atomic: user + GroupMember + register-handler ---------------------
     # Verify-email send and jwt_login run OUTSIDE this block. An SMTP hiccup
     # or JWT-issuance failure must NOT roll back a user whose register-handler
     # has already fired side effects in consumer downstream systems.
     with transaction.atomic():
-        user = User(email=email)
-        user.username = user.generate_username_from_email()
+        user = User(email=email or "")
+        if identity_field == "email" and email:
+            user.username = user.generate_username_from_email()
+        else:
+            user.username = phone  # phone is already normalized
         if first_name:
             user.first_name = first_name
         if last_name:
             user.last_name = last_name
+        if phone:
+            user.phone_number = phone
+        if dob is not None:
+            user.dob = dob
+        if phone_was_verified:
+            user.is_phone_verified = True
         user.set_password(password)
         user.save()
 
@@ -348,18 +387,26 @@ def on_register(request):
             source="password", extra=extra)
 
     # ---- Side effects (outside atomic) -------------------------------------
-    token = tokens.generate_email_verify_token(user)
-    try:
-        user.send_template_email("email_verify", context=dict(token=token))
-    except Exception as exc:
-        user.report_incident(
-            f"verify-email send failed during register: {exc}",
-            "register:email_send_failed", level=4)
-    user.report_incident(f"{user.username} registered via email", "register:success")
+    # Email-verify only fires when email is configured. Phone-only registers
+    # don't trigger an email send and don't return the requires_verification
+    # response either — the verified-phone-token flow has already proven
+    # ownership of the contact channel.
+    email_in_schema = "email" in by_name and bool(email)
+    if email_in_schema:
+        token = tokens.generate_email_verify_token(user)
+        try:
+            user.send_template_email("email_verify", context=dict(token=token))
+        except Exception as exc:
+            user.report_incident(
+                f"verify-email send failed during register: {exc}",
+                "register:email_send_failed", level=4)
+    user.report_incident(
+        f"{user.username} registered via {identity_field}",
+        "register:success")
 
     # ---- Auth handoff ------------------------------------------------------
     require_verified = settings.get("REQUIRE_VERIFIED_EMAIL", False, kind="bool")
-    if require_verified:
+    if email_in_schema and require_verified:
         return JsonResponse(dict(
             status=True,
             requires_verification=True,

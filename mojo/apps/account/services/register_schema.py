@@ -32,8 +32,10 @@ Public surface:
         render a single loop without per-field positional logic.
 """
 import datetime
+import json
 
 from mojo import errors as merrors
+from mojo.helpers import test_mode as _tm
 from mojo.helpers.settings import settings
 
 
@@ -73,8 +75,34 @@ def _normalize_entry(entry):
     return {"name": name, "required": required, "verify": verify}
 
 
-def resolve_fields(group=None):
-    raw = settings.get("AUTH_REGISTER_FIELDS", None, group=group)
+def _read_test_header(request, header_name):
+    if request is None:
+        return None
+    if not _tm.is_test_request(request):
+        return None
+    key = "HTTP_" + header_name.upper().replace("-", "_")
+    return request.META.get(key)
+
+
+def resolve_fields(group=None, request=None):
+    """Resolve the register field schema.
+
+    `request` enables the test-mode header override
+    (`X-Mojo-Test-Register-Fields`, a JSON list). The override is
+    only honored when the test-mode gate passes (loopback + flag + no
+    proxy chain), so production traffic can't influence the schema.
+    """
+    raw = None
+    header_value = _read_test_header(request, "X-Mojo-Test-Register-Fields")
+    if header_value is not None:
+        try:
+            parsed = json.loads(header_value)
+            if isinstance(parsed, list):
+                raw = parsed
+        except (json.JSONDecodeError, TypeError):
+            raw = None
+    if raw is None:
+        raw = settings.get("AUTH_REGISTER_FIELDS", None, group=group)
     if not raw:
         return [dict(f) for f in DEFAULT_FIELDS]
     if not isinstance(raw, (list, tuple)):
@@ -116,8 +144,12 @@ def resolve_identity_field(fields, group=None):
         "AUTH_REGISTER_FIELDS must include either 'email' or 'phone'")
 
 
-def resolve_min_age(group=None):
-    raw = settings.get("AUTH_MIN_AGE_YEARS", None, group=group)
+def resolve_min_age(group=None, request=None):
+    """Resolve AUTH_MIN_AGE_YEARS. Accepts an X-Mojo-Test-Min-Age-Years
+    header override when the test-mode gate passes."""
+    header_value = _read_test_header(request, "X-Mojo-Test-Min-Age-Years")
+    raw = header_value if header_value is not None else settings.get(
+        "AUTH_MIN_AGE_YEARS", None, group=group)
     if raw in (None, ""):
         return None
     try:
