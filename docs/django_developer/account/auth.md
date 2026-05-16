@@ -302,6 +302,85 @@ def on_register(request):
 
 With `REQUIRE_VERIFIED_EMAIL = True`, the user cannot log in until they click the verification link — no additional gate logic needed.
 
+### Registration Extension Hooks
+
+Three settings let consumer apps plug custom logic into the register and login flows without forking the built-in endpoints.
+
+#### `PRE_REGISTER_VALIDATOR`
+
+Dotted-path callable invoked before the user record is created. Raise `ValueException` to reject the request with a 400. The plaintext password is intentionally **not** passed.
+
+```python
+# settings.py
+PRE_REGISTER_VALIDATOR = "myapp.validators.check_registration"
+```
+
+```python
+# myapp/validators.py
+from mojo import errors as merrors
+
+def check_registration(*, email, group, request, extra):
+    if not email.endswith("@acme.com"):
+        raise merrors.ValueException("Only @acme.com addresses may register.")
+```
+
+#### `USER_REGISTERED_HANDLER`
+
+Fires inside the register `transaction.atomic()` block, and also from the OAuth path when a new user is created. Raising an exception rolls back the entire registration transaction.
+
+```python
+# settings.py
+USER_REGISTERED_HANDLER = "myapp.handlers.on_user_registered"
+```
+
+```python
+# myapp/handlers.py
+def on_user_registered(*, user, request, group, source, extra):
+    # source ∈ {"password", "oauth"} in v1
+    # Avoid slow I/O here — this is inside a DB transaction
+    user.metadata["registration_source"] = source
+    user.save(update_fields=["metadata"])
+```
+
+#### `USER_LOGIN_HANDLER`
+
+Fires from every successful `jwt_login()` call, across all login paths. Errors are caught, logged, and swallowed — they never affect the login response.
+
+```python
+# settings.py
+USER_LOGIN_HANDLER = "myapp.handlers.on_user_login"
+```
+
+```python
+# myapp/handlers.py
+def on_user_login(*, user, request, source, is_new_user):
+    pass
+```
+
+`source` values: `"password"`, `"magic"`, `"oauth"`, `"email_verify"`, `"invite"`, `"password_reset"`, `"email_change"`, `"sessions_revoke"`, `"totp"`, `"totp_mfa"`, `"totp_recovery"`, `"passkey"`, `"sms"`, `"sms_mfa"`, `"handoff"`.
+
+**Error contract asymmetry:**
+
+| Hook | Raises | Effect |
+|---|---|---|
+| `PRE_REGISTER_VALIDATOR` | `ValueException` | Rejects with 400, propagates |
+| `USER_REGISTERED_HANDLER` | Any exception | Rolls back registration transaction |
+| `USER_LOGIN_HANDLER` | Any exception | Caught + logged; login succeeds anyway |
+
+**Guidance:** Enqueue background jobs from `USER_LOGIN_HANDLER` rather than performing slow I/O inline. For `USER_REGISTERED_HANDLER`, keep work minimal — it is inside a database transaction.
+
+### Registration Extra Fields
+
+The built-in `POST /api/auth/register` endpoint accepts an optional `group_uuid` body param to associate the new user with a group at registration time. It also forwards an allowlisted set of arbitrary key/value pairs to the `USER_REGISTERED_HANDLER` via the `extra` argument.
+
+```python
+# settings.py — keys not in this list are silently dropped
+REGISTRATION_EXTRA_FIELDS = ["referral_code", "plan"]
+
+# Require group_uuid to be present and valid
+REQUIRE_GROUP_ON_REGISTRATION = True   # default False
+```
+
 ### Framework primitives available
 
 | Need | How |

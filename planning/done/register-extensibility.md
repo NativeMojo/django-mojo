@@ -1,8 +1,9 @@
 # Register Endpoint Extensibility (Group Context + Signal Hooks + Custom Fields)
 
 **Type**: request
-**Status**: planned
+**Status**: resolved
 **Date**: 2026-05-15
+**Resolved**: 2026-05-15
 **Priority**: high
 
 ## Description
@@ -383,3 +384,46 @@ Server-process isolation rules out `mock.patch`; tests register module-level cap
 - Saving extras directly to User columns.
 - Multi-handler validation (graduate `PRE_REGISTER_VALIDATOR` to a chain only if needed).
 - Bringing OAuth's `_find_or_create_user` to an explicit-param group-aware pattern (uses state-channel only in v1).
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-05-15
+**Commits**: `fa3ad79` (feature) + `849ed80` (security hardening)
+
+### What Was Built
+Three dotted-path extension hooks (`PRE_REGISTER_VALIDATOR`, `USER_REGISTERED_HANDLER`, `USER_LOGIN_HANDLER`) plus group-aware registration via a new `group_uuid` body param, an allowlisted-extras mechanism (`REGISTRATION_EXTRA_FIELDS`), and `REQUIRE_GROUP_ON_REGISTRATION` enforcement. OAuth registrations now also fire `USER_REGISTERED_HANDLER` (with `source="oauth"`) and create a GroupMember from `state_data["group_uuid"]`. Verification gate moved out of `jwt_login()` and into `on_user_login()` so the `source` kwarg is now strictly the auth-flow identifier (no overload with lookup-channel values). Backfilled `source` on every internal `jwt_login()` call site so login analytics is meaningful from day one. Two new template blocks (`extra_fields`, `pre_submit_script`) in `register.html` and `MojoAuth.register()` forwards the full payload.
+
+### Files Changed
+- `mojo/apps/account/services/extensions.py` — new module with the three hook resolvers, asymmetric error handling, and cached dotted-path loading.
+- `mojo/apps/account/rest/user.py` — restructured `on_register` with explicit atomic boundary (verify-email send outside), added `is_new_user` kwarg to `jwt_login`, fires the login hook, moved verification gate into `on_user_login`, backfilled `source` on every caller, hard-strips plaintext password from `request.DATA` before invoking `PRE_REGISTER_VALIDATOR`.
+- `mojo/apps/account/rest/oauth.py` — changed `_find_or_create_user(provider_name, profile, state_data=None, request=None)`, added Group resolution + GroupMember creation + `fire_user_registered` on new-user path, passes `source="oauth"` and `is_new_user=created` to `jwt_login`.
+- `mojo/apps/account/rest/totp.py`, `passkeys.py`, `sms.py` — `source` backfill (`totp_mfa`, `totp_recovery`, `totp`, `passkey`, `sms`, `sms_mfa`).
+- `mojo/apps/account/templates/account/register.html` — two new empty template blocks.
+- `mojo/apps/account/static/account/mojo-auth.js` — `register()` forwards the full payload via `Object.assign`.
+
+### Tests
+- `tests/test_register/__init__.py` — new package, marked `serial: True`.
+- `tests/test_register/_capture.py` — module-level capture handlers (filesystem JSON to bridge test process ↔ server process).
+- `tests/test_register/register.py` — 15 tests covering group flows, extras, validator contract, atomic rollback, asymmetric error contracts, source backfill, refresh-token exclusion, and a defense-in-depth probe that the validator cannot reach the password via `request.DATA`.
+- Run: `bin/run_tests --agent -t test_register.register`
+
+### Docs Updated
+- `docs/django_developer/account/auth.md` — new "Registration Extension Hooks" section with handler signatures, asymmetric error contract, settings table.
+- `docs/django_developer/account/user.md` — six new rows in the Settings table.
+- `docs/web_developer/account/authentication.md` — `group_uuid` body param and silent-drop extras behavior.
+- `CHANGELOG.md` — entry under the unreleased section.
+
+### Security Review
+Two findings, both addressed:
+1. **PRE_REGISTER_VALIDATOR password exposure** — fixed in `849ed80`. The validator now cannot read the plaintext password via `request.DATA` either (popped for the call duration). Test asserts this via direct probe.
+2. **Verification gate move from `jwt_login()` to `on_user_login()`** — flagged as "could other flows now bypass the gate?". Empirically verified: in the prior code, the gate only fired when `source` ∈ {"email", "phone_number"}; the only caller passing those values was `on_user_login`. All other callers passed auth-flow strings that never triggered the gate. No behavior change for non-password flows. Whether password-reset / magic-link / OAuth should ALSO enforce `REQUIRE_VERIFIED_EMAIL` is an independent policy question and out of scope for this ticket.
+
+### Test Results
+Full suite green after both commits: 1870 passed, 0 failed, 56 skipped (skips are opt-in slow modules + environment-conditional).
+
+### Follow-up
+- OAuth `on_oauth_begin` already accepts `group_uuid` query param and stores it in state. No further plumbing needed.
+- Consider adding a `USER_REGISTERED_HANDLER` fire on `on_invite_accept` if invite acceptance should count as "new user landed" for handlers — currently treats existing user (registered via invite-send earlier).
+- Consider explicit gate enforcement on password-reset endpoints if `REQUIRE_VERIFIED_EMAIL=True` deployments want to block unverified accounts from recovering via reset.
+- Settings reference docs (`docs/django_developer/helpers/settings_reference.md` if it exists) should list the five new settings.

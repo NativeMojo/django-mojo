@@ -1,5 +1,13 @@
 ## v1.1.0 - (current)
 
+**account** — three extension hooks for the register and login flows:
+
+- `PRE_REGISTER_VALIDATOR` — dotted-path callable invoked before user creation; raise `ValueException` to reject with 400. Signature: `(*, email, group, request, extra)`. Plaintext password is intentionally not passed.
+- `USER_REGISTERED_HANDLER` — fires inside the register `transaction.atomic()` block and from the OAuth path on new-user create. Raising rolls back the transaction. Signature: `(*, user, request, group, source, extra)`. `source` ∈ `{"password", "oauth"}` in v1.
+- `USER_LOGIN_HANDLER` — fires on every successful `jwt_login()` call across all login paths. Errors are caught, logged, and swallowed. Signature: `(*, user, request, source, is_new_user)`.
+
+**account** — `POST /api/auth/register` accepts a new optional `group_uuid` body param. Set `REQUIRE_GROUP_ON_REGISTRATION = True` to make it mandatory. Extra body keys are forwarded to `USER_REGISTERED_HANDLER` via `extra` if listed in `REGISTRATION_EXTRA_FIELDS`; unrecognised keys are silently dropped. `MojoAuth.register()` in mojo-auth.js now forwards the full payload. The register template gains `{% block extra_fields %}` and `{% block pre_submit_script %}` extension points.
+
 ## v1.2.11 - May 12, 2026
 
 add resolve to ticket handler

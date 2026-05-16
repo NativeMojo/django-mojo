@@ -370,6 +370,7 @@ Creates a new user account. No authentication required. Rate-limited to 5 reques
   "password": "mysecretpassword",
   "first_name": "Alice",
   "last_name": "Smith",
+  "group_uuid": "abc123",
   "bouncer_token": "<token-from-assess>",
   "duid": "browser-generated-device-uuid"
 }
@@ -381,8 +382,11 @@ Creates a new user account. No authentication required. Rate-limited to 5 reques
 | `password` | yes | Must meet password strength requirements |
 | `first_name` | no | User's first name |
 | `last_name` | no | User's last name |
+| `group_uuid` | conditional | UUID of a group to associate the new user with. Required when the server has `REQUIRE_GROUP_ON_REGISTRATION = True` |
 | `bouncer_token` | conditional | Required when bouncer is active. Must be a token issued with `page_type: "registration"` — a login-scoped token will be rejected |
 | `duid` | conditional | Device UUID, required when bouncer is active |
+
+Additional keys may be included in the payload. The server silently drops any key not present in its `REGISTRATION_EXTRA_FIELDS` allowlist, so safe to forward extra fields without causing errors. `MojoAuth.register()` forwards the full payload as-is.
 
 ### Response — Auto-Login (default)
 

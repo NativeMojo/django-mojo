@@ -354,3 +354,9 @@ The full disable-lifecycle schema and service API are in [disable_lifecycle.md](
 | `ALLOW_USERNAME_CHANGE` | `True` | Feature flag — set `False` to disable the self-service username change endpoint |
 | `ALLOW_SELF_DEACTIVATION` | `True` | Feature flag — set `False` to disable self-service account deactivation |
 | `DEACTIVATE_TOKEN_TTL` | `900` | Account deactivation confirmation token TTL (seconds, 15 min default) |
+| `ALLOW_USER_REGISTRATION` | `False` | Enable built-in `POST /api/auth/register` endpoint |
+| `REQUIRE_GROUP_ON_REGISTRATION` | `False` | Require `group_uuid` body param on register; rejects if missing or invalid |
+| `REGISTRATION_EXTRA_FIELDS` | `[]` | Allowlist of extra body keys forwarded to `USER_REGISTERED_HANDLER` via `extra`; unrecognised keys are silently dropped |
+| `PRE_REGISTER_VALIDATOR` | `None` | Dotted-path callable invoked before user creation; raise `ValueException` to reject |
+| `USER_REGISTERED_HANDLER` | `None` | Dotted-path callable fired inside the registration transaction (and on OAuth new-user); raising rolls back |
+| `USER_LOGIN_HANDLER` | `None` | Dotted-path callable fired on every successful `jwt_login()`; errors are swallowed |
