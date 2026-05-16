@@ -1,6 +1,6 @@
 TESTIT = {
     "requires_apps": ["mojo.apps.account"],
-    # Serial because tests toggle GEOFENCE_* settings via th.server_settings()
-    # for per-scenario configuration; reloads must not race with parallel modules.
-    "serial": True,
+    # Parallel-safe: tests pass per-request test-mode headers
+    # (X-Mojo-Test-Geo, X-Mojo-Test-Geofence-System, etc.) instead of using
+    # th.server_settings(). No server reloads, no cross-module collisions.
 }

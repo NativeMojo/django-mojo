@@ -6,6 +6,59 @@ The account app sets `APP_NAME = ""`, so these endpoints have no app prefix — 
 
 ---
 
+## `GET geo/check` — Geofence Pre-flight Check
+
+```
+GET /api/geo/check
+GET /api/geo/check?group_uuid=<uuid>
+```
+
+**Public** — no authentication required. This endpoint is itself not geofenced.
+
+Use this before showing a login or registration form to detect whether the current user's IP is permitted to use the platform (or a specific tenant). Render a "not available in your region" page when `allowed` is `false` rather than letting the user hit a 403 mid-flow.
+
+| Param | Required | Description |
+|---|---|---|
+| `group_uuid` | No | UUID of a specific group. When provided, group-level geofence rules are evaluated in addition to system rules. Omit to check system rules only. |
+
+### Response
+
+```json
+{
+    "status": true,
+    "data": {
+        "allowed": true,
+        "reason": "allowed",
+        "detail": "Request is permitted.",
+        "ip": "1.2.3.4",
+        "country": "United States",
+        "country_code": "US",
+        "region": "New York",
+        "region_code": "US-NY",
+        "abuse": {
+            "tor": false,
+            "vpn": false,
+            "datacenter": false,
+            "proxy": false
+        },
+        "checked_at": "2026-05-15T10:00:00Z",
+        "rule_level": null
+    }
+}
+```
+
+When `allowed` is `false`, `rule_level` indicates which level caused the block (`"system"` or `"group"`), and `reason` and `detail` describe the specific rule that matched.
+
+| Field | Description |
+|---|---|
+| `allowed` | `true` if all geofence rules passed |
+| `reason` | `"allowed"`, `"system_rule"`, `"group_rule"`, or `"lookup_failed"` |
+| `detail` | Human-readable explanation of the decision |
+| `rule_level` | `"system"` or `"group"` when blocked; `null` when allowed |
+| `abuse` | Connection-type flags from the IP intelligence lookup |
+
+---
+
 ## `GET system/geoip` — List GeoIP Records
 
 ```

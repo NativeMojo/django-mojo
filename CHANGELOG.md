@@ -8,6 +8,18 @@
 
 **account** — `POST /api/auth/register` accepts a new optional `group_uuid` body param. Set `REQUIRE_GROUP_ON_REGISTRATION = True` to make it mandatory. Extra body keys are forwarded to `USER_REGISTERED_HANDLER` via `extra` if listed in `REGISTRATION_EXTRA_FIELDS`; unrecognised keys are silently dropped. `MojoAuth.register()` in mojo-auth.js now forwards the full payload. The register template gains `{% block extra_fields %}` and `{% block pre_submit_script %}` extension points.
 
+## Unreleased
+
+**account** — geofencing policy engine. System-wide and per-group rules gate access at the HTTP layer before any view logic runs.
+
+- Rule DSL supports `country` (ISO 3166-1), `region` (ISO 3166-2), and `abuse` (`tor`, `vpn`, `datacenter`, `proxy`) with `in` / `not_in` / `eq` operators. Empty `{}` = allow all.
+- Two rule levels, both must pass: `GEOFENCE_SYSTEM_RULES` (settings, hard floor) and `Group.metadata['geofence']` (per-tenant).
+- `@md.requires_geofence()` applied to all built-in auth endpoints. Blocked requests return 403 with `{error, code, reason, detail}` only — country/region/abuse omitted to prevent information leakage.
+- `bypass_geofence` permission short-circuits all checks without a cache write (revocation is immediate).
+- `GET /api/geo/check?group_uuid=<uuid>` — public pre-flight endpoint returning the full `GeoDecision` shape for UI "not available in your region" gates.
+- New `GEOFENCE_ENABLED`, `GEOFENCE_SYSTEM_RULES`, `GEOFENCE_CACHE_TTL`, `GEOFENCE_FAIL_CLOSED`, `GEOFENCE_ALLOW_PRIVATE_IPS`, and `GEOFENCE_TEST_OVERRIDE` settings (all default to permissive/off).
+- `GeoLocatedIP` gains a `region_code` field (ISO 3166-2); backfilled lazily via `refresh()`. `geolocate_ip()` output includes `region_code`.
+
 ## v1.2.11 - May 12, 2026
 
 add resolve to ticket handler

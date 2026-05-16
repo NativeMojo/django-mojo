@@ -106,7 +106,12 @@ class RestClient:
         if path[0] == "/":
             path = path[1:]
         url = f"{self.host}{path}"
-        headers = self.get_headers()
+        headers = dict(self.get_headers())
+        # Allow per-request header overrides via headers= kwarg, merged on top
+        # of the client's default headers (Authorization, Content-Type, etc.).
+        extra_headers = kwargs.pop("headers", None)
+        if extra_headers:
+            headers.update(extra_headers)
         response = self.session.request(method, url, headers=headers, **kwargs)
         if self.logger:
             self.logger.info("REQUEST", f"{method}:{url}", headers)

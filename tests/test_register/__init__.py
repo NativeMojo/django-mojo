@@ -1,6 +1,6 @@
 TESTIT = {
     "requires_apps": ["mojo.apps.account"],
-    # Serial because tests use th.server_settings() to wire handler dotted-paths
-    # per scenario; reloads must not race with parallel modules.
-    "serial": True,
+    # Parallel-safe: tests pass per-request test-mode headers
+    # (X-Mojo-Test-*-Handler, X-Mojo-Test-Allow-User-Registration, etc.)
+    # instead of using th.server_settings(). No server reloads.
 }

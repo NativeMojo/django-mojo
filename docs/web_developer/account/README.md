@@ -35,6 +35,6 @@
 - [API Keys](api_keys.md) — Long-lived tokens for programmatic access
 - [Custom Auth Models](custom_auth_models.md) — JWT, OAuth, and passkeys for non-User models (e.g. game.Player)
 - [Notifications](notifications.md) — Inbox, mark read, WebSocket delivery
-- [GeoIP](geoip.md) — IP geolocation and time lookup endpoints
+- [GeoIP & Geofencing](geoip.md) — IP geolocation, time lookup, and geofence pre-flight check (`GET /api/geo/check`)
 - [Login Events](login_events.md) — Login history with geolocation, aggregation for maps, anomaly detection
 - [Public Messages](public_messages.md) — Bouncer-gated contact / support form and admin endpoint

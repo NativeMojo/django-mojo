@@ -271,7 +271,9 @@ def on_register(request):
     When REQUIRE_VERIFIED_EMAIL is False the user is logged in
     immediately and a verification email is still sent as a nudge.
     """
-    if not settings.get("ALLOW_USER_REGISTRATION", False, kind="bool"):
+    allow_registration = account_extensions.bool_setting_with_header(
+        request, "X-Mojo-Test-Allow-User-Registration", "ALLOW_USER_REGISTRATION", False)
+    if not allow_registration:
         raise merrors.PermissionDeniedException("Registration is not enabled", 403, 403)
 
     # ---- Pre-validation (no DB writes) -------------------------------------
@@ -288,7 +290,9 @@ def on_register(request):
     # `group` for integer-id lookup into request.group.
     group = None
     group_uuid = (request.DATA.get("group_uuid") or "").strip()
-    require_group = settings.get("REQUIRE_GROUP_ON_REGISTRATION", False, kind="bool")
+    require_group = account_extensions.bool_setting_with_header(
+        request, "X-Mojo-Test-Require-Group-On-Registration",
+        "REQUIRE_GROUP_ON_REGISTRATION", False)
     if group_uuid:
         from mojo.apps.account.models.group import Group
         group = Group.objects.filter(uuid=group_uuid).first()
@@ -300,7 +304,9 @@ def on_register(request):
         raise merrors.ValueException("group_uuid is required")
 
     # Allowlisted extras — silent-drop unknown keys
-    extras_allow = settings.get("REGISTRATION_EXTRA_FIELDS", []) or []
+    extras_allow = account_extensions.list_setting_with_header(
+        request, "X-Mojo-Test-Registration-Extra-Fields",
+        "REGISTRATION_EXTRA_FIELDS", [])
     extra = {key: request.DATA.get(key) for key in extras_allow if key in request.DATA}
 
     # PRE_REGISTER_VALIDATOR — may raise ValueException → 400.

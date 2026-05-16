@@ -26,7 +26,21 @@ mojo.helpers.modules.load_function() and cached.
 
 All handlers are invoked with keyword arguments only so future signature
 additions don't break consumer handlers.
+
+TEST MODE — when settings.MOJO_TEST_MODE is True, handler dotted paths can be
+overridden per-request via headers, so test suites can run in parallel without
+reloading the server:
+    X-Mojo-Test-Pre-Register-Validator   → overrides PRE_REGISTER_VALIDATOR
+    X-Mojo-Test-User-Registered-Handler  → overrides USER_REGISTERED_HANDLER
+    X-Mojo-Test-User-Login-Handler       → overrides USER_LOGIN_HANDLER
+    X-Mojo-Test-Registration-Extra-Fields → overrides REGISTRATION_EXTRA_FIELDS
+                                            (JSON list of allowlisted keys)
+    X-Mojo-Test-Require-Group-On-Registration → "0"/"1"
+    X-Mojo-Test-Allow-User-Registration  → "0"/"1"
+MOJO_TEST_MODE defaults to False, so production never honors these headers.
 """
+import json
+
 from mojo.helpers import modules, logit
 from mojo.helpers.settings import settings
 
@@ -38,6 +52,33 @@ _NO_HANDLER = object()
 _CACHE = {}
 
 
+# ---------------------------------------------------------------------------
+# Test-mode helpers
+# ---------------------------------------------------------------------------
+
+def _test_mode():
+    return settings.get("MOJO_TEST_MODE", False, kind="bool")
+
+
+def _header(request, name):
+    if request is None:
+        return None
+    key = "HTTP_" + name.upper().replace("-", "_")
+    return request.META.get(key)
+
+
+def _resolve_with_override(setting_name, request, header_name):
+    """Like _resolve, but consults a test-mode header first when allowed."""
+    if request is not None and _test_mode():
+        h = _header(request, header_name)
+        if h is not None:
+            # Empty header value means "no handler"
+            if not h:
+                return _NO_HANDLER
+            return _resolve_path(h)
+    return _resolve(setting_name)
+
+
 def _resolve(setting_name):
     """Return the configured callable, _NO_HANDLER, or None on broken config.
 
@@ -45,20 +86,45 @@ def _resolve(setting_name):
     distinct path value via the cache.
     """
     path = settings.get(setting_name, "")
-    if not path:
-        return _NO_HANDLER
+    return _resolve_path(path) if path else _NO_HANDLER
+
+
+def _resolve_path(path):
     cached = _CACHE.get(path, Ellipsis)
     if cached is not Ellipsis:
         return cached
     try:
         fn = modules.load_function(path)
     except Exception as exc:
-        logit.error("account.extensions",
-                    f"failed to load {setting_name}={path!r}: {exc}")
+        logit.error("account.extensions", f"failed to load handler {path!r}: {exc}")
         _CACHE[path] = None
         return None
     _CACHE[path] = fn
     return fn
+
+
+def list_setting_with_header(request, header_name, setting_name, default):
+    """Public helper for callers (e.g. on_register's extras allowlist) to read
+    a list setting with a JSON-list header override under test mode."""
+    if request is not None and _test_mode():
+        h = _header(request, header_name)
+        if h is not None:
+            try:
+                value = json.loads(h)
+                if isinstance(value, list):
+                    return value
+            except (json.JSONDecodeError, TypeError):
+                pass
+    return settings.get(setting_name, default) or []
+
+
+def bool_setting_with_header(request, header_name, setting_name, default):
+    """Public helper for boolean settings with header override under test mode."""
+    if request is not None and _test_mode():
+        h = _header(request, header_name)
+        if h is not None:
+            return h not in ("0", "false", "False", "")
+    return settings.get(setting_name, default, kind="bool")
 
 
 def run_pre_register_validator(*, email, group, request, extra):
@@ -68,7 +134,8 @@ def run_pre_register_validator(*, email, group, request, extra):
     Other exceptions propagate as 500. Plaintext password is intentionally
     not passed — strength check stays framework-side.
     """
-    fn = _resolve("PRE_REGISTER_VALIDATOR")
+    fn = _resolve_with_override(
+        "PRE_REGISTER_VALIDATOR", request, "X-Mojo-Test-Pre-Register-Validator")
     if fn is _NO_HANDLER or fn is None:
         return
     fn(email=email, group=group, request=request, extra=extra)
@@ -80,7 +147,8 @@ def fire_user_registered(*, user, request, group, source, extra):
     Runtime exceptions PROPAGATE — the caller's transaction.atomic must roll
     back the user row. Handlers should be fast-path or enqueue-and-return.
     """
-    fn = _resolve("USER_REGISTERED_HANDLER")
+    fn = _resolve_with_override(
+        "USER_REGISTERED_HANDLER", request, "X-Mojo-Test-User-Registered-Handler")
     if fn is _NO_HANDLER or fn is None:
         return
     fn(user=user, request=request, group=group, source=source, extra=extra)
@@ -92,7 +160,8 @@ def fire_user_login(*, user, request, source, is_new_user):
     Runtime exceptions are caught + logged + swallowed. Authentication must
     never break because of a login analytics / SIEM handler hiccup.
     """
-    fn = _resolve("USER_LOGIN_HANDLER")
+    fn = _resolve_with_override(
+        "USER_LOGIN_HANDLER", request, "X-Mojo-Test-User-Login-Handler")
     if fn is _NO_HANDLER or fn is None:
         return
     try:

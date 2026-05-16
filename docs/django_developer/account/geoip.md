@@ -14,7 +14,7 @@ Caches geolocation results per IP to reduce redundant API calls. Tracks security
 |---|---|
 | `ip_address` | Unique, indexed IP address |
 | `subnet` | First three octets, used for subnet-based fallback lookups |
-| `country_code`, `country_name`, `region`, `city`, `postal_code` | Location fields |
+| `country_code`, `country_name`, `region`, `region_code`, `city`, `postal_code` | Location fields. `region_code` is the ISO 3166-2 subdivision code (e.g. `US-FL`); populated from MaxMind subdivisions, ip-api, ipstack, or ipinfo (paid tier) and backfilled lazily via `refresh()`. |
 | `latitude`, `longitude` | Coordinates |
 | `timezone` | IANA timezone string (e.g. `America/New_York`) |
 | `is_tor`, `is_vpn`, `is_proxy`, `is_cloud`, `is_datacenter`, `is_mobile` | Connection type flags |

@@ -1,8 +1,8 @@
-"""Capture handlers for register-extensibility tests.
+"""Capture handlers for register-extensibility tests — parallel-safe.
 
-Both processes (test runner + server) can import this module via the same
-dotted path. Handlers persist invocation data to a JSON file in the system
-temp dir so the test process can read what the server-side handler captured.
+Each test passes a unique `X-Mojo-Test-Capture-Id` header. The capture handler
+reads that id and writes invocation data to a per-test file. Tests read their
+own file. No global state, fully parallel-safe.
 
 Module name starts with underscore so the testit runner skips it during
 test discovery (see testit/runner.py file-discovery filter).
@@ -10,58 +10,76 @@ test discovery (see testit/runner.py file-discovery filter).
 import json
 import os
 import tempfile
+import uuid as _uuid
 
 from mojo import errors as merrors
 
 
-CAPTURE_FILE = os.path.join(tempfile.gettempdir(), "django_mojo_register_capture.json")
+_CAPTURE_DIR = os.path.join(tempfile.gettempdir(), "django_mojo_register_captures")
+os.makedirs(_CAPTURE_DIR, exist_ok=True)
 
 
-def clear_capture():
-    """Test setup helper — wipe the capture file before each scenario."""
-    try:
-        os.remove(CAPTURE_FILE)
-    except FileNotFoundError:
-        pass
+def new_capture_id():
+    """Return a fresh capture id; pass via X-Mojo-Test-Capture-Id header."""
+    return _uuid.uuid4().hex
 
 
-def read_capture():
-    """Test assertion helper — return the dict of captured calls."""
-    if not os.path.exists(CAPTURE_FILE):
+def _file_for(capture_id):
+    return os.path.join(_CAPTURE_DIR, f"capture_{capture_id}.json")
+
+
+def read_capture(capture_id):
+    """Return the dict of captured calls for this id (empty if none)."""
+    path = _file_for(capture_id)
+    if not os.path.exists(path):
         return {}
     try:
-        with open(CAPTURE_FILE) as fh:
+        with open(path) as fh:
             return json.load(fh)
     except (json.JSONDecodeError, OSError):
         return {}
 
 
-def _append(kind, data):
-    state = read_capture()
+def clear_capture(capture_id):
+    """Remove the capture file for this id."""
+    try:
+        os.remove(_file_for(capture_id))
+    except FileNotFoundError:
+        pass
+
+
+def _append(request, kind, data):
+    """Server-side: append data under the test's capture id (from header)."""
+    capture_id = None
+    if request is not None:
+        capture_id = request.META.get("HTTP_X_MOJO_TEST_CAPTURE_ID")
+    if not capture_id:
+        return  # No id — silently skip (not under test, or test didn't set header)
+    path = _file_for(capture_id)
+    state = {}
+    if os.path.exists(path):
+        try:
+            with open(path) as fh:
+                state = json.load(fh)
+        except (json.JSONDecodeError, OSError):
+            state = {}
     state.setdefault(kind, []).append(data)
-    with open(CAPTURE_FILE, "w") as fh:
+    with open(path, "w") as fh:
         json.dump(state, fh)
 
 
 # ---------------------------------------------------------------------------
-# Capture handlers — write call data to disk for the test process to read
+# Capture handlers
 # ---------------------------------------------------------------------------
 
 def capture_validator(*, email, group, request, extra, **rest):
-    """PRE_REGISTER_VALIDATOR capture. Records the kwargs we received.
-
-    Asserts (a) `password` is NOT in kwargs, and (b) `password` is NOT
-    reachable via request.DATA either (framework pops it for the call
-    duration as defense-in-depth).
-    """
     received = sorted(["email", "group", "request", "extra"] + list(rest.keys()))
-    # Probe whether a hostile handler could read the password via the request
     password_via_request = None
     try:
         password_via_request = request.DATA.get("password")
     except Exception:
         password_via_request = "__request_data_inaccessible__"
-    _append("validator", {
+    _append(request, "validator", {
         "email": email,
         "group_uuid": str(group.uuid) if group is not None else None,
         "extra": extra or {},
@@ -71,8 +89,7 @@ def capture_validator(*, email, group, request, extra, **rest):
 
 
 def capture_register(*, user, request, group, source, extra, **rest):
-    """USER_REGISTERED_HANDLER capture."""
-    _append("register", {
+    _append(request, "register", {
         "user_id": user.pk,
         "user_email": str(user.email),
         "group_id": group.pk if group is not None else None,
@@ -84,8 +101,7 @@ def capture_register(*, user, request, group, source, extra, **rest):
 
 
 def capture_login(*, user, request, source, is_new_user, **rest):
-    """USER_LOGIN_HANDLER capture."""
-    _append("login", {
+    _append(request, "login", {
         "user_id": user.pk,
         "user_email": str(user.email),
         "source": source,
@@ -99,15 +115,12 @@ def capture_login(*, user, request, source, is_new_user, **rest):
 # ---------------------------------------------------------------------------
 
 def reject_validator(*, email, group, request, extra, **rest):
-    """Always rejects via ValueException (turns into 400)."""
     raise merrors.ValueException("rejected by test validator")
 
 
 def raising_register(*, user, request, group, source, extra, **rest):
-    """Register handler that always raises — must roll back the user row."""
     raise RuntimeError("test register handler raised")
 
 
 def raising_login(*, user, request, source, is_new_user, **rest):
-    """Login handler that always raises — must be swallowed; login must succeed."""
     raise RuntimeError("test login handler raised")

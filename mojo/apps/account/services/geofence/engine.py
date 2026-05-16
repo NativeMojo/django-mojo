@@ -13,7 +13,19 @@ Decision flow:
  10. Else                      → allowed=True, reason="passed"
 
 Steps 6-10 all cache the decision under (ip, group_id) for GEOFENCE_CACHE_TTL.
+
+TEST MODE — when settings.MOJO_TEST_MODE is True, the engine honors per-request
+headers so test suites can run in parallel without server reloads:
+    X-Mojo-Test-Geo               : JSON dict, replaces geoip lookup result
+    X-Mojo-Test-Geofence-System   : JSON dict, replaces GEOFENCE_SYSTEM_RULES
+    X-Mojo-Test-Geofence-Enabled  : "0" or "1", overrides GEOFENCE_ENABLED
+    X-Mojo-Test-Geofence-Fail-Closed : "0" or "1", overrides GEOFENCE_FAIL_CLOSED
+    X-Mojo-Test-Geofence-Allow-Private : "0" or "1", overrides GEOFENCE_ALLOW_PRIVATE_IPS
+    X-Mojo-Test-Geofence-Cache-Ttl : int seconds; <=0 disables cache for this request
+MOJO_TEST_MODE defaults to False, so production never honors these headers.
 """
+import json
+
 from objict import objict
 
 from mojo.helpers import dates, logit
@@ -23,7 +35,56 @@ from . import cache as gf_cache
 from .dsl import evaluate_rule, validate_rule
 
 
-def _system_rules():
+# ---------------------------------------------------------------------------
+# Test-mode header overrides — read once per request, no production cost when
+# MOJO_TEST_MODE is False (default).
+# ---------------------------------------------------------------------------
+
+def _test_mode():
+    return settings.get("MOJO_TEST_MODE", False, kind="bool")
+
+
+def _header(request, name):
+    if request is None:
+        return None
+    key = "HTTP_" + name.upper().replace("-", "_")
+    return request.META.get(key)
+
+
+def _json_header(request, name):
+    raw = _header(request, name)
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def _bool_setting_with_header(request, header_name, setting_name, default):
+    if request is not None and _test_mode():
+        h = _header(request, header_name)
+        if h is not None:
+            return h not in ("0", "false", "False", "")
+    return settings.get(setting_name, default, kind="bool")
+
+
+def _int_setting_with_header(request, header_name, setting_name, default):
+    if request is not None and _test_mode():
+        h = _header(request, header_name)
+        if h is not None:
+            try:
+                return int(h)
+            except (TypeError, ValueError):
+                pass
+    return settings.get(setting_name, default, kind="int")
+
+
+def _system_rules(request=None):
+    if request is not None and _test_mode():
+        override = _json_header(request, "X-Mojo-Test-Geofence-System")
+        if override is not None:
+            return override or {}
     return settings.get("GEOFENCE_SYSTEM_RULES", {}) or {}
 
 
@@ -38,12 +99,17 @@ def _both_empty(system, group_rules):
     return not system and not group_rules
 
 
-def _resolve_geo(ip):
+def _resolve_geo(ip, request=None):
     """Return a geo dict (provider-shaped) for `ip`, or None on lookup failure.
 
-    GEOFENCE_TEST_OVERRIDE — if set, returns the override dict verbatim. Lets
-    tests + local dev exercise blocked-region paths without real IPs.
+    Test-mode header X-Mojo-Test-Geo (JSON dict) wins over everything when
+    MOJO_TEST_MODE=True. Otherwise GEOFENCE_TEST_OVERRIDE setting wins over
+    real lookups.
     """
+    if request is not None and _test_mode():
+        header_override = _json_header(request, "X-Mojo-Test-Geo")
+        if header_override is not None:
+            return header_override
     override = settings.get("GEOFENCE_TEST_OVERRIDE", None)
     if override:
         return dict(override)
@@ -125,7 +191,9 @@ class GeoFenceEngine:
             user = getattr(request, "user", None)
 
         # 1. Master kill
-        if not settings.get("GEOFENCE_ENABLED", True, kind="bool"):
+        enabled = _bool_setting_with_header(
+            request, "X-Mojo-Test-Geofence-Enabled", "GEOFENCE_ENABLED", True)
+        if not enabled:
             return _build_decision(True, "disabled", ip=ip)
 
         # 2. Bypass permission
@@ -137,7 +205,7 @@ class GeoFenceEngine:
                 # has_permission errors should not crash the request
                 pass
 
-        system = _system_rules()
+        system = _system_rules(request)
         group_r = _group_rules(group)
         group_id = getattr(group, "pk", None)
 
@@ -145,26 +213,33 @@ class GeoFenceEngine:
         if _both_empty(system, group_r):
             return _build_decision(True, "no_rules", ip=ip)
 
-        # 4. Cache lookup
-        cached = gf_cache.get(ip, group_id)
-        if cached:
-            return objict(cached)
+        ttl = _int_setting_with_header(
+            request, "X-Mojo-Test-Geofence-Cache-Ttl", "GEOFENCE_CACHE_TTL", 300)
+        cache_enabled = ttl > 0
+
+        # 4. Cache lookup (skipped when caller disabled it)
+        if cache_enabled:
+            cached = gf_cache.get(ip, group_id)
+            if cached:
+                return objict(cached)
 
         # 5. Resolve geo
-        geo = _resolve_geo(ip)
+        geo = _resolve_geo(ip, request)
 
         # 6. Lookup failure
         if geo is None:
-            fail_closed = settings.get("GEOFENCE_FAIL_CLOSED", False, kind="bool")
+            fail_closed = _bool_setting_with_header(
+                request, "X-Mojo-Test-Geofence-Fail-Closed", "GEOFENCE_FAIL_CLOSED", False)
             dec = _build_decision(not fail_closed, "lookup_failed", ip=ip)
-            _maybe_cache(ip, group_id, dec)
+            _maybe_cache(ip, group_id, dec, ttl)
             return dec
 
         # 7. Private/reserved IP — no country code
         if not geo.get("country_code"):
-            allow_priv = settings.get("GEOFENCE_ALLOW_PRIVATE_IPS", True, kind="bool")
+            allow_priv = _bool_setting_with_header(
+                request, "X-Mojo-Test-Geofence-Allow-Private", "GEOFENCE_ALLOW_PRIVATE_IPS", True)
             dec = _build_decision(allow_priv, "private_ip", ip=ip, geo=geo)
-            _maybe_cache(ip, group_id, dec)
+            _maybe_cache(ip, group_id, dec, ttl)
             return dec
 
         # 8 + 9. Evaluate rules. System first (hard floor).
@@ -177,22 +252,21 @@ class GeoFenceEngine:
                 logit.error("geofence", f"{level}-level rule invalid: {exc}")
                 dec = _build_decision(False, "rule_invalid", ip=ip, geo=geo,
                                       rule_level=level, detail=str(exc))
-                _maybe_cache(ip, group_id, dec)
+                _maybe_cache(ip, group_id, dec, ttl)
                 return dec
             ok, reason = evaluate_rule(rule, geo)
             if not ok:
                 dec = _build_decision(False, reason, ip=ip, geo=geo, rule_level=level)
-                _maybe_cache(ip, group_id, dec)
+                _maybe_cache(ip, group_id, dec, ttl)
                 return dec
 
         # 10. Passed
         dec = _build_decision(True, "passed", ip=ip, geo=geo)
-        _maybe_cache(ip, group_id, dec)
+        _maybe_cache(ip, group_id, dec, ttl)
         return dec
 
 
-def _maybe_cache(ip, group_id, decision):
-    ttl = settings.get("GEOFENCE_CACHE_TTL", 300, kind="int")
+def _maybe_cache(ip, group_id, decision, ttl):
     if ttl <= 0:
         return
     # Serialize objict → plain dict for JSON
