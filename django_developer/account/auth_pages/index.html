@@ -3881,6 +3881,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#multi-tenant-forwarding-group_uuid-from-the-hosted-forms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Multi-Tenant: Forwarding group_uuid From the Hosted Forms
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -4413,6 +4424,19 @@ not hidden by JS).</p>
 </tbody>
 </table>
 <p>See <a href="../bouncer/">bouncer.md</a> for the full bouncer settings reference.</p>
+<hr />
+<h2 id="multi-tenant-forwarding-group_uuid-from-the-hosted-forms">Multi-Tenant: Forwarding <code>group_uuid</code> From the Hosted Forms<a class="headerlink" href="#multi-tenant-forwarding-group_uuid-from-the-hosted-forms" title="Permanent link">&para;</a></h2>
+<p>The hosted register and login pages resolve the operator group in <code>on_register_page</code> / <code>on_login_page</code> from either:</p>
+<ol>
+<li>The request hostname matching a <code>Group.auth_domain</code>, or</li>
+<li>The <code>?group=&lt;uuid&gt;</code> query parameter.</li>
+</ol>
+<p>The resolved group's <code>uuid</code> is plumbed into <code>_auth_context()</code> and emitted by <code>auth_base.html</code> as <code>window._matConfig.groupUuid</code>. The submit handlers in <code>register.html</code> and <code>login.html</code> then add it to the POST payload automatically:</p>
+<ul>
+<li><code>register.html</code> adds <code>payload.group_uuid = cfg.groupUuid</code> before calling <code>MojoAuth.register(payload)</code>. This means deployments with <code>REQUIRE_GROUP_ON_REGISTRATION = True</code> are satisfied from the hosted page — no custom front-end is required.</li>
+<li><code>login.html</code> calls <code>MojoAuth.login(u, p, { group_uuid: cfg.groupUuid })</code> so <code>request.group</code> middleware and <code>USER_LOGIN_HANDLER</code> receive the operator on password logins.</li>
+</ul>
+<p>When <code>_matConfig.groupUuid</code> is empty (single-tenant deployment), neither form adds the key — payloads are identical to pre-multi-tenant behavior. Hand-crafted invalid <code>group_uuid</code> values reaching the POST follow current middleware behavior: on register the lookup is strict and returns 400; on login <code>request.group</code> falls back to other resolvers.</p>
 
 
 
