@@ -23,7 +23,7 @@ From JavaScript, pass `group_uuid` via the third `options` arg on the SDK:
 MojoAuth.login(username, password, { group_uuid: '<uuid>' });
 ```
 
-Two-arg `MojoAuth.login(username, password)` callers omit the key entirely and behave identically to single-tenant deployments. The bouncer-hosted login page (`/auth`) forwards `group_uuid` automatically when the page resolves a group via custom auth domain or `?group=` — see [Auth Pages § Per-Group Branding](auth_pages.md#per-group-branding).
+Two-arg `MojoAuth.login(username, password)` callers omit the key entirely and behave identically to single-tenant deployments. The bouncer-hosted login page (`/auth`) forwards `group_uuid` automatically when the page resolves a group via custom auth domain or `?group_uuid=` — see [Auth Pages § Per-Group Branding](auth_pages.md#per-group-branding).
 
 **Response:**
 

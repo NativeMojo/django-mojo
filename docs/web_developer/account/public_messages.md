@@ -47,7 +47,7 @@ Both are bouncer-gated identically to `/auth` and `/register`. Response is HTML
 The path is configurable server-side via `BOUNCER_CONTACT_PATH` (default
 `contact`). If your backend has customized it, use that value here.
 
-White-label: pass `?group=<group_uuid>` to scope the page to a specific group.
+White-label: pass `?group_uuid=<uuid>` to scope the page to a specific group.
 The resulting message will be attached to that group and only admins with
 notify_public_messages access in that group are emailed.
 
