@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## v1.2.12 - May 16, 2026
+
+- new federated ip info support, better geofencing support
+
+
 **account** — three extension hooks for the register and login flows:
 
 - `PRE_REGISTER_VALIDATOR` — dotted-path callable invoked before user creation; raise `ValueException` to reject with 400. Signature: `(*, email, group, request, extra)`. Plaintext password is intentionally not passed.
