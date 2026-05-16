@@ -16,3 +16,4 @@ from .setting import *
 from .bouncer import *
 from .bouncer_admin import *
 from .login_event import *
+from .geofence import *

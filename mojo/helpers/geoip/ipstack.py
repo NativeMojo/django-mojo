@@ -37,11 +37,15 @@ def fetch(ip_address, api_key=None):
             return None
 
         country_code = data.get('country_code')
+        # ipstack's "region_code" is the ISO 3166-2 subdivision code (e.g. "FL").
+        sub_code = data.get('region_code')
+        region_code = f"{country_code}-{sub_code}" if (country_code and sub_code) else None
         return {
             'provider': 'ipstack',
             'country_code': country_code,
             'country_name': data.get('country_name') or get_country_name(country_code),
             'region': data.get('region_name'),
+            'region_code': region_code,
             'city': data.get('city'),
             'postal_code': data.get('zip'),
             'latitude': data.get('latitude'),

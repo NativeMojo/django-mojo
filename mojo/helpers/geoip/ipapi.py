@@ -41,11 +41,17 @@ def fetch(ip_address, api_key=None):
                 asn = parts[0]
                 asn_org = parts[1]
 
+        # ip-api's "region" field is the ISO 3166-2 subdivision code (e.g. "FL");
+        # "regionName" is the full name. Combine with country to form "US-FL".
+        sub_code = data.get('region')
+        region_code = f"{country_code}-{sub_code}" if (country_code and sub_code) else None
+
         return {
             'provider': 'ip-api',
             'country_code': country_code,
             'country_name': data.get('country') or get_country_name(country_code),
             'region': data.get('regionName'),
+            'region_code': region_code,
             'city': data.get('city'),
             'postal_code': data.get('zip'),
             'latitude': data.get('lat'),

@@ -46,11 +46,19 @@ def fetch(ip_address, api_key=None):
                 asn = parts[0]
                 asn_org = parts[1]
 
+        # ipinfo's "region" is the full subdivision name (e.g. "California"). The
+        # ISO 3166-2 code isn't directly provided by the basic endpoint, so we
+        # leave region_code as None unless ipinfo's response carries an explicit
+        # "region_code" field (paid tier). Best-effort.
+        sub_code = data.get('region_code')
+        region_code = f"{country_code}-{sub_code}" if (country_code and sub_code) else None
+
         return {
             'provider': 'ipinfo',
             'country_code': country_code,
             'country_name': get_country_name(country_code),
             'region': data.get('region'),
+            'region_code': region_code,
             'city': data.get('city'),
             'postal_code': data.get('postal'),
             'latitude': latitude,

@@ -53,11 +53,16 @@ def fetch(ip_address, api_key=None):
             if response.traits.connection_type:
                 connection_type = response.traits.connection_type
 
+            # ISO 3166-2 region code (e.g. "FL" — combined as "US-FL" below)
+            sub_iso = response.subdivisions.most_specific.iso_code if response.subdivisions else None
+            region_code = f"{country_code}-{sub_iso}" if (country_code and sub_iso) else None
+
             return {
                 'provider': 'maxmind',
                 'country_code': country_code,
                 'country_name': response.country.name or get_country_name(country_code),
                 'region': response.subdivisions.most_specific.name if response.subdivisions else None,
+                'region_code': region_code,
                 'city': response.city.name,
                 'postal_code': response.postal.code,
                 'latitude': response.location.latitude,

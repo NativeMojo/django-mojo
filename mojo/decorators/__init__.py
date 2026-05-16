@@ -4,3 +4,4 @@ from .auth import *
 from .limits import *
 from .bouncer import *
 from .github import *
+from .geofence import requires_geofence

@@ -181,6 +181,7 @@ def _find_or_create_user(provider_name, profile, state_data=None, request=None):
 
 @md.GET("auth/oauth/<str:provider>/begin")
 @md.public_endpoint()
+@md.requires_geofence(scope="auth")
 def on_oauth_begin(request, provider):
     """Return the provider's authorization URL.
 
@@ -289,6 +290,7 @@ def on_oauth_callback(request, provider):
 @md.POST("oauth/<str:provider>/complete")
 @md.requires_params("code", "state")
 @md.public_endpoint()
+@md.requires_geofence(scope="auth")
 def on_oauth_complete(request, provider):
     """Exchange authorization code for tokens, resolve user, issue JWT."""
     try:

@@ -99,6 +99,7 @@ def on_sms_send(request):
 @md.requires_params("code")
 @md.strict_rate_limit(10, 60)
 @md.public_endpoint()
+@md.requires_geofence(scope="auth")
 def on_sms_verify(request):
     """
     Verify an SMS OTP code.
@@ -148,6 +149,7 @@ def on_sms_verify(request):
 @md.POST("auth/sms/login")
 @md.strict_rate_limit(10, 60)
 @md.public_endpoint()
+@md.requires_geofence(scope="auth")
 def on_sms_login(request):
     """Send an SMS OTP to start a passwordless login."""
     user = User.lookup_from_request(request, phone_as_username=True)

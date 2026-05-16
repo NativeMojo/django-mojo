@@ -31,6 +31,10 @@ class GeoLocatedIP(models.Model, MojoModel):
     country_code = models.CharField(max_length=3, db_index=True, null=True, blank=True)
     country_name = models.CharField(max_length=100, null=True, blank=True)
     region = models.CharField(max_length=100, db_index=True, null=True, blank=True)
+    # ISO 3166-2 subdivision code, e.g. "US-FL". Populated lazily on refresh()
+    # from providers that expose it (MaxMind, ip-api, ipstack). For geofence DSL
+    # region matching.
+    region_code = models.CharField(max_length=10, db_index=True, null=True, blank=True)
     city = models.CharField(max_length=100, null=True, blank=True)
     postal_code = models.CharField(max_length=20, null=True, blank=True)
     latitude = models.FloatField(null=True, blank=True)

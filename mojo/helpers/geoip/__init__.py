@@ -78,7 +78,9 @@ def geolocate_ip(ip_address, check_threats=False):
             return {
                 'provider': 'internal',
                 'country_name': 'Private Network',
+                'country_code': None,
                 'region': 'Private' if ip_obj.is_private else 'Reserved',
+                'region_code': None,
                 'is_tor': False,
                 'is_vpn': False,
                 'is_proxy': False,

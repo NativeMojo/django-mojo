@@ -89,6 +89,20 @@ def dispatcher(request, *args, **kwargs):
                     request_path=getattr(request, "path", None),
                 )
             return JsonResponse({"error": "Invalid group ID", "code": 400}, status=400)
+    # Fallback: accept ?group_uuid=<uuid> for endpoints that pass the active
+    # group by UUID rather than integer-id (e.g. OAuth begin, geofence pre-flight).
+    # Only used when `group` was not already resolved above.
+    elif "group_uuid" in request.DATA and request.DATA.group_uuid and not getattr(request, "group", None):
+        from mojo.apps.account.models.group import Group
+        group_uuid = str(request.DATA.group_uuid).strip()
+        if group_uuid:
+            grp = Group.objects.filter(uuid=group_uuid).first()
+            if grp is not None:
+                request.group = grp
+                grp.touch()
+                api_key = getattr(request, "api_key", None)
+                if api_key and not api_key.is_group_allowed(grp):
+                    return JsonResponse({"error": "Group not accessible with this API key", "code": 403}, status=403)
     method_key = f"{key}__{request.method}"
     if method_key not in URLPATTERN_METHODS:
         method_key = f"{key}__ALL"

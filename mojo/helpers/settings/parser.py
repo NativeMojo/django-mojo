@@ -49,6 +49,8 @@ class DjangoConfigLoader:
         """
         if self._is_list_value(value):
             return self._parse_list_value(value)
+        elif self._is_dict_value(value):
+            return self._parse_dict_value(value)
         elif self._is_quoted_string(value):
             return self._parse_quoted_string(value)
         elif self._is_f_string(value):
@@ -57,6 +59,20 @@ class DjangoConfigLoader:
             return self._parse_boolean(value)
         else:
             return self._parse_numeric_or_string(value)
+
+    def _is_dict_value(self, value):
+        """Check if value is a dict literal."""
+        return value.startswith('{') and value.endswith('}')
+
+    def _parse_dict_value(self, value):
+        """Parse a Python dict literal using ast.literal_eval (safe — no code exec)."""
+        import ast
+        try:
+            return ast.literal_eval(value)
+        except (ValueError, SyntaxError):
+            # Malformed dict literal — fall back to raw string so the bad value
+            # is visible in debug rather than silently swallowed.
+            return value
 
     def _is_list_value(self, value):
         """Check if value is a list format."""

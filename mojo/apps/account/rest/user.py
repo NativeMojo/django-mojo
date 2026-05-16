@@ -140,6 +140,7 @@ def on_refresh_token(request):
 @md.endpoint_metrics("login_attempts", by=["ip", "muid"])
 @md.requires_params("password")
 @md.requires_bouncer_token('login')
+@md.requires_geofence(scope="auth")
 def on_user_login(request):
     from mojo.decorators.limits import check_account_attempt, clear_rate_limits
 
@@ -194,6 +195,7 @@ def on_user_login(request):
 @md.POST("auth/handoff")
 @md.requires_auth()
 @md.rate_limit("auth_handoff", ip_limit=30)
+@md.requires_geofence(scope="auth")
 def on_auth_handoff(request):
     """
     Issue a short-lived, single-use handoff code for the authenticated user.
@@ -214,6 +216,7 @@ def on_auth_handoff(request):
 @md.POST("auth/exchange")
 @md.public_endpoint()
 @md.strict_rate_limit("auth_exchange", ip_limit=20, ip_window=60)
+@md.requires_geofence(scope="auth")
 @md.requires_params("code")
 def on_auth_exchange(request):
     """
@@ -236,6 +239,7 @@ def on_auth_exchange(request):
 @md.public_endpoint()
 @md.strict_rate_limit("register", ip_limit=5, ip_window=300)
 @md.requires_bouncer_token('registration')
+@md.requires_geofence(scope="auth")
 @md.requires_params("email", "password")
 def on_register(request):
     """
@@ -483,6 +487,7 @@ def jwt_login(request, user, legacy=False, source=None, extra=None, is_new_user=
 @md.POST("auth/forgot")
 @md.strict_rate_limit("auth_forgot", ip_limit=5, ip_window=300)
 @md.public_endpoint()
+@md.requires_geofence(scope="auth")
 def on_user_forgot(request):
     user = User.lookup_from_request(request, phone_as_username=True)
     if user is None:
@@ -512,6 +517,7 @@ def on_user_forgot(request):
 @md.POST("auth/password/reset/code")
 @md.strict_rate_limit("password_reset_code", ip_limit=5, ip_window=300)
 @md.public_endpoint()
+@md.requires_geofence(scope="auth")
 @md.requires_params("code", "new_password")
 def on_user_password_reset_code(request):
     code = request.DATA.get("code")
@@ -544,6 +550,7 @@ def on_user_password_reset_code(request):
 
 @md.POST("auth/password/reset/token")
 @md.custom_security("requires valid token")
+@md.requires_geofence(scope="auth")
 @md.requires_params("token", "new_password")
 def on_user_password_reset_token(request):
     token = request.DATA.get("token")
@@ -568,6 +575,7 @@ def on_user_password_reset_token(request):
 @md.POST("auth/magic/send")
 @md.strict_rate_limit("magic_login_send", ip_limit=5, ip_window=300)
 @md.public_endpoint()
+@md.requires_geofence(scope="auth")
 def on_magic_login_send(request):
     """Send a magic login link via email (default) or SMS (method=sms)."""
     channel = request.DATA.get("method", "email")
@@ -601,6 +609,7 @@ def on_magic_login_send(request):
 @md.POST("auth/magic/login")
 @md.strict_rate_limit("magic_login", ip_limit=10, ip_window=300)
 @md.custom_security("requires valid magic login token")
+@md.requires_geofence(scope="auth")
 @md.requires_params("token")
 def on_magic_login_complete(request):
     """Exchange a magic login token for a JWT — logs the user in."""
@@ -622,6 +631,7 @@ def on_magic_login_complete(request):
 @md.POST("auth/email/verify/send")
 @md.strict_rate_limit("email_verify_send", ip_limit=5, ip_window=300)
 @md.public_endpoint()
+@md.requires_geofence(scope="auth")
 def on_email_verify_send(request):
     """Send an email verification link. Accepts username or email."""
     from mojo.apps.account.utils import tokens as tok_utils
@@ -641,6 +651,7 @@ def on_email_verify_send(request):
 @md.POST("auth/email/verify")
 @md.strict_rate_limit("email_verify", ip_limit=10, ip_window=300)
 @md.custom_security("requires valid email verify token")
+@md.requires_geofence(scope="auth")
 @md.requires_params("token")
 def on_email_verify(request):
     """Exchange an email verify token — marks email verified and logs the user in."""
@@ -658,6 +669,7 @@ def on_email_verify(request):
 @md.POST("auth/invite/accept")
 @md.strict_rate_limit("invite_accept", ip_limit=10, ip_window=300)
 @md.custom_security("requires valid invite token")
+@md.requires_geofence(scope="auth")
 @md.requires_params("token")
 def on_invite_accept(request):
     """
