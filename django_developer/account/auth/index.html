@@ -1439,6 +1439,67 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#registration-extension-hooks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Registration Extension Hooks
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Registration Extension Hooks">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pre_register_validator" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PRE_REGISTER_VALIDATOR
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#user_registered_handler" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        USER_REGISTERED_HANDLER
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#user_login_handler" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        USER_LOGIN_HANDLER
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#registration-extra-fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Registration Extra Fields
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#framework-primitives-available" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4269,6 +4330,67 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#registration-extension-hooks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Registration Extension Hooks
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Registration Extension Hooks">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pre_register_validator" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PRE_REGISTER_VALIDATOR
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#user_registered_handler" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        USER_REGISTERED_HANDLER
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#user_login_handler" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        USER_LOGIN_HANDLER
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#registration-extra-fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Registration Extra Fields
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#framework-primitives-available" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4624,6 +4746,78 @@ for the end-to-end client-side flow.</p>
 <a id="__codelineno-10-19" name="__codelineno-10-19" href="#__codelineno-10-19"></a>    <span class="k">return</span> <span class="n">JsonResponse</span><span class="p">({</span><span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span> <span class="s2">&quot;message&quot;</span><span class="p">:</span> <span class="s2">&quot;Check your email to verify your account.&quot;</span><span class="p">})</span>
 </code></pre></div>
 <p>With <code>REQUIRE_VERIFIED_EMAIL = True</code>, the user cannot log in until they click the verification link — no additional gate logic needed.</p>
+<h3 id="registration-extension-hooks">Registration Extension Hooks<a class="headerlink" href="#registration-extension-hooks" title="Permanent link">&para;</a></h3>
+<p>Three settings let consumer apps plug custom logic into the register and login flows without forking the built-in endpoints.</p>
+<h4 id="pre_register_validator"><code>PRE_REGISTER_VALIDATOR</code><a class="headerlink" href="#pre_register_validator" title="Permanent link">&para;</a></h4>
+<p>Dotted-path callable invoked before the user record is created. Raise <code>ValueException</code> to reject the request with a 400. The plaintext password is intentionally <strong>not</strong> passed.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="c1"># settings.py</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="n">PRE_REGISTER_VALIDATOR</span> <span class="o">=</span> <span class="s2">&quot;myapp.validators.check_registration&quot;</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="c1"># myapp/validators.py</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo</span><span class="w"> </span><span class="kn">import</span> <span class="n">errors</span> <span class="k">as</span> <span class="n">merrors</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="k">def</span><span class="w"> </span><span class="nf">check_registration</span><span class="p">(</span><span class="o">*</span><span class="p">,</span> <span class="n">email</span><span class="p">,</span> <span class="n">group</span><span class="p">,</span> <span class="n">request</span><span class="p">,</span> <span class="n">extra</span><span class="p">):</span>
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">email</span><span class="o">.</span><span class="n">endswith</span><span class="p">(</span><span class="s2">&quot;@acme.com&quot;</span><span class="p">):</span>
+<a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a>        <span class="k">raise</span> <span class="n">merrors</span><span class="o">.</span><span class="n">ValueException</span><span class="p">(</span><span class="s2">&quot;Only @acme.com addresses may register.&quot;</span><span class="p">)</span>
+</code></pre></div>
+<h4 id="user_registered_handler"><code>USER_REGISTERED_HANDLER</code><a class="headerlink" href="#user_registered_handler" title="Permanent link">&para;</a></h4>
+<p>Fires inside the register <code>transaction.atomic()</code> block, and also from the OAuth path when a new user is created. Raising an exception rolls back the entire registration transaction.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="c1"># settings.py</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="n">USER_REGISTERED_HANDLER</span> <span class="o">=</span> <span class="s2">&quot;myapp.handlers.on_user_registered&quot;</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="c1"># myapp/handlers.py</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_user_registered</span><span class="p">(</span><span class="o">*</span><span class="p">,</span> <span class="n">user</span><span class="p">,</span> <span class="n">request</span><span class="p">,</span> <span class="n">group</span><span class="p">,</span> <span class="n">source</span><span class="p">,</span> <span class="n">extra</span><span class="p">):</span>
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>    <span class="c1"># source ∈ {&quot;password&quot;, &quot;oauth&quot;} in v1</span>
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>    <span class="c1"># Avoid slow I/O here — this is inside a DB transaction</span>
+<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a>    <span class="n">user</span><span class="o">.</span><span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;registration_source&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">source</span>
+<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a>    <span class="n">user</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="n">update_fields</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;metadata&quot;</span><span class="p">])</span>
+</code></pre></div>
+<h4 id="user_login_handler"><code>USER_LOGIN_HANDLER</code><a class="headerlink" href="#user_login_handler" title="Permanent link">&para;</a></h4>
+<p>Fires from every successful <code>jwt_login()</code> call, across all login paths. Errors are caught, logged, and swallowed — they never affect the login response.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="c1"># settings.py</span>
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="n">USER_LOGIN_HANDLER</span> <span class="o">=</span> <span class="s2">&quot;myapp.handlers.on_user_login&quot;</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="c1"># myapp/handlers.py</span>
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_user_login</span><span class="p">(</span><span class="o">*</span><span class="p">,</span> <span class="n">user</span><span class="p">,</span> <span class="n">request</span><span class="p">,</span> <span class="n">source</span><span class="p">,</span> <span class="n">is_new_user</span><span class="p">):</span>
+<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>    <span class="k">pass</span>
+</code></pre></div>
+<p><code>source</code> values: <code>"password"</code>, <code>"magic"</code>, <code>"oauth"</code>, <code>"email_verify"</code>, <code>"invite"</code>, <code>"password_reset"</code>, <code>"email_change"</code>, <code>"sessions_revoke"</code>, <code>"totp"</code>, <code>"totp_mfa"</code>, <code>"totp_recovery"</code>, <code>"passkey"</code>, <code>"sms"</code>, <code>"sms_mfa"</code>, <code>"handoff"</code>.</p>
+<p><strong>Error contract asymmetry:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Hook</th>
+<th>Raises</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>PRE_REGISTER_VALIDATOR</code></td>
+<td><code>ValueException</code></td>
+<td>Rejects with 400, propagates</td>
+</tr>
+<tr>
+<td><code>USER_REGISTERED_HANDLER</code></td>
+<td>Any exception</td>
+<td>Rolls back registration transaction</td>
+</tr>
+<tr>
+<td><code>USER_LOGIN_HANDLER</code></td>
+<td>Any exception</td>
+<td>Caught + logged; login succeeds anyway</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Guidance:</strong> Enqueue background jobs from <code>USER_LOGIN_HANDLER</code> rather than performing slow I/O inline. For <code>USER_REGISTERED_HANDLER</code>, keep work minimal — it is inside a database transaction.</p>
+<h3 id="registration-extra-fields">Registration Extra Fields<a class="headerlink" href="#registration-extra-fields" title="Permanent link">&para;</a></h3>
+<p>The built-in <code>POST /api/auth/register</code> endpoint accepts an optional <code>group_uuid</code> body param to associate the new user with a group at registration time. It also forwards an allowlisted set of arbitrary key/value pairs to the <code>USER_REGISTERED_HANDLER</code> via the <code>extra</code> argument.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="c1"># settings.py — keys not in this list are silently dropped</span>
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="n">REGISTRATION_EXTRA_FIELDS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;referral_code&quot;</span><span class="p">,</span> <span class="s2">&quot;plan&quot;</span><span class="p">]</span>
+<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a>
+<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a><span class="c1"># Require group_uuid to be present and valid</span>
+<a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a><span class="n">REQUIRE_GROUP_ON_REGISTRATION</span> <span class="o">=</span> <span class="kc">True</span>   <span class="c1"># default False</span>
+</code></pre></div>
 <h3 id="framework-primitives-available">Framework primitives available<a class="headerlink" href="#framework-primitives-available" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
@@ -4674,7 +4868,7 @@ for the end-to-end client-side flow.</p>
 <hr />
 <h2 id="token-urls">Token URLs<a class="headerlink" href="#token-urls" title="Permanent link">&para;</a></h2>
 <p>Transactional token links (invite, magic login, password reset, email verify) are built as:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>{base_url}{auth_path}?flow={flow}&amp;token={token}
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>{base_url}{auth_path}?flow={flow}&amp;token={token}
 </code></pre></div>
 <p>The frontend dispatches on <code>flow=</code> so only one auth path needs to be configured per tenant.</p>
 <p><strong>Resolution order</strong> (first non-empty wins):</p>
@@ -4689,9 +4883,9 @@ for the end-to-end client-side flow.</p>
 </ol>
 <p>Auth path follows the same precedence with <code>group.metadata["webapp_auth_path"]</code> and <code>WEBAPP_AUTH_PATH</code> (default <code>"/auth"</code>).</p>
 <p>Configure per tenant without a deploy:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="n">group</span><span class="o">.</span><span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;webapp_base_url&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;https://app.acme.com&quot;</span>
-<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="n">group</span><span class="o">.</span><span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;webapp_auth_path&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;/login&quot;</span>  <span class="c1"># optional, default /auth</span>
-<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="n">group</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="n">group</span><span class="o">.</span><span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;webapp_base_url&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;https://app.acme.com&quot;</span>
+<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a><span class="n">group</span><span class="o">.</span><span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;webapp_auth_path&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;/login&quot;</span>  <span class="c1"># optional, default /auth</span>
+<a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a><span class="n">group</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
 </code></pre></div>
 <h2 id="failed-login-protection">Failed Login Protection<a class="headerlink" href="#failed-login-protection" title="Permanent link">&para;</a></h2>
 <p>The login endpoint applies a layered, bypass-resistant throttle stack. Each tier is independent — tripping one does not bypass any other.</p>
@@ -4780,23 +4974,23 @@ for the end-to-end client-side flow.</p>
 </table>
 <h3 id="admin-releasing-a-stuck-account">Admin — releasing a stuck account<a class="headerlink" href="#admin-releasing-a-stuck-account" title="Permanent link">&para;</a></h3>
 <p>When a user is locked out by tier 3, an admin with <code>manage_users</code> can clear the counter:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>POST /api/auth/manage/clear_rate_limit
-<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>{
-<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>  &quot;username&quot;: &quot;alice@example.com&quot;
-<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>}
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>POST /api/auth/manage/clear_rate_limit
+<a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a>{
+<a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a>  &quot;username&quot;: &quot;alice@example.com&quot;
+<a id="__codelineno-20-4" name="__codelineno-20-4" href="#__codelineno-20-4"></a>}
 </code></pre></div>
 <p>Or by user ID:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>POST /api/auth/manage/clear_rate_limit
-<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>{
-<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>  &quot;user_id&quot;: 42
-<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>}
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>POST /api/auth/manage/clear_rate_limit
+<a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a>{
+<a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a>  &quot;user_id&quot;: 42
+<a id="__codelineno-21-4" name="__codelineno-21-4" href="#__codelineno-21-4"></a>}
 </code></pre></div>
 <p>When <code>username</code> or <code>user_id</code> is provided without an explicit <code>key</code>, the key defaults to <code>"login"</code>. To clear a specific bucket:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>POST /api/auth/manage/clear_rate_limit
-<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>{
-<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>  &quot;username&quot;: &quot;alice@example.com&quot;,
-<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a>  &quot;key&quot;: &quot;login&quot;
-<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a>}
+<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>POST /api/auth/manage/clear_rate_limit
+<a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a>{
+<a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a>  &quot;username&quot;: &quot;alice@example.com&quot;,
+<a id="__codelineno-22-4" name="__codelineno-22-4" href="#__codelineno-22-4"></a>  &quot;key&quot;: &quot;login&quot;
+<a id="__codelineno-22-5" name="__codelineno-22-5" href="#__codelineno-22-5"></a>}
 </code></pre></div>
 <p>The endpoint also accepts <code>ip</code>, <code>duid</code>, and <code>muid</code> to clear other tiers independently.</p>
 <h2 id="incident-reporting">Incident Reporting<a class="headerlink" href="#incident-reporting" title="Permanent link">&para;</a></h2>

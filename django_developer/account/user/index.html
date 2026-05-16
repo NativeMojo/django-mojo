@@ -4877,6 +4877,36 @@ allowed for anyone with edit access.</p>
 <td><code>900</code></td>
 <td>Account deactivation confirmation token TTL (seconds, 15 min default)</td>
 </tr>
+<tr>
+<td><code>ALLOW_USER_REGISTRATION</code></td>
+<td><code>False</code></td>
+<td>Enable built-in <code>POST /api/auth/register</code> endpoint</td>
+</tr>
+<tr>
+<td><code>REQUIRE_GROUP_ON_REGISTRATION</code></td>
+<td><code>False</code></td>
+<td>Require <code>group_uuid</code> body param on register; rejects if missing or invalid</td>
+</tr>
+<tr>
+<td><code>REGISTRATION_EXTRA_FIELDS</code></td>
+<td><code>[]</code></td>
+<td>Allowlist of extra body keys forwarded to <code>USER_REGISTERED_HANDLER</code> via <code>extra</code>; unrecognised keys are silently dropped</td>
+</tr>
+<tr>
+<td><code>PRE_REGISTER_VALIDATOR</code></td>
+<td><code>None</code></td>
+<td>Dotted-path callable invoked before user creation; raise <code>ValueException</code> to reject</td>
+</tr>
+<tr>
+<td><code>USER_REGISTERED_HANDLER</code></td>
+<td><code>None</code></td>
+<td>Dotted-path callable fired inside the registration transaction (and on OAuth new-user); raising rolls back</td>
+</tr>
+<tr>
+<td><code>USER_LOGIN_HANDLER</code></td>
+<td><code>None</code></td>
+<td>Dotted-path callable fired on every successful <code>jwt_login()</code>; errors are swallowed</td>
+</tr>
 </tbody>
 </table>
 

@@ -3813,6 +3813,56 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#test-mode-headers-x-mojo-test-" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Test-Mode Headers (X-Mojo-Test-*)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Test-Mode Headers (X-Mojo-Test-*)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#whats-overridable" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What's overridable
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#security-gate-mandatory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Security gate (mandatory)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#enabling-for-your-own-projects-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Enabling for your own project's tests
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -4218,6 +4268,111 @@ It is intentionally lightweight so both humans and LLM agents can reason about a
 <li>Run with <code>./bin/run_tests -v -e</code> (or via config) when validating locally.</li>
 </ol>
 <p>Keeping these habits makes the suite predictable for both humans and models, highlights design gaps early, and keeps TestIt simple.</p>
+<hr />
+<h2 id="test-mode-headers-x-mojo-test-">Test-Mode Headers (<code>X-Mojo-Test-*</code>)<a class="headerlink" href="#test-mode-headers-x-mojo-test-" title="Permanent link">&para;</a></h2>
+<p>Several framework hooks (geofence engine, account extension handlers, bouncer decorator) support per-request override headers so tests can change behavior without reloading the server. This is what lets <code>test_geofence</code>, <code>test_register</code>, <code>test_public_messages</code>, and <code>test_oauth</code> run in parallel in ~1–3s each.</p>
+<h3 id="whats-overridable">What's overridable<a class="headerlink" href="#whats-overridable" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Header</th>
+<th>Overrides</th>
+<th>Defined in</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>X-Mojo-Test-Geo</code> (JSON)</td>
+<td>geoip lookup result</td>
+<td><code>mojo.apps.account.services.geofence.engine</code></td>
+</tr>
+<tr>
+<td><code>X-Mojo-Test-Geofence-System</code> (JSON)</td>
+<td><code>GEOFENCE_SYSTEM_RULES</code></td>
+<td><code>mojo.apps.account.services.geofence.engine</code></td>
+</tr>
+<tr>
+<td><code>X-Mojo-Test-Geofence-Enabled</code> (<code>0</code>/<code>1</code>)</td>
+<td><code>GEOFENCE_ENABLED</code></td>
+<td>same</td>
+</tr>
+<tr>
+<td><code>X-Mojo-Test-Geofence-Fail-Closed</code> (<code>0</code>/<code>1</code>)</td>
+<td><code>GEOFENCE_FAIL_CLOSED</code></td>
+<td>same</td>
+</tr>
+<tr>
+<td><code>X-Mojo-Test-Geofence-Allow-Private</code> (<code>0</code>/<code>1</code>)</td>
+<td><code>GEOFENCE_ALLOW_PRIVATE_IPS</code></td>
+<td>same</td>
+</tr>
+<tr>
+<td><code>X-Mojo-Test-Geofence-Cache-Ttl</code> (int)</td>
+<td><code>GEOFENCE_CACHE_TTL</code></td>
+<td>same</td>
+</tr>
+<tr>
+<td><code>X-Mojo-Test-Pre-Register-Validator</code> (dotted path)</td>
+<td><code>PRE_REGISTER_VALIDATOR</code></td>
+<td><code>mojo.apps.account.services.extensions</code></td>
+</tr>
+<tr>
+<td><code>X-Mojo-Test-User-Registered-Handler</code> (dotted path)</td>
+<td><code>USER_REGISTERED_HANDLER</code></td>
+<td>same</td>
+</tr>
+<tr>
+<td><code>X-Mojo-Test-User-Login-Handler</code> (dotted path)</td>
+<td><code>USER_LOGIN_HANDLER</code></td>
+<td>same</td>
+</tr>
+<tr>
+<td><code>X-Mojo-Test-Registration-Extra-Fields</code> (JSON list)</td>
+<td><code>REGISTRATION_EXTRA_FIELDS</code></td>
+<td>same</td>
+</tr>
+<tr>
+<td><code>X-Mojo-Test-Require-Group-On-Registration</code> (<code>0</code>/<code>1</code>)</td>
+<td><code>REQUIRE_GROUP_ON_REGISTRATION</code></td>
+<td>same</td>
+</tr>
+<tr>
+<td><code>X-Mojo-Test-Allow-User-Registration</code> (<code>0</code>/<code>1</code>)</td>
+<td><code>ALLOW_USER_REGISTRATION</code></td>
+<td>same</td>
+</tr>
+<tr>
+<td><code>X-Mojo-Test-Bouncer-Require-Token</code> (<code>0</code>/<code>1</code>)</td>
+<td><code>BOUNCER_REQUIRE_TOKEN</code></td>
+<td><code>mojo.decorators.bouncer</code></td>
+</tr>
+<tr>
+<td><code>X-Mojo-Test-Capture-Id</code></td>
+<td>per-test capture key for handler fixtures</td>
+<td><code>tests/test_register/_capture.py</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="security-gate-mandatory">Security gate (mandatory)<a class="headerlink" href="#security-gate-mandatory" title="Permanent link">&para;</a></h3>
+<p>Some of these headers — the dotted-path handler ones in particular — can load arbitrary importable callables. To prevent an accidental production leak from becoming a remote-code-execution vector, <code>mojo.helpers.test_mode.is_test_request(request)</code> is the gate, and EVERY callsite consults it before honoring a header. The gate requires <strong>all three</strong> of:</p>
+<ol>
+<li><code>MOJO_TEST_MODE = True</code> in Django settings. Defaults to False.</li>
+<li><code>REMOTE_ADDR</code> is loopback (<code>127.0.0.1</code>, <code>::1</code>, or <code>localhost</code>).</li>
+<li>NO <code>X-Forwarded-For</code>, <code>Forwarded</code>, or <code>Via</code> header on the request.</li>
+</ol>
+<p>Production deployments don't set the flag, AND any LB always adds <code>X-Forwarded-For</code>. The gate is closed-by-default and survives accidental flag leaks because external traffic can never satisfy #2 + #3.</p>
+<h3 id="enabling-for-your-own-projects-tests">Enabling for your own project's tests<a class="headerlink" href="#enabling-for-your-own-projects-tests" title="Permanent link">&para;</a></h3>
+<p>If you're a consumer of django-mojo writing tests against these endpoints, add ONE line to your test environment settings:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="c1"># In your project&#39;s local/test settings module:</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="n">MOJO_TEST_MODE</span> <span class="o">=</span> <span class="kc">True</span>
+</code></pre></div>
+<p>Your tests then send the relevant <code>X-Mojo-Test-*</code> headers per-request via the testit client:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="n">resp</span> <span class="o">=</span> <span class="n">opts</span><span class="o">.</span><span class="n">client</span><span class="o">.</span><span class="n">post</span><span class="p">(</span><span class="s2">&quot;/api/auth/login&quot;</span><span class="p">,</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>                        <span class="p">{</span><span class="s2">&quot;username&quot;</span><span class="p">:</span> <span class="s2">&quot;u&quot;</span><span class="p">,</span> <span class="s2">&quot;password&quot;</span><span class="p">:</span> <span class="s2">&quot;p&quot;</span><span class="p">},</span>
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>                        <span class="n">headers</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;X-Mojo-Test-Geo&quot;</span><span class="p">:</span> <span class="s1">&#39;{&quot;country_code&quot;: &quot;US&quot;}&#39;</span><span class="p">})</span>
+</code></pre></div>
+<p>The testit <code>RestClient</code> merges the <code>headers=</code> kwarg with its default auth headers — no extra setup needed beyond the env var.</p>
+<p>Most consumer projects don't need this at all — they configure handlers via settings and run tests against that fixed config. Only reach for the headers when you genuinely need per-test handler swapping (e.g. testing the asymmetric error contracts of <code>USER_REGISTERED_HANDLER</code> vs <code>USER_LOGIN_HANDLER</code>).</p>
 
 
 

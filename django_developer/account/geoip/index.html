@@ -3705,10 +3705,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#blockreason-ttl-broadcast" class="md-nav__link">
+  <a href="#blockreason-ttl-broadcast-from_syncfalse" class="md-nav__link">
     <span class="md-ellipsis">
       
-        block(reason, ttl, broadcast)
+        block(reason, ttl, broadcast, from_sync=False)
       
     </span>
   </a>
@@ -3866,10 +3866,21 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#get-systemgeoiplookup-public-ip-lookup" class="md-nav__link">
+  <a href="#get-systemgeoiplookup-authenticated-ip-lookup" class="md-nav__link">
     <span class="md-ellipsis">
       
-        GET system/geoip/lookup — Public IP Lookup
+        GET system/geoip/lookup — Authenticated IP Lookup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#post-systemgeoipsync-federation-abuse-signal-receiver" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        POST system/geoip/sync — Federation Abuse-Signal Receiver
       
     </span>
   </a>
@@ -3881,6 +3892,95 @@
     <span class="md-ellipsis">
       
         GET system/geoip/time — Public IP Time Lookup
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#geoip-providers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GeoIP Providers
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="GeoIP Providers">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#mojo-provider" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        mojo Provider
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#federation-with-another-mojo-instance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Federation with Another Mojo Instance
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Federation with Another Mojo Instance">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-is-federated" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What is federated
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-is-never-federated" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What is never federated
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-a-push-is-triggered" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How a push is triggered
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#push-is-always-async" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Push is always async
       
     </span>
   </a>
@@ -3957,8 +4057,8 @@
 <td>First three octets, used for subnet-based fallback lookups</td>
 </tr>
 <tr>
-<td><code>country_code</code>, <code>country_name</code>, <code>region</code>, <code>city</code>, <code>postal_code</code></td>
-<td>Location fields</td>
+<td><code>country_code</code>, <code>country_name</code>, <code>region</code>, <code>region_code</code>, <code>city</code>, <code>postal_code</code></td>
+<td>Location fields. <code>region_code</code> is the ISO 3166-2 subdivision code (e.g. <code>US-FL</code>); populated from MaxMind subdivisions, ip-api, ipstack, or ipinfo (paid tier) and backfilled lazily via <code>refresh()</code>.</td>
 </tr>
 <tr>
 <td><code>latitude</code>, <code>longitude</code></td>
@@ -4113,16 +4213,16 @@
 <td>Re-fetch geolocation data from provider</td>
 </tr>
 <tr>
-<td><code>instance.check_threats()</code></td>
-<td>Run threat intelligence checks</td>
+<td><code>instance.check_threats(from_sync=False)</code></td>
+<td>Run threat intelligence checks. Pass <code>from_sync=True</code> to suppress outbound federation push.</td>
 </tr>
 <tr>
-<td><code>instance.update_threat_from_incident(priority, block=False)</code></td>
-<td>Escalate threat level from incident priority (0–15 scale). Pass <code>block=True</code> to allow auto-blocking when threat reaches <code>high</code>/<code>critical</code>.</td>
+<td><code>instance.update_threat_from_incident(priority, block=False, from_sync=False)</code></td>
+<td>Escalate threat level from incident priority (0–15 scale). Pass <code>block=True</code> to allow auto-blocking when threat reaches <code>high</code>/<code>critical</code>. Pass <code>from_sync=True</code> to suppress outbound federation push.</td>
 </tr>
 <tr>
-<td><code>instance.block(reason, ttl, broadcast)</code></td>
-<td>Block this IP fleet-wide (DB + broadcast)</td>
+<td><code>instance.block(reason, ttl, broadcast, from_sync=False)</code></td>
+<td>Block this IP fleet-wide (DB + broadcast). Always escalates <code>threat_level</code> to at least <code>high</code>. Pass <code>from_sync=True</code> to suppress outbound federation push.</td>
 </tr>
 <tr>
 <td><code>instance.unblock(reason, broadcast)</code></td>
@@ -4147,7 +4247,7 @@
 <li>Broadcasts <code>broadcast_block_ip</code> to all instances via <code>jobs.broadcast_execute()</code></li>
 <li>Each instance's job runner (as <code>ec2-user</code>) applies the iptables DROP rule</li>
 </ol>
-<h3 id="blockreason-ttl-broadcast">block(reason, ttl, broadcast)<a class="headerlink" href="#blockreason-ttl-broadcast" title="Permanent link">&para;</a></h3>
+<h3 id="blockreason-ttl-broadcast-from_syncfalse">block(reason, ttl, broadcast, from_sync=False)<a class="headerlink" href="#blockreason-ttl-broadcast-from_syncfalse" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">geo</span> <span class="o">=</span> <span class="n">GeoLocatedIP</span><span class="o">.</span><span class="n">geolocate</span><span class="p">(</span><span class="s2">&quot;1.2.3.4&quot;</span><span class="p">)</span>
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">geo</span><span class="o">.</span><span class="n">block</span><span class="p">(</span><span class="n">reason</span><span class="o">=</span><span class="s2">&quot;ssh_brute_force&quot;</span><span class="p">,</span> <span class="n">ttl</span><span class="o">=</span><span class="mi">3600</span><span class="p">)</span>  <span class="c1"># Block for 1 hour fleet-wide</span>
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">geo</span><span class="o">.</span><span class="n">block</span><span class="p">(</span><span class="n">reason</span><span class="o">=</span><span class="s2">&quot;repeat_offender&quot;</span><span class="p">)</span>             <span class="c1"># Permanent block (no ttl)</span>
@@ -4157,6 +4257,7 @@
 <li>Returns <code>False</code> if the IP is whitelisted (whitelisting always wins)</li>
 <li><code>ttl</code> in seconds. <code>None</code> or <code>0</code> = permanent (no auto-unblock)</li>
 <li><code>broadcast=False</code> to update DB only (used during bulk operations)</li>
+<li>Always escalates <code>threat_level</code> to at least <code>high</code> atomically in the same UPDATE — never downgrades. This ensures every block entry point (admin REST, LLM agent, rule-engine handler, asyncjobs, manual) feeds the federation signal loop without extra code at each call site.</li>
 </ul>
 <h3 id="unblockreason-broadcast">unblock(reason, broadcast)<a class="headerlink" href="#unblockreason-broadcast" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">geo</span><span class="o">.</span><span class="n">unblock</span><span class="p">(</span><span class="n">reason</span><span class="o">=</span><span class="s2">&quot;manual: false positive&quot;</span><span class="p">)</span>
@@ -4334,10 +4435,10 @@
 <a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>DELETE /api/system/geoip/123
 </code></pre></div>
 <p>Requires <code>manage_users</code> permission. PUT supports POST_SAVE_ACTIONS for block/unblock/whitelist.</p>
-<h3 id="get-systemgeoiplookup-public-ip-lookup"><code>GET system/geoip/lookup</code> — Public IP Lookup<a class="headerlink" href="#get-systemgeoiplookup-public-ip-lookup" title="Permanent link">&para;</a></h3>
+<h3 id="get-systemgeoiplookup-authenticated-ip-lookup"><code>GET system/geoip/lookup</code> — Authenticated IP Lookup<a class="headerlink" href="#get-systemgeoiplookup-authenticated-ip-lookup" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>GET /api/system/geoip/lookup?ip=1.2.3.4
 </code></pre></div>
-<p><strong>Public endpoint</strong> — no authentication required. Rate limited to 30 requests/minute per IP.</p>
+<p><strong>Requires authentication</strong> (<code>@md.requires_auth()</code>). Rate limited to 30 requests/minute per IP. Used by the <code>mojo</code> provider on downstream instances to query the upstream.</p>
 <table>
 <thead>
 <tr>
@@ -4357,24 +4458,174 @@
 <td>No</td>
 <td>Refresh expired cache (default: <code>true</code>)</td>
 </tr>
+<tr>
+<td><code>graph</code></td>
+<td>No</td>
+<td>Response graph (<code>default</code>, <code>basic</code>, <code>detailed</code>). The <code>mojo</code> provider requests <code>graph=detailed</code>.</td>
+</tr>
 </tbody>
 </table>
-<p>Returns the <code>GeoLocatedIP</code> record via <code>on_rest_get</code> (default graph).</p>
-<h3 id="get-systemgeoiptime-public-ip-time-lookup"><code>GET system/geoip/time</code> — Public IP Time Lookup<a class="headerlink" href="#get-systemgeoiptime-public-ip-time-lookup" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>GET /api/system/geoip/time
+<p>Returns the <code>GeoLocatedIP</code> record via <code>on_rest_get</code>.</p>
+<h3 id="post-systemgeoipsync-federation-abuse-signal-receiver"><code>POST system/geoip/sync</code> — Federation Abuse-Signal Receiver<a class="headerlink" href="#post-systemgeoipsync-federation-abuse-signal-receiver" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>POST /api/system/geoip/sync
 </code></pre></div>
-<p><strong>Public endpoint</strong> — no authentication required. Rate limited to 30 requests/minute per IP. Uses the caller's IP address automatically.</p>
+<p><strong>Requires:</strong> ApiKey with <code>geoip_sync</code> permission (group-scoped). This endpoint is called by downstream mojo instances to push abuse signals observed locally back to this upstream.</p>
+<table>
+<thead>
+<tr>
+<th>Body field</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ip</code></td>
+<td>Yes</td>
+<td>IP address</td>
+</tr>
+<tr>
+<td><code>threat_level</code></td>
+<td>No*</td>
+<td>New threat level (<code>low</code>, <code>medium</code>, <code>high</code>, <code>critical</code>). Applied as MAX — never downgrades.</td>
+</tr>
+<tr>
+<td><code>is_known_attacker</code></td>
+<td>No*</td>
+<td><code>true</code> only. OR semantics — never flips <code>True → False</code>.</td>
+</tr>
+<tr>
+<td><code>is_known_abuser</code></td>
+<td>No*</td>
+<td><code>true</code> only. OR semantics — never flips <code>True → False</code>.</td>
+</tr>
+</tbody>
+</table>
+<p>*At least one of <code>threat_level</code>, <code>is_known_attacker</code>, <code>is_known_abuser</code> must be present.</p>
+<p>Payloads containing per-fleet enforcement fields (<code>is_blocked</code>, <code>is_whitelisted</code>, <code>blocked_*</code>, <code>whitelisted_*</code>) are rejected with a 200 error response.</p>
+<p><strong>Loop prevention:</strong> the receiver applies changes via raw <code>save(update_fields=...)</code>, not via <code>block()</code>/<code>check_threats()</code>, so <code>_maybe_push_abuse_signals</code> never fires on the receiver side.</p>
 <p><strong>Response:</strong></p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="p">{</span>
 <a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">    </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
 <a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">    </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
 <a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">        </span><span class="nt">&quot;ip&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;1.2.3.4&quot;</span><span class="p">,</span>
-<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="w">        </span><span class="nt">&quot;timezone&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;America/New_York&quot;</span><span class="p">,</span>
-<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="w">        </span><span class="nt">&quot;epoch&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1711300800</span><span class="p">,</span>
-<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="w">        </span><span class="nt">&quot;iso&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-03-24T12:00:00-04:00&quot;</span>
-<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="w">    </span><span class="p">}</span>
-<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="p">}</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="w">        </span><span class="nt">&quot;threat_level&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;high&quot;</span><span class="p">,</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="w">        </span><span class="nt">&quot;is_known_attacker&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="w">        </span><span class="nt">&quot;is_known_abuser&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="w">        </span><span class="nt">&quot;applied&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="w">            </span><span class="nt">&quot;threat_level&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;high&quot;</span><span class="p">,</span>
+<a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a><span class="w">            </span><span class="nt">&quot;is_known_attacker&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a><span class="w">        </span><span class="p">}</span>
+<a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-9-13" name="__codelineno-9-13" href="#__codelineno-9-13"></a><span class="p">}</span>
 </code></pre></div>
+<p><code>applied</code> contains only the fields that actually changed. An empty <code>applied</code> dict means the incoming values were already at or above the current values.</p>
+<h3 id="get-systemgeoiptime-public-ip-time-lookup"><code>GET system/geoip/time</code> — Public IP Time Lookup<a class="headerlink" href="#get-systemgeoiptime-public-ip-time-lookup" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>GET /api/system/geoip/time
+</code></pre></div>
+<p><strong>Public endpoint</strong> — no authentication required. Rate limited to 30 requests/minute per IP. Uses the caller's IP address automatically.</p>
+<p><strong>Response:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="p">{</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">    </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">    </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="w">        </span><span class="nt">&quot;ip&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;1.2.3.4&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="w">        </span><span class="nt">&quot;timezone&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;America/New_York&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="w">        </span><span class="nt">&quot;epoch&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1711300800</span><span class="p">,</span>
+<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="w">        </span><span class="nt">&quot;iso&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-03-24T12:00:00-04:00&quot;</span>
+<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a><span class="p">}</span>
+</code></pre></div>
+<hr />
+<h2 id="geoip-providers">GeoIP Providers<a class="headerlink" href="#geoip-providers" title="Permanent link">&para;</a></h2>
+<p><code>geolocate_ip()</code> queries the configured primary provider, with an optional fallback. Set the provider name via <code>GEOIP_PRIMARY_PROVIDER</code> (or <code>GEOIP_FALLBACK_PROVIDER</code>).</p>
+<p>Built-in providers: <code>ipinfo</code>, <code>ipstack</code>, <code>ip-api</code>, <code>maxmind</code>, <code>mojo</code>.</p>
+<h3 id="mojo-provider"><code>mojo</code> Provider<a class="headerlink" href="#mojo-provider" title="Permanent link">&para;</a></h3>
+<p>Use another django-mojo instance as a GeoIP data source. The downstream instance calls the upstream's <code>GET /api/system/geoip/lookup?graph=detailed</code> with an ApiKey token and caches the result locally.</p>
+<p><strong>Configuration:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GEOIP_PRIMARY_PROVIDER</code></td>
+<td>—</td>
+<td>Set to <code>'mojo'</code> to use a mojo instance as primary</td>
+</tr>
+<tr>
+<td><code>GEOIP_MOJO_PROVIDER_URL</code></td>
+<td><code>None</code></td>
+<td>Base URL of the upstream mojo instance (e.g. <code>https://hub.example.com</code>)</td>
+</tr>
+<tr>
+<td><code>GEOIP_API_KEY_MOJO</code></td>
+<td>—</td>
+<td>ApiKey token sent as <code>Authorization: apikey &lt;token&gt;</code></td>
+</tr>
+<tr>
+<td><code>GEOIP_MOJO_SYNC_ENABLED</code></td>
+<td><code>True</code></td>
+<td>Master kill switch for outbound abuse-signal push-back</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Behavior:</strong></p>
+<ul>
+<li>The upstream is trusted for all third-party detection: Tor, VPN, proxy, cloud, external blocklists. Local re-detection is skipped for <code>provider='mojo'</code> records (<code>skip_external=True</code>).</li>
+<li>Local internal-threat analysis (<code>check_internal_threats</code>) still runs so events observed only on this instance are captured.</li>
+<li>Threat flags are OR-merged with upstream values — <code>is_known_attacker</code> and <code>is_known_abuser</code> are never downgraded.</li>
+<li>Per-fleet firewall fields (<code>is_blocked</code>, <code>is_whitelisted</code>, <code>blocked_*</code>, <code>whitelisted_*</code>) are stripped at the boundary. Local enforcement state from the upstream never enters this instance's cache.</li>
+</ul>
+<hr />
+<h2 id="federation-with-another-mojo-instance">Federation with Another Mojo Instance<a class="headerlink" href="#federation-with-another-mojo-instance" title="Permanent link">&para;</a></h2>
+<p>When a downstream uses the <code>mojo</code> provider, it pushes newly observed abuse signals back to the upstream so a mesh of instances builds a shared abuse list.</p>
+<h3 id="what-is-federated">What is federated<a class="headerlink" href="#what-is-federated" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Signal</th>
+<th>Semantics</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>threat_level</code></td>
+<td>MAX — only pushed when level strictly rises</td>
+</tr>
+<tr>
+<td><code>is_known_attacker</code></td>
+<td>OR — only pushed on <code>False → True</code> flip</td>
+</tr>
+<tr>
+<td><code>is_known_abuser</code></td>
+<td>OR — only pushed on <code>False → True</code> flip</td>
+</tr>
+</tbody>
+</table>
+<h3 id="what-is-never-federated">What is never federated<a class="headerlink" href="#what-is-never-federated" title="Permanent link">&para;</a></h3>
+<p>Per-fleet enforcement decisions stay local and are never pushed upstream:</p>
+<p><code>is_blocked</code>, <code>is_whitelisted</code>, <code>blocked_at</code>, <code>blocked_until</code>, <code>blocked_reason</code>, <code>block_count</code>, <code>whitelisted_reason</code></p>
+<h3 id="how-a-push-is-triggered">How a push is triggered<a class="headerlink" href="#how-a-push-is-triggered" title="Permanent link">&para;</a></h3>
+<p>The following methods call <code>_maybe_push_abuse_signals()</code> after a change, provided:</p>
+<ul>
+<li><code>self.provider == 'mojo'</code></li>
+<li><code>GEOIP_MOJO_PROVIDER_URL</code> is configured</li>
+<li><code>GEOIP_MOJO_SYNC_ENABLED</code> is <code>True</code></li>
+</ul>
+<p>Triggering methods:</p>
+<ul>
+<li><code>block()</code> — block always escalates <code>threat_level</code> to <code>high</code>, so a push fires on first block of any <code>mojo</code>-sourced IP</li>
+<li><code>update_threat_from_incident()</code> — fires when incident escalation produces a rise</li>
+<li><code>check_threats()</code> — fires when local analysis flips an attacker/abuser flag</li>
+</ul>
+<p>Pass <code>from_sync=True</code> to suppress the push (used by the sync endpoint receiver to prevent loops).</p>
+<h3 id="push-is-always-async">Push is always async<a class="headerlink" href="#push-is-always-async" title="Permanent link">&para;</a></h3>
+<p><code>_maybe_push_abuse_signals()</code> enqueues via <code>jobs.publish</code> — HTTP is never made inline. <code>block()</code> return latency is unaffected by upstream availability. Retries on 5xx with backoff; 4xx (auth, permission, validation) logs and drops without retry.</p>
+<p>The async job is <code>mojo.apps.account.asyncjobs.push_abuse_signals</code>. It posts <code>{ip, threat_level?, is_known_attacker?, is_known_abuser?}</code> to <code>POST /api/system/geoip/sync</code> on the upstream.</p>
 <hr />
 <h2 id="settings">Settings<a class="headerlink" href="#settings" title="Permanent link">&para;</a></h2>
 <table>
@@ -4395,6 +4646,21 @@
 <td><code>GEOLOCATION_CACHE_DURATION_DAYS</code></td>
 <td><code>90</code></td>
 <td>Days before a cached record expires</td>
+</tr>
+<tr>
+<td><code>GEOIP_MOJO_PROVIDER_URL</code></td>
+<td><code>None</code></td>
+<td>Base URL of upstream mojo instance (enables mojo provider)</td>
+</tr>
+<tr>
+<td><code>GEOIP_API_KEY_MOJO</code></td>
+<td>—</td>
+<td>ApiKey token for upstream mojo instance</td>
+</tr>
+<tr>
+<td><code>GEOIP_MOJO_SYNC_ENABLED</code></td>
+<td><code>True</code></td>
+<td>Enable outbound abuse-signal federation push</td>
 </tr>
 </tbody>
 </table>

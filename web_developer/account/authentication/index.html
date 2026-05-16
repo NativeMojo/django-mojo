@@ -4484,9 +4484,10 @@ for end-to-end flow and security trade-offs.</p>
 <a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a><span class="w">  </span><span class="nt">&quot;password&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;mysecretpassword&quot;</span><span class="p">,</span>
 <a id="__codelineno-20-4" name="__codelineno-20-4" href="#__codelineno-20-4"></a><span class="w">  </span><span class="nt">&quot;first_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Alice&quot;</span><span class="p">,</span>
 <a id="__codelineno-20-5" name="__codelineno-20-5" href="#__codelineno-20-5"></a><span class="w">  </span><span class="nt">&quot;last_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Smith&quot;</span><span class="p">,</span>
-<a id="__codelineno-20-6" name="__codelineno-20-6" href="#__codelineno-20-6"></a><span class="w">  </span><span class="nt">&quot;bouncer_token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;token-from-assess&gt;&quot;</span><span class="p">,</span>
-<a id="__codelineno-20-7" name="__codelineno-20-7" href="#__codelineno-20-7"></a><span class="w">  </span><span class="nt">&quot;duid&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;browser-generated-device-uuid&quot;</span>
-<a id="__codelineno-20-8" name="__codelineno-20-8" href="#__codelineno-20-8"></a><span class="p">}</span>
+<a id="__codelineno-20-6" name="__codelineno-20-6" href="#__codelineno-20-6"></a><span class="w">  </span><span class="nt">&quot;group_uuid&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;abc123&quot;</span><span class="p">,</span>
+<a id="__codelineno-20-7" name="__codelineno-20-7" href="#__codelineno-20-7"></a><span class="w">  </span><span class="nt">&quot;bouncer_token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;token-from-assess&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-20-8" name="__codelineno-20-8" href="#__codelineno-20-8"></a><span class="w">  </span><span class="nt">&quot;duid&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;browser-generated-device-uuid&quot;</span>
+<a id="__codelineno-20-9" name="__codelineno-20-9" href="#__codelineno-20-9"></a><span class="p">}</span>
 </code></pre></div>
 <table>
 <thead>
@@ -4518,6 +4519,11 @@ for end-to-end flow and security trade-offs.</p>
 <td>User's last name</td>
 </tr>
 <tr>
+<td><code>group_uuid</code></td>
+<td>conditional</td>
+<td>UUID of a group to associate the new user with. Required when the server has <code>REQUIRE_GROUP_ON_REGISTRATION = True</code></td>
+</tr>
+<tr>
 <td><code>bouncer_token</code></td>
 <td>conditional</td>
 <td>Required when bouncer is active. Must be a token issued with <code>page_type: "registration"</code> — a login-scoped token will be rejected</td>
@@ -4529,6 +4535,7 @@ for end-to-end flow and security trade-offs.</p>
 </tr>
 </tbody>
 </table>
+<p>Additional keys may be included in the payload. The server silently drops any key not present in its <code>REGISTRATION_EXTRA_FIELDS</code> allowlist, so safe to forward extra fields without causing errors. <code>MojoAuth.register()</code> forwards the full payload as-is.</p>
 <h3 id="response-auto-login-default">Response — Auto-Login (default)<a class="headerlink" href="#response-auto-login-default" title="Permanent link">&para;</a></h3>
 <p>When <code>REQUIRE_VERIFIED_EMAIL</code> is <code>False</code> (default), the user is logged in immediately. A verification email is still sent as a nudge.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="p">{</span>
