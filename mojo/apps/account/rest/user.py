@@ -361,10 +361,6 @@ def on_register(request):
     # has already fired side effects in consumer downstream systems.
     with transaction.atomic():
         user = User(email=email or None)
-        if identity_field == "email" and email:
-            user.username = user.generate_username_from_email()
-        else:
-            user.username = phone  # phone is already normalized
         if first_name:
             user.first_name = first_name
         if last_name:
@@ -375,6 +371,14 @@ def on_register(request):
             user.dob = dob
         if phone_was_verified:
             user.is_phone_verified = True
+        if identity_field == "email" and email:
+            user.username = user.generate_username_from_email()
+        else:
+            # Phone-as-identity: prefer first.last (lowercased + sanitized,
+            # numeric suffix on collision) so the username is human-readable.
+            # Falls back to the normalized phone when no names are supplied
+            # or every candidate collides.
+            user.username = user.generate_username_from_names(fallback=phone)
         user.set_password(password)
         user.save()
 

@@ -106,8 +106,10 @@ def test_phone_only_full_flow(opts):
     user = User.objects.filter(phone_number=phone).first()
     assert user is not None, \
         f"user must exist after phone-only register (phone={phone})"
-    assert user.username == phone, \
-        f"username must be set to normalized phone for phone-only identity, got {user.username!r}"
+    # Username prefers first.last for human-readable handles when both names
+    # are present; falls back to the normalized phone on collision.
+    assert user.username in ("pat.phone", phone) or user.username.startswith("pat.phone."), \
+        f"username must derive from first.last (or fall back to phone) for phone-only identity, got {user.username!r}"
     assert user.is_phone_verified is True, \
         "is_phone_verified must be True when verify=sms is in the schema"
     assert user.first_name == "Pat", \
@@ -238,6 +240,74 @@ def test_min_age_gate_below(opts):
         f"DOB below min-age must be 4xx, got {resp.status_code}: {opts.client.last_response.body}"
     assert not User.objects.filter(phone_number=phone).exists(), \
         "no user must be created when age gate rejects"
+
+
+@th.django_unit_test("phone-only register: username uses first.last when both names supplied")
+def test_phone_only_username_uses_first_last(opts):
+    from mojo.apps.account.models import User
+    _clear_register_limits()
+    phone = _fresh_phone()
+    verified_token = _start_and_verify_phone(opts, phone)
+    today = datetime.date.today()
+    dob = today.replace(year=today.year - 30).isoformat()
+
+    # Use a unique-enough first/last so we don't collide with prior runs.
+    suffix = _uuid.uuid4().hex[:6]
+    first = f"Alex{suffix}"
+    last = "Tester"
+
+    resp = opts.client.post(
+        "/api/auth/register",
+        {"first_name": first, "last_name": last,
+         "phone": phone, "dob": dob,
+         "password": "Reg##99Phone",
+         "verified_phone_token": verified_token},
+        headers=_register_headers())
+    assert resp.status_code == 200, \
+        f"register must succeed, got {resp.status_code}: {opts.client.last_response.body}"
+
+    user = User.objects.get(phone_number=phone)
+    expected = f"{first}.{last}".lower()
+    assert user.username == expected, \
+        f"username must be `first.last` lowercased for phone-only identity, " \
+        f"got {user.username!r} (expected {expected!r})"
+
+
+@th.django_unit_test("generate_username_from_names: collision falls through to a numeric suffix")
+def test_generate_username_from_names_collision(opts):
+    from mojo.apps.account.models import User
+    # Pre-create a user that owns the bare `first.last` username
+    base_first = f"Coll{_uuid.uuid4().hex[:5]}"
+    base_last = "Smith"
+    base_username = f"{base_first}.{base_last}".lower()
+    User.objects.filter(username=base_username).delete()
+    u1 = User(username=base_username, email=None)
+    u1.phone_number = _fresh_phone()
+    u1.set_password("Abcd1234!")
+    u1.save()
+
+    # New user with the same first.last must fall through to a suffixed handle
+    # (not blow up, not collide).
+    new_phone = _fresh_phone()
+    u2 = User(email=None)
+    u2.phone_number = new_phone
+    handle = u2.generate_username_from_names(first_name=base_first, last_name=base_last,
+                                             fallback=new_phone)
+    assert handle != base_username, \
+        f"collision must produce a different username, got {handle!r}"
+    assert handle.startswith(base_username + ".") or handle == new_phone, \
+        f"collision must produce `{base_username}.<suffix>` or the phone fallback, got {handle!r}"
+
+
+@th.django_unit_test("generate_username_from_names: empty names fall back to phone")
+def test_generate_username_from_names_empty_names(opts):
+    from mojo.apps.account.models import User
+    phone = _fresh_phone()
+    u = User(email=None)
+    u.phone_number = phone
+    handle = u.generate_username_from_names(first_name="", last_name="", fallback=phone)
+    assert handle == phone, \
+        f"empty first/last must fall back to the phone fallback, got {handle!r}"
 
 
 @th.django_unit_test("default register: AUTH_REGISTER_FIELDS unset uses email-based form (regression)")

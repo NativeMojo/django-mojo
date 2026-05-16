@@ -5,6 +5,7 @@ from mojo.helpers.settings import settings
 from mojo import errors as merrors
 from mojo.helpers import dates
 from mojo.helpers import content_guard
+from mojo.helpers import crypto
 from mojo.apps.account.utils.jwtoken import JWToken
 from mojo.apps import metrics
 from .device import UserDevice
@@ -663,6 +664,69 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
 
         # Fall back to using the full email as username
         return self.email.lower()
+
+    def generate_username_from_names(self, first_name=None, last_name=None, fallback=None):
+        """Generate a human-readable username from first/last name.
+
+        Used when there is no email to derive a username from (phone-only
+        registration is the main case). Tries `first.last` lowercased with
+        non-alphanumerics stripped, then appends a 3-digit random suffix
+        on collision (a few attempts), then falls back to `fallback`
+        (typically the normalized phone number) so we never end up without
+        a unique username.
+
+        Args:
+            first_name: First name to use; defaults to self.first_name.
+            last_name:  Last name to use; defaults to self.last_name.
+            fallback:   Username to return if a clean handle cannot be
+                        minted. Required unless self.phone_number is set.
+
+        Returns:
+            A unique, normalized username string.
+        """
+        import re
+        first = (first_name if first_name is not None else (self.first_name or "")).strip()
+        last = (last_name if last_name is not None else (self.last_name or "")).strip()
+        fallback = fallback or self.phone_number
+        if not fallback:
+            raise merrors.ValueException(
+                "generate_username_from_names requires a fallback when phone_number is unset")
+
+        def _clean(s):
+            # Keep alphanumerics + dash; lowercase; collapse runs of dashes.
+            cleaned = re.sub(r"[^a-z0-9-]+", "", s.lower())
+            cleaned = re.sub(r"-{2,}", "-", cleaned).strip("-")
+            return cleaned
+
+        first_clean = _clean(first)
+        last_clean = _clean(last)
+
+        if first_clean and last_clean:
+            base = f"{first_clean}.{last_clean}"
+        elif first_clean:
+            base = first_clean
+        elif last_clean:
+            base = last_clean
+        else:
+            return fallback
+
+        # Exclude self on update so re-saving a user doesn't see itself as a collision.
+        def _free(candidate):
+            qset = User.objects.filter(username=candidate)
+            if self.pk is not None:
+                qset = qset.exclude(pk=self.pk)
+            return not qset.exists()
+
+        if _free(base):
+            return base
+        # Try a few short numeric suffixes — keeps the username human-readable
+        # without unbounded retries.
+        for _ in range(5):
+            suffix = crypto.random_string(3, allow_digits=True, allow_chars=False, allow_special=False)
+            candidate = f"{base}.{suffix}"
+            if _free(candidate):
+                return candidate
+        return fallback
 
     def generate_display_name(self):
         """Generate a display name from email, falling back to email if username exists."""
