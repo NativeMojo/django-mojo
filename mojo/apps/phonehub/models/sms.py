@@ -52,7 +52,7 @@ class SMS(models.Model, MojoModel):
 
     # Provider Info
     provider = models.CharField(max_length=20, blank=True, null=True,
-                              help_text="twilio or aws")
+                              help_text="twilio, aws, or mojo")
     provider_message_id = models.CharField(max_length=100, blank=True, null=True,
                                          db_index=True,
                                          help_text="Provider's message ID")
@@ -166,10 +166,72 @@ class SMS(models.Model, MojoModel):
 
     @classmethod
     def send(cls, body, to_number, metadata=None, group=None, user=None, from_number=None):
-        """Send an outbound SMS and return the saved SMS instance."""
+        """Send an outbound SMS and return the saved SMS instance.
+
+        Dispatches by PhoneConfig.provider (resolved once via
+        PhoneConfig.get_for_group(group)). If no PhoneConfig exists or the
+        provider is 'twilio'/'aws', the existing twilio path is used unchanged.
+        For provider='mojo', the request is delegated over HTTP to a remote
+        django-mojo instance.
+        """
         from mojo.apps.phonehub.services import twilio
         from .phone import PhoneNumber
+        from .config import PhoneConfig
+
         to_number = PhoneNumber.normalize(to_number)
+        config = PhoneConfig.get_for_group(group)
+        provider_name = config.provider if config else twilio.PROVIDER
+
+        # --- Mojo remote provider branch ---
+        if provider_name == 'mojo':
+            base_url = (config.mojo_remote_url or '').rstrip('/') if config else ''
+            api_key = config.get_mojo_api_key() if config else ''
+            if not base_url or not api_key:
+                sms = cls.objects.create(
+                    user=user, group=group, direction='outbound',
+                    from_number=from_number or '', to_number=to_number, body=body,
+                    status='failed', provider='mojo', metadata=metadata or {},
+                )
+                sms.mark_failed(
+                    error_code='config_error',
+                    error_message='Mojo provider requires mojo_remote_url and mojo_api_key on PhoneConfig'
+                )
+                return sms
+
+            sms = cls.objects.create(
+                user=user, group=group, direction='outbound',
+                from_number=from_number or '', to_number=to_number, body=body,
+                status='queued', provider='mojo', metadata=metadata or {},
+            )
+
+            # Test-number short-circuit stays ahead of the network call so
+            # local dev/test runs never reach the remote.
+            if to_number.startswith("+1555"):
+                fake_mapping = SMS_FAKE_MAPPINGS.get(to_number[:8])
+                if not fake_mapping:
+                    sms.is_test = True
+                    sms.mark_sent(f"test{to_number}")
+                    return sms
+                to_number = fake_mapping
+
+            from mojo.apps.phonehub.services import mojo_provider
+            resp = mojo_provider.send_sms(
+                body, to_number, from_number=from_number,
+                base_url=base_url, api_key=api_key,
+            )
+            if resp.sent:
+                if resp.from_number and not sms.from_number:
+                    sms.from_number = resp.from_number
+                if resp.remote:
+                    md = sms.metadata or {}
+                    md['remote'] = resp.remote
+                    sms.metadata = md
+                sms.mark_sent(resp.id)
+            else:
+                sms.mark_failed(error_code=resp.code, error_message=resp.error)
+            return sms
+
+        # --- Twilio (default) / AWS — existing behavior, unchanged ---
         resolved_from = from_number or twilio.get_from_number()
         if not resolved_from or not isinstance(resolved_from, str):
             sms = cls.objects.create(

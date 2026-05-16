@@ -124,6 +124,7 @@ See [rest.md](rest.md) for all endpoint details, or the [web developer docs](../
 | `TWILIO_AUTH_TOKEN` | Twilio auth token |
 | `TWILIO_NUMBER` | Default sender phone number |
 | `SMS_INBOUND_HANDLER` | Optional dotted path to inbound SMS handler (e.g. `"myapp.services.on_sms"`) |
+| `SMS_REMOTE_TIMEOUT` | HTTP timeout (seconds) for outbound calls when using the `mojo` SMS provider. Default `10`. |
 
 ### Inbound SMS handler
 
@@ -140,6 +141,49 @@ def on_sms(sms):
 
 ## Provider Configuration
 
-PhoneHub supports Twilio (default) and AWS SNS. Credentials can be stored globally in Django settings, or per-group via `PhoneConfig` (which encrypts credentials using MojoSecrets).
+PhoneHub supports three SMS providers, selected per-group (or system-wide) via `PhoneConfig.provider`:
+
+- **`twilio`** (default) — credentials in Django settings or `PhoneConfig` (encrypted via `MojoSecrets`).
+- **`aws`** — AWS SNS, credentials in `PhoneConfig` (encrypted).
+- **`mojo`** — delegate sending to a remote django-mojo instance that holds the real Twilio/AWS credentials. Useful when multiple deployments share one set of compliance / billing / A2P registration.
 
 See [models.md — PhoneConfig](models.md#phoneconfig) for credential management.
+
+### Mojo Remote SMS Provider
+
+Configure a deployment to send SMS via another django-mojo instance:
+
+**On the remote (provider) mojo:**
+1. Configure Twilio (or AWS) normally — this mojo does the actual sending.
+2. Create an `account.ApiKey` for the caller group with at least `send_sms` and `comms` permissions:
+
+   ```python
+   from mojo.apps.account.models import ApiKey
+   api_key, raw_token = ApiKey.create_for_group(
+       group=caller_group,
+       name="downstream-mojo",
+       permissions={"send_sms": True, "comms": True},
+   )
+   # Hand `raw_token` to the caller — it cannot be retrieved later.
+   ```
+
+**On the calling (downstream) mojo:**
+1. Create a `PhoneConfig` with `provider="mojo"`, point `mojo_remote_url` at the upstream, and store the api key:
+
+   ```python
+   from mojo.apps.phonehub.models import PhoneConfig
+   cfg = PhoneConfig(
+       group=my_group,                                  # or None for system default
+       name="central-sms",
+       provider="mojo",
+       mojo_remote_url="https://sms-hub.example.com",
+   )
+   cfg.set_mojo_api_key(raw_token)                      # encrypted via MojoSecrets
+   cfg.save()
+   ```
+
+2. Validate end-to-end with `cfg.test_connection()` — issues a single authenticated `GET /api/account/me` to the remote.
+
+`phonehub.send_sms(...)` and `POST /api/phonehub/sms/send` are unchanged from the caller's perspective; dispatch happens inside `SMS.send()`. A successful remote call stores the remote SMS id in `provider_message_id` and the full remote payload in `metadata["remote"]`. Failures are surfaced as `error_code` values: `timeout`, `http_<status>`, `remote_error`, `remote_failed`, or `config_error`.
+
+Test numbers (`+1555…`) continue to short-circuit locally without hitting the remote.

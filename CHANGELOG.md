@@ -26,6 +26,8 @@ bug fixes for multi-tennant config
 
 ## Unreleased
 
+**phonehub** — new `mojo` SMS provider lets one django-mojo instance delegate outbound SMS to another over HTTP. Set `PhoneConfig.provider='mojo'`, `mojo_remote_url`, and an encrypted `mojo_api_key` (via `set_mojo_api_key()`); `SMS.send()` then POSTs to the remote's existing `POST /api/phonehub/sms/send` with `Authorization: apikey <token>`. `SMS.send()` now dispatches by `PhoneConfig.provider` — `twilio`/`aws`/no config paths are unchanged. Provider failures map to `error_code` values `timeout`, `http_<status>`, `remote_error`, `remote_failed`, or `config_error`; no silent failover. `PhoneConfig.test_connection()` gains a mojo branch that validates the api key via `GET /api/account/me`. New setting `SMS_REMOTE_TIMEOUT` (default `10`). Test numbers (`+1555…`) continue to short-circuit locally without hitting the remote. Migration: `phonehub.0003_phoneconfig_mojo_remote_url_and_more`.
+
 **account** — mojo GeoIP provider and abuse-signal federation. One django-mojo instance can use another as its primary/fallback GeoIP source (`GEOIP_PRIMARY_PROVIDER='mojo'`), and pushes observed threat escalations and attacker/abuser flag flips back to the upstream asynchronously via `POST /api/system/geoip/sync` (requires `geoip_sync` ApiKey permission). `block()` now atomically escalates `threat_level` to at least `high`. Per-fleet firewall state (`is_blocked`, `is_whitelisted`, etc.) is never federated.
 
 **account** — geofencing policy engine. System-wide and per-group rules gate access at the HTTP layer before any view logic runs.

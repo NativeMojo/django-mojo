@@ -1,3 +1,4 @@
+import requests
 from django.db import models
 from mojo.models import MojoModel, MojoSecrets
 
@@ -22,6 +23,7 @@ class PhoneConfig(MojoSecrets, MojoModel):
     PROVIDER_CHOICES = [
         ('twilio', 'Twilio'),
         ('aws', 'AWS SNS'),
+        ('mojo', 'Mojo Remote Instance'),
     ]
     provider = models.CharField(max_length=20, choices=PROVIDER_CHOICES,
                               default='twilio', db_index=True)
@@ -39,6 +41,11 @@ class PhoneConfig(MojoSecrets, MojoModel):
                                 help_text="AWS region for SNS")
     aws_sender_id = models.CharField(max_length=11, blank=True, null=True,
                                    help_text="AWS SNS sender ID (optional)")
+
+    # Mojo-remote provider fields (api key stored in mojo_secrets)
+    # mojo_api_key - stored in secrets
+    mojo_remote_url = models.CharField(max_length=255, blank=True, null=True,
+                                       help_text="Base URL of the remote django-mojo instance, e.g. https://sms.example.com")
 
     # Lookup Settings
     lookup_enabled = models.BooleanField(default=True, db_index=True,
@@ -76,6 +83,13 @@ class PhoneConfig(MojoSecrets, MojoModel):
                 }
             }
         }
+
+    def save(self, *args, **kwargs):
+        # Defensive: strip trailing slash from mojo_remote_url so the service
+        # layer can always concat paths without double slashes.
+        if self.mojo_remote_url:
+            self.mojo_remote_url = self.mojo_remote_url.rstrip('/')
+        return super().save(*args, **kwargs)
 
     def __str__(self):
         org = self.group.name if self.group else "System Default"
@@ -128,6 +142,15 @@ class PhoneConfig(MojoSecrets, MojoModel):
         """Get decrypted AWS secret access key."""
         return self.get_secret('aws_secret_access_key', '')
 
+    # Mojo remote provider credentials management
+    def set_mojo_api_key(self, api_key):
+        """Set encrypted API key for the remote mojo SMS provider."""
+        self.set_secret('mojo_api_key', api_key)
+
+    def get_mojo_api_key(self):
+        """Get decrypted API key for the remote mojo SMS provider."""
+        return self.get_secret('mojo_api_key', '')
+
     def test_connection(self):
         """
         Test provider configuration.
@@ -146,6 +169,8 @@ class PhoneConfig(MojoSecrets, MojoModel):
             return self._test_twilio()
         elif self.provider == 'aws':
             return self._test_aws()
+        elif self.provider == 'mojo':
+            return self._test_mojo()
         else:
             return {
                 'success': False,
@@ -244,3 +269,59 @@ class PhoneConfig(MojoSecrets, MojoModel):
                 'error': 'connection_failed',
                 'details': str(e)
             }
+
+    def _test_mojo(self):
+        """Test the remote mojo SMS provider by validating the API key."""
+        from mojo.helpers.settings import settings
+
+        base_url = (self.mojo_remote_url or '').rstrip('/')
+        api_key = self.get_mojo_api_key()
+
+        if not base_url or not api_key:
+            return {
+                'success': False,
+                'message': 'Mojo provider requires mojo_remote_url and mojo_api_key',
+                'error': 'missing_credentials'
+            }
+
+        timeout = settings.get_static('SMS_REMOTE_TIMEOUT', 10)
+        url = f"{base_url}/api/account/me"
+        headers = {"Authorization": f"apikey {api_key}"}
+
+        try:
+            response = requests.get(url, headers=headers, timeout=timeout)
+        except requests.Timeout:
+            return {
+                'success': False,
+                'message': f'Mojo provider test timed out after {timeout}s',
+                'error': 'timeout'
+            }
+        except Exception as e:
+            return {
+                'success': False,
+                'message': f'Mojo provider test failed: {str(e)}',
+                'error': 'connection_failed',
+                'details': str(e)
+            }
+
+        if response.status_code in (401, 403):
+            return {
+                'success': False,
+                'message': 'Mojo provider rejected the API key',
+                'error': 'invalid_credentials',
+                'status_code': response.status_code
+            }
+
+        if response.status_code >= 400:
+            return {
+                'success': False,
+                'message': f'Mojo provider returned HTTP {response.status_code}',
+                'error': 'connection_failed',
+                'status_code': response.status_code
+            }
+
+        return {
+            'success': True,
+            'message': 'Mojo provider reachable and API key valid',
+            'remote_url': base_url
+        }

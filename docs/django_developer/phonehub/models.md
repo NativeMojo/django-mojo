@@ -182,10 +182,11 @@ Inherits from `MojoSecrets, MojoModel`. Credentials are stored encrypted in a si
 | `group` | OneToOneField → account.Group | `null` = system default config |
 | `name` | CharField(100) | Config name |
 | `is_active` | BooleanField | Whether this config is active |
-| `provider` | CharField | `"twilio"` (default) or `"aws"` |
+| `provider` | CharField | `"twilio"` (default), `"aws"`, or `"mojo"` |
 | `twilio_from_number` | CharField(20) | Default Twilio sender number |
 | `aws_region` | CharField(20) | AWS region (default `"us-east-1"`) |
 | `aws_sender_id` | CharField(11) | AWS SNS sender ID (max 11 chars) |
+| `mojo_remote_url` | CharField(255) | Base URL of the remote django-mojo SMS provider (e.g. `https://sms.example.com`). Trailing slash stripped on save. |
 | `lookup_enabled` | BooleanField | Whether to perform carrier lookups |
 | `lookup_cache_days` | IntegerField | Days before re-lookup (default 90) |
 | `test_mode` | BooleanField | Prevent sending real SMS when True |
@@ -233,13 +234,21 @@ config.get_twilio_auth_token()
 config.set_aws_credentials("AKIAXXXX", "secret_key_here")
 config.get_aws_access_key_id()
 config.get_aws_secret_access_key()
+
+# Mojo remote provider
+config.set_mojo_api_key("apikey_token_from_remote")
+config.get_mojo_api_key()
 ```
 
 #### `config.test_connection()`
-Test that the configured credentials are valid.
+Test that the configured credentials are valid. Dispatches to the per-provider
+test method (`_test_twilio` / `_test_aws` / `_test_mojo`). The mojo branch
+performs a lightweight `GET <mojo_remote_url>/api/account/me` with the
+configured api key.
 
 ```python
 result = config.test_connection()
 result["success"]  # True or False
 result["message"]  # Human-readable result
+result["error"]    # e.g. "invalid_credentials", "timeout", "missing_credentials"
 ```
