@@ -344,6 +344,10 @@ def test_validator_no_password_in_kwargs(opts):
             f"validator must receive `{required}` kwarg, got keys={keys}"
     assert val_calls[0]["email"] == email, \
         f"validator must receive the submitted email, got {val_calls[0]['email']}"
+    # Defense-in-depth: validator must not be able to reach password via request.DATA either
+    pw_probe = val_calls[0]["password_via_request"]
+    assert pw_probe in (None, ""), \
+        f"SECURITY: validator MUST NOT be able to read password via request.DATA, got {pw_probe!r}"
 
 
 # ===========================================================================

@@ -7,8 +7,10 @@ a single dotted-path setting points at one callable, loaded via
 mojo.helpers.modules.load_function() and cached.
 
   PRE_REGISTER_VALIDATOR    — runs before any DB write on register; raise
-                              ValueException to reject (400). Plaintext
-                              password is intentionally NOT passed.
+                              ValueException to reject (400). The plaintext
+                              password is NOT in the kwargs AND is popped
+                              from request.DATA for the duration of the call
+                              so the handler cannot reach it via the request.
 
   USER_REGISTERED_HANDLER   — runs inside the register transaction.atomic
                               block (or, for OAuth, immediately after the

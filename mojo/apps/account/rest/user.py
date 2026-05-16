@@ -299,9 +299,18 @@ def on_register(request):
     extras_allow = settings.get("REGISTRATION_EXTRA_FIELDS", []) or []
     extra = {key: request.DATA.get(key) for key in extras_allow if key in request.DATA}
 
-    # PRE_REGISTER_VALIDATOR — may raise ValueException → 400
-    account_extensions.run_pre_register_validator(
-        email=email, group=group, request=request, extra=extra)
+    # PRE_REGISTER_VALIDATOR — may raise ValueException → 400.
+    # Strip plaintext password from request.DATA before calling the validator
+    # so a consumer-written handler literally cannot reach it (defense-in-depth
+    # beyond "we don't pass it as a kwarg"). Restored in finally so downstream
+    # code that re-reads request.DATA still works.
+    _password_pop = request.DATA.pop("password", None)
+    try:
+        account_extensions.run_pre_register_validator(
+            email=email, group=group, request=request, extra=extra)
+    finally:
+        if _password_pop is not None:
+            request.DATA["password"] = _password_pop
 
     # Strength check (still framework-side; outside atomic for clarity)
     User(email=email).check_password_strength(password)

@@ -50,14 +50,23 @@ def _append(kind, data):
 def capture_validator(*, email, group, request, extra, **rest):
     """PRE_REGISTER_VALIDATOR capture. Records the kwargs we received.
 
-    Asserting `password` is NOT present is the security-regression guard.
+    Asserts (a) `password` is NOT in kwargs, and (b) `password` is NOT
+    reachable via request.DATA either (framework pops it for the call
+    duration as defense-in-depth).
     """
     received = sorted(["email", "group", "request", "extra"] + list(rest.keys()))
+    # Probe whether a hostile handler could read the password via the request
+    password_via_request = None
+    try:
+        password_via_request = request.DATA.get("password")
+    except Exception:
+        password_via_request = "__request_data_inaccessible__"
     _append("validator", {
         "email": email,
         "group_uuid": str(group.uuid) if group is not None else None,
         "extra": extra or {},
         "kwargs_keys": received,
+        "password_via_request": password_via_request,
     })
 
 
