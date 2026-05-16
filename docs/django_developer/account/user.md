@@ -13,7 +13,7 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
 | Field | Type | Description |
 |---|---|---|
 | `username` | TextField (unique) | Login username (lowercased) |
-| `email` | EmailField (unique) | Email address |
+| `email` | EmailField (unique, nullable) | Email address. Nullable since migration 0043 — phone-only users have no email on file. |
 | `first_name` | CharField | First name |
 | `last_name` | CharField | Last name |
 | `display_name` | CharField | Display name (auto-generated if blank) |

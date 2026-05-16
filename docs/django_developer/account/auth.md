@@ -233,17 +233,22 @@ ALLOW_USER_REGISTRATION = True
 
 **Endpoint:** `POST /api/auth/register`
 
+Fields and which identity channel is required depend on the server's `AUTH_REGISTER_FIELDS` setting. Default config requires `email` + `password`. Phone-as-identity projects configure `phone` (with optional `verify: "sms"` pre-verification) as the identity field instead.
+
 | Param | Required | Description |
 |---|---|---|
-| `email` | Yes | Email address (must be unique) |
+| `email` | Conditional | Required when `email` is the configured identity field |
+| `phone` | Conditional | Required when `phone` is the configured identity field |
 | `password` | Yes | Password (strength validated) |
-| `first_name` | No | First name |
-| `last_name` | No | Last name |
+| `first_name` | Conditional | Required when configured as such |
+| `last_name` | Conditional | Required when configured as such |
+| `dob` | Conditional | ISO `yyyy-mm-dd`. Required when configured; age-gated by `AUTH_MIN_AGE_YEARS` |
+| `verified_phone_token` | Conditional | Required when the schema marks `phone` with `verify: "sms"` |
 
 **Behavior depends on `REQUIRE_VERIFIED_EMAIL`:**
 
-- **`REQUIRE_VERIFIED_EMAIL = True`** — Account is created, verification email sent, response includes `requires_verification: true`. No JWT is issued. The user must verify their email before they can log in.
-- **`REQUIRE_VERIFIED_EMAIL = False`** (default) — Account is created, verification email sent as a nudge, and the user is logged in immediately with a JWT.
+- **`REQUIRE_VERIFIED_EMAIL = True`** — Account is created, response includes `requires_verification: true`. No JWT is issued. Email users must verify before logging in.
+- **`REQUIRE_VERIFIED_EMAIL = False`** (default) — User is logged in immediately with a JWT. A verification email is sent as a nudge when the user has an email on file.
 
 The registration page is served by the bouncer at `/auth/register` and uses `MojoAuth.register()` on the frontend.
 

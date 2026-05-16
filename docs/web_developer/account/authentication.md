@@ -287,7 +287,7 @@ Returns the profile of the authenticated user.
 }
 ```
 
-A 6-digit code is sent to the email. Response always returns success (to prevent email enumeration).
+The identifier can be supplied as `email`, `phone`, or `username`. A 6-digit code is dispatched via email by default. Pass `"channel": "sms"` to route the code via SMS instead; the server also routes via SMS automatically when the matched account has no email on file. Response always returns success (to prevent account enumeration).
 
 **Step 2: Submit code and new password**
 
@@ -457,7 +457,7 @@ await MojoAuth.register({
 
 ### Response — Auto-Login (default)
 
-When `REQUIRE_VERIFIED_EMAIL` is `False` (default), the user is logged in immediately. A verification email is still sent as a nudge.
+When `REQUIRE_VERIFIED_EMAIL` is `False` (default), the user is logged in immediately. A verification email is sent as a nudge when the user has an email address on file (phone-only registrations skip this).
 
 ```json
 {

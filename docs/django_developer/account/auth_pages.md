@@ -275,11 +275,11 @@ and bypass the `/api/` prefix.
 
 ### Registration page (`/register`)
 
-- First name / last name (optional)
-- Email + password
-- Terms & conditions checkbox
+- Fields driven by `AUTH_REGISTER_FIELDS` (default: first name, last name, email, password)
+- Terms & conditions checkbox (when `AUTH_TERMS_URL` is set)
 - Google/Apple OAuth sign-up
 - Link to login page
+- When `phone` is in the schema with `verify: "sms"`: inline Send-code / Verify controls are rendered automatically
 
 ### When providers are disabled
 
