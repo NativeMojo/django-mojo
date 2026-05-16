@@ -132,13 +132,13 @@ def test_rejects_missing_token_enforced(opts):
     clear_rate_limits(ip=TEST_IP, key="public_message_submit")
 
     # With BOUNCER_REQUIRE_TOKEN=True, missing token → 403.
-    with th.server_settings(BOUNCER_REQUIRE_TOKEN=True):
-        resp = opts.client.post(SUBMIT_PATH, {
-            "kind": "contact_us",
-            "name": "Jane",
-            "email": "reject-token@example.com",
-            "message": "hello",
-        })
+    # Use per-request test-mode header (parallel-safe, no server reload).
+    resp = opts.client.post(SUBMIT_PATH, {
+        "kind": "contact_us",
+        "name": "Jane",
+        "email": "reject-token@example.com",
+        "message": "hello",
+    }, headers={"X-Mojo-Test-Bouncer-Require-Token": "1"})
 
     assert_eq(resp.status_code, 403, f"expected 403 without token, got {resp.status_code}")
     saved = PublicMessage.objects.filter(email="reject-token@example.com").count()
@@ -160,14 +160,14 @@ def test_rejects_reused_token(opts):
     })
     assert_eq(resp1.status_code, 200, f"first submit should succeed, got {resp1.status_code}")
 
-    with th.server_settings(BOUNCER_REQUIRE_TOKEN=True):
-        resp2 = opts.client.post(SUBMIT_PATH, {
-            "kind": "contact_us",
-            "name": "Jane",
-            "email": "reject-token@example.com",
-            "message": "replay attempt",
-            "bouncer_token": token,
-        })
+    # Use per-request test-mode header (parallel-safe, no server reload).
+    resp2 = opts.client.post(SUBMIT_PATH, {
+        "kind": "contact_us",
+        "name": "Jane",
+        "email": "reject-token@example.com",
+        "message": "replay attempt",
+        "bouncer_token": token,
+    }, headers={"X-Mojo-Test-Bouncer-Require-Token": "1"})
     assert_eq(
         resp2.status_code, 403,
         f"replayed token should be rejected with 403, got {resp2.status_code}",

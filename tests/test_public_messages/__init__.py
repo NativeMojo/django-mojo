@@ -1,4 +1,5 @@
 TESTIT = {
     "requires_apps": ["mojo.apps.account"],
-    "serial": True,  # uses th.server_settings() for BOUNCER_REQUIRE_TOKEN toggle
+    # Now uses X-Mojo-Test-Bouncer-Require-Token header instead of
+    # th.server_settings() — parallel-safe, no server reloads.
 }

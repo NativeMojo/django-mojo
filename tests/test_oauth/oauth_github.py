@@ -50,8 +50,9 @@ def test_github_get_auth_url(opts):
 def test_github_oauth_begin(opts):
     from urllib.parse import unquote
 
-    with th.server_settings(GITHUB_CLIENT_ID="test-client-id-123"):
-        resp = opts.client.get(f"/api/auth/oauth/{PROVIDER}/begin")
+    # GITHUB_CLIENT_ID is pinned in test project settings (parallel-safe);
+    # no per-test server_settings reload needed.
+    resp = opts.client.get(f"/api/auth/oauth/{PROVIDER}/begin")
 
     assert resp.status_code == 200, f"Unexpected status {resp.status_code}: {resp.response}"
     data = resp.response.data

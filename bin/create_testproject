@@ -85,6 +85,12 @@ SECRET_KEY = "set-in-var-django-conf"
 # extension handler dotted paths). No-op in production — the env wouldn't set this.
 MOJO_TEST_MODE = True
 
+# Test-environment static config — set once so tests don't need server reloads
+# to flip these per-test. Tests that need different values mutate
+# django.conf.settings in-process or use test-mode headers where supported.
+ALLOWED_REDIRECT_URLS = ["https://example.com/"]
+GITHUB_CLIENT_ID = "test-client-id-123"
+
 AUTH_USER_MODEL = "account.User"
 ROOT_URLCONF = "settings.urls"
 ALLOWED_HOSTS = ["*"]

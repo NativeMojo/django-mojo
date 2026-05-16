@@ -71,10 +71,11 @@ def test_oauth_begin_frontend_uri_in_state(opts):
     """
     from urllib.parse import unquote
     frontend_url = "https://example.com/login"
-    with th.server_settings(ALLOWED_REDIRECT_URLS=["https://example.com/"]):
-        resp = opts.client.get(
-            f"/api/auth/oauth/{PROVIDER}/begin?redirect_uri={frontend_url}"
-        )
+    # ALLOWED_REDIRECT_URLS is pinned in test project settings (parallel-safe);
+    # no per-test server_settings reload needed.
+    resp = opts.client.get(
+        f"/api/auth/oauth/{PROVIDER}/begin?redirect_uri={frontend_url}"
+    )
     assert resp.status_code == 200, f"Unexpected status {resp.status_code}: {resp.response}"
     auth_url = resp.response.data.auth_url
     decoded_url = unquote(auth_url)

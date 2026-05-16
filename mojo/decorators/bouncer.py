@@ -32,12 +32,22 @@ def requires_bouncer_token(page_type='login'):
     BOUNCER_REQUIRE_TOKEN=False (default): invalid/missing token is logged but
     the request proceeds. Safe for gradual rollout.
     BOUNCER_REQUIRE_TOKEN=True: invalid/missing token returns 403.
+
+    Test-mode override: when settings.MOJO_TEST_MODE is True, the
+    X-Mojo-Test-Bouncer-Require-Token header ("0"/"1") overrides the setting
+    per-request. Lets tests exercise both branches without a server reload.
+    Production has zero overhead — MOJO_TEST_MODE defaults to False.
     """
     def decorator(func):
         @wraps(func)
         def wrapper(request, *args, **kwargs):
             token_str = request.DATA.get('bouncer_token', '')
             require = settings.get_static('BOUNCER_REQUIRE_TOKEN', False)
+            # Test-mode header override
+            if settings.get('MOJO_TEST_MODE', False, kind='bool'):
+                hdr = request.META.get('HTTP_X_MOJO_TEST_BOUNCER_REQUIRE_TOKEN')
+                if hdr is not None:
+                    require = hdr not in ('0', 'false', 'False', '')
 
             # Check group-level opt-in override
             if not require and request.group:
