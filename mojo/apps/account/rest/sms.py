@@ -165,3 +165,71 @@ def on_sms_login(request):
 
     _send_otp(user)
     return JsonResponse({"status": True, "message": "If the account exists, a code was sent."})
+
+
+# -----------------------------------------------------------------
+# Pre-registration phone verification (verify-then-register).
+# Redis-backed, user-less: no User row exists yet at this stage.
+# -----------------------------------------------------------------
+
+@md.POST("auth/phone/register/start")
+@md.public_endpoint()
+@md.requires_bouncer_token('registration')
+@md.strict_rate_limit("phone_register_start", ip_limit=5, ip_window=300)
+@md.requires_geofence(scope="auth")
+@md.requires_params("phone")
+def on_phone_register_start(request):
+    """Begin pre-register phone verification.
+
+    Body: { phone }
+    Returns { session_token, expires_in }.
+    """
+    from mojo.apps.account.services import phone_register
+
+    raw_phone = request.DATA.get("phone", "")
+    phone = normalize_phone(raw_phone) if raw_phone else None
+    if not phone:
+        raise merrors.ValueException("Invalid phone number")
+
+    # Reject early when a user already owns this number — same error family
+    # the email path uses for duplicates. Without this guard, a bot can
+    # silently burn SMS spend trying to "verify" someone else's number.
+    if User.objects.filter(phone_number=phone).exists():
+        raise merrors.ValueException("An account with this phone number already exists")
+
+    session_token, code, ttl = phone_register.start(phone, ip=getattr(request, "ip", None))
+
+    try:
+        sms = phonehub.send_sms(phone, f"Your verification code is: {code}")
+        if sms is not None and getattr(sms, "status", None) == "failed":
+            logit.error("account.sms", f"phone_register: failed to send code to {phone}")
+    except Exception as e:
+        logit.error("account.sms", f"phone_register: SMS exception for {phone}: {e}")
+
+    return JsonResponse({
+        "status": True,
+        "data": {"session_token": session_token, "expires_in": ttl},
+    })
+
+
+@md.POST("auth/phone/register/verify")
+@md.public_endpoint()
+@md.strict_rate_limit("phone_register_verify", ip_limit=10, ip_window=60)
+@md.requires_geofence(scope="auth")
+@md.requires_params("session_token", "code")
+def on_phone_register_verify(request):
+    """Verify the SMS code and mint a verified-phone token.
+
+    Body: { session_token, code }
+    Returns { verified_phone_token, expires_in }. The token is then
+    submitted as `verified_phone_token` in the `/auth/register` POST body.
+    """
+    from mojo.apps.account.services import phone_register
+
+    session_token = request.DATA.get("session_token", "")
+    code = request.DATA.get("code", "")
+    verified_token, phone, ttl = phone_register.verify_code(session_token, code)
+    return JsonResponse({
+        "status": True,
+        "data": {"verified_phone_token": verified_token, "expires_in": ttl},
+    })
