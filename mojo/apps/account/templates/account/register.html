@@ -70,6 +70,7 @@ Already have an account? <a href="{{ auth_url|default:'/auth' }}">Log in</a>
 (function () {
     var m = window._mat;
     var $ = m.$;
+    var cfg = window._matConfig;
 
     {% block pre_submit_script %}{% endblock %}
 
@@ -86,6 +87,7 @@ Already have an account? <a href="{{ auth_url|default:'/auth' }}">Log in</a>
         var payload = { email: email, password: password };
         if (firstName) payload.first_name = firstName;
         if (lastName) payload.last_name = lastName;
+        if (cfg.groupUuid) payload.group_uuid = cfg.groupUuid;
         MojoAuth.register(payload)
             .then(function (result) {
                 if (result && result.requires_verification) {

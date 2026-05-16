@@ -210,6 +210,15 @@ Per-group settings that take effect: all `AUTH_*` settings (logo, title, hero,
 OAuth buttons, success redirect, layout, CSS). Each setting resolves with a
 parent-chain fallback: group → parent group → global.
 
+**Group forwarded on submit** — when the auth page resolves a group (via
+hostname or `?group=`), the rendered register and login forms automatically
+include `group_uuid` in the POST body sent to `/api/auth/register` and
+`/api/auth/login`. This satisfies servers configured with
+`REQUIRE_GROUP_ON_REGISTRATION = True` from the hosted page, and gives the
+backend's `request.group` middleware and `USER_LOGIN_HANDLER` the operator
+context on password logins. Single-tenant deployments are unaffected —
+when no group is resolved, `group_uuid` is omitted from the body.
+
 ### Features — enable/disable per provider
 
 | Setting | Default | Description |

@@ -204,7 +204,7 @@
         var u = $("signin-username").value.trim(), p = $("signin-password").value;
         if (!u || !p) { m.showMessage("Please enter your username and password.", "error"); return; }
         var btn = $("btn-signin"); m.setLoading(btn, true); m.hideMessage();
-        MojoAuth.login(u, p)
+        MojoAuth.login(u, p, { group_uuid: cfg.groupUuid })
             .then(function (data) {
                 if (data && data.mfa_required) { m.showMessage("MFA required — check your authenticator app or phone.", "info"); m.setLoading(btn, false); return; }
                 m.onAuthSuccess();

@@ -188,13 +188,19 @@
          * Stores access_token and refresh_token in localStorage on success.
          * @param {string} username
          * @param {string} password
+         * @param {object} [options] - Optional extras. Supported keys:
+         *   - group_uuid {string}: operator/group UUID forwarded to the
+         *     server so request.group middleware and USER_LOGIN_HANDLER
+         *     receive multi-tenant context.
          * @returns {Promise<object>} response data ({ access_token, refresh_token, user })
          *
          * NOTE: If MFA is enabled, the response will contain { mfa_required: true, mfa_token, mfa_methods }
          * instead of tokens. Check result.mfa_required before assuming login is complete.
          */
-        login: function (username, password) {
-            return post(ep('login'), _withDevice({ username: username, password: password }))
+        login: function (username, password, options) {
+            var payload = { username: username, password: password };
+            if (options && options.group_uuid) payload.group_uuid = options.group_uuid;
+            return post(ep('login'), _withDevice(payload))
                 .then(function (resp) {
                     var d = resp.data || resp;
                     // MFA challenge — tokens not issued yet, return raw for caller to handle

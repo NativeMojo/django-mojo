@@ -331,3 +331,19 @@ not hidden by JS).
 | `BOUNCER_CONTACT_PATH` | `'contact'` | Bouncer-gated contact/support page URL path |
 
 See [bouncer.md](bouncer.md) for the full bouncer settings reference.
+
+---
+
+## Multi-Tenant: Forwarding `group_uuid` From the Hosted Forms
+
+The hosted register and login pages resolve the operator group in `on_register_page` / `on_login_page` from either:
+
+1. The request hostname matching a `Group.auth_domain`, or
+2. The `?group=<uuid>` query parameter.
+
+The resolved group's `uuid` is plumbed into `_auth_context()` and emitted by `auth_base.html` as `window._matConfig.groupUuid`. The submit handlers in `register.html` and `login.html` then add it to the POST payload automatically:
+
+- `register.html` adds `payload.group_uuid = cfg.groupUuid` before calling `MojoAuth.register(payload)`. This means deployments with `REQUIRE_GROUP_ON_REGISTRATION = True` are satisfied from the hosted page — no custom front-end is required.
+- `login.html` calls `MojoAuth.login(u, p, { group_uuid: cfg.groupUuid })` so `request.group` middleware and `USER_LOGIN_HANDLER` receive the operator on password logins.
+
+When `_matConfig.groupUuid` is empty (single-tenant deployment), neither form adds the key — payloads are identical to pre-multi-tenant behavior. Hand-crafted invalid `group_uuid` values reaching the POST follow current middleware behavior: on register the lookup is strict and returns 400; on login `request.group` falls back to other resolvers.
