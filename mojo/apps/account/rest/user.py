@@ -574,17 +574,21 @@ def on_user_forgot(request):
             and (channel == "sms" or (not user.email and bool(user.phone_number)))
         )
         if wants_sms:
-            if not user.phone_number:
-                # No SMS-capable channel — fall back to silent success to
-                # avoid enumeration. Same generic response as below.
-                user.report_incident(
-                    f"{user.username} requested SMS reset but has no phone on file",
-                    "password_reset:no_phone", level=4)
-            else:
-                code = crypto.random_string(6, True, False, False)
-                user.set_secret("password_reset_code", code)
-                user.set_secret("password_reset_code_ts", int(dates.utcnow().timestamp()))
-                user.save()
+            # Always perform the DB writes regardless of phone presence so the
+            # response timing for "user has phone" vs "user has no phone" is
+            # dominated by the same set_secret + save work — closes a
+            # latency-based attribute-enumeration side channel.
+            #
+            # Residual gap: phonehub.send_sms is a network call only made when
+            # the user actually has a phone. A determined attacker measuring
+            # response latency could still distinguish has-phone from
+            # no-phone in the tail. Move the SMS dispatch onto the jobs
+            # channel to fully close this; tracked separately.
+            code = crypto.random_string(6, True, False, False)
+            user.set_secret("password_reset_code", code)
+            user.set_secret("password_reset_code_ts", int(dates.utcnow().timestamp()))
+            user.save()
+            if user.phone_number:
                 try:
                     phonehub.send_sms(
                         user.phone_number,
@@ -593,6 +597,10 @@ def on_user_forgot(request):
                     user.report_incident(
                         f"SMS reset code send failed: {exc}",
                         "password_reset:sms_send_failed", level=4)
+            else:
+                user.report_incident(
+                    f"{user.username} requested SMS reset but has no phone on file",
+                    "password_reset:no_phone", level=4)
         elif method == "code":
             code = crypto.random_string(6, True, False, False)
             user.set_secret("password_reset_code", code)

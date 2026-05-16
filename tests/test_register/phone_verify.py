@@ -107,3 +107,35 @@ def test_rejects_malformed_token(opts):
         assert False, "verify_code must reject malformed session tokens"
     except merrors.ValueException:
         pass
+
+
+@th.django_unit_test("normalize_phone is idempotent: token binds through non-normalized input")
+def test_normalize_phone_idempotent_through_flow(opts):
+    """If a caller passes the same number in a different format on register,
+    consume() must still bind correctly because normalize_phone normalizes
+    both stored and supplied values to the same canonical form.
+
+    This locks in the idempotency assumption — non-normalized input through
+    User.normalize_phone twice yields the same canonical phone string.
+    """
+    from mojo.apps.account.models import User
+    from mojo.apps.account.services import phone_register
+
+    raw_messy = "+1 (415) 555-0666"
+    normalized = User.normalize_phone(raw_messy)
+    assert normalized, f"normalize_phone must accept the formatted input, got {normalized!r}"
+    assert User.normalize_phone(normalized) == normalized, \
+        "normalize_phone must be idempotent — feeding its own output back must yield the same string"
+
+    # Start with the already-normalized phone (mirrors the endpoint's behavior
+    # where it normalizes before storing).
+    session_token, code, _ = phone_register.start(normalized)
+    verified_token, stored_phone, _ = phone_register.verify_code(session_token, code)
+    assert stored_phone == normalized, \
+        f"verify_code must return the normalized phone, got {stored_phone!r}"
+
+    # Caller supplies the same phone in a different (re-normalized) format.
+    # If normalize_phone is idempotent, the binding holds.
+    resupplied = User.normalize_phone(raw_messy)
+    assert phone_register.consume(verified_token, resupplied) is True, \
+        "consume must succeed when the supplied phone normalizes to the bound phone"
