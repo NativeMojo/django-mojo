@@ -25,98 +25,104 @@ class _FakeRequest:
             self.META["HTTP_VIA"] = via
 
 
-@th.unit_test("gate: env var enabled + loopback + no proxy → True")
+@th.unit_test("gate: MOJO_TEST_MODE=True + loopback + no proxy → True")
 def test_gate_pass(opts):
     from mojo.helpers import test_mode
-    # Sanity: env var is set in the test server, but for the gate function
-    # we control _TEST_MODE_ENABLED directly to make the test independent of
-    # env state.
-    orig = test_mode._TEST_MODE_ENABLED
-    test_mode._TEST_MODE_ENABLED = True
+    # The test project sets MOJO_TEST_MODE=True, but we mutate django.conf
+    # directly here to make the test independent of settings state.
+    from django.conf import settings as dj_settings
+    orig = getattr(dj_settings, "MOJO_TEST_MODE", False)
+    dj_settings.MOJO_TEST_MODE = True
     try:
         assert test_mode.is_test_request(_FakeRequest()) is True, \
-            "loopback + no proxy + env-enabled must pass"
+            "loopback + no proxy + MOJO_TEST_MODE=True must pass"
         assert test_mode.is_test_request(_FakeRequest(remote_addr="::1")) is True, \
             "IPv6 loopback must pass"
     finally:
-        test_mode._TEST_MODE_ENABLED = orig
+        dj_settings.MOJO_TEST_MODE = orig
 
 
-@th.unit_test("gate: env var disabled → False (even with loopback)")
+@th.unit_test("gate: MOJO_TEST_MODE=False → gate always closed (even with loopback)")
 def test_gate_env_disabled(opts):
     from mojo.helpers import test_mode
-    orig = test_mode._TEST_MODE_ENABLED
-    test_mode._TEST_MODE_ENABLED = False
+    from django.conf import settings as dj_settings
+    orig = getattr(dj_settings, "MOJO_TEST_MODE", False)
+    dj_settings.MOJO_TEST_MODE = False
     try:
         assert test_mode.is_test_request(_FakeRequest()) is False, \
-            "env var disabled must always fail the gate"
+            "MOJO_TEST_MODE=False must always close the gate"
     finally:
-        test_mode._TEST_MODE_ENABLED = orig
+        dj_settings.MOJO_TEST_MODE = orig
 
 
 @th.unit_test("gate: X-Forwarded-For present → False (proxy chain detected)")
 def test_gate_xff_blocks(opts):
     from mojo.helpers import test_mode
-    orig = test_mode._TEST_MODE_ENABLED
-    test_mode._TEST_MODE_ENABLED = True
+    from django.conf import settings as dj_settings
+    orig = getattr(dj_settings, "MOJO_TEST_MODE", False)
+    dj_settings.MOJO_TEST_MODE = True
     try:
         req = _FakeRequest(remote_addr="127.0.0.1", x_forwarded_for="1.2.3.4")
         assert test_mode.is_test_request(req) is False, \
             "X-Forwarded-For present must close the gate (proxy chain)"
     finally:
-        test_mode._TEST_MODE_ENABLED = orig
+        dj_settings.MOJO_TEST_MODE = orig
 
 
 @th.unit_test("gate: Forwarded header present → False")
 def test_gate_forwarded_blocks(opts):
     from mojo.helpers import test_mode
-    orig = test_mode._TEST_MODE_ENABLED
-    test_mode._TEST_MODE_ENABLED = True
+    from django.conf import settings as dj_settings
+    orig = getattr(dj_settings, "MOJO_TEST_MODE", False)
+    dj_settings.MOJO_TEST_MODE = True
     try:
         req = _FakeRequest(remote_addr="127.0.0.1", forwarded='for="1.2.3.4"')
         assert test_mode.is_test_request(req) is False, \
             "Forwarded header must close the gate"
     finally:
-        test_mode._TEST_MODE_ENABLED = orig
+        dj_settings.MOJO_TEST_MODE = orig
 
 
 @th.unit_test("gate: Via header present → False")
 def test_gate_via_blocks(opts):
     from mojo.helpers import test_mode
-    orig = test_mode._TEST_MODE_ENABLED
-    test_mode._TEST_MODE_ENABLED = True
+    from django.conf import settings as dj_settings
+    orig = getattr(dj_settings, "MOJO_TEST_MODE", False)
+    dj_settings.MOJO_TEST_MODE = True
     try:
         req = _FakeRequest(remote_addr="127.0.0.1", via="1.1 proxy.example.com")
         assert test_mode.is_test_request(req) is False, \
             "Via header must close the gate"
     finally:
-        test_mode._TEST_MODE_ENABLED = orig
+        dj_settings.MOJO_TEST_MODE = orig
 
 
 @th.unit_test("gate: non-loopback REMOTE_ADDR → False (external traffic)")
 def test_gate_non_loopback_blocks(opts):
     from mojo.helpers import test_mode
-    orig = test_mode._TEST_MODE_ENABLED
-    test_mode._TEST_MODE_ENABLED = True
+    from django.conf import settings as dj_settings
+    orig = getattr(dj_settings, "MOJO_TEST_MODE", False)
+    dj_settings.MOJO_TEST_MODE = True
     try:
         for ip in ("1.2.3.4", "10.0.0.1", "8.8.8.8", "192.168.1.1", ""):
             req = _FakeRequest(remote_addr=ip)
             assert test_mode.is_test_request(req) is False, \
                 f"non-loopback {ip!r} must close the gate"
     finally:
-        test_mode._TEST_MODE_ENABLED = orig
+        dj_settings.MOJO_TEST_MODE = orig
 
 
 @th.unit_test("gate: None request → False (defensive)")
 def test_gate_none_request(opts):
     from mojo.helpers import test_mode
-    orig = test_mode._TEST_MODE_ENABLED
-    test_mode._TEST_MODE_ENABLED = True
+    from django.conf import settings as dj_settings
+    orig = getattr(dj_settings, "MOJO_TEST_MODE", False)
+    dj_settings.MOJO_TEST_MODE = True
     try:
         assert test_mode.is_test_request(None) is False, \
             "None request must fail safely, not crash"
     finally:
-        test_mode._TEST_MODE_ENABLED = orig
+        dj_settings.MOJO_TEST_MODE = orig
 
 
 # ---------------------------------------------------------------------------

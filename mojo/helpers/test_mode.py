@@ -1,48 +1,46 @@
-"""Hardened test-mode header gate — defense in depth.
+"""Test-mode header gate.
 
 Test-mode headers (X-Mojo-Test-*) let test suites override per-request behavior
-without server reloads. To prevent an accidental production leak from becoming
-a remote-code-execution vector, the gate enforces FOUR layers:
+without server reloads. The gate enforces three layers:
 
-  1. **Environment variable**: MOJO_TEST_MODE=1 must be set in the server
-     process environment. Set only by `bin/asgi_local` for the test server;
-     production launchers never set it. Not a settings.py value — settings
-     files travel between projects, env vars don't.
+  1. **`MOJO_TEST_MODE = True` in Django settings**. Defaults to False.
+     The framework follows the same settings-flag pattern used for other
+     gates throughout the codebase.
 
   2. **Loopback-only**: REMOTE_ADDR must be 127.0.0.1 / ::1 / localhost.
      The peer-IP check uses the raw socket address, not the proxy-aware
      `request.ip` — production traffic that came through any reverse proxy
-     fails this check.
+     fails this check even if MOJO_TEST_MODE were accidentally True.
 
-  3. **No proxy chain**: HTTP_X_FORWARDED_FOR / HTTP_FORWARDED / HTTP_VIA must
-     all be absent. Any presence indicates the request crossed a proxy and is
-     therefore not a local test request.
+  3. **No proxy chain**: HTTP_X_FORWARDED_FOR / HTTP_FORWARDED / HTTP_VIA
+     must all be absent. Any presence indicates the request crossed a
+     proxy and is therefore not a local test request.
 
-  4. **Startup warning + Django system check**: when MOJO_TEST_MODE=1 is set,
-     a WARNING is logged at import time. Django's `check --deploy` reports
-     this as an ERROR if DEBUG=False — production deploys catch the
-     misconfiguration before serving traffic.
+If ALL three conditions are not satisfied, every X-Mojo-Test-* header is
+silently ignored. This is the only function that should grant
+header-override access anywhere in the framework. The defenses #2 and #3
+make this safe even if MOJO_TEST_MODE accidentally leaks into a production
+settings file — external attackers can't satisfy them.
 
-If ALL four conditions are not satisfied, every X-Mojo-Test-* header is
-silently ignored — the code paths that read them are short-circuited at the
-gate. This is the only function that should grant header-override access
-anywhere in the framework.
+The dotted-path handler headers (X-Mojo-Test-User-Registered-Handler etc.)
+can load arbitrary importable callables — that's why #2 and #3 matter, not
+just the flag.
 """
-import os
 import sys
 
-
-# Read once at module load. Env var only — never settings. The server process
-# either had MOJO_TEST_MODE=1 in its environment at startup or it didn't.
-_TEST_MODE_ENABLED = os.environ.get("MOJO_TEST_MODE") == "1"
+from mojo.helpers.settings import settings
 
 
 _LOOPBACK_IPS = frozenset(("127.0.0.1", "::1", "localhost"))
 
+# Track whether we've already emitted the startup warning so we only log once
+# per process, not once per request.
+_WARNED = False
+
 
 def is_enabled():
     """Module-level: is test-mode enabled in this process at all?"""
-    return _TEST_MODE_ENABLED
+    return settings.get("MOJO_TEST_MODE", False, kind="bool")
 
 
 def is_test_request(request):
@@ -51,8 +49,9 @@ def is_test_request(request):
     Call this before reading ANY X-Mojo-Test-* header. If False, the header
     must be ignored — fall back to normal settings.
     """
-    if not _TEST_MODE_ENABLED:
+    if not is_enabled():
         return False
+    _warn_once()
     if request is None:
         return False
     # Defense 2 + 3: peer must be loopback AND no proxy chain.
@@ -67,13 +66,18 @@ def is_test_request(request):
     return remote in _LOOPBACK_IPS
 
 
-# Emit a loud startup warning when test mode is active. Goes to stderr so
-# it shows up in every common log capture (uvicorn, gunicorn, systemd, k8s).
-if _TEST_MODE_ENABLED:
+def _warn_once():
+    """Loud one-shot stderr warning the first time the gate is consulted
+    with MOJO_TEST_MODE=True. Surfaces accidental production-settings
+    leaks in logs (uvicorn, gunicorn, systemd, k8s all capture stderr)."""
+    global _WARNED
+    if _WARNED:
+        return
+    _WARNED = True
     print(
         "================================================================\n"
-        "MOJO_TEST_MODE=1 IS ACTIVE — server honors X-Mojo-Test-* headers\n"
-        "from loopback connections. This MUST NOT be set in production.\n"
+        "MOJO_TEST_MODE=True — server honors X-Mojo-Test-* override headers\n"
+        "from loopback connections. This MUST NOT be True in production.\n"
         "================================================================",
         file=sys.stderr, flush=True,
     )

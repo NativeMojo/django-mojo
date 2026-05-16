@@ -433,22 +433,21 @@ Several framework hooks (geofence engine, account extension handlers, bouncer de
 
 ### Security gate (mandatory)
 
-Some of these headers — the dotted-path handler ones in particular — can load arbitrary importable callables. To prevent an accidental production leak from becoming a remote-code-execution vector, `mojo.helpers.test_mode.is_test_request(request)` is the gate, and EVERY callsite consults it before honoring a header. The gate requires **all four** of:
+Some of these headers — the dotted-path handler ones in particular — can load arbitrary importable callables. To prevent an accidental production leak from becoming a remote-code-execution vector, `mojo.helpers.test_mode.is_test_request(request)` is the gate, and EVERY callsite consults it before honoring a header. The gate requires **all three** of:
 
-1. `MOJO_TEST_MODE=1` set in the server process **environment** (not Django settings — env vars don't travel between projects).
+1. `MOJO_TEST_MODE = True` in Django settings. Defaults to False.
 2. `REMOTE_ADDR` is loopback (`127.0.0.1`, `::1`, or `localhost`).
-3. NO `X-Forwarded-For` header on the request.
-4. NO `Forwarded` or `Via` header on the request.
+3. NO `X-Forwarded-For`, `Forwarded`, or `Via` header on the request.
 
-Production deployments fail #1 (env var not set) AND #3 (LB always adds `X-Forwarded-For`). The gate is closed-by-default.
+Production deployments don't set the flag, AND any LB always adds `X-Forwarded-For`. The gate is closed-by-default and survives accidental flag leaks because external traffic can never satisfy #2 + #3.
 
 ### Enabling for your own project's tests
 
-If you're a consumer of django-mojo writing tests against these endpoints, you need ONE line in your test server launcher:
+If you're a consumer of django-mojo writing tests against these endpoints, add ONE line to your test environment settings:
 
-```bash
-# In your project's bin/run_tests or equivalent:
-MOJO_TEST_MODE=1 python -m uvicorn yourproject.asgi:application --host 127.0.0.1 --port 5555
+```python
+# In your project's local/test settings module:
+MOJO_TEST_MODE = True
 ```
 
 Your tests then send the relevant `X-Mojo-Test-*` headers per-request via the testit client:
