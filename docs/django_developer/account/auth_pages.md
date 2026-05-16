@@ -339,7 +339,7 @@ See [bouncer.md](bouncer.md) for the full bouncer settings reference.
 The hosted register and login pages resolve the operator group in `on_register_page` / `on_login_page` from either:
 
 1. The request hostname matching a `Group.auth_domain`, or
-2. The `?group=<uuid>` query parameter.
+2. The `?group_uuid=<uuid>` query parameter (the framework dispatcher reserves `?group=` for integer IDs and rejects UUID values upstream, so the bouncer's public UUID slot is `group_uuid`).
 
 The resolved group's `uuid` is plumbed into `_auth_context()` and emitted by `auth_base.html` as `window._matConfig.groupUuid`. The submit handlers in `register.html` and `login.html` then add it to the POST payload automatically:
 

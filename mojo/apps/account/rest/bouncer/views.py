@@ -38,7 +38,11 @@ def _resolve_group(request):
 
     Detection order:
     1. Hostname → Group.auth_domain lookup (trusted signal, cached in Redis)
-    2. ?group=<uuid> query param (fallback for platforms without custom domains)
+    2. ?group_uuid=<uuid> query param (fallback for platforms without custom domains)
+
+    The framework dispatcher reserves `?group=` for integer ID lookup and
+    400s on any non-integer value before this view runs, so the UUID path
+    must use `?group_uuid=` to be reachable.
 
     Returns Group instance or None.
     """
@@ -54,7 +58,7 @@ def _resolve_group(request):
         pass
 
     # 2. Query param fallback
-    group_uuid = request.GET.get('group', '')
+    group_uuid = request.GET.get('group_uuid', '')
     if group_uuid:
         try:
             return Group.objects.filter(uuid=group_uuid, is_active=True).first()
@@ -222,8 +226,10 @@ def _auth_context(request, group=None):
     login_path = settings.get_static('BOUNCER_LOGIN_PATH', 'auth')
     register_path = settings.get_static('BOUNCER_REGISTER_PATH', 'register')
     group_uuid = group.uuid if group else ''
-    # Preserve ?group= param in auth/register URLs so branding survives navigation
-    group_qs = f'?group={group_uuid}' if group_uuid else ''
+    # Preserve ?group_uuid= param in auth/register URLs so branding survives
+    # navigation. The framework dispatcher reserves `?group=` for integer IDs
+    # and 400s on UUID values, so cross-links must use `?group_uuid=`.
+    group_qs = f'?group_uuid={group_uuid}' if group_uuid else ''
     return {
         'api_base': settings.get('AUTH_API_BASE', '', group=group),
         'success_redirect': settings.get('AUTH_SUCCESS_REDIRECT', '/', group=group),
@@ -274,11 +280,13 @@ def _serve_challenge(request, challenge_tier=1, page_type='login', group=None):
         redirect_path = settings.get_static('BOUNCER_CONTACT_PATH', 'contact')
     else:
         redirect_path = settings.get_static('BOUNCER_LOGIN_PATH', 'auth')
-    # Preserve group, redirect, and back params through the challenge redirect
+    # Preserve group, redirect, and back params through the challenge redirect.
+    # Use `group_uuid` (not `group`) because the framework dispatcher reserves
+    # `?group=` for integer IDs and rejects UUID values with 400.
     group_uuid = group.uuid if group else ''
     fwd_params = {}
     if group_uuid:
-        fwd_params['group'] = group_uuid
+        fwd_params['group_uuid'] = group_uuid
     redirect_val = request.DATA.get('redirect') or request.DATA.get('next') or request.DATA.get('returnTo') or ''
     if redirect_val:
         fwd_params['redirect'] = redirect_val

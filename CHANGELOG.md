@@ -1,5 +1,7 @@
 ## v1.1.0 - (current)
 
+**account** — bouncer and OAuth flows now use `?group_uuid=<uuid>` instead of `?group=<uuid>` for UUID-based group selection. The framework dispatcher reserves `?group=` for integer-ID lookup and rejects non-integer values with `400 Invalid group ID` before any view runs, so the previous bouncer `?group=<uuid>` convention never actually worked end-to-end. `_resolve_group()` now reads `?group_uuid=`, `_auth_context()` emits `?group_uuid=` in cross-links (login ↔ register), `_serve_challenge()` preserves `group_uuid` through the bot-check redirect, and the OAuth callback bounce appends `?group_uuid=` to the frontend URI. The OAuth `on_oauth_begin` no longer silently falls back to `request.GET.get("group")` — callers must pass `group_uuid` explicitly. Consumer apps and frontends that built URLs with `?group=<uuid>` must switch to `?group_uuid=<uuid>`. Hostname-based resolution via `Group.auth_domain` is unchanged.
+
 ## v1.2.13 - May 16, 2026
 
 bug fixes for multi-tennant config

@@ -43,7 +43,7 @@ Supports all auth flows:
 | `?title=My+App` | Override brand title (URL param overrides settings) |
 | `?subtitle=Welcome` | Override subtitle text |
 | `?logo=/logo.png` | Override logo URL |
-| `?group=<uuid>` | Load per-group branding (logo, brand name, OAuth settings, success redirect). Used when multiple groups share one auth domain. |
+| `?group_uuid=<uuid>` | Load per-group branding (logo, brand name, OAuth settings, success redirect). Used when multiple groups share one auth domain. **Note:** must be `group_uuid`, not `group` — the framework dispatcher reserves `?group=` for integer IDs and rejects UUID values with 400 before the page renders. |
 
 ### After Login
 
@@ -196,15 +196,21 @@ can resolve a group automatically and apply its settings.
 backend. The server detects the hostname, resolves the group, and serves that
 group's logo, brand name, features, and success redirect. No URL params needed.
 
-**`?group=<uuid>` param** — for shared-domain deployments, append
-`?group=<uuid>` to the auth page URL. The group's branding is applied and the
-param is preserved through navigation (login ↔ register) and the OAuth
-round-trip (Google/Apple callback includes `?group=` in the return URL).
+**`?group_uuid=<uuid>` param** — for shared-domain deployments, append
+`?group_uuid=<uuid>` to the auth page URL. The group's branding is applied
+and the param is preserved through navigation (login ↔ register) and the
+OAuth round-trip (Google/Apple callback includes `?group_uuid=` in the
+return URL).
 
 ```html
 <!-- Link to the auth page with group-scoped branding -->
-<a href="/auth?group=abc123-uuid">Sign In to Client Brand</a>
+<a href="/auth?group_uuid=abc123uuid">Sign In to Client Brand</a>
 ```
+
+The param name is `group_uuid` rather than `group` because the framework's
+URL dispatcher reserves `?group=` for integer-ID lookup and rejects any
+non-integer value with `400 Invalid group ID` before the bouncer page
+runs.
 
 Per-group settings that take effect: all `AUTH_*` settings (logo, title, hero,
 OAuth buttons, success redirect, layout, CSS). Each setting resolves with a

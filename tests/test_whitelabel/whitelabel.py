@@ -177,25 +177,45 @@ def test_resolve_by_auth_domain_empty(opts):
 
 @th.django_unit_test()
 def test_resolve_group_by_query_param(opts):
-    """_resolve_group falls back to ?group=<uuid> when hostname doesn't match."""
+    """_resolve_group falls back to ?group_uuid=<uuid> when hostname doesn't match."""
     from mojo.apps.account.rest.bouncer.views import _resolve_group
     from django.test import RequestFactory
     factory = RequestFactory()
-    request = factory.get(f'/auth?group={TEST_GROUP_UUID}')
+    request = factory.get(f'/auth?group_uuid={TEST_GROUP_UUID}')
     # RequestFactory doesn't set get_host to our auth_domain, so hostname won't match
     result = _resolve_group(request)
-    assert_true(result is not None, "Expected group from ?group= param")
+    assert_true(result is not None, "Expected group from ?group_uuid= param")
     assert_eq(result.pk, opts.group.pk,
               f"Expected group pk {opts.group.pk}, got {result.pk}")
 
 
 @th.django_unit_test()
-def test_resolve_group_invalid_uuid(opts):
-    """_resolve_group returns None for invalid ?group= value."""
+def test_resolve_group_ignores_group_int_alias(opts):
+    """_resolve_group does NOT read ?group=<uuid>.
+
+    The framework dispatcher (mojo/decorators/http.py) reserves `?group=`
+    for integer IDs and 400s on any non-integer value before this view
+    runs. The bouncer's UUID fallback must therefore use ?group_uuid=.
+    Reading `?group=` here would be dead code that gives a false sense
+    the param works publicly.
+    """
     from mojo.apps.account.rest.bouncer.views import _resolve_group
     from django.test import RequestFactory
     factory = RequestFactory()
-    request = factory.get('/auth?group=nonexistent-uuid')
+    request = factory.get(f'/auth?group={TEST_GROUP_UUID}')
+    result = _resolve_group(request)
+    assert_true(result is None,
+                f"Expected None when uuid is passed via ?group= (reserved for "
+                f"integer IDs by the dispatcher), got {result}")
+
+
+@th.django_unit_test()
+def test_resolve_group_invalid_uuid(opts):
+    """_resolve_group returns None for invalid ?group_uuid= value."""
+    from mojo.apps.account.rest.bouncer.views import _resolve_group
+    from django.test import RequestFactory
+    factory = RequestFactory()
+    request = factory.get('/auth?group_uuid=nonexistent-uuid')
     result = _resolve_group(request)
     assert_true(result is None,
                 f"Expected None for invalid group uuid, got {result}")
@@ -251,16 +271,21 @@ def test_auth_context_no_group(opts):
 
 @th.django_unit_test()
 def test_auth_context_group_urls_preserve_param(opts):
-    """auth_url and register_url include ?group= when group is set."""
+    """auth_url and register_url include ?group_uuid= when group is set."""
     from mojo.apps.account.rest.bouncer.views import _auth_context
     from django.test import RequestFactory
     factory = RequestFactory()
     request = factory.get('/auth')
     ctx = _auth_context(request, group=opts.group)
-    assert_true(f'group={TEST_GROUP_UUID}' in ctx['auth_url'],
-                f"Expected group param in auth_url, got '{ctx['auth_url']}'")
-    assert_true(f'group={TEST_GROUP_UUID}' in ctx['register_url'],
-                f"Expected group param in register_url, got '{ctx['register_url']}'")
+    assert_true(f'group_uuid={TEST_GROUP_UUID}' in ctx['auth_url'],
+                f"Expected ?group_uuid= in auth_url, got '{ctx['auth_url']}'")
+    assert_true(f'group_uuid={TEST_GROUP_UUID}' in ctx['register_url'],
+                f"Expected ?group_uuid= in register_url, got '{ctx['register_url']}'")
+    # Must NOT use `?group=` for UUID — the framework dispatcher reserves
+    # that param for integer IDs and 400s on UUID values.
+    assert_true(f'group={TEST_GROUP_UUID}' not in ctx['auth_url'].replace('group_uuid=', ''),
+                f"auth_url must not emit `?group=<uuid>` (dispatcher rejects "
+                f"non-int values), got '{ctx['auth_url']}'")
 
 
 # ---------------------------------------------------------------------------

@@ -216,8 +216,12 @@ def on_oauth_begin(request, provider):
         "redirect_uri": callback_uri,
         "frontend_uri": frontend_uri,
     }
-    # Preserve group context through the OAuth round-trip for white-label branding
-    group_uuid = request.DATA.get("group_uuid", "") or request.GET.get("group", "")
+    # Preserve group context through the OAuth round-trip for white-label
+    # branding. Only accept `group_uuid` — the framework dispatcher reserves
+    # `?group=` for integer IDs and any UUID passed there is rejected upstream
+    # before this view runs (so silently falling back to it would just mask
+    # client bugs).
+    group_uuid = request.DATA.get("group_uuid", "")
     if group_uuid:
         state_extra["group_uuid"] = group_uuid
 
@@ -273,10 +277,13 @@ def on_oauth_callback(request, provider):
         raise merrors.ValueException("No frontend_uri in OAuth state")
 
     redirect_params = {"code": code, "state": state}
-    # Preserve group context so branding survives the OAuth round-trip
+    # Preserve group context so branding survives the OAuth round-trip.
+    # Use `group_uuid` (not `group`) because the framework dispatcher reserves
+    # `?group=` for integer IDs and rejects UUID values with 400, which would
+    # break the next request from the frontend.
     group_uuid = state_data.get("group_uuid", "")
     if group_uuid:
-        redirect_params["group"] = group_uuid
+        redirect_params["group_uuid"] = group_uuid
 
     params = urlencode(redirect_params, quote_via=quote)
     return HttpResponseRedirect(f"{frontend_uri}?{params}")

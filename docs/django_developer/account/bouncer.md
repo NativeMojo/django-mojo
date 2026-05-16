@@ -286,22 +286,29 @@ The Redis cache is also rebuilt by the scheduled `refresh_bouncer_sig_cache` job
 ## Per-Group Branding (White-Label Auth)
 
 The bouncer supports white-label auth pages per group. When a request arrives
-on a custom auth domain — or includes a `?group=<uuid>` query param — the
-bouncer resolves the group and applies its scoped `AUTH_*` settings.
+on a custom auth domain — or includes a `?group_uuid=<uuid>` query param —
+the bouncer resolves the group and applies its scoped `AUTH_*` settings.
 
 ### Group detection order
 
 1. **Hostname** — `Group.resolve_by_auth_domain(hostname)` looks up the active
    group whose `auth_domain` matches the request host. Result is Redis-cached
    (24h for hits, 1h for misses).
-2. **`?group=<uuid>` query param** — fallback for platforms that share a domain.
-   The group UUID is preserved through the challenge redirect and OAuth round-trip.
+2. **`?group_uuid=<uuid>` query param** — fallback for platforms that share a
+   domain. The group UUID is preserved through the challenge redirect and the
+   OAuth round-trip.
+
+The bouncer reads `?group_uuid=` (not `?group=`) because the framework's URL
+dispatcher (`mojo/decorators/http.py`) reserves `?group=` for integer-ID lookup
+and returns `400 Invalid group ID` for any non-integer value before this view
+runs. The dispatcher's UUID slot is `?group_uuid=`, which is what the bouncer
+reads and emits.
 
 ### Query params forwarded through the challenge
 
 `_serve_challenge()` preserves these params when building the post-challenge
-login redirect URL: `group`, `redirect` (and aliases `next`, `returnTo`), and
-`back`. Any param missing from the original request is omitted from the
+login redirect URL: `group_uuid`, `redirect` (and aliases `next`, `returnTo`),
+and `back`. Any param missing from the original request is omitted from the
 forwarded query string.
 
 ### Configuring a white-label group
@@ -342,8 +349,10 @@ when a group is resolved. Requests with no group always use the default branding
 ### OAuth round-trip
 
 `group_uuid` is embedded in the OAuth state so branding survives the
-provider redirect. The callback reconstructs `?group=<uuid>` and appends it
-to the frontend redirect URI before handing back to the auth page.
+provider redirect. The callback reconstructs `?group_uuid=<uuid>` and appends
+it to the frontend redirect URI before handing back to the auth page (using
+`group_uuid` rather than `group` so the framework dispatcher accepts the
+next request through the rest of the flow).
 
 ### Nginx setup for custom auth domains
 
