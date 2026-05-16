@@ -117,7 +117,12 @@ do_start() {
     _run_migrations
 
     echo "==> Starting uvicorn on http://$HOST:$PORT (daemon)"
-    nohup $PYTHON -m uvicorn _asgi:application \
+    # MOJO_TEST_MODE=1 enables per-request X-Mojo-Test-* header overrides for
+    # the geofence engine, account extension hooks, and bouncer decorator.
+    # The header gate ALSO requires loopback REMOTE_ADDR + no proxy chain, so
+    # this is safe even with the env var set. Production launchers MUST NOT
+    # set this env var.
+    MOJO_TEST_MODE=1 nohup $PYTHON -m uvicorn _asgi:application \
         --app-dir "$TESTPROJECT/bin" \
         --host "$HOST" \
         --port "$PORT" \
@@ -171,7 +176,9 @@ do_foreground() {
     fi
 
     echo "==> Starting uvicorn on http://$HOST:$PORT"
-    exec $PYTHON -m uvicorn _asgi:application \
+    # See do_start: MOJO_TEST_MODE=1 enables test-mode headers; gate also
+    # requires loopback + no proxy chain. Production must NOT set this.
+    MOJO_TEST_MODE=1 exec $PYTHON -m uvicorn _asgi:application \
         --app-dir "$TESTPROJECT/bin" \
         --host "$HOST" \
         --port "$PORT" \

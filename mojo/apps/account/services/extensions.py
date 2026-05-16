@@ -27,9 +27,10 @@ mojo.helpers.modules.load_function() and cached.
 All handlers are invoked with keyword arguments only so future signature
 additions don't break consumer handlers.
 
-TEST MODE — when settings.MOJO_TEST_MODE is True, handler dotted paths can be
-overridden per-request via headers, so test suites can run in parallel without
-reloading the server:
+TEST MODE — when the test-mode gate passes (see mojo.helpers.test_mode for the
+defense-in-depth checks: env var + loopback-only + no proxy chain), handler
+dotted paths can be overridden per-request via headers so tests run in parallel
+without server reloads:
     X-Mojo-Test-Pre-Register-Validator   → overrides PRE_REGISTER_VALIDATOR
     X-Mojo-Test-User-Registered-Handler  → overrides USER_REGISTERED_HANDLER
     X-Mojo-Test-User-Login-Handler       → overrides USER_LOGIN_HANDLER
@@ -37,11 +38,14 @@ reloading the server:
                                             (JSON list of allowlisted keys)
     X-Mojo-Test-Require-Group-On-Registration → "0"/"1"
     X-Mojo-Test-Allow-User-Registration  → "0"/"1"
-MOJO_TEST_MODE defaults to False, so production never honors these headers.
+
+These headers can load arbitrary Python callables — the gate is mandatory and
+production never satisfies all four conditions, so this is NOT an RCE vector
+in deployed environments.
 """
 import json
 
-from mojo.helpers import modules, logit
+from mojo.helpers import modules, logit, test_mode as _tm
 from mojo.helpers.settings import settings
 
 
@@ -53,12 +57,9 @@ _CACHE = {}
 
 
 # ---------------------------------------------------------------------------
-# Test-mode helpers
+# Test-mode helpers — gated by mojo.helpers.test_mode.is_test_request which
+# enforces env var + loopback-only + no proxy chain.
 # ---------------------------------------------------------------------------
-
-def _test_mode():
-    return settings.get("MOJO_TEST_MODE", False, kind="bool")
-
 
 def _header(request, name):
     if request is None:
@@ -68,8 +69,12 @@ def _header(request, name):
 
 
 def _resolve_with_override(setting_name, request, header_name):
-    """Like _resolve, but consults a test-mode header first when allowed."""
-    if request is not None and _test_mode():
+    """Like _resolve, but consults a test-mode header first when the gate passes.
+
+    Header can load arbitrary callables via load_function — gate MUST be
+    enforced before reading the header value.
+    """
+    if _tm.is_test_request(request):
         h = _header(request, header_name)
         if h is not None:
             # Empty header value means "no handler"
@@ -105,8 +110,8 @@ def _resolve_path(path):
 
 def list_setting_with_header(request, header_name, setting_name, default):
     """Public helper for callers (e.g. on_register's extras allowlist) to read
-    a list setting with a JSON-list header override under test mode."""
-    if request is not None and _test_mode():
+    a list setting with a JSON-list header override when the test gate passes."""
+    if _tm.is_test_request(request):
         h = _header(request, header_name)
         if h is not None:
             try:
@@ -119,8 +124,8 @@ def list_setting_with_header(request, header_name, setting_name, default):
 
 
 def bool_setting_with_header(request, header_name, setting_name, default):
-    """Public helper for boolean settings with header override under test mode."""
-    if request is not None and _test_mode():
+    """Public helper for boolean settings with header override when the test gate passes."""
+    if _tm.is_test_request(request):
         h = _header(request, header_name)
         if h is not None:
             return h not in ("0", "false", "False", "")

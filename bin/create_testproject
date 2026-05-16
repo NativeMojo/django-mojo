@@ -80,10 +80,9 @@ from .db import *
 DEBUG = True
 SECRET_KEY = "set-in-var-django-conf"
 
-# Enable per-request test-mode header overrides for fast, parallel-safe testing
-# of features that otherwise require server reload (geofence rules / overrides,
-# extension handler dotted paths). No-op in production — the env wouldn't set this.
-MOJO_TEST_MODE = True
+# Test-mode header overrides are gated by the MOJO_TEST_MODE=1 env var (not a
+# settings value — see mojo/helpers/test_mode.py). bin/asgi_local sets the
+# env var for the test server; production launchers never do.
 
 # Test-environment static config — set once so tests don't need server reloads
 # to flip these per-test. Tests that need different values mutate

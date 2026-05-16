@@ -14,21 +14,23 @@ Decision flow:
 
 Steps 6-10 all cache the decision under (ip, group_id) for GEOFENCE_CACHE_TTL.
 
-TEST MODE — when settings.MOJO_TEST_MODE is True, the engine honors per-request
-headers so test suites can run in parallel without server reloads:
+TEST MODE — when the test-mode gate passes (see mojo.helpers.test_mode for the
+defense-in-depth checks: env var + loopback-only + no proxy chain), the engine
+honors per-request headers so test suites can run in parallel without server
+reloads:
     X-Mojo-Test-Geo               : JSON dict, replaces geoip lookup result
     X-Mojo-Test-Geofence-System   : JSON dict, replaces GEOFENCE_SYSTEM_RULES
     X-Mojo-Test-Geofence-Enabled  : "0" or "1", overrides GEOFENCE_ENABLED
     X-Mojo-Test-Geofence-Fail-Closed : "0" or "1", overrides GEOFENCE_FAIL_CLOSED
     X-Mojo-Test-Geofence-Allow-Private : "0" or "1", overrides GEOFENCE_ALLOW_PRIVATE_IPS
     X-Mojo-Test-Geofence-Cache-Ttl : int seconds; <=0 disables cache for this request
-MOJO_TEST_MODE defaults to False, so production never honors these headers.
+The gate is closed by default; production never satisfies all four conditions.
 """
 import json
 
 from objict import objict
 
-from mojo.helpers import dates, logit
+from mojo.helpers import dates, logit, test_mode as _tm
 from mojo.helpers.settings import settings
 
 from . import cache as gf_cache
@@ -36,13 +38,10 @@ from .dsl import evaluate_rule, validate_rule
 
 
 # ---------------------------------------------------------------------------
-# Test-mode header overrides — read once per request, no production cost when
-# MOJO_TEST_MODE is False (default).
+# Test-mode header overrides — gated by mojo.helpers.test_mode.is_test_request
+# which enforces env var + loopback-only + no proxy chain. Production traffic
+# fails the gate so the header read paths short-circuit.
 # ---------------------------------------------------------------------------
-
-def _test_mode():
-    return settings.get("MOJO_TEST_MODE", False, kind="bool")
-
 
 def _header(request, name):
     if request is None:
@@ -62,7 +61,7 @@ def _json_header(request, name):
 
 
 def _bool_setting_with_header(request, header_name, setting_name, default):
-    if request is not None and _test_mode():
+    if _tm.is_test_request(request):
         h = _header(request, header_name)
         if h is not None:
             return h not in ("0", "false", "False", "")
@@ -70,7 +69,7 @@ def _bool_setting_with_header(request, header_name, setting_name, default):
 
 
 def _int_setting_with_header(request, header_name, setting_name, default):
-    if request is not None and _test_mode():
+    if _tm.is_test_request(request):
         h = _header(request, header_name)
         if h is not None:
             try:
@@ -81,7 +80,7 @@ def _int_setting_with_header(request, header_name, setting_name, default):
 
 
 def _system_rules(request=None):
-    if request is not None and _test_mode():
+    if _tm.is_test_request(request):
         override = _json_header(request, "X-Mojo-Test-Geofence-System")
         if override is not None:
             return override or {}
@@ -103,10 +102,10 @@ def _resolve_geo(ip, request=None):
     """Return a geo dict (provider-shaped) for `ip`, or None on lookup failure.
 
     Test-mode header X-Mojo-Test-Geo (JSON dict) wins over everything when
-    MOJO_TEST_MODE=True. Otherwise GEOFENCE_TEST_OVERRIDE setting wins over
-    real lookups.
+    the test-mode gate passes. Otherwise GEOFENCE_TEST_OVERRIDE setting wins
+    over real lookups.
     """
-    if request is not None and _test_mode():
+    if _tm.is_test_request(request):
         header_override = _json_header(request, "X-Mojo-Test-Geo")
         if header_override is not None:
             return header_override

@@ -405,3 +405,60 @@ def test_handler_fires(opts):
 9. Run with `./bin/run_tests -v -e` (or via config) when validating locally.
 
 Keeping these habits makes the suite predictable for both humans and models, highlights design gaps early, and keeps TestIt simple.
+
+---
+
+## Test-Mode Headers (`X-Mojo-Test-*`)
+
+Several framework hooks (geofence engine, account extension handlers, bouncer decorator) support per-request override headers so tests can change behavior without reloading the server. This is what lets `test_geofence`, `test_register`, `test_public_messages`, and `test_oauth` run in parallel in ~1–3s each.
+
+### What's overridable
+
+| Header | Overrides | Defined in |
+|---|---|---|
+| `X-Mojo-Test-Geo` (JSON) | geoip lookup result | `mojo.apps.account.services.geofence.engine` |
+| `X-Mojo-Test-Geofence-System` (JSON) | `GEOFENCE_SYSTEM_RULES` | `mojo.apps.account.services.geofence.engine` |
+| `X-Mojo-Test-Geofence-Enabled` (`0`/`1`) | `GEOFENCE_ENABLED` | same |
+| `X-Mojo-Test-Geofence-Fail-Closed` (`0`/`1`) | `GEOFENCE_FAIL_CLOSED` | same |
+| `X-Mojo-Test-Geofence-Allow-Private` (`0`/`1`) | `GEOFENCE_ALLOW_PRIVATE_IPS` | same |
+| `X-Mojo-Test-Geofence-Cache-Ttl` (int) | `GEOFENCE_CACHE_TTL` | same |
+| `X-Mojo-Test-Pre-Register-Validator` (dotted path) | `PRE_REGISTER_VALIDATOR` | `mojo.apps.account.services.extensions` |
+| `X-Mojo-Test-User-Registered-Handler` (dotted path) | `USER_REGISTERED_HANDLER` | same |
+| `X-Mojo-Test-User-Login-Handler` (dotted path) | `USER_LOGIN_HANDLER` | same |
+| `X-Mojo-Test-Registration-Extra-Fields` (JSON list) | `REGISTRATION_EXTRA_FIELDS` | same |
+| `X-Mojo-Test-Require-Group-On-Registration` (`0`/`1`) | `REQUIRE_GROUP_ON_REGISTRATION` | same |
+| `X-Mojo-Test-Allow-User-Registration` (`0`/`1`) | `ALLOW_USER_REGISTRATION` | same |
+| `X-Mojo-Test-Bouncer-Require-Token` (`0`/`1`) | `BOUNCER_REQUIRE_TOKEN` | `mojo.decorators.bouncer` |
+| `X-Mojo-Test-Capture-Id` | per-test capture key for handler fixtures | `tests/test_register/_capture.py` |
+
+### Security gate (mandatory)
+
+Some of these headers — the dotted-path handler ones in particular — can load arbitrary importable callables. To prevent an accidental production leak from becoming a remote-code-execution vector, `mojo.helpers.test_mode.is_test_request(request)` is the gate, and EVERY callsite consults it before honoring a header. The gate requires **all four** of:
+
+1. `MOJO_TEST_MODE=1` set in the server process **environment** (not Django settings — env vars don't travel between projects).
+2. `REMOTE_ADDR` is loopback (`127.0.0.1`, `::1`, or `localhost`).
+3. NO `X-Forwarded-For` header on the request.
+4. NO `Forwarded` or `Via` header on the request.
+
+Production deployments fail #1 (env var not set) AND #3 (LB always adds `X-Forwarded-For`). The gate is closed-by-default.
+
+### Enabling for your own project's tests
+
+If you're a consumer of django-mojo writing tests against these endpoints, you need ONE line in your test server launcher:
+
+```bash
+# In your project's bin/run_tests or equivalent:
+MOJO_TEST_MODE=1 python -m uvicorn yourproject.asgi:application --host 127.0.0.1 --port 5555
+```
+
+Your tests then send the relevant `X-Mojo-Test-*` headers per-request via the testit client:
+
+```python
+resp = opts.client.post("/api/auth/login",
+                        {"username": "u", "password": "p"},
+                        headers={"X-Mojo-Test-Geo": '{"country_code": "US"}'})
+```
+
+The testit `RestClient` merges the `headers=` kwarg with its default auth headers — no extra setup needed beyond the env var.
+
+Most consumer projects don't need this at all — they configure handlers via settings and run tests against that fixed config. Only reach for the headers when you genuinely need per-test handler swapping (e.g. testing the asymmetric error contracts of `USER_REGISTERED_HANDLER` vs `USER_LOGIN_HANDLER`).
