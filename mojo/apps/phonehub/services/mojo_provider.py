@@ -51,7 +51,10 @@ def send_sms(body, to_number, from_number=None, base_url=None, api_key=None, tim
         payload["from_number"] = from_number
 
     try:
-        response = requests.post(url, json=payload, headers=headers, timeout=timeout)
+        response = requests.post(
+            url, json=payload, headers=headers,
+            timeout=timeout, allow_redirects=False,
+        )
     except requests.Timeout:
         logit.warning("[phonehub] mojo provider send timed out after %ss to %s", timeout, url)
         return objict({
@@ -70,20 +73,33 @@ def send_sms(body, to_number, from_number=None, base_url=None, api_key=None, tim
         })
 
     if response.status_code >= 400:
-        # Try to surface the remote error body, but cap length to keep the
-        # error_message column reasonable.
+        # Log the raw body for operators, but DO NOT echo it into
+        # SMS.error_message — the remote could leak internal hostnames,
+        # tracebacks, or other content that ends up readable by anyone
+        # with view_sms permission. Surface only structured JSON error
+        # fields (if any), else a generic HTTP <status> string.
         try:
-            err_body = response.text[:500]
+            raw_body = response.text[:500]
         except Exception:
-            err_body = ''
+            raw_body = ''
         logit.warning(
             "[phonehub] mojo provider HTTP %s from %s: %s",
-            response.status_code, url, err_body
+            response.status_code, url, raw_body
         )
+        safe_error = f'HTTP {response.status_code}'
+        try:
+            parsed = response.json()
+            if isinstance(parsed, dict):
+                # Prefer 'error' or 'message' keys if present; cap length.
+                msg = parsed.get('error') or parsed.get('message')
+                if isinstance(msg, str) and msg:
+                    safe_error = f'HTTP {response.status_code}: {msg[:200]}'
+        except Exception:
+            pass
         return objict({
             'sent': False, 'id': None, 'status': None,
             'code': f'http_{response.status_code}',
-            'error': err_body or f'HTTP {response.status_code}',
+            'error': safe_error,
             'remote': None, 'from_number': None,
         })
 

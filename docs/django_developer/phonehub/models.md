@@ -104,7 +104,7 @@ from mojo.apps.phonehub.models import SMS
 | `to_number` | CharField(20) | Recipient in E.164 format |
 | `body` | TextField | Message text |
 | `status` | CharField | `queued`, `sending`, `sent`, `delivered`, `failed`, `undelivered`, `received` |
-| `provider` | CharField(20) | `"twilio"` or `"aws"` |
+| `provider` | CharField(20) | `"twilio"`, `"aws"`, or `"mojo"` |
 | `provider_message_id` | CharField(100) | Provider SID/message ID |
 | `error_code` | CharField(50) | Provider error code on failure |
 | `error_message` | TextField | Provider error message on failure |

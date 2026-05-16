@@ -64,11 +64,12 @@ def test_send_mojo_provider_success(opts):
     group = Group.objects.get(pk=opts.group.pk)
     captured = {}
 
-    def fake_post(url, json=None, headers=None, timeout=None):
+    def fake_post(url, json=None, headers=None, timeout=None, allow_redirects=None):
         captured["url"] = url
         captured["json"] = json
         captured["headers"] = headers
         captured["timeout"] = timeout
+        captured["allow_redirects"] = allow_redirects
         return _mock_post_response(
             status_code=200,
             body={
@@ -116,6 +117,12 @@ def test_send_mojo_provider_success(opts):
     )
     assert captured["json"]["body"] == "test_sms_mojo:hello", (
         f"body not forwarded correctly: {captured['json']!r}"
+    )
+    # SSRF mitigation: outbound POST must NOT follow redirects (a redirect to
+    # an internal address could otherwise widen the SSRF surface).
+    assert captured["allow_redirects"] is False, (
+        f"requests.post must be called with allow_redirects=False, "
+        f"got {captured['allow_redirects']!r}"
     )
 
 

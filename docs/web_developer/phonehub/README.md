@@ -153,6 +153,8 @@ Pass `force_refresh: true` to bypass the cache and fetch fresh data from the car
 
 Note: The outer `status` is `true` (the request succeeded); check `data.status` for the delivery result.
 
+The `provider` field in the response reflects which backend was used (`twilio`, `aws`, or `mojo`). When the server is configured with the `mojo` provider (SMS delegated to a remote django-mojo instance), `error_code` will be one of: `timeout`, `http_<status>` (e.g. `http_401`), `remote_error`, `remote_failed`, or `config_error` — rather than a Twilio error code. `provider_message_id` will be the remote instance's SMS id on success.
+
 ---
 
 ## List SMS Records

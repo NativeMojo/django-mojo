@@ -289,7 +289,10 @@ class PhoneConfig(MojoSecrets, MojoModel):
         headers = {"Authorization": f"apikey {api_key}"}
 
         try:
-            response = requests.get(url, headers=headers, timeout=timeout)
+            response = requests.get(
+                url, headers=headers, timeout=timeout,
+                allow_redirects=False,
+            )
         except requests.Timeout:
             return {
                 'success': False,
@@ -297,11 +300,16 @@ class PhoneConfig(MojoSecrets, MojoModel):
                 'error': 'timeout'
             }
         except Exception as e:
+            # Log the raw exception for operators but do NOT echo it back to
+            # the caller — `str(e)` from `requests` can carry the full URL,
+            # internal hostnames, or TLS error details that should not surface
+            # in REST responses.
+            from mojo.helpers import logit
+            logit.warning("[phonehub] mojo provider test_connection error: %s", e)
             return {
                 'success': False,
-                'message': f'Mojo provider test failed: {str(e)}',
-                'error': 'connection_failed',
-                'details': str(e)
+                'message': 'Mojo provider connection failed (see logs)',
+                'error': 'connection_failed'
             }
 
         if response.status_code in (401, 403):
