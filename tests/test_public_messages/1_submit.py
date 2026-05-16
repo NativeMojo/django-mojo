@@ -428,21 +428,29 @@ def test_client_metadata_caps(opts):
 def test_rate_limit(opts):
     from mojo.apps.account.models import PublicMessage
     from mojo.decorators.limits import clear_rate_limits
-    clear_rate_limits(ip=TEST_IP, key="public_message_submit")
+
+    # Use a unique per-test IP so parallel modules calling
+    # `clear_rate_limits(ip="127.0.0.1")` (broad, no-key wildcard wipe across
+    # every srl:*:ip:127.0.0.1 key) don't clobber our counter mid-loop.
+    rl_ip = "10.99.99.42"
+    forwarded = {"X-Forwarded-For": rl_ip}
+    clear_rate_limits(ip=rl_ip, key="public_message_submit")
 
     PublicMessage.objects.filter(email="rate-limit@example.com").delete()
 
     ok_count = 0
     rate_limited = False
     for i in range(7):  # cap is 5 in 300s
-        token = _mint_token()
+        # Mint the bouncer token for the same IP we're spoofing via header,
+        # since bouncer tokens are bound to a specific IP at mint time.
+        token = _mint_token(ip=rl_ip)
         resp = opts.client.post(SUBMIT_PATH, {
             "kind": "contact_us",
             "name": f"Jane {i}",
             "email": "rate-limit@example.com",
             "message": f"submission {i}",
             "bouncer_token": token,
-        })
+        }, headers=forwarded)
         if resp.status_code == 200:
             ok_count += 1
         elif resp.status_code == 429:
