@@ -1,8 +1,9 @@
 # Geofencing Policy Engine (System + Group Levels)
 
 **Type**: request
-**Status**: planned
+**Status**: resolved
 **Date**: 2026-05-15
+**Resolved**: 2026-05-15
 **Priority**: high
 
 ## Description
@@ -526,3 +527,66 @@ Module `__init__.py` marks `"serial": True` because some tests toggle `GEOFENCE_
 - Reverse geofencing (lat/long proximity).
 - Mobile-network-vs-residential differentiation in the DSL.
 - Non-HTTP enforcement helper (was `enforce_or_raise`); dropped from v1 because the USER_*_HANDLER integration story it served is itself out of scope.
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-05-15
+**Commits**: `24bbd4e` (feature) + `49c6490` (test speedup / parallelization)
+
+### What Was Built
+Framework-level geofencing precondition: JSON rule DSL (country / region / abuse) + decision engine + Redis cache + `@requires_geofence` decorator applied to every built-in auth endpoint + `GET /api/geo/check` pre-flight endpoint. Default is true no-op when no rules are configured (zero geoip lookup, zero cache write). System rules act as a hard floor; group rules layer on top. `bypass_geofence` permission short-circuits everything. ISO 3166-2 `region_code` plumbed through every provider and stored on `GeoLocatedIP` (new field + migration).
+
+`USER_REGISTERED_HANDLER` / `USER_LOGIN_HANDLER` are NOT part of geofencing — they're orthogonal extension hooks. Geofence enforces at the HTTP layer via the decorator. Documented in `docs/django_developer/account/geofence.md`.
+
+### Files Changed
+- `mojo/helpers/geoip/{maxmind,ipinfo,ipapi,ipstack,__init__}.py` — emit `region_code` (ISO 3166-2).
+- `mojo/apps/account/models/geolocated_ip.py` — new `region_code` field + migration `0042`.
+- `mojo/apps/account/services/geofence/` — new package: `dsl.py`, `engine.py`, `cache.py`, `__init__.py`.
+- `mojo/apps/account/rest/geofence.py` — new `GET /api/geo/check` pre-flight endpoint.
+- `mojo/apps/account/rest/__init__.py` — re-export `geofence`.
+- `mojo/decorators/geofence.py` — new `@requires_geofence(scope=...)` decorator.
+- `mojo/decorators/__init__.py` — re-export `requires_geofence`.
+- `mojo/decorators/http.py` — dispatcher accepts `?group_uuid=<uuid>` with `is_active=True` filter (security: prevents inactive-group existence disclosure via side-effect).
+- `mojo/helpers/settings/parser.py` — accept dict literals via `ast.literal_eval` (so dict overrides round-trip through `var/django.conf` cleanly).
+- `mojo/apps/account/rest/{user,oauth,totp,passkeys,sms}.py` — `@md.requires_geofence(scope="auth")` applied to every JSON-returning auth endpoint. OAuth `/callback` is NOT decorated (returns HttpResponseRedirect — JSON 403 would break the bounce); `/begin` and `/complete` are decorated as backstops.
+- `mojo/apps/account/services/extensions.py` — test-mode header overrides for extension-handler dotted paths (`X-Mojo-Test-Pre-Register-Validator`, etc.) and gating settings.
+
+### Test-mode header override (commit 49c6490)
+Replaces `th.server_settings()` for geofence + extension-handler tests. `settings.MOJO_TEST_MODE=True` in test environment enables the engine and hooks to honor per-request `X-Mojo-Test-*` headers; production default is False so the override paths are skipped via a single bool check (zero production cost). Test modules are no longer serial; all run in parallel.
+
+- `bin/create_testproject` + `testproject/config/settings/local/__init__.py` set `MOJO_TEST_MODE=True`.
+- `testit/client.py` merges per-request `headers=` kwargs with the client's defaults.
+
+### Tests
+- `tests/test_geofence/` — 35 tests across `dsl.py` (pure-function), `engine.py`, `endpoint.py`, `decorator.py`. Run time: **~1s**. Parallel-safe.
+- `tests/test_register/` — 15 tests reworked to use the same header-override mechanism. Run time: **~2s**. Parallel-safe.
+- Run: `bin/run_tests --agent -t test_geofence -t test_register`
+
+### Docs Updated
+- `docs/django_developer/account/geofence.md` (new) — rule DSL, decision shape, decorator, settings, `bypass_geofence`, OAuth `/complete` group-rule limitation, explicit note that `USER_*_HANDLER` are unrelated.
+- `docs/django_developer/account/geoip.md` — added `region_code` field.
+- `docs/django_developer/account/README.md` — added geofence row.
+- `docs/web_developer/account/geoip.md` — documented `GET /api/geo/check` and the optional `group_uuid` query param.
+- `docs/web_developer/account/README.md` — updated GeoIP entry to mention pre-flight.
+- `CHANGELOG.md` — entry under unreleased.
+
+### Security Review
+Two findings addressed:
+1. **Dispatcher inactive-group existence disclosure** — fixed in `49c6490`: dispatcher now filters `is_active=True` on the `?group_uuid=` path so inactive groups never become `request.group` and no `.touch()` side effect leaks existence. The pre-flight endpoint does its own lookup to surface inactive-group state intentionally.
+2. **PRE_REGISTER_VALIDATOR password reachability** — fixed in prior commit `849ed80`: plaintext password popped from `request.DATA` before the validator runs.
+
+Items verified clean: 403 body omits country/region/abuse (info-leak guard), bypass permission semantics, cache poisoning, `ast.literal_eval` (safe — not `eval`), OAuth `/callback` skip is correct (no user creation path), `GEOFENCE_TEST_OVERRIDE` doesn't activate by accident.
+
+Items NOT changed (documented trade-offs):
+- Pre-flight endpoint returns 400 for unknown UUID vs 200 for inactive — slight oracle, but rate-limited to 30/IP and UUIDs are uuid4 (122 bits entropy) so it only validates pre-known UUIDs.
+- Group-level rules don't apply at OAuth `/complete` because the `group_uuid` is inside encrypted state — system rules (hard floor) still apply.
+
+### Test Results
+Full suite: **1905 passed, 0 failed, 351 skipped** (skips are opt-in `--full` modules + environment-conditional). test_geofence + test_register combined: 50 tests in ~3s (down from ~175s).
+
+### Follow-up
+- **Bouncer pre-screen integration** — extend `mojo/apps/account/services/bouncer/environment.py` to bump risk score on `decision.allowed=False`. Out of scope for v1; deferred follow-up.
+- **HTML-rendering 403 variant** — `@requires_geofence_html` could render a template instead of JSON 403 for HTML auth pages. Not needed yet.
+- **Admin UI / CRUD model for rules** — v1 uses `Group.metadata['geofence']` + settings. Add `GeoFenceRule` model later if audit trails or multi-rule-set support is needed.
+- **Time-window rules** ("block this region midnight–6am") — not in v1.
