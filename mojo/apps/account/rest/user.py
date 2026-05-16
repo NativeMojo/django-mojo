@@ -1,3 +1,4 @@
+from django.db import transaction
 from mojo import decorators as md
 from mojo.apps.account.utils.jwtoken import JWToken
 # from django.http import JsonResponse
@@ -5,6 +6,7 @@ from mojo.helpers.response import JsonResponse
 from django.shortcuts import render
 from django.http import HttpResponseRedirect
 from mojo.apps.account.models.user import User
+from mojo.apps.account.services import extensions as account_extensions
 from mojo.apps.account.utils import tokens
 from mojo.apps.account.utils.webapp_url import build_token_url
 from mojo.apps.shortlink import maybe_shorten_url
@@ -174,10 +176,15 @@ def on_user_login(request):
     # check passed and a stolen-password retry would not get this far.
     clear_rate_limits(key="login", account_id=user.pk)
 
+    # Verification gate: source here is the lookup channel ("email"/"phone_number"/
+    # "username") used to find the account. The gate enforces REQUIRE_VERIFIED_EMAIL
+    # / REQUIRE_VERIFIED_PHONE only for the matching channel.
+    _check_verification_gate(user, source)
+
     mfa_methods = get_mfa_methods(user)
     if mfa_methods:
         return mfa_required_response(user, mfa_methods)
-    return jwt_login(request, user, "account/jwt/login" in request.path, source=source)
+    return jwt_login(request, user, "account/jwt/login" in request.path, source="password")
 
 
 # -----------------------------------------------------------------
@@ -237,7 +244,21 @@ def on_register(request):
     Gated by the ALLOW_USER_REGISTRATION setting (default False).
 
     Required body params: email, password
-    Optional body params: first_name, last_name
+    Optional body params: first_name, last_name, group_uuid, plus any keys
+                          listed in REGISTRATION_EXTRA_FIELDS.
+
+    Note: the body param is `group_uuid` (not `group`) because the framework's
+    request dispatcher reserves `group` for integer-id resolution into
+    request.group at the HTTP layer.
+
+    Extension points:
+      PRE_REGISTER_VALIDATOR    — dotted-path callable, raises ValueException
+                                  to reject before any DB write.
+      USER_REGISTERED_HANDLER   — dotted-path callable fired inside the user-
+                                  create transaction. Raising rolls back the
+                                  user row.
+      USER_LOGIN_HANDLER        — fired by jwt_login() at the end of every
+                                  successful authentication.
 
     When REQUIRE_VERIFIED_EMAIL is True the response includes
     requires_verification=True and no JWT is issued — the user must
@@ -249,29 +270,75 @@ def on_register(request):
     if not settings.get("ALLOW_USER_REGISTRATION", False, kind="bool"):
         raise merrors.PermissionDeniedException("Registration is not enabled", 403, 403)
 
+    # ---- Pre-validation (no DB writes) -------------------------------------
     email = request.DATA.email.lower().strip()
     password = request.DATA.password
+    first_name = request.DATA.get("first_name", "").strip()
+    last_name = request.DATA.get("last_name", "").strip()
 
     if User.objects.filter(email=email).exists():
         raise merrors.ValueException("An account with this email already exists")
 
-    user = User(email=email)
-    user.username = user.generate_username_from_email()
-    first_name = request.DATA.get("first_name", "").strip()
-    last_name = request.DATA.get("last_name", "").strip()
-    if first_name:
-        user.first_name = first_name
-    if last_name:
-        user.last_name = last_name
-    user.check_password_strength(password)
-    user.set_password(password)
-    user.save()
+    # Resolve group from UUID (silent-drop if unset; 400 if unknown/inactive).
+    # The body param is `group_uuid` because the framework dispatcher reserves
+    # `group` for integer-id lookup into request.group.
+    group = None
+    group_uuid = (request.DATA.get("group_uuid") or "").strip()
+    require_group = settings.get("REQUIRE_GROUP_ON_REGISTRATION", False, kind="bool")
+    if group_uuid:
+        from mojo.apps.account.models.group import Group
+        group = Group.objects.filter(uuid=group_uuid).first()
+        if group is None:
+            raise merrors.ValueException("Unknown group")
+        if not group.is_active:
+            raise merrors.ValueException("Group is not active")
+    elif require_group:
+        raise merrors.ValueException("group_uuid is required")
 
-    # send verification email
+    # Allowlisted extras — silent-drop unknown keys
+    extras_allow = settings.get("REGISTRATION_EXTRA_FIELDS", []) or []
+    extra = {key: request.DATA.get(key) for key in extras_allow if key in request.DATA}
+
+    # PRE_REGISTER_VALIDATOR — may raise ValueException → 400
+    account_extensions.run_pre_register_validator(
+        email=email, group=group, request=request, extra=extra)
+
+    # Strength check (still framework-side; outside atomic for clarity)
+    User(email=email).check_password_strength(password)
+
+    # ---- Atomic: user + GroupMember + register-handler ---------------------
+    # Verify-email send and jwt_login run OUTSIDE this block. An SMTP hiccup
+    # or JWT-issuance failure must NOT roll back a user whose register-handler
+    # has already fired side effects in consumer downstream systems.
+    with transaction.atomic():
+        user = User(email=email)
+        user.username = user.generate_username_from_email()
+        if first_name:
+            user.first_name = first_name
+        if last_name:
+            user.last_name = last_name
+        user.set_password(password)
+        user.save()
+
+        if group is not None:
+            from mojo.apps.account.models.member import GroupMember
+            GroupMember.objects.get_or_create(user=user, group=group)
+
+        account_extensions.fire_user_registered(
+            user=user, request=request, group=group,
+            source="password", extra=extra)
+
+    # ---- Side effects (outside atomic) -------------------------------------
     token = tokens.generate_email_verify_token(user)
-    user.send_template_email("email_verify", context=dict(token=token))
+    try:
+        user.send_template_email("email_verify", context=dict(token=token))
+    except Exception as exc:
+        user.report_incident(
+            f"verify-email send failed during register: {exc}",
+            "register:email_send_failed", level=4)
     user.report_incident(f"{user.username} registered via email", "register:success")
 
+    # ---- Auth handoff ------------------------------------------------------
     require_verified = settings.get("REQUIRE_VERIFIED_EMAIL", False, kind="bool")
     if require_verified:
         return JsonResponse(dict(
@@ -279,7 +346,7 @@ def on_register(request):
             requires_verification=True,
             message="Account created. Please check your email to verify your account before logging in."
         ))
-    return jwt_login(request, user)
+    return jwt_login(request, user, source="password", is_new_user=True)
 
 
 def get_mfa_methods(user):
@@ -342,9 +409,19 @@ def _check_verification_gate(user, source=None):
         )
 
 
-def jwt_login(request, user, legacy=False, source=None, extra=None):
-    if source is not None:
-        _check_verification_gate(user, source)
+def jwt_login(request, user, legacy=False, source=None, extra=None, is_new_user=False):
+    """Issue an access+refresh JWT pair for the given user.
+
+    Args:
+        source: auth-flow identifier passed through to USER_LOGIN_HANDLER and
+            recorded on the login event. Examples: "password", "magic", "oauth",
+            "email_verify", "invite", "password_reset", "totp_mfa", "passkey",
+            "sessions_revoke", "handoff", "sms", "sms_mfa", "totp", "totp_recovery",
+            "email_change". Callers requiring REQUIRE_VERIFIED_EMAIL/_PHONE
+            enforcement against a *lookup* channel (e.g. password login) must
+            call _check_verification_gate themselves before invoking this.
+        is_new_user: True only for the first login of a freshly-created account.
+    """
     user.last_login = dates.utcnow()
     user.track()
     # Record login event with geo data — must not break login on failure
@@ -376,6 +453,9 @@ def jwt_login(request, user, legacy=False, source=None, extra=None):
             user.set_protected_metadata("orig_webapp_url", webapp_url)
         else:
             user.set_protected_metadata("last_webapp_url", webapp_url)
+    # USER_LOGIN_HANDLER — wrapped internally; runtime errors never block login
+    account_extensions.fire_user_login(
+        user=user, request=request, source=source, is_new_user=is_new_user)
     if legacy:
         return {
             "status": True,
@@ -450,7 +530,7 @@ def on_user_password_reset_code(request):
     user.set_secret("password_reset_code", None)
     user.set_secret("password_reset_code_ts", None)
     user.save()
-    return jwt_login(request, user)
+    return jwt_login(request, user, source="password_reset")
 
 
 @md.POST("auth/password/reset/token")
@@ -473,7 +553,7 @@ def on_user_password_reset_token(request):
     user.check_password_strength(new_password)
     user.set_password(new_password)
     user.save()
-    return jwt_login(request, user)
+    return jwt_login(request, user, source="password_reset")
 
 
 @md.POST("auth/magic/send")
@@ -523,7 +603,7 @@ def on_magic_login_complete(request):
     elif channel == "email" and not user.is_email_verified:
         user.is_email_verified = True
         user.save(update_fields=["is_email_verified", "modified"])
-    return jwt_login(request, user)
+    return jwt_login(request, user, source="magic")
 
 
 # -----------------------------------------------------------------
@@ -563,7 +643,7 @@ def on_email_verify(request):
     user.is_email_verified = True
     user.save(update_fields=["is_email_verified", "modified"])
     _send_account_realtime_event(user, "account:email:verified", {"email": user.email})
-    return jwt_login(request, user)
+    return jwt_login(request, user, source="email_verify")
 
 
 @md.POST("auth/invite/accept")
@@ -584,7 +664,7 @@ def on_invite_accept(request):
         raise merrors.PermissionDeniedException("Account is disabled", 403, 403)
     user.is_email_verified = True
     user.save(update_fields=["is_email_verified", "modified"])
-    return jwt_login(request, user)
+    return jwt_login(request, user, source="invite")
 
 
 # -----------------------------------------------------------------
@@ -843,7 +923,7 @@ def on_email_change_confirm(request):
     # event gives them a clean signal to re-prompt login rather than silently failing)
     _send_account_realtime_event(user, "account:email:changed", {"email": new_email})
 
-    return jwt_login(request, user)
+    return jwt_login(request, user, source="email_change")
 
 
 @md.GET("auth/email/change/confirm")
@@ -1174,7 +1254,7 @@ def on_sessions_revoke(request):
     user.report_incident(f"{user.username} revoked all sessions", "sessions:revoked")
 
     # Issue fresh JWT signed with the new key
-    return jwt_login(request, user)
+    return jwt_login(request, user, source="sessions_revoke")
 
 
 # -----------------------------------------------------------------

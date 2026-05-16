@@ -237,4 +237,4 @@ def on_passkeys_login_complete(request):
         raise merrors.PermissionDeniedException(str(exc))
 
     # Issue JWT tokens
-    return jwt_login(request, passkey.user)
+    return jwt_login(request, passkey.user, source="passkey")

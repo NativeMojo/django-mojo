@@ -21,6 +21,7 @@ from mojo import errors as merrors
 from mojo.apps.account.models import User
 from mojo.apps.account.models.oauth import OAuthConnection
 from mojo.apps.account.rest.user import jwt_login
+from mojo.apps.account.services import extensions as account_extensions
 from mojo.apps.account.services.oauth import get_provider
 from mojo.helpers import logit
 from mojo.helpers.response import JsonResponse
@@ -75,7 +76,28 @@ def _validate_redirect_uri(request, redirect_uri):
     raise merrors.ValueException("redirect_uri is not on the allowlist")
 
 
-def _find_or_create_user(provider_name, profile):
+def _resolve_state_group(state_data):
+    """Look up an active Group from state_data['group_uuid'].
+
+    Returns the Group if active, or None if absent / unknown / inactive.
+    Logs a warning for unknown/inactive — the OAuth callback already passed,
+    failing the whole login attempt to enforce group membership would lose it.
+    """
+    group_uuid = (state_data or {}).get("group_uuid")
+    if not group_uuid:
+        return None
+    from mojo.apps.account.models.group import Group
+    group = Group.objects.filter(uuid=group_uuid).first()
+    if group is None:
+        logit.warn("oauth", f"OAuth state references unknown group_uuid={group_uuid}")
+        return None
+    if not group.is_active:
+        logit.warn("oauth", f"OAuth state references inactive group_uuid={group_uuid}")
+        return None
+    return group
+
+
+def _find_or_create_user(provider_name, profile, state_data=None, request=None):
     """
     Auto-link logic:
     1. Existing OAuthConnection  -> return (user, conn, False)
@@ -83,6 +105,14 @@ def _find_or_create_user(provider_name, profile):
     3. Neither                   -> create User + OAuthConnection, return (user, conn, True)
 
     Path 3 raises PermissionDeniedException if OAUTH_ALLOW_REGISTRATION is False.
+
+    When path 3 runs and state_data carries an active group_uuid, the new user
+    is also added to that group as a GroupMember and USER_REGISTERED_HANDLER
+    is fired with source="oauth".
+
+    state_data and request are optional (default None) so existing direct
+    callers (notably tests that exercise the auto-link logic in isolation)
+    continue to work without needing to construct a fake state/request.
     """
     uid = profile["uid"]
     email = profile["email"]
@@ -120,6 +150,20 @@ def _find_or_create_user(provider_name, profile):
             provider_uid=uid,
             email=email,
         )
+
+        # GroupMember from state.group_uuid (if present + active)
+        resolved_group = _resolve_state_group(state_data)
+        if resolved_group is not None:
+            from mojo.apps.account.models.member import GroupMember
+            GroupMember.objects.get_or_create(user=user, group=resolved_group)
+
+        # USER_REGISTERED_HANDLER — runtime errors propagate (no atomic here;
+        # the user + conn are already committed, so the consumer is expected
+        # to handle its own partial-state cleanup if it raises).
+        account_extensions.fire_user_registered(
+            user=user, request=request, group=resolved_group,
+            source="oauth", extra={"provider": provider_name})
+
         return user, conn, True
 
     conn = OAuthConnection.objects.create(
@@ -271,7 +315,7 @@ def on_oauth_complete(request, provider):
     if not profile.get("uid"):
         raise merrors.PermissionDeniedException("Could not retrieve user identity from provider")
 
-    user, conn, created = _find_or_create_user(provider, profile)
+    user, conn, created = _find_or_create_user(provider, profile, state_data, request)
 
     if not user.is_active:
         raise merrors.PermissionDeniedException("Account is disabled")
@@ -284,7 +328,7 @@ def on_oauth_complete(request, provider):
 
     logit.info("oauth", f"User {user.username} logged in via {provider}")
     extra = {"is_new_user": True} if created else None
-    return jwt_login(request, user, extra=extra)
+    return jwt_login(request, user, source="oauth", extra=extra, is_new_user=created)
 
 
 # -----------------------------------------------------------------

@@ -115,9 +115,10 @@ def on_sms_verify(request):
         if not token_data:
             raise merrors.PermissionDeniedException("Invalid or expired MFA token", 401, 401)
         user = User.objects.filter(pk=token_data["uid"]).first()
-        source = None  # MFA step — primary auth already cleared
+        login_source = "sms_mfa"  # second factor after primary auth
     else:
-        user, source = User.lookup_from_request_with_source(request, phone_as_username=True)
+        user, _src = User.lookup_from_request_with_source(request, phone_as_username=True)
+        login_source = "sms"  # standalone passwordless login
     if not user:
         raise merrors.PermissionDeniedException()
 
@@ -137,7 +138,7 @@ def on_sms_verify(request):
         if not user.is_phone_verified:
             user.is_phone_verified = True
             user.save(update_fields=["is_phone_verified", "modified"])
-    return jwt_login(request, user, source=None)
+    return jwt_login(request, user, source=login_source)
 
 
 # -----------------------------------------------------------------

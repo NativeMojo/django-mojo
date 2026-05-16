@@ -208,24 +208,26 @@
         // -----------------------------------------------------------------------
 
         /**
-         * Register a new account with email and password.
+         * Register a new account.
+         * Forwards every key from the supplied payload to the server. Required
+         * keys: email, password. Optional keys: first_name, last_name, group
+         * (UUID), plus any keys whitelisted by the server's
+         * REGISTRATION_EXTRA_FIELDS setting. Unknown keys are silently dropped
+         * by the server.
+         *
          * If the backend requires email verification the response will contain
-         * { requires_verification: true } and no tokens are stored.
-         * Otherwise tokens are stored and the user is logged in immediately.
-         * @param {object} payload - { email, password, first_name?, last_name? }
+         * { requires_verification: true } and no tokens are stored. Otherwise
+         * tokens are stored and the user is logged in immediately.
+         * @param {object} payload - { email, password, ...any other fields }
          * @returns {Promise<object>}
          */
         register: function (payload) {
-            return post(ep('register'), _withDevice({
-                email: payload.email,
-                password: payload.password,
-                first_name: payload.first_name || '',
-                last_name: payload.last_name || ''
-            })).then(function (resp) {
-                var d = resp.data || resp;
-                if (d.requires_verification) return d;
-                return saveTokens(resp);
-            });
+            return post(ep('register'), _withDevice(Object.assign({}, payload || {})))
+                .then(function (resp) {
+                    var d = resp.data || resp;
+                    if (d.requires_verification) return d;
+                    return saveTokens(resp);
+                });
         },
 
         // -----------------------------------------------------------------------

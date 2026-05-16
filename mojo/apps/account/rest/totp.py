@@ -161,7 +161,7 @@ def on_totp_verify(request):
         user.report_incident("Invalid TOTP code during login", "totp:login_failed")
         raise merrors.PermissionDeniedException("Invalid code", 401, 401)
 
-    return jwt_login(request, user)
+    return jwt_login(request, user, source="totp_mfa")
 
 
 # -----------------------------------------------------------------
@@ -201,7 +201,7 @@ def on_totp_recover(request):
             "You have used your last TOTP recovery code. Generate new ones in your security settings.",
             kind="security",
         )
-    return jwt_login(request, user)
+    return jwt_login(request, user, source="totp_recovery")
 
 
 # -----------------------------------------------------------------
@@ -248,4 +248,4 @@ def on_totp_login(request):
         raise merrors.PermissionDeniedException("Invalid code", 401, 401)
 
     clear_rate_limits(key="login", account_id=user.pk)
-    return jwt_login(request, user)
+    return jwt_login(request, user, source="totp")

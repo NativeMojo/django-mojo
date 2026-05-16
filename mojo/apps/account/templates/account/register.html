@@ -29,6 +29,8 @@ Already have an account? <a href="{{ auth_url|default:'/auth' }}">Log in</a>
             </div>
         </div>
 
+        {% block extra_fields %}{% endblock %}
+
         <div class="mat-checkbox-row">
             <input type="checkbox" id="reg-terms" />
             <label for="reg-terms">I agree to the <a href="{{ terms_url|default:'#' }}" target="_blank">Terms &amp; Conditions</a></label>
@@ -68,6 +70,8 @@ Already have an account? <a href="{{ auth_url|default:'/auth' }}">Log in</a>
 (function () {
     var m = window._mat;
     var $ = m.$;
+
+    {% block pre_submit_script %}{% endblock %}
 
     $("form-register").addEventListener("submit", function (e) {
         e.preventDefault();
