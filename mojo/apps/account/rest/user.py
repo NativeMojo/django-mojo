@@ -542,7 +542,23 @@ def jwt_login(request, user, legacy=False, source=None, extra=None, is_new_user=
 @md.public_endpoint()
 @md.requires_geofence(scope="auth")
 def on_user_forgot(request):
+    """
+    Start a password-reset flow. Accepts an identifier via either the
+    `email` or `phone` body field (`username` is also accepted and routed
+    by shape — `@` => email, else phone).
+
+    Method routing:
+      method=code  + channel=sms (or user has no email) → SMS the 6-digit code
+      method=code  (default)                            → email the 6-digit code
+      method=link / email                               → email a reset link
+                                                          (link mode is email-only)
+    """
+    from mojo.apps import phonehub
+
     user = User.lookup_from_request(request, phone_as_username=True)
+    method = (request.DATA.get("method") or "code").lower().strip()
+    channel = (request.DATA.get("channel") or "").lower().strip()
+
     if user is None:
         User.class_report_incident(
             f"reset password with details {request.DATA.username} - {request.DATA.email} - {request.DATA.phone_number}",
@@ -551,20 +567,46 @@ def on_user_forgot(request):
             request=request)
     else:
         user.report_incident(f"{user.username} requested a password reset", "password_reset")
-        if request.DATA.get("method") == "code":
+        # Auto-dispatch SMS when the user has no email on file. Operators
+        # can also force SMS via channel=sms when both contact channels exist.
+        wants_sms = (
+            method == "code"
+            and (channel == "sms" or (not user.email and bool(user.phone_number)))
+        )
+        if wants_sms:
+            if not user.phone_number:
+                # No SMS-capable channel — fall back to silent success to
+                # avoid enumeration. Same generic response as below.
+                user.report_incident(
+                    f"{user.username} requested SMS reset but has no phone on file",
+                    "password_reset:no_phone", level=4)
+            else:
+                code = crypto.random_string(6, True, False, False)
+                user.set_secret("password_reset_code", code)
+                user.set_secret("password_reset_code_ts", int(dates.utcnow().timestamp()))
+                user.save()
+                try:
+                    phonehub.send_sms(
+                        user.phone_number,
+                        f"Your password reset code is: {code}")
+                except Exception as exc:
+                    user.report_incident(
+                        f"SMS reset code send failed: {exc}",
+                        "password_reset:sms_send_failed", level=4)
+        elif method == "code":
             code = crypto.random_string(6, True, False, False)
             user.set_secret("password_reset_code", code)
             user.set_secret("password_reset_code_ts", int(dates.utcnow().timestamp()))
             user.save()
             user.send_template_email("password_reset_code", dict(code=code))
-        elif request.DATA.get("method") in ["link", "email"]:
+        elif method in ("link", "email"):
             token = tokens.generate_password_reset_token(user)
             token_url = build_token_url("password_reset", token, request=request, user=user, group=getattr(request, "group", None))
             token_url = maybe_shorten_url(token_url, source="password_reset", user=user, expire_hours=1)
             user.send_template_email("password_reset_link", dict(token=token, token_url=token_url))
         else:
             raise merrors.ValueException("Invalid method")
-    return JsonResponse(dict(status=True, message="If email in our system a reset email was sent."))
+    return JsonResponse(dict(status=True, message="If the account is in our system a reset code was sent."))
 
 
 @md.POST("auth/password/reset/code")
