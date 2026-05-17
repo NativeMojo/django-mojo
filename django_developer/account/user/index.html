@@ -4579,7 +4579,7 @@
 <ol>
 <li><code>first_name</code> + <code>last_name</code> (if either is set)</li>
 <li><code>display_name</code></li>
-<li><code>generate_display_name()</code> — derived from username/email</li>
+<li><code>generate_display_name()</code> — priority chain: first+last → email local-part → friendly random placeholder ("BraveTiger"-style) → username. Phone numbers are intentionally NEVER used (PII).</li>
 </ol>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">user</span><span class="o">.</span><span class="n">full_name</span>  <span class="c1"># e.g. &quot;Alice Smith&quot;, &quot;alice&quot;, or &quot;Alice Smith&quot; from &quot;alice.smith@co.com&quot;</span>
 </code></pre></div>

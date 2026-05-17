@@ -4472,7 +4472,7 @@
 <ol>
 <li><code>first_name</code> + <code>last_name</code> (if either is set)</li>
 <li><code>display_name</code></li>
-<li>A name derived from the username/email (e.g. <code>alice.smith</code> → <code>Alice Smith</code>)</li>
+<li>A name derived via priority chain: email local-part → friendly random placeholder (e.g. <code>Brave Tiger</code>) → username. Phone numbers are intentionally NEVER used here to avoid PII leakage.</li>
 </ol>
 <hr />
 <h2 id="update-own-profile">Update Own Profile<a class="headerlink" href="#update-own-profile" title="Permanent link">&para;</a></h2>
