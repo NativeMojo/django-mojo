@@ -4565,24 +4565,31 @@ login attempt. Calling it multiple times per session is rate-limited.</p>
 <hr />
 <h2 id="per-group-branding-custom-domain-deployments">Per-Group Branding (Custom Domain Deployments)<a class="headerlink" href="#per-group-branding-custom-domain-deployments" title="Permanent link">&para;</a></h2>
 <p>When the platform hosts multiple groups on separate custom domains — or uses
-<code>?group=&lt;uuid&gt;</code> to identify a group on a shared domain — the bouncer
+<code>?group_uuid=&lt;uuid&gt;</code> to identify a group on a shared domain — the bouncer
 automatically applies that group's branding and settings to the auth pages.</p>
 <h3 id="how-group-detection-works">How group detection works<a class="headerlink" href="#how-group-detection-works" title="Permanent link">&para;</a></h3>
 <ol>
 <li><strong>Custom auth domain</strong> — if <code>auth.clientbrand.com</code> maps to a group, visiting
    that hostname shows the group's logo, brand name, OAuth buttons, and success
    redirect without any extra URL params.</li>
-<li><strong><code>?group=&lt;uuid&gt;</code></strong> — for deployments where all groups share a domain, pass
-   the group UUID as a query param. The bouncer applies the group's settings.</li>
+<li><strong><code>?group_uuid=&lt;uuid&gt;</code></strong> — for deployments where all groups share a domain,
+   pass the group UUID as a query param. The bouncer applies the group's
+   settings.</li>
 </ol>
+<blockquote>
+<p><strong>Use <code>group_uuid</code>, not <code>group</code>.</strong> The framework's URL dispatcher reserves
+<code>?group=</code> for integer-ID lookup and rejects any non-integer value with
+<code>400 Invalid group ID</code> before the bouncer page runs. The bouncer's public
+UUID slot is <code>group_uuid</code>.</p>
+</blockquote>
 <h3 id="oauth-round-trip">OAuth round-trip<a class="headerlink" href="#oauth-round-trip" title="Permanent link">&para;</a></h3>
 <p>The <code>group_uuid</code> is embedded in OAuth state so branding survives the Google/
 Apple redirect. After the provider callback, the page receives
-<code>?code=...&amp;state=...&amp;group=&lt;uuid&gt;</code>, which <code>mojo-auth.js</code> picks up automatically
-via <code>window._matConfig.groupUuid</code>.</p>
+<code>?code=...&amp;state=...&amp;group_uuid=&lt;uuid&gt;</code>, which <code>mojo-auth.js</code> picks up
+automatically via <code>window._matConfig.groupUuid</code>.</p>
 <h3 id="custom-auth-domain-client-side-behavior">Custom auth domain — client-side behavior<a class="headerlink" href="#custom-auth-domain-client-side-behavior" title="Permanent link">&para;</a></h3>
 <p>When operating on a custom auth domain, no special client-side code is required.
-The server resolves the group from the hostname. The <code>?group=</code> param is
+The server resolves the group from the hostname. The <code>?group_uuid=</code> param is
 preserved in all navigation links (login → register → back) so branding stays
 consistent across page transitions even when the hostname is shared.</p>
 <h3 id="query-params-preserved-through-the-challenge">Query params preserved through the challenge<a class="headerlink" href="#query-params-preserved-through-the-challenge" title="Permanent link">&para;</a></h3>

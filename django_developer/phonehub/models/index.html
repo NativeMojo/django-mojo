@@ -4191,7 +4191,7 @@
 <tr>
 <td><code>provider</code></td>
 <td>CharField(20)</td>
-<td><code>"twilio"</code> or <code>"aws"</code></td>
+<td><code>"twilio"</code>, <code>"aws"</code>, or <code>"mojo"</code></td>
 </tr>
 <tr>
 <td><code>provider_message_id</code></td>
@@ -4326,7 +4326,7 @@
 <tr>
 <td><code>provider</code></td>
 <td>CharField</td>
-<td><code>"twilio"</code> (default) or <code>"aws"</code></td>
+<td><code>"twilio"</code> (default), <code>"aws"</code>, or <code>"mojo"</code></td>
 </tr>
 <tr>
 <td><code>twilio_from_number</code></td>
@@ -4342,6 +4342,11 @@
 <td><code>aws_sender_id</code></td>
 <td>CharField(11)</td>
 <td>AWS SNS sender ID (max 11 chars)</td>
+</tr>
+<tr>
+<td><code>mojo_remote_url</code></td>
+<td>CharField(255)</td>
+<td>Base URL of the remote django-mojo SMS provider (e.g. <code>https://sms.example.com</code>). Trailing slash stripped on save.</td>
 </tr>
 <tr>
 <td><code>lookup_enabled</code></td>
@@ -4416,12 +4421,21 @@
 <a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="n">config</span><span class="o">.</span><span class="n">set_aws_credentials</span><span class="p">(</span><span class="s2">&quot;AKIAXXXX&quot;</span><span class="p">,</span> <span class="s2">&quot;secret_key_here&quot;</span><span class="p">)</span>
 <a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a><span class="n">config</span><span class="o">.</span><span class="n">get_aws_access_key_id</span><span class="p">()</span>
 <a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a><span class="n">config</span><span class="o">.</span><span class="n">get_aws_secret_access_key</span><span class="p">()</span>
+<a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a>
+<a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a><span class="c1"># Mojo remote provider</span>
+<a id="__codelineno-11-12" name="__codelineno-11-12" href="#__codelineno-11-12"></a><span class="n">config</span><span class="o">.</span><span class="n">set_mojo_api_key</span><span class="p">(</span><span class="s2">&quot;apikey_token_from_remote&quot;</span><span class="p">)</span>
+<a id="__codelineno-11-13" name="__codelineno-11-13" href="#__codelineno-11-13"></a><span class="n">config</span><span class="o">.</span><span class="n">get_mojo_api_key</span><span class="p">()</span>
 </code></pre></div>
+<p>Each individual secret also has an auto-setter (<code>set_twilio_account_sid</code>, <code>set_twilio_auth_token</code>, <code>set_aws_access_key_id</code>, <code>set_aws_secret_access_key</code>, <code>set_mojo_api_key</code>) so the REST layer can route a write straight through a POST body field — see <a href="../rest/#writing-encrypted-credentials-via-rest">rest.md — Writing encrypted credentials via REST</a>.</p>
 <h4 id="configtest_connection"><code>config.test_connection()</code><a class="headerlink" href="#configtest_connection" title="Permanent link">&para;</a></h4>
-<p>Test that the configured credentials are valid.</p>
+<p>Test that the configured credentials are valid. Dispatches to the per-provider
+test method (<code>_test_twilio</code> / <code>_test_aws</code> / <code>_test_mojo</code>). The mojo branch
+performs a lightweight <code>GET &lt;mojo_remote_url&gt;/api/account/me</code> with the
+configured api key.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="n">result</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">test_connection</span><span class="p">()</span>
 <a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="n">result</span><span class="p">[</span><span class="s2">&quot;success&quot;</span><span class="p">]</span>  <span class="c1"># True or False</span>
 <a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="n">result</span><span class="p">[</span><span class="s2">&quot;message&quot;</span><span class="p">]</span>  <span class="c1"># Human-readable result</span>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="n">result</span><span class="p">[</span><span class="s2">&quot;error&quot;</span><span class="p">]</span>    <span class="c1"># e.g. &quot;invalid_credentials&quot;, &quot;timeout&quot;, &quot;missing_credentials&quot;</span>
 </code></pre></div>
 
 

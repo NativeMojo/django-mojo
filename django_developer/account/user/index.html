@@ -4465,8 +4465,8 @@
 </tr>
 <tr>
 <td><code>email</code></td>
-<td>EmailField (unique)</td>
-<td>Email address</td>
+<td>EmailField (unique, nullable)</td>
+<td>Email address. Nullable since migration 0043 — phone-only users have no email on file.</td>
 </tr>
 <tr>
 <td><code>first_name</code></td>

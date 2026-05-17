@@ -3866,6 +3866,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#configurable-registration-form" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configurable Registration Form
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#bouncer-gate-file-based-via-settingsget_static" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4268,11 +4279,11 @@ and bypass the <code>/api/</code> prefix.</p>
 </ul>
 <h3 id="registration-page-register">Registration page (<code>/register</code>)<a class="headerlink" href="#registration-page-register" title="Permanent link">&para;</a></h3>
 <ul>
-<li>First name / last name (optional)</li>
-<li>Email + password</li>
-<li>Terms &amp; conditions checkbox</li>
+<li>Fields driven by <code>AUTH_REGISTER_FIELDS</code> (default: first name, last name, email, password)</li>
+<li>Terms &amp; conditions checkbox (when <code>AUTH_TERMS_URL</code> is set)</li>
 <li>Google/Apple OAuth sign-up</li>
 <li>Link to login page</li>
+<li>When <code>phone</code> is in the schema with <code>verify: "sms"</code>: form becomes a three-step state machine (phone → SMS verify → profile) — see Configurable Registration Form below</li>
 </ul>
 <h3 id="when-providers-are-disabled">When providers are disabled<a class="headerlink" href="#when-providers-are-disabled" title="Permanent link">&para;</a></h3>
 <p>When all OAuth providers and passkeys are disabled, the "or continue with"
@@ -4396,6 +4407,56 @@ not hidden by JS).</p>
 </tr>
 </tbody>
 </table>
+<h3 id="configurable-registration-form">Configurable Registration Form<a class="headerlink" href="#configurable-registration-form" title="Permanent link">&para;</a></h3>
+<p><code>AUTH_REGISTER_FIELDS</code> drives both the bouncer-rendered register form and the server-side validator. Group-scoped — different groups can have different signup shapes.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># settings.py — phone-as-identity project example</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="n">AUTH_REGISTER_FIELDS</span> <span class="o">=</span> <span class="p">[</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>    <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;first_name&quot;</span><span class="p">,</span> <span class="s2">&quot;required&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>    <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;last_name&quot;</span><span class="p">,</span>  <span class="s2">&quot;required&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>    <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;phone&quot;</span><span class="p">,</span>      <span class="s2">&quot;required&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span> <span class="s2">&quot;verify&quot;</span><span class="p">:</span> <span class="s2">&quot;sms&quot;</span><span class="p">},</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>    <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;dob&quot;</span><span class="p">,</span>        <span class="s2">&quot;required&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>    <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;password&quot;</span><span class="p">,</span>   <span class="s2">&quot;required&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
+<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="p">]</span>
+<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="n">AUTH_MIN_AGE_YEARS</span> <span class="o">=</span> <span class="mi">13</span>   <span class="c1"># optional age gate when dob is required</span>
+</code></pre></div>
+<p>Canonical field set: <code>first_name</code>, <code>last_name</code>, <code>email</code>, <code>phone</code>, <code>dob</code>, <code>password</code>. Unknown names are silently dropped from the config — consumer-specific keys keep using <code>REGISTRATION_EXTRA_FIELDS</code>. Password is always required (passwordless registration is a separate flow and out of scope).</p>
+<p><strong>Identity field</strong> — auto-picked: <code>email</code> if required + present, else <code>phone</code>. <code>AUTH_REGISTER_IDENTITY_FIELD = "phone"</code> or <code>"email"</code> overrides explicitly. <code>User.username</code> is set to the identity value at create time (the existing <code>User.lookup_from_request(phone_as_username=True)</code> path then handles phone-based login transparently).</p>
+<p><strong>Phone verification (verify-then-register)</strong> — when a field has <code>verify: "sms"</code>, the rendered form switches to a <strong>three-step state machine</strong> (phone-first flow):</p>
+<ol>
+<li><strong>Step 1 — Identity</strong>: phone input only. Submit calls <code>POST /api/auth/phone/register/start</code> and advances.</li>
+<li><strong>Step 2 — Verify</strong>: 6-digit code input, "Resend code" (30s client-side cooldown) and "Back" links. Submit calls <code>POST /api/auth/phone/register/verify</code> and stashes the <code>verified_phone_token</code>.</li>
+<li><strong>Step 3 — Profile</strong>: remaining schema fields (first/last name, DOB, password). Final submit POSTs <code>/api/auth/register</code> with the <code>verified_phone_token</code>.</li>
+</ol>
+<p>The Back link on Step 2 clears the session token but keeps the phone value pre-filled. When the schema has no SMS-verify phone, the form falls back to a single-pane layout (single submit, no step UI).</p>
+<p><strong>DOB collection</strong> — when <code>dob</code> is in the schema, the form renders three auto-advancing numeric segments (<code>MM</code> <code>DD</code> <code>YYYY</code>) with <code>inputmode="numeric"</code> for mobile keyboards. Paste of <code>MM/DD/YYYY</code>, <code>MM-DD-YYYY</code>, or ISO <code>YYYY-MM-DD</code> into any segment distributes across the three. Submits as ISO <code>yyyy-mm-dd</code> to the server.</p>
+<p><strong>Dev-mode bypass for SMS-less testing</strong>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="n">AUTH_PHONE_VERIFY_DEV_BYPASS_CODE</span> <span class="o">=</span> <span class="s2">&quot;000000&quot;</span>   <span class="c1"># DO NOT SET IN PROD</span>
+</code></pre></div>
+<p>When set, <code>POST /api/auth/phone/register/verify</code> accepts the fixed bypass code in addition to the real generated code. The verified-phone token still binds to the session's phone — bypass does not let an attacker mint a token for an arbitrary phone. App startup logs a warning when the setting is non-empty so misconfiguration is visible in prod logs.</p>
+<p>Two endpoints back the flow:</p>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>POST</td>
+<td><code>/api/auth/phone/register/start</code></td>
+<td>Body <code>{phone}</code> → <code>{session_token, expires_in}</code>. Generates a 6-digit code, sends via <code>phonehub.send_sms</code>.</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/api/auth/phone/register/verify</code></td>
+<td>Body <code>{session_token, code}</code> → <code>{verified_phone_token, expires_in}</code>.</td>
+</tr>
+</tbody>
+</table>
+<p>Tokens are Redis-backed (<code>phone:register:session:*</code> and <code>phone:register:verified:*</code>), single-use, and TTL-bound (<code>PHONE_REGISTER_SESSION_TTL</code> / <code>PHONE_REGISTER_VERIFIED_TTL</code>, both default 600s). The endpoints are rate-limited per IP. No User row is created until phone ownership is proven — this is intentional spam control on a scarce resource.</p>
+<p><strong>Forgot-password dispatch</strong> — <code>POST /api/auth/forgot</code> now routes the 6-digit reset code via SMS automatically when the matched user has no email on file, or when <code>channel: "sms"</code> is supplied explicitly. The bouncer's login page forgot-password subview switches to a phone-input UI when <code>identity_field == "phone"</code>. Existing email flows are unchanged.</p>
 <h3 id="bouncer-gate-file-based-via-settingsget_static">Bouncer gate (file-based via <code>settings.get_static()</code>)<a class="headerlink" href="#bouncer-gate-file-based-via-settingsget_static" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
@@ -4429,7 +4490,7 @@ not hidden by JS).</p>
 <p>The hosted register and login pages resolve the operator group in <code>on_register_page</code> / <code>on_login_page</code> from either:</p>
 <ol>
 <li>The request hostname matching a <code>Group.auth_domain</code>, or</li>
-<li>The <code>?group=&lt;uuid&gt;</code> query parameter.</li>
+<li>The <code>?group_uuid=&lt;uuid&gt;</code> query parameter (the framework dispatcher reserves <code>?group=</code> for integer IDs and rejects UUID values upstream, so the bouncer's public UUID slot is <code>group_uuid</code>).</li>
 </ol>
 <p>The resolved group's <code>uuid</code> is plumbed into <code>_auth_context()</code> and emitted by <code>auth_base.html</code> as <code>window._matConfig.groupUuid</code>. The submit handlers in <code>register.html</code> and <code>login.html</code> then add it to the POST payload automatically:</p>
 <ul>

@@ -2361,6 +2361,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Provider Configuration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#mojo-remote-sms-provider" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Mojo Remote SMS Provider
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
     </ul>
@@ -4011,6 +4028,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Provider Configuration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#mojo-remote-sms-provider" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Mojo Remote SMS Provider
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
     </ul>
@@ -4144,6 +4178,10 @@
 <td><code>SMS_INBOUND_HANDLER</code></td>
 <td>Optional dotted path to inbound SMS handler (e.g. <code>"myapp.services.on_sms"</code>)</td>
 </tr>
+<tr>
+<td><code>SMS_REMOTE_TIMEOUT</code></td>
+<td>HTTP timeout (seconds) for outbound calls when using the <code>mojo</code> SMS provider. Default <code>10</code>.</td>
+</tr>
 </tbody>
 </table>
 <h3 id="inbound-sms-handler">Inbound SMS handler<a class="headerlink" href="#inbound-sms-handler" title="Permanent link">&para;</a></h3>
@@ -4156,8 +4194,43 @@
 <a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>    <span class="c1"># return a string to auto-reply, or None for no reply</span>
 </code></pre></div>
 <h2 id="provider-configuration">Provider Configuration<a class="headerlink" href="#provider-configuration" title="Permanent link">&para;</a></h2>
-<p>PhoneHub supports Twilio (default) and AWS SNS. Credentials can be stored globally in Django settings, or per-group via <code>PhoneConfig</code> (which encrypts credentials using MojoSecrets).</p>
+<p>PhoneHub supports three SMS providers, selected per-group (or system-wide) via <code>PhoneConfig.provider</code>:</p>
+<ul>
+<li><strong><code>twilio</code></strong> (default) — credentials in Django settings or <code>PhoneConfig</code> (encrypted via <code>MojoSecrets</code>).</li>
+<li><strong><code>aws</code></strong> — AWS SNS, credentials in <code>PhoneConfig</code> (encrypted).</li>
+<li><strong><code>mojo</code></strong> — delegate sending to a remote django-mojo instance that holds the real Twilio/AWS credentials. Useful when multiple deployments share one set of compliance / billing / A2P registration.</li>
+</ul>
 <p>See <a href="models/#phoneconfig">models.md — PhoneConfig</a> for credential management.</p>
+<h3 id="mojo-remote-sms-provider">Mojo Remote SMS Provider<a class="headerlink" href="#mojo-remote-sms-provider" title="Permanent link">&para;</a></h3>
+<p>Configure a deployment to send SMS via another django-mojo instance:</p>
+<p><strong>On the remote (provider) mojo:</strong>
+1. Configure Twilio (or AWS) normally — this mojo does the actual sending.
+2. Create an <code>account.ApiKey</code> for the caller group with at least <code>send_sms</code> and <code>comms</code> permissions:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">ApiKey</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="n">api_key</span><span class="p">,</span> <span class="n">raw_token</span> <span class="o">=</span> <span class="n">ApiKey</span><span class="o">.</span><span class="n">create_for_group</span><span class="p">(</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>    <span class="n">group</span><span class="o">=</span><span class="n">caller_group</span><span class="p">,</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;downstream-mojo&quot;</span><span class="p">,</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>    <span class="n">permissions</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;send_sms&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span> <span class="s2">&quot;comms&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="p">)</span>
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="c1"># Hand `raw_token` to the caller — it cannot be retrieved later.</span>
+</code></pre></div>
+<p><strong>On the calling (downstream) mojo:</strong>
+1. Create a <code>PhoneConfig</code> with <code>provider="mojo"</code>, point <code>mojo_remote_url</code> at the upstream, and store the api key:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.phonehub.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">PhoneConfig</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="n">cfg</span> <span class="o">=</span> <span class="n">PhoneConfig</span><span class="p">(</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>    <span class="n">group</span><span class="o">=</span><span class="n">my_group</span><span class="p">,</span>                                  <span class="c1"># or None for system default</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;central-sms&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>    <span class="n">provider</span><span class="o">=</span><span class="s2">&quot;mojo&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>    <span class="n">mojo_remote_url</span><span class="o">=</span><span class="s2">&quot;https://sms-hub.example.com&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="p">)</span>
+<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="n">cfg</span><span class="o">.</span><span class="n">set_mojo_api_key</span><span class="p">(</span><span class="n">raw_token</span><span class="p">)</span>                      <span class="c1"># encrypted via MojoSecrets</span>
+<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="n">cfg</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
+</code></pre></div>
+<ol>
+<li>Validate end-to-end with <code>cfg.test_connection()</code> — issues a single authenticated <code>GET /api/account/me</code> to the remote.</li>
+</ol>
+<p><code>phonehub.send_sms(...)</code> and <code>POST /api/phonehub/sms/send</code> are unchanged from the caller's perspective; dispatch happens inside <code>SMS.send()</code>. A successful remote call stores the remote SMS id in <code>provider_message_id</code> and the full remote payload in <code>metadata["remote"]</code>. Failures are surfaced as <code>error_code</code> values: <code>timeout</code>, <code>http_&lt;status&gt;</code>, <code>remote_error</code>, <code>remote_failed</code>, or <code>config_error</code>.</p>
+<p>Test numbers (<code>+1555…</code>) continue to short-circuit locally without hitting the remote.</p>
 
 
 

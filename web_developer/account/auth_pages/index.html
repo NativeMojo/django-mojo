@@ -3948,8 +3948,8 @@ HttpOnly pass cookie that skips the challenge on subsequent visits.</p>
 <td>Override logo URL</td>
 </tr>
 <tr>
-<td><code>?group=&lt;uuid&gt;</code></td>
-<td>Load per-group branding (logo, brand name, OAuth settings, success redirect). Used when multiple groups share one auth domain.</td>
+<td><code>?group_uuid=&lt;uuid&gt;</code></td>
+<td>Load per-group branding (logo, brand name, OAuth settings, success redirect). Used when multiple groups share one auth domain. <strong>Note:</strong> must be <code>group_uuid</code>, not <code>group</code> — the framework dispatcher reserves <code>?group=</code> for integer IDs and rejects UUID values with 400 before the page renders.</td>
 </tr>
 </tbody>
 </table>
@@ -3960,11 +3960,26 @@ HttpOnly pass cookie that skips the challenge on subsequent visits.</p>
 3. User is redirected to <code>AUTH_SUCCESS_REDIRECT</code> (default <code>/</code>)</p>
 <hr />
 <h2 id="registration-page-register">Registration Page (<code>/register</code>)<a class="headerlink" href="#registration-page-register" title="Permanent link">&para;</a></h2>
-<p>Fields:
+<p>Default fields (configurable via <code>AUTH_REGISTER_FIELDS</code>):
 - First name / Last name (optional, side-by-side)
 - Email (required)
 - Password (required, with visibility toggle)
 - Terms &amp; Conditions checkbox</p>
+<p><strong>Phone-first flow</strong> — when the server's <code>AUTH_REGISTER_FIELDS</code> schema marks
+<code>phone</code> with <code>verify: "sms"</code>, the form becomes a three-step state machine
+instead of a single pane:</p>
+<ol>
+<li><strong>Step 1 — Identity</strong>: phone number entry only</li>
+<li><strong>Step 2 — Verify</strong>: 6-digit SMS code entry with "Resend code" and "Back" links</li>
+<li><strong>Step 3 — Profile</strong>: remaining fields (name, DOB, password) with final submit</li>
+</ol>
+<p>SPAs implementing a custom registration form follow the same endpoint sequence
+— see <a href="../authentication/#phone-based-registration-verify-then-register">Authentication § Phone-Based Registration</a>.</p>
+<p><strong>DOB field</strong> — when <code>dob</code> is in the schema, it renders as three segmented
+numeric inputs (<code>MM</code> / <code>DD</code> / <code>YYYY</code>) with <code>inputmode="numeric"</code> for mobile
+keyboards. Paste of common date formats (<code>MM/DD/YYYY</code>, <code>MM-DD-YYYY</code>, <code>YYYY-MM-DD</code>)
+into any segment distributes across all three. The value is submitted as ISO
+<code>yyyy-mm-dd</code>.</p>
 <p>Also supports Google/Apple OAuth sign-up (same buttons, same flow — the
 backend auto-creates the account on first OAuth login).</p>
 <p>After registration, the user is automatically logged in and redirected.</p>
@@ -4103,13 +4118,18 @@ can resolve a group automatically and apply its settings.</p>
 <p><strong>Custom auth domain</strong> — point <code>auth.clientbrand.com</code> at the same Django
 backend. The server detects the hostname, resolves the group, and serves that
 group's logo, brand name, features, and success redirect. No URL params needed.</p>
-<p><strong><code>?group=&lt;uuid&gt;</code> param</strong> — for shared-domain deployments, append
-<code>?group=&lt;uuid&gt;</code> to the auth page URL. The group's branding is applied and the
-param is preserved through navigation (login ↔ register) and the OAuth
-round-trip (Google/Apple callback includes <code>?group=</code> in the return URL).</p>
+<p><strong><code>?group_uuid=&lt;uuid&gt;</code> param</strong> — for shared-domain deployments, append
+<code>?group_uuid=&lt;uuid&gt;</code> to the auth page URL. The group's branding is applied
+and the param is preserved through navigation (login ↔ register) and the
+OAuth round-trip (Google/Apple callback includes <code>?group_uuid=</code> in the
+return URL).</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="cm">&lt;!-- Link to the auth page with group-scoped branding --&gt;</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="p">&lt;</span><span class="nt">a</span> <span class="na">href</span><span class="o">=</span><span class="s">&quot;/auth?group=abc123-uuid&quot;</span><span class="p">&gt;</span>Sign In to Client Brand<span class="p">&lt;/</span><span class="nt">a</span><span class="p">&gt;</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="p">&lt;</span><span class="nt">a</span> <span class="na">href</span><span class="o">=</span><span class="s">&quot;/auth?group_uuid=abc123uuid&quot;</span><span class="p">&gt;</span>Sign In to Client Brand<span class="p">&lt;/</span><span class="nt">a</span><span class="p">&gt;</span>
 </code></pre></div>
+<p>The param name is <code>group_uuid</code> rather than <code>group</code> because the framework's
+URL dispatcher reserves <code>?group=</code> for integer-ID lookup and rejects any
+non-integer value with <code>400 Invalid group ID</code> before the bouncer page
+runs.</p>
 <p>Per-group settings that take effect: all <code>AUTH_*</code> settings (logo, title, hero,
 OAuth buttons, success redirect, layout, CSS). Each setting resolves with a
 parent-chain fallback: group → parent group → global.</p>

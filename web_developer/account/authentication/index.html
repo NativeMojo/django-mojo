@@ -2850,6 +2850,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#phone-based-registration-verify-then-register" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phone-Based Registration (verify-then-register)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#response-auto-login-default" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4126,6 +4137,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#phone-based-registration-verify-then-register" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phone-Based Registration (verify-then-register)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#response-auto-login-default" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4236,7 +4258,7 @@
 <tr>
 <td><code>username</code></td>
 <td>yes</td>
-<td>Email or username.</td>
+<td>Email, phone number, or username.</td>
 </tr>
 <tr>
 <td><code>password</code></td>
@@ -4250,10 +4272,11 @@
 </tr>
 </tbody>
 </table>
+<p>Phone-number identity is accepted in the <code>username</code> field as well — the server resolves the channel automatically and <code>USER_LOGIN_HANDLER</code> receives <code>source="password"</code> regardless of which identifier was used.</p>
 <p>From JavaScript, pass <code>group_uuid</code> via the third <code>options</code> arg on the SDK:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nx">MojoAuth</span><span class="p">.</span><span class="nx">login</span><span class="p">(</span><span class="nx">username</span><span class="p">,</span><span class="w"> </span><span class="nx">password</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">group_uuid</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;&lt;uuid&gt;&#39;</span><span class="w"> </span><span class="p">});</span>
 </code></pre></div>
-<p>Two-arg <code>MojoAuth.login(username, password)</code> callers omit the key entirely and behave identically to single-tenant deployments. The bouncer-hosted login page (<code>/auth</code>) forwards <code>group_uuid</code> automatically when the page resolves a group via custom auth domain or <code>?group=</code> — see <a href="../auth_pages/#per-group-branding">Auth Pages § Per-Group Branding</a>.</p>
+<p>Two-arg <code>MojoAuth.login(username, password)</code> callers omit the key entirely and behave identically to single-tenant deployments. The bouncer-hosted login page (<code>/auth</code>) forwards <code>group_uuid</code> automatically when the page resolves a group via custom auth domain or <code>?group_uuid=</code> — see <a href="../auth_pages/#per-group-branding">Auth Pages § Per-Group Branding</a>.</p>
 <p><strong>Response:</strong></p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span>
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
@@ -4450,7 +4473,7 @@ for end-to-end flow and security trade-offs.</p>
 <a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="w">  </span><span class="nt">&quot;method&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;code&quot;</span>
 <a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="p">}</span>
 </code></pre></div>
-<p>A 6-digit code is sent to the email. Response always returns success (to prevent email enumeration).</p>
+<p>The identifier can be supplied as <code>email</code>, <code>phone</code>, or <code>username</code>. A 6-digit code is dispatched via email by default. Pass <code>"channel": "sms"</code> to route the code via SMS instead; the server also routes via SMS automatically when the matched account has no email on file. Response always returns success (to prevent account enumeration).</p>
 <p><strong>Step 2: Submit code and new password</strong></p>
 <p><strong>POST</strong> <code>/api/auth/password/reset/code</code></p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="p">{</span>
@@ -4530,8 +4553,13 @@ for end-to-end flow and security trade-offs.</p>
 <tbody>
 <tr>
 <td><code>email</code></td>
-<td>yes</td>
-<td>Must be unique across all accounts</td>
+<td>conditional</td>
+<td>Required when <code>email</code> is in the server's <code>AUTH_REGISTER_FIELDS</code> schema (default config). Unique across all accounts.</td>
+</tr>
+<tr>
+<td><code>phone</code></td>
+<td>conditional</td>
+<td>Required when <code>phone</code> is in the server's <code>AUTH_REGISTER_FIELDS</code> schema. Normalized to E.164 server-side. Unique across all accounts.</td>
 </tr>
 <tr>
 <td><code>password</code></td>
@@ -4540,13 +4568,23 @@ for end-to-end flow and security trade-offs.</p>
 </tr>
 <tr>
 <td><code>first_name</code></td>
-<td>no</td>
-<td>User's first name</td>
+<td>conditional</td>
+<td>Required when configured as such in <code>AUTH_REGISTER_FIELDS</code></td>
 </tr>
 <tr>
 <td><code>last_name</code></td>
-<td>no</td>
-<td>User's last name</td>
+<td>conditional</td>
+<td>Required when configured as such in <code>AUTH_REGISTER_FIELDS</code></td>
+</tr>
+<tr>
+<td><code>dob</code></td>
+<td>conditional</td>
+<td>ISO <code>yyyy-mm-dd</code>. Required when configured. Age-gated against <code>AUTH_MIN_AGE_YEARS</code> if that setting is set.</td>
+</tr>
+<tr>
+<td><code>verified_phone_token</code></td>
+<td>conditional</td>
+<td>Required when the schema marks <code>phone</code> with <code>verify: "sms"</code>. Obtain via the two-step phone verify endpoints below.</td>
 </tr>
 <tr>
 <td><code>group_uuid</code></td>
@@ -4566,29 +4604,57 @@ for end-to-end flow and security trade-offs.</p>
 </tbody>
 </table>
 <p>Additional keys may be included in the payload. The server silently drops any key not present in its <code>REGISTRATION_EXTRA_FIELDS</code> allowlist, so safe to forward extra fields without causing errors. <code>MojoAuth.register()</code> forwards the full payload as-is.</p>
+<h3 id="phone-based-registration-verify-then-register">Phone-Based Registration (verify-then-register)<a class="headerlink" href="#phone-based-registration-verify-then-register" title="Permanent link">&para;</a></h3>
+<p>When the server's <code>AUTH_REGISTER_FIELDS</code> schema marks <code>phone</code> with <code>verify: "sms"</code>, the client must complete a two-step phone verification before calling <code>/api/auth/register</code>. The bouncer-hosted register page does this automatically; SPAs implementing their own form follow the same pattern.</p>
+<p><strong>Step 1 — Start verification</strong></p>
+<p><strong>POST</strong> <code>/api/auth/phone/register/start</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;phone&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;+14155550123&quot;</span><span class="w"> </span><span class="p">}</span>
+</code></pre></div>
+<p>Response:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;session_token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;32-hex&gt;&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;expires_in&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">600</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="p">}</span>
+</code></pre></div>
+<p>The server sends a 6-digit code via SMS. Rate-limited per IP. Returns 400 if a user already owns the phone.</p>
+<p><strong>Step 2 — Verify</strong></p>
+<p><strong>POST</strong> <code>/api/auth/phone/register/verify</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;session_token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;32-hex&gt;&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;123456&quot;</span><span class="w"> </span><span class="p">}</span>
+</code></pre></div>
+<p>Response:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;verified_phone_token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;32-hex&gt;&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;expires_in&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">600</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="p">}</span>
+</code></pre></div>
+<p>Single-use. Include <code>verified_phone_token</code> (and the same <code>phone</code>) in the subsequent <code>/api/auth/register</code> POST. The server consumes the token, marks <code>is_phone_verified=True</code>, and creates the User row in a single transaction.</p>
+<p><strong>Dev bypass</strong> — when the server has <code>AUTH_PHONE_VERIFY_DEV_BYPASS_CODE</code> set (development environments only), that fixed code is accepted in place of the real SMS code. This setting must never be set in production.</p>
+<p>From JavaScript:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a><span class="kd">const</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">session_token</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">MojoAuth</span><span class="p">.</span><span class="nx">startPhoneRegister</span><span class="p">(</span><span class="nx">phone</span><span class="p">);</span>
+<a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a><span class="c1">// user enters the 6-digit code from SMS</span>
+<a id="__codelineno-26-3" name="__codelineno-26-3" href="#__codelineno-26-3"></a><span class="kd">const</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">verified_phone_token</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">MojoAuth</span><span class="p">.</span><span class="nx">verifyPhoneRegister</span><span class="p">(</span><span class="nx">session_token</span><span class="p">,</span><span class="w"> </span><span class="nx">code</span><span class="p">);</span>
+<a id="__codelineno-26-4" name="__codelineno-26-4" href="#__codelineno-26-4"></a><span class="k">await</span><span class="w"> </span><span class="nx">MojoAuth</span><span class="p">.</span><span class="nx">register</span><span class="p">({</span>
+<a id="__codelineno-26-5" name="__codelineno-26-5" href="#__codelineno-26-5"></a><span class="w">  </span><span class="nx">first_name</span><span class="p">,</span><span class="w"> </span><span class="nx">last_name</span><span class="p">,</span><span class="w"> </span><span class="nx">phone</span><span class="p">,</span><span class="w"> </span><span class="nx">dob</span><span class="p">,</span><span class="w"> </span><span class="nx">password</span><span class="p">,</span>
+<a id="__codelineno-26-6" name="__codelineno-26-6" href="#__codelineno-26-6"></a><span class="w">  </span><span class="nx">verified_phone_token</span><span class="p">,</span>
+<a id="__codelineno-26-7" name="__codelineno-26-7" href="#__codelineno-26-7"></a><span class="p">});</span>
+</code></pre></div>
 <h3 id="response-auto-login-default">Response — Auto-Login (default)<a class="headerlink" href="#response-auto-login-default" title="Permanent link">&para;</a></h3>
-<p>When <code>REQUIRE_VERIFIED_EMAIL</code> is <code>False</code> (default), the user is logged in immediately. A verification email is still sent as a nudge.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="p">{</span>
-<a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-22-4" name="__codelineno-22-4" href="#__codelineno-22-4"></a><span class="w">    </span><span class="nt">&quot;access_token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;eyJhbGci...&quot;</span><span class="p">,</span>
-<a id="__codelineno-22-5" name="__codelineno-22-5" href="#__codelineno-22-5"></a><span class="w">    </span><span class="nt">&quot;refresh_token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;eyJhbGci...&quot;</span><span class="p">,</span>
-<a id="__codelineno-22-6" name="__codelineno-22-6" href="#__codelineno-22-6"></a><span class="w">    </span><span class="nt">&quot;expires_in&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">21600</span><span class="p">,</span>
-<a id="__codelineno-22-7" name="__codelineno-22-7" href="#__codelineno-22-7"></a><span class="w">    </span><span class="nt">&quot;user&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-22-8" name="__codelineno-22-8" href="#__codelineno-22-8"></a><span class="w">      </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">43</span><span class="p">,</span>
-<a id="__codelineno-22-9" name="__codelineno-22-9" href="#__codelineno-22-9"></a><span class="w">      </span><span class="nt">&quot;username&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;alice@example.com&quot;</span><span class="p">,</span>
-<a id="__codelineno-22-10" name="__codelineno-22-10" href="#__codelineno-22-10"></a><span class="w">      </span><span class="nt">&quot;display_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Alice&quot;</span>
-<a id="__codelineno-22-11" name="__codelineno-22-11" href="#__codelineno-22-11"></a><span class="w">    </span><span class="p">}</span>
-<a id="__codelineno-22-12" name="__codelineno-22-12" href="#__codelineno-22-12"></a><span class="w">  </span><span class="p">}</span>
-<a id="__codelineno-22-13" name="__codelineno-22-13" href="#__codelineno-22-13"></a><span class="p">}</span>
+<p>When <code>REQUIRE_VERIFIED_EMAIL</code> is <code>False</code> (default), the user is logged in immediately. A verification email is sent as a nudge when the user has an email address on file (phone-only registrations skip this).</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a><span class="p">{</span>
+<a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-27-3" name="__codelineno-27-3" href="#__codelineno-27-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-27-4" name="__codelineno-27-4" href="#__codelineno-27-4"></a><span class="w">    </span><span class="nt">&quot;access_token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;eyJhbGci...&quot;</span><span class="p">,</span>
+<a id="__codelineno-27-5" name="__codelineno-27-5" href="#__codelineno-27-5"></a><span class="w">    </span><span class="nt">&quot;refresh_token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;eyJhbGci...&quot;</span><span class="p">,</span>
+<a id="__codelineno-27-6" name="__codelineno-27-6" href="#__codelineno-27-6"></a><span class="w">    </span><span class="nt">&quot;expires_in&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">21600</span><span class="p">,</span>
+<a id="__codelineno-27-7" name="__codelineno-27-7" href="#__codelineno-27-7"></a><span class="w">    </span><span class="nt">&quot;user&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-27-8" name="__codelineno-27-8" href="#__codelineno-27-8"></a><span class="w">      </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">43</span><span class="p">,</span>
+<a id="__codelineno-27-9" name="__codelineno-27-9" href="#__codelineno-27-9"></a><span class="w">      </span><span class="nt">&quot;username&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;alice@example.com&quot;</span><span class="p">,</span>
+<a id="__codelineno-27-10" name="__codelineno-27-10" href="#__codelineno-27-10"></a><span class="w">      </span><span class="nt">&quot;display_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Alice&quot;</span>
+<a id="__codelineno-27-11" name="__codelineno-27-11" href="#__codelineno-27-11"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-27-12" name="__codelineno-27-12" href="#__codelineno-27-12"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-27-13" name="__codelineno-27-13" href="#__codelineno-27-13"></a><span class="p">}</span>
 </code></pre></div>
 <h3 id="response-verification-required">Response — Verification Required<a class="headerlink" href="#response-verification-required" title="Permanent link">&para;</a></h3>
 <p>When <code>REQUIRE_VERIFIED_EMAIL</code> is <code>True</code>, no JWT is issued. The user must verify their email before they can log in.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a><span class="p">{</span>
-<a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a><span class="w">  </span><span class="nt">&quot;requires_verification&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-23-4" name="__codelineno-23-4" href="#__codelineno-23-4"></a><span class="w">  </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Account created. Please check your email to verify your account before logging in.&quot;</span>
-<a id="__codelineno-23-5" name="__codelineno-23-5" href="#__codelineno-23-5"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a><span class="p">{</span>
+<a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-28-3" name="__codelineno-28-3" href="#__codelineno-28-3"></a><span class="w">  </span><span class="nt">&quot;requires_verification&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-28-4" name="__codelineno-28-4" href="#__codelineno-28-4"></a><span class="w">  </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Account created. Please check your email to verify your account before logging in.&quot;</span>
+<a id="__codelineno-28-5" name="__codelineno-28-5" href="#__codelineno-28-5"></a><span class="p">}</span>
 </code></pre></div>
 <p>Show a "check your email" screen — <strong>not</strong> a logged-in state. After the user clicks the verification link, they must go through the normal <a href="#login">login flow</a>.</p>
 <p>If your frontend handles the verification token (SPA flow), <code>POST /api/auth/email/verify</code> both verifies the email and returns a JWT in one step. See <a href="../email_verification/#confirm--link-flow">Email Verification § Link Flow — Option B</a>.</p>
@@ -4640,28 +4706,28 @@ for end-to-end flow and security trade-offs.</p>
 <hr />
 <h2 id="error-responses_1">Error Responses<a class="headerlink" href="#error-responses_1" title="Permanent link">&para;</a></h2>
 <p><strong>Invalid credentials:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a><span class="p">{</span>
-<a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
-<a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a><span class="w">  </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">401</span><span class="p">,</span>
-<a id="__codelineno-24-4" name="__codelineno-24-4" href="#__codelineno-24-4"></a><span class="w">  </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Permission denied&quot;</span>
-<a id="__codelineno-24-5" name="__codelineno-24-5" href="#__codelineno-24-5"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a><span class="p">{</span>
+<a id="__codelineno-29-2" name="__codelineno-29-2" href="#__codelineno-29-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<a id="__codelineno-29-3" name="__codelineno-29-3" href="#__codelineno-29-3"></a><span class="w">  </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">401</span><span class="p">,</span>
+<a id="__codelineno-29-4" name="__codelineno-29-4" href="#__codelineno-29-4"></a><span class="w">  </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Permission denied&quot;</span>
+<a id="__codelineno-29-5" name="__codelineno-29-5" href="#__codelineno-29-5"></a><span class="p">}</span>
 </code></pre></div>
 <p><strong>Unauthenticated request to protected endpoint:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a><span class="p">{</span>
-<a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
-<a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a><span class="w">  </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">403</span><span class="p">,</span>
-<a id="__codelineno-25-4" name="__codelineno-25-4" href="#__codelineno-25-4"></a><span class="w">  </span><span class="nt">&quot;is_authenticated&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
-<a id="__codelineno-25-5" name="__codelineno-25-5" href="#__codelineno-25-5"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a><span class="p">{</span>
+<a id="__codelineno-30-2" name="__codelineno-30-2" href="#__codelineno-30-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<a id="__codelineno-30-3" name="__codelineno-30-3" href="#__codelineno-30-3"></a><span class="w">  </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">403</span><span class="p">,</span>
+<a id="__codelineno-30-4" name="__codelineno-30-4" href="#__codelineno-30-4"></a><span class="w">  </span><span class="nt">&quot;is_authenticated&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
+<a id="__codelineno-30-5" name="__codelineno-30-5" href="#__codelineno-30-5"></a><span class="p">}</span>
 </code></pre></div>
 <h2 id="email-verification-gate">Email Verification Gate<a class="headerlink" href="#email-verification-gate" title="Permanent link">&para;</a></h2>
 <p>When the server has <code>REQUIRE_VERIFIED_EMAIL</code> or <code>REQUIRE_VERIFIED_PHONE</code> enabled, a login attempt by an unverified user returns a structured 403 with a machine-readable <code>error</code> field instead of a generic failure.</p>
 <p><strong>Important:</strong> <code>REQUIRE_VERIFIED_EMAIL</code> only gates logins where the identifier submitted is an <strong>email address</strong> (i.e. the user typed their email into the username field, or used the <code>email</code> parameter). Logging in with a plain username is never blocked by this gate, regardless of the user's email verification status.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a><span class="p">{</span>
-<a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
-<a id="__codelineno-26-3" name="__codelineno-26-3" href="#__codelineno-26-3"></a><span class="w">  </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">403</span><span class="p">,</span>
-<a id="__codelineno-26-4" name="__codelineno-26-4" href="#__codelineno-26-4"></a><span class="w">  </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;email_not_verified&quot;</span><span class="p">,</span>
-<a id="__codelineno-26-5" name="__codelineno-26-5" href="#__codelineno-26-5"></a><span class="w">  </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Please verify your email before logging in.&quot;</span>
-<a id="__codelineno-26-6" name="__codelineno-26-6" href="#__codelineno-26-6"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a><span class="p">{</span>
+<a id="__codelineno-31-2" name="__codelineno-31-2" href="#__codelineno-31-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<a id="__codelineno-31-3" name="__codelineno-31-3" href="#__codelineno-31-3"></a><span class="w">  </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">403</span><span class="p">,</span>
+<a id="__codelineno-31-4" name="__codelineno-31-4" href="#__codelineno-31-4"></a><span class="w">  </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;email_not_verified&quot;</span><span class="p">,</span>
+<a id="__codelineno-31-5" name="__codelineno-31-5" href="#__codelineno-31-5"></a><span class="w">  </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Please verify your email before logging in.&quot;</span>
+<a id="__codelineno-31-6" name="__codelineno-31-6" href="#__codelineno-31-6"></a><span class="p">}</span>
 </code></pre></div>
 <p>Detect this error and show a <strong>Resend verification email</strong> prompt rather than a generic error message. The user does not need to re-enter their password — they only need to click the link.</p>
 <p>See <a href="../email_verification/">Email &amp; Phone Verification</a> for the full send/verify flow, invite link handling, phone verification, and settings reference.</p>

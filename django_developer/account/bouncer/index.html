@@ -4248,20 +4248,26 @@ high-confidence blocks. Fully manageable via the operator portal.</p>
 <hr />
 <h2 id="per-group-branding-white-label-auth">Per-Group Branding (White-Label Auth)<a class="headerlink" href="#per-group-branding-white-label-auth" title="Permanent link">&para;</a></h2>
 <p>The bouncer supports white-label auth pages per group. When a request arrives
-on a custom auth domain — or includes a <code>?group=&lt;uuid&gt;</code> query param — the
-bouncer resolves the group and applies its scoped <code>AUTH_*</code> settings.</p>
+on a custom auth domain — or includes a <code>?group_uuid=&lt;uuid&gt;</code> query param —
+the bouncer resolves the group and applies its scoped <code>AUTH_*</code> settings.</p>
 <h3 id="group-detection-order">Group detection order<a class="headerlink" href="#group-detection-order" title="Permanent link">&para;</a></h3>
 <ol>
 <li><strong>Hostname</strong> — <code>Group.resolve_by_auth_domain(hostname)</code> looks up the active
    group whose <code>auth_domain</code> matches the request host. Result is Redis-cached
    (24h for hits, 1h for misses).</li>
-<li><strong><code>?group=&lt;uuid&gt;</code> query param</strong> — fallback for platforms that share a domain.
-   The group UUID is preserved through the challenge redirect and OAuth round-trip.</li>
+<li><strong><code>?group_uuid=&lt;uuid&gt;</code> query param</strong> — fallback for platforms that share a
+   domain. The group UUID is preserved through the challenge redirect and the
+   OAuth round-trip.</li>
 </ol>
+<p>The bouncer reads <code>?group_uuid=</code> (not <code>?group=</code>) because the framework's URL
+dispatcher (<code>mojo/decorators/http.py</code>) reserves <code>?group=</code> for integer-ID lookup
+and returns <code>400 Invalid group ID</code> for any non-integer value before this view
+runs. The dispatcher's UUID slot is <code>?group_uuid=</code>, which is what the bouncer
+reads and emits.</p>
 <h3 id="query-params-forwarded-through-the-challenge">Query params forwarded through the challenge<a class="headerlink" href="#query-params-forwarded-through-the-challenge" title="Permanent link">&para;</a></h3>
 <p><code>_serve_challenge()</code> preserves these params when building the post-challenge
-login redirect URL: <code>group</code>, <code>redirect</code> (and aliases <code>next</code>, <code>returnTo</code>), and
-<code>back</code>. Any param missing from the original request is omitted from the
+login redirect URL: <code>group_uuid</code>, <code>redirect</code> (and aliases <code>next</code>, <code>returnTo</code>),
+and <code>back</code>. Any param missing from the original request is omitted from the
 forwarded query string.</p>
 <h3 id="configuring-a-white-label-group">Configuring a white-label group<a class="headerlink" href="#configuring-a-white-label-group" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="n">settings</span>
@@ -4291,8 +4297,10 @@ for a specific group (opt-in only):</p>
 when a group is resolved. Requests with no group always use the default branding.</p>
 <h3 id="oauth-round-trip">OAuth round-trip<a class="headerlink" href="#oauth-round-trip" title="Permanent link">&para;</a></h3>
 <p><code>group_uuid</code> is embedded in the OAuth state so branding survives the
-provider redirect. The callback reconstructs <code>?group=&lt;uuid&gt;</code> and appends it
-to the frontend redirect URI before handing back to the auth page.</p>
+provider redirect. The callback reconstructs <code>?group_uuid=&lt;uuid&gt;</code> and appends
+it to the frontend redirect URI before handing back to the auth page (using
+<code>group_uuid</code> rather than <code>group</code> so the framework dispatcher accepts the
+next request through the rest of the flow).</p>
 <h3 id="nginx-setup-for-custom-auth-domains">Nginx setup for custom auth domains<a class="headerlink" href="#nginx-setup-for-custom-auth-domains" title="Permanent link">&para;</a></h3>
 <p>Each white-label domain needs its own nginx server block pointing at the same
 Django backend. Pass the real hostname so the bouncer can resolve the group:</p>

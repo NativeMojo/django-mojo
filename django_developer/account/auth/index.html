@@ -4665,6 +4665,7 @@ for the end-to-end client-side flow.</p>
 <a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="n">ALLOW_USER_REGISTRATION</span> <span class="o">=</span> <span class="kc">True</span>
 </code></pre></div>
 <p><strong>Endpoint:</strong> <code>POST /api/auth/register</code></p>
+<p>Fields and which identity channel is required depend on the server's <code>AUTH_REGISTER_FIELDS</code> setting. Default config requires <code>email</code> + <code>password</code>. Phone-as-identity projects configure <code>phone</code> (with optional <code>verify: "sms"</code> pre-verification) as the identity field instead.</p>
 <table>
 <thead>
 <tr>
@@ -4676,8 +4677,13 @@ for the end-to-end client-side flow.</p>
 <tbody>
 <tr>
 <td><code>email</code></td>
-<td>Yes</td>
-<td>Email address (must be unique)</td>
+<td>Conditional</td>
+<td>Required when <code>email</code> is the configured identity field</td>
+</tr>
+<tr>
+<td><code>phone</code></td>
+<td>Conditional</td>
+<td>Required when <code>phone</code> is the configured identity field</td>
 </tr>
 <tr>
 <td><code>password</code></td>
@@ -4686,20 +4692,30 @@ for the end-to-end client-side flow.</p>
 </tr>
 <tr>
 <td><code>first_name</code></td>
-<td>No</td>
-<td>First name</td>
+<td>Conditional</td>
+<td>Required when configured as such</td>
 </tr>
 <tr>
 <td><code>last_name</code></td>
-<td>No</td>
-<td>Last name</td>
+<td>Conditional</td>
+<td>Required when configured as such</td>
+</tr>
+<tr>
+<td><code>dob</code></td>
+<td>Conditional</td>
+<td>ISO <code>yyyy-mm-dd</code>. Required when configured; age-gated by <code>AUTH_MIN_AGE_YEARS</code></td>
+</tr>
+<tr>
+<td><code>verified_phone_token</code></td>
+<td>Conditional</td>
+<td>Required when the schema marks <code>phone</code> with <code>verify: "sms"</code></td>
 </tr>
 </tbody>
 </table>
 <p><strong>Behavior depends on <code>REQUIRE_VERIFIED_EMAIL</code>:</strong></p>
 <ul>
-<li><strong><code>REQUIRE_VERIFIED_EMAIL = True</code></strong> — Account is created, verification email sent, response includes <code>requires_verification: true</code>. No JWT is issued. The user must verify their email before they can log in.</li>
-<li><strong><code>REQUIRE_VERIFIED_EMAIL = False</code></strong> (default) — Account is created, verification email sent as a nudge, and the user is logged in immediately with a JWT.</li>
+<li><strong><code>REQUIRE_VERIFIED_EMAIL = True</code></strong> — Account is created, response includes <code>requires_verification: true</code>. No JWT is issued. Email users must verify before logging in.</li>
+<li><strong><code>REQUIRE_VERIFIED_EMAIL = False</code></strong> (default) — User is logged in immediately with a JWT. A verification email is sent as a nudge when the user has an email on file.</li>
 </ul>
 <p>The registration page is served by the bouncer at <code>/auth/register</code> and uses <code>MojoAuth.register()</code> on the frontend.</p>
 <p><strong>Protections:</strong></p>

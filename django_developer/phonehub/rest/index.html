@@ -3752,6 +3752,34 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="CRUD — PhoneConfig">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#writing-encrypted-credentials-via-rest" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Writing encrypted credentials via REST
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#test-the-configured-provider-post-apiphonehubconfigid-with-test_connection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Test the configured provider — POST /api/phonehub/config/&lt;id&gt; with test_connection
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
       </ul>
@@ -3949,6 +3977,9 @@
 <a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a><span class="p">}</span>
 </code></pre></div></p>
 <p>On failure: <code>status</code> will be <code>"failed"</code> and <code>error_message</code> will contain the provider error.</p>
+<blockquote>
+<p><strong>Provider-to-provider use:</strong> This same endpoint doubles as the integration surface for the <code>mojo</code> SMS provider. A downstream django-mojo instance configured with <code>PhoneConfig.provider="mojo"</code> authenticates here using an <code>account.ApiKey</code> (<code>Authorization: apikey &lt;token&gt;</code>) and forwards the user's send request. The api key must grant <code>send_sms</code> and <code>comms</code>. See <a href="../#mojo-remote-sms-provider">README — Mojo Remote SMS Provider</a> for the full setup.</p>
+</blockquote>
 <hr />
 <h3 id="twilio-inbound-webhook-post-apiphonehubsmswebhooktwilio">Twilio Inbound Webhook — <code>POST /api/phonehub/sms/webhook/twilio</code><a class="headerlink" href="#twilio-inbound-webhook-post-apiphonehubsmswebhooktwilio" title="Permanent link">&para;</a></h3>
 <p>Public endpoint. Receives inbound SMS from Twilio. Validates the Twilio webhook signature before processing.</p>
@@ -4003,6 +4034,70 @@
 </table>
 <p><strong>Permissions:</strong> <code>manage_phone_config</code> or <code>manage_groups</code></p>
 <p><code>mojo_secrets</code> (encrypted credentials) is never returned in any response.</p>
+<h4 id="writing-encrypted-credentials-via-rest">Writing encrypted credentials via REST<a class="headerlink" href="#writing-encrypted-credentials-via-rest" title="Permanent link">&para;</a></h4>
+<p>Provider credentials are stored encrypted in <code>mojo_secrets</code> and are <strong>write-only over REST</strong>. The standard auto-setter pattern routes each credential field through its <code>set_&lt;field&gt;</code> helper transparently:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="err">POST /api/phonehub/config/&lt;id&gt;</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="err">Content-Type: application/json</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="err">{</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="err">  &quot;mojo_api_key&quot;: &quot;&lt;token shown once by /api/group/apikey&gt;&quot;</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="err">}</span>
+</code></pre></div>
+<p>Supported credential body keys:</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Routes to</th>
+<th>Provider</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>twilio_account_sid</code></td>
+<td><code>set_twilio_account_sid</code></td>
+<td>twilio</td>
+</tr>
+<tr>
+<td><code>twilio_auth_token</code></td>
+<td><code>set_twilio_auth_token</code></td>
+<td>twilio</td>
+</tr>
+<tr>
+<td><code>aws_access_key_id</code></td>
+<td><code>set_aws_access_key_id</code></td>
+<td>aws</td>
+</tr>
+<tr>
+<td><code>aws_secret_access_key</code></td>
+<td><code>set_aws_secret_access_key</code></td>
+<td>aws</td>
+</tr>
+<tr>
+<td><code>mojo_api_key</code></td>
+<td><code>set_mojo_api_key</code></td>
+<td>mojo</td>
+</tr>
+</tbody>
+</table>
+<p>Leaving a credential key out of the body = no change. Setting any of these keys requires the same <code>SAVE_PERMS</code> as scalar updates. The response is the standard PhoneConfig payload (without secrets).</p>
+<h4 id="test-the-configured-provider-post-apiphonehubconfigid-with-test_connection">Test the configured provider — <code>POST /api/phonehub/config/&lt;id&gt;</code> with <code>test_connection</code><a class="headerlink" href="#test-the-configured-provider-post-apiphonehubconfigid-with-test_connection" title="Permanent link">&para;</a></h4>
+<p>Per-instance action that runs the per-provider connectivity check (<code>_test_twilio</code> / <code>_test_aws</code> / <code>_test_mojo</code>) and returns the result inline. Used by the admin portal's "Test connection" button.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="err">POST /api/phonehub/config/&lt;id&gt;</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="err">Content-Type: application/json</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="err">{</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="err">  &quot;test_connection&quot;: 1</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="err">}</span>
+</code></pre></div>
+<p><strong>Response:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="p">{</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">  </span><span class="nt">&quot;success&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">  </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Mojo provider reachable and API key valid&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="w">  </span><span class="nt">&quot;remote_url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://sms-hub.example.com&quot;</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="p">}</span>
+</code></pre></div>
+<p>On failure, <code>success</code> is <code>false</code> and <code>error</code> is one of <code>missing_credentials</code>, <code>invalid_credentials</code>, <code>timeout</code>, <code>connection_failed</code>, <code>missing_library</code>, or <code>invalid_provider</code>. Operators get a non-throwing dict either way; the underlying exception (if any) is logged via <code>mojo.helpers.logit</code> and not echoed back.</p>
 
 
 

@@ -4082,6 +4082,7 @@
 <a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="p">}</span>
 </code></pre></div></p>
 <p>Note: The outer <code>status</code> is <code>true</code> (the request succeeded); check <code>data.status</code> for the delivery result.</p>
+<p>The <code>provider</code> field in the response reflects which backend was used (<code>twilio</code>, <code>aws</code>, or <code>mojo</code>). When the server is configured with the <code>mojo</code> provider (SMS delegated to a remote django-mojo instance), <code>error_code</code> will be one of: <code>timeout</code>, <code>http_&lt;status&gt;</code> (e.g. <code>http_401</code>), <code>remote_error</code>, <code>remote_failed</code>, or <code>config_error</code> — rather than a Twilio error code. <code>provider_message_id</code> will be the remote instance's SMS id on success.</p>
 <hr />
 <h2 id="list-sms-records">List SMS Records<a class="headerlink" href="#list-sms-records" title="Permanent link">&para;</a></h2>
 <p><strong>GET</strong> <code>/api/phonehub/sms</code></p>
