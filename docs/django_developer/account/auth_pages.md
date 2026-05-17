@@ -279,7 +279,7 @@ and bypass the `/api/` prefix.
 - Terms & conditions checkbox (when `AUTH_TERMS_URL` is set)
 - Google/Apple OAuth sign-up
 - Link to login page
-- When `phone` is in the schema with `verify: "sms"`: inline Send-code / Verify controls are rendered automatically
+- When `phone` is in the schema with `verify: "sms"`: form becomes a three-step state machine (phone → SMS verify → profile) — see Configurable Registration Form below
 
 ### When providers are disabled
 

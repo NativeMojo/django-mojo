@@ -443,6 +443,8 @@ Response:
 
 Single-use. Include `verified_phone_token` (and the same `phone`) in the subsequent `/api/auth/register` POST. The server consumes the token, marks `is_phone_verified=True`, and creates the User row in a single transaction.
 
+**Dev bypass** — when the server has `AUTH_PHONE_VERIFY_DEV_BYPASS_CODE` set (development environments only), that fixed code is accepted in place of the real SMS code. This setting must never be set in production.
+
 From JavaScript:
 
 ```javascript

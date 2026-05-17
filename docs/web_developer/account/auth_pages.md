@@ -56,11 +56,28 @@ On successful authentication:
 
 ## Registration Page (`/register`)
 
-Fields:
+Default fields (configurable via `AUTH_REGISTER_FIELDS`):
 - First name / Last name (optional, side-by-side)
 - Email (required)
 - Password (required, with visibility toggle)
 - Terms & Conditions checkbox
+
+**Phone-first flow** — when the server's `AUTH_REGISTER_FIELDS` schema marks
+`phone` with `verify: "sms"`, the form becomes a three-step state machine
+instead of a single pane:
+
+1. **Step 1 — Identity**: phone number entry only
+2. **Step 2 — Verify**: 6-digit SMS code entry with "Resend code" and "Back" links
+3. **Step 3 — Profile**: remaining fields (name, DOB, password) with final submit
+
+SPAs implementing a custom registration form follow the same endpoint sequence
+— see [Authentication § Phone-Based Registration](authentication.md#phone-based-registration-verify-then-register).
+
+**DOB field** — when `dob` is in the schema, it renders as three segmented
+numeric inputs (`MM` / `DD` / `YYYY`) with `inputmode="numeric"` for mobile
+keyboards. Paste of common date formats (`MM/DD/YYYY`, `MM-DD-YYYY`, `YYYY-MM-DD`)
+into any segment distributes across all three. The value is submitted as ISO
+`yyyy-mm-dd`.
 
 Also supports Google/Apple OAuth sign-up (same buttons, same flow — the
 backend auto-creates the account on first OAuth login).
