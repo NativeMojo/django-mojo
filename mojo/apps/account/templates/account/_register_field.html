@@ -21,25 +21,11 @@ Input context:
     <input class="mat-input" type="email" id="reg-email" autocomplete="email" placeholder="Email"{% if f.required %} required{% endif %} />
 </div>
 {% elif f.name == "phone" %}
-<div class="mat-field" data-mat-phone="1">
+<div class="mat-field">
     <input class="mat-input" type="tel" id="reg-phone" autocomplete="tel" placeholder="Phone number"{% if f.required %} required{% endif %} />
-    {% if f.verify == "sms" %}
-    <div class="mat-phone-verify">
-        <button type="button" class="mat-btn mat-btn-outline" id="reg-phone-send"><span class="mat-btn-text">Send code</span></button>
-        <div class="mat-phone-code-row" id="reg-phone-code-row" style="display:none">
-            <input class="mat-input" type="text" inputmode="numeric" pattern="\d*" id="reg-phone-code" placeholder="6-digit code" autocomplete="one-time-code" />
-            <button type="button" class="mat-btn mat-btn-outline" id="reg-phone-verify"><span class="mat-btn-text">Verify</span></button>
-        </div>
-        <input type="hidden" id="reg-phone-session-token" value="" />
-        <input type="hidden" id="reg-phone-token" name="verified_phone_token" value="" />
-        <p class="mat-help-text" id="reg-phone-help" style="display:none"></p>
-    </div>
-    {% endif %}
 </div>
 {% elif f.name == "dob" %}
-<div class="mat-field">
-    <input class="mat-input" type="date" id="reg-dob" autocomplete="bday" placeholder="Date of birth"{% if f.required %} required{% endif %} />
-</div>
+{% include "account/_dob_segments.html" %}
 {% elif f.name == "password" %}
 <div class="mat-field">
     <div class="mat-input-wrap">

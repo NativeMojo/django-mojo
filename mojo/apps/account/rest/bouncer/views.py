@@ -245,6 +245,13 @@ def _auth_context(request, group=None):
     # phone (not email) and use the SMS channel.
     forgot_channel = 'sms' if identity_field == 'phone' else 'email'
 
+    # Stepped flow partitioning. When phone has verify="sms" the template
+    # renders three .mat-view step containers (identity → SMS code → profile).
+    # Otherwise step2_active is False and the template falls back to the
+    # single-pane register_field_rows render path.
+    step1_fields, step2_active, step3_field_rows = register_schema.partition_for_stepped_flow(
+        register_fields)
+
     return {
         'api_base': settings.get('AUTH_API_BASE', '', group=group),
         'success_redirect': settings.get('AUTH_SUCCESS_REDIRECT', '/', group=group),
@@ -267,6 +274,9 @@ def _auth_context(request, group=None):
         'group_uuid': group_uuid,
         'register_fields': register_fields,
         'register_field_rows': register_field_rows,
+        'register_step1_fields': step1_fields,
+        'register_step2_active': step2_active,
+        'register_step3_field_rows': step3_field_rows,
         'identity_field': identity_field,
         'forgot_channel': forgot_channel,
     }

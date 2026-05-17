@@ -188,12 +188,16 @@ def _render_with_test_register_fields(template_name, fields_json, group=None):
     rows = register_schema.field_rows(fields)
     identity_field = register_schema.resolve_identity_field(fields, group=group)
     forgot_channel = 'sms' if identity_field == 'phone' else 'email'
+    step1, step2_active, step3_rows = register_schema.partition_for_stepped_flow(fields)
 
     ctx = _auth_context(request, group=group)
     ctx['page_mode'] = 'login' if 'login' in template_name else 'register'
     ctx['page_title'] = 'Sign In' if 'login' in template_name else 'Create Account'
     ctx['register_fields'] = fields
     ctx['register_field_rows'] = rows
+    ctx['register_step1_fields'] = step1
+    ctx['register_step2_active'] = step2_active
+    ctx['register_step3_field_rows'] = step3_rows
     ctx['identity_field'] = identity_field
     ctx['forgot_channel'] = forgot_channel
     response = render(request, template_name, ctx)
@@ -217,12 +221,13 @@ def test_register_html_phone_only_renders(opts):
                 "phone field input must render for the phone-only config")
     assert_true('type="tel"' in html,
                 "phone field must render with type='tel'")
+    # DOB now renders as three segmented numeric inputs (post-redesign);
+    # the hidden composed-date input keeps id="reg-dob" for the submit handler.
     assert_true('id="reg-dob"' in html,
-                "dob field must render for the phone-only config")
-    assert_true('type="date"' in html,
-                "dob field must render with type='date'")
-    assert_true('id="reg-phone-send"' in html,
-                "phone with verify=sms must render the Send-code button")
+                "hidden composed DOB input must still render for the phone-only config")
+    assert_true('id="reg-dob-mm"' in html and 'id="reg-dob-dd"' in html and 'id="reg-dob-yyyy"' in html,
+                "DOB must render as MM / DD / YYYY segmented inputs")
+    # Verify-token hidden input is now in the form-level scope (not on the phone field)
     assert_true('verified_phone_token' in html,
                 "phone-verify must render a hidden verified_phone_token input")
     # Email row is NOT present
@@ -306,3 +311,80 @@ def test_mojo_auth_forgot_channel(opts):
                 "mojo-auth.js forgotPasswordCode must accept (identifier, channel)")
     assert_true("channel: 'sms'" in source or "channel == 'sms'" in source or "ch === 'sms'" in source,
                 "mojo-auth.js must route channel='sms' into the phone payload")
+
+
+# ---------------------------------------------------------------------------
+# Phone-first stepped flow (register page UX redesign)
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test("register.html: phone-verify schema renders three step containers")
+def test_register_stepped_flow_renders(opts):
+    html = _render_with_test_register_fields(
+        'account/register.html', PHONE_ONLY_FIELDS_JSON, group=opts.group)
+    # Step indicator
+    assert_true('class="mat-steps"' in html or 'data-mat-steps="3"' in html,
+                "stepped flow must render the .mat-steps step indicator")
+    # Three step containers, each with the expected data-step attr
+    assert_true('id="view-reg-step1"' in html and 'data-step="1"' in html,
+                "Step 1 container missing — expected #view-reg-step1 with data-step=1")
+    assert_true('id="view-reg-step2"' in html and 'data-step="2"' in html,
+                "Step 2 container missing — expected #view-reg-step2 with data-step=2")
+    assert_true('id="view-reg-step3"' in html and 'data-step="3"' in html,
+                "Step 3 container missing — expected #view-reg-step3 with data-step=3")
+    # Step 2 must include the 6-digit code input + Verify + Back + Resend
+    assert_true('id="reg-phone-code"' in html,
+                "Step 2 must render the 6-digit code input")
+    assert_true('id="btn-reg-verify"' in html,
+                "Step 2 must render the Verify button")
+    assert_true('id="btn-reg-back"' in html,
+                "Step 2 must render the Back button")
+    assert_true('id="btn-reg-resend"' in html,
+                "Step 2 must render the Resend button")
+    # Step 1 carries the phone field (only)
+    assert_true('id="reg-phone"' in html,
+                "Step 1 must render the phone input")
+
+
+@th.django_unit_test("register.html: stepped flow drops the inline Send-code subwidget")
+def test_register_stepped_no_inline_send(opts):
+    html = _render_with_test_register_fields(
+        'account/register.html', PHONE_ONLY_FIELDS_JSON, group=opts.group)
+    # The legacy inline Send-code / Verify buttons on the phone field are gone
+    # — verification now lives on Step 2.
+    assert_true('id="reg-phone-send"' not in html,
+                "stepped flow must NOT render the legacy reg-phone-send button "
+                "on the phone field; verification lives on Step 2")
+    assert_true('id="reg-phone-code-row"' not in html,
+                "stepped flow must NOT render the legacy reg-phone-code-row subwidget")
+
+
+@th.django_unit_test("register.html: default email schema stays single-pane (no step containers)")
+def test_register_default_email_single_pane(opts):
+    html = _render('account/register.html', group=opts.group)
+    assert_true('id="view-reg-step1"' not in html,
+                "default email schema must NOT render step containers (single-pane fallback)")
+    assert_true('id="view-register"' in html,
+                "default email schema must render the single-pane #view-register container")
+    assert_true('class="mat-steps"' not in html,
+                "default email schema must NOT render the .mat-steps indicator")
+
+
+@th.django_unit_test("register.html: DOB renders three segmented inputs (MM/DD/YYYY)")
+def test_register_dob_segments(opts):
+    html = _render_with_test_register_fields(
+        'account/register.html', PHONE_ONLY_FIELDS_JSON, group=opts.group)
+    assert_true('id="reg-dob-mm"' in html,
+                "DOB month segment input must render")
+    assert_true('id="reg-dob-dd"' in html,
+                "DOB day segment input must render")
+    assert_true('id="reg-dob-yyyy"' in html,
+                "DOB year segment input must render")
+    assert_true('inputmode="numeric"' in html,
+                "DOB segments must declare inputmode='numeric' for mobile keyboards")
+    # The hidden composed-date input still carries the ISO yyyy-mm-dd
+    assert_true('id="reg-dob"' in html,
+                "hidden composed #reg-dob input must still render so the submit "
+                "handler reads the composed ISO date")
+    # And NOT the legacy <input type="date">
+    assert_true('type="date"' not in html,
+                "DOB must NOT render as <input type='date'> any more")

@@ -29,7 +29,7 @@ import json
 import uuid
 
 from mojo import errors as merrors
-from mojo.helpers import crypto, dates
+from mojo.helpers import crypto, dates, test_mode as _tm
 from mojo.helpers.redis import get_connection
 from mojo.helpers.settings import settings
 
@@ -78,13 +78,39 @@ def start(phone, ip=None):
     return session_token, code, ttl
 
 
-def verify_code(session_token, code):
+def _dev_bypass_code(request=None):
+    """Return the configured dev bypass code, or None.
+
+    When set, this is a fixed code that verify_code() accepts in addition
+    to the real generated code. Lets dev environments exercise the phone
+    verify flow without a working SMS gateway. Operator-controlled trust
+    model: setting alone enables the bypass; production is expected to
+    leave it unset (mojo.apps.account.apps.AppConfig.ready emits a
+    server-startup warning when it's non-empty).
+
+    Honors a per-request X-Mojo-Test-Phone-Verify-Bypass-Code header
+    when the test-mode gate passes (loopback + MOJO_TEST_MODE + no proxy
+    chain). Used by tests so they don't require th.server_settings
+    (which would force test_register to be serial).
+    """
+    if request is not None and _tm.is_test_request(request):
+        hdr = request.META.get("HTTP_X_MOJO_TEST_PHONE_VERIFY_BYPASS_CODE")
+        if hdr is not None:
+            return hdr if hdr else None
+    raw = settings.get("AUTH_PHONE_VERIFY_DEV_BYPASS_CODE", "")
+    return raw if raw else None
+
+
+def verify_code(session_token, code, request=None):
     """Atomically consume the session and mint a verified token.
 
     Returns (verified_token, phone, ttl) on success. Raises ValueException
     on missing session, expired session, or mismatched code. Single-use:
     the session is deleted whether the code matches or not (rate-limit at
     the endpoint layer prevents brute force).
+
+    Honors the AUTH_PHONE_VERIFY_DEV_BYPASS_CODE setting: when configured,
+    the bypass code is accepted in addition to the real generated code.
     """
     if not _valid_token_hex(session_token):
         raise merrors.ValueException("Invalid or expired verification session")
@@ -99,8 +125,13 @@ def verify_code(session_token, code):
         raise merrors.ValueException("Invalid or expired verification session")
     stored_code = data.get("code")
     submitted = str(code).strip()
-    # Constant-time comparison for resistance to timing oracles.
-    if not stored_code or not _ct_eq(submitted, stored_code):
+    bypass = _dev_bypass_code(request=request)
+    real_match = stored_code and _ct_eq(submitted, stored_code)
+    # Constant-time compare both branches so wrong-code timing does not
+    # disclose which path matched. Use str() guards because settings may
+    # return non-string types in pathological configs.
+    bypass_match = bypass is not None and _ct_eq(submitted, str(bypass))
+    if not (real_match or bypass_match):
         raise merrors.ValueException("Invalid code")
     phone = data.get("phone")
     if not phone:

@@ -342,7 +342,26 @@ Canonical field set: `first_name`, `last_name`, `email`, `phone`, `dob`, `passwo
 
 **Identity field** — auto-picked: `email` if required + present, else `phone`. `AUTH_REGISTER_IDENTITY_FIELD = "phone"` or `"email"` overrides explicitly. `User.username` is set to the identity value at create time (the existing `User.lookup_from_request(phone_as_username=True)` path then handles phone-based login transparently).
 
-**Phone verification (verify-then-register)** — when a field has `verify: "sms"`, the rendered form includes inline Send-code / Verify controls and the server requires a `verified_phone_token` in the register POST body. Two new endpoints back this flow:
+**Phone verification (verify-then-register)** — when a field has `verify: "sms"`, the rendered form switches to a **three-step state machine** (phone-first flow):
+
+1. **Step 1 — Identity**: phone input only. Submit calls `POST /api/auth/phone/register/start` and advances.
+2. **Step 2 — Verify**: 6-digit code input, "Resend code" (30s client-side cooldown) and "Back" links. Submit calls `POST /api/auth/phone/register/verify` and stashes the `verified_phone_token`.
+3. **Step 3 — Profile**: remaining schema fields (first/last name, DOB, password). Final submit POSTs `/api/auth/register` with the `verified_phone_token`.
+
+The Back link on Step 2 clears the session token but keeps the phone value pre-filled. When the schema has no SMS-verify phone, the form falls back to a single-pane layout (single submit, no step UI).
+
+**DOB collection** — when `dob` is in the schema, the form renders three auto-advancing numeric segments (`MM` `DD` `YYYY`) with `inputmode="numeric"` for mobile keyboards. Paste of `MM/DD/YYYY`, `MM-DD-YYYY`, or ISO `YYYY-MM-DD` into any segment distributes across the three. Submits as ISO `yyyy-mm-dd` to the server.
+
+**Dev-mode bypass for SMS-less testing**:
+
+```python
+AUTH_PHONE_VERIFY_DEV_BYPASS_CODE = "000000"   # DO NOT SET IN PROD
+```
+
+When set, `POST /api/auth/phone/register/verify` accepts the fixed bypass code in addition to the real generated code. The verified-phone token still binds to the session's phone — bypass does not let an attacker mint a token for an arbitrary phone. App startup logs a warning when the setting is non-empty so misconfiguration is visible in prod logs.
+
+Two endpoints back the flow:
+
 
 | Method | Path | Purpose |
 |---|---|---|

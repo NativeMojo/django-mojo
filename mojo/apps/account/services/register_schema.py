@@ -254,3 +254,36 @@ def field_rows(fields):
             rows.append([f])
             i += 1
     return rows
+
+
+def partition_for_stepped_flow(fields):
+    """Split the schema into three step buckets for the phone-first stepped
+    register UX.
+
+    Returns a 3-tuple `(step1_fields, step2_active, step3_field_rows)`:
+        step1_fields       — list with the identity field shown in step 1
+                             (`phone` when present, else `email`)
+        step2_active       — True iff the schema requires SMS verify (phone
+                             with verify="sms"). Step 2 is rendered
+                             statically; the template doesn't need fields.
+        step3_field_rows   — every remaining field, name-pair-row-grouped
+                             via field_rows() so the template can reuse
+                             the existing layout helper.
+
+    When step2_active is False the stepped flow doesn't engage — caller
+    should fall back to rendering `field_rows(fields)` in a single pane.
+    """
+    by_name = {f["name"]: f for f in fields}
+    has_sms_verify = (
+        "phone" in by_name
+        and by_name["phone"].get("verify") == "sms"
+    )
+
+    if not has_sms_verify:
+        return [], False, field_rows(fields)
+
+    # The identity field shown in step 1 is whichever channel needs verify —
+    # which is `phone` here (we only get to this branch when phone.verify=="sms").
+    step1 = [by_name["phone"]]
+    step3 = [f for f in fields if f["name"] != "phone"]
+    return step1, True, field_rows(step3)

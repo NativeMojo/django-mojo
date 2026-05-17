@@ -228,7 +228,8 @@ def on_phone_register_verify(request):
 
     session_token = request.DATA.get("session_token", "")
     code = request.DATA.get("code", "")
-    verified_token, phone, ttl = phone_register.verify_code(session_token, code)
+    verified_token, phone, ttl = phone_register.verify_code(
+        session_token, code, request=request)
     return JsonResponse({
         "status": True,
         "data": {"verified_phone_token": verified_token, "expires_in": ttl},

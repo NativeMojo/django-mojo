@@ -196,6 +196,59 @@ def test_validate_payload_future_dob(opts):
             f"Future-DOB error must mention DOB, got {e}"
 
 
+@th.django_unit_test("partition_for_stepped_flow: phone-verify schema returns 3 buckets")
+def test_partition_phone_verify(opts):
+    from mojo.apps.account.services import register_schema as rs
+    fields = [
+        {"name": "first_name", "required": True, "verify": None},
+        {"name": "last_name",  "required": True, "verify": None},
+        {"name": "phone",      "required": True, "verify": "sms"},
+        {"name": "dob",        "required": True, "verify": None},
+        {"name": "password",   "required": True, "verify": None},
+    ]
+    step1, step2_active, step3_rows = rs.partition_for_stepped_flow(fields)
+    assert [f["name"] for f in step1] == ["phone"], \
+        f"Step 1 must be just the phone field for SMS-verify schema, got {step1}"
+    assert step2_active is True, \
+        "step2_active must be True when phone has verify=sms"
+    step3_names = [f["name"] for row in step3_rows for f in row]
+    assert step3_names == ["first_name", "last_name", "dob", "password"], \
+        f"Step 3 must include every non-phone field in order, got {step3_names}"
+    # Name-pair grouping preserved
+    assert len(step3_rows[0]) == 2 and step3_rows[0][0]["name"] == "first_name", \
+        f"Step 3 first row must group first+last, got {step3_rows[0]}"
+
+
+@th.django_unit_test("partition_for_stepped_flow: default email schema does not activate steps")
+def test_partition_email_default(opts):
+    from mojo.apps.account.services import register_schema as rs
+    fields = rs.DEFAULT_FIELDS  # email-based default
+    step1, step2_active, step3_rows = rs.partition_for_stepped_flow(fields)
+    assert step1 == [], \
+        f"Step 1 must be empty when no phone-with-SMS-verify is configured, got {step1}"
+    assert step2_active is False, \
+        "step2_active must be False for the email-based default schema"
+    step3_names = [f["name"] for row in step3_rows for f in row]
+    assert "email" in step3_names and "password" in step3_names, \
+        f"single-pane fallback must include all fields, got {step3_names}"
+
+
+@th.django_unit_test("partition_for_stepped_flow: phone without verify stays in single-pane")
+def test_partition_phone_no_verify(opts):
+    from mojo.apps.account.services import register_schema as rs
+    fields = [
+        {"name": "phone",    "required": True, "verify": None},
+        {"name": "password", "required": True, "verify": None},
+    ]
+    step1, step2_active, step3_rows = rs.partition_for_stepped_flow(fields)
+    assert step2_active is False, \
+        "step2_active must be False when phone is present but verify is not 'sms'"
+    assert step1 == [], "step1 must be empty when stepped flow doesn't engage"
+    step3_names = [f["name"] for row in step3_rows for f in row]
+    assert "phone" in step3_names, \
+        f"phone must still appear in the single-pane field list, got {step3_names}"
+
+
 @th.django_unit_test("field_rows groups adjacent first/last into a single row")
 def test_field_rows_groups_names(opts):
     from mojo.apps.account.services import register_schema as rs

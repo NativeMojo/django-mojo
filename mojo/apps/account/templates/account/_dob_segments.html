@@ -1,0 +1,30 @@
+{% comment %}
+Three auto-advancing numeric segments for date-of-birth collection.
+
+Mobile gets a numeric keyboard via inputmode="numeric". Desktop gets
+tab-friendly typing. Paste of "MM/DD/YYYY", "MM-DD-YYYY", or ISO
+"YYYY-MM-DD" into any segment is distributed across the three by the
+state-machine JS in register.html. The hidden #reg-dob input carries
+the composed yyyy-mm-dd value to the submit handler — the wire format
+is unchanged.
+
+Input context:
+    f.required  — bool; drives the `required` attribute on each segment
+{% endcomment %}
+<div class="mat-field">
+    <div class="mat-dob-row" data-mat-dob="1" role="group" aria-labelledby="reg-dob-label">
+        <span id="reg-dob-label" class="mat-dob-label">Date of birth</span>
+        <input class="mat-input mat-dob-mm" type="text" id="reg-dob-mm"
+               inputmode="numeric" pattern="\d*" maxlength="2"
+               placeholder="MM" aria-label="Month"{% if f.required %} required{% endif %} />
+        <span class="mat-dob-sep" aria-hidden="true">/</span>
+        <input class="mat-input mat-dob-dd" type="text" id="reg-dob-dd"
+               inputmode="numeric" pattern="\d*" maxlength="2"
+               placeholder="DD" aria-label="Day"{% if f.required %} required{% endif %} />
+        <span class="mat-dob-sep" aria-hidden="true">/</span>
+        <input class="mat-input mat-dob-yyyy" type="text" id="reg-dob-yyyy"
+               inputmode="numeric" pattern="\d*" maxlength="4"
+               placeholder="YYYY" aria-label="Year"{% if f.required %} required{% endif %} />
+    </div>
+    <input type="hidden" id="reg-dob" value="" />
+</div>

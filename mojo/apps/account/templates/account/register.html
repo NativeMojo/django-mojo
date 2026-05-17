@@ -7,6 +7,73 @@ Already have an account? <a href="{{ auth_url|default:'/auth' }}">Log in</a>
 {% endblock %}
 
 {% block content %}
+{% if register_step2_active %}
+{# ---- Stepped flow: phone-first (identity → SMS code → profile) ---- #}
+<div class="mat-steps" data-mat-steps="3" aria-hidden="true">
+    <span class="mat-step is-active" data-step-dot="1">1</span>
+    <span class="mat-step" data-step-dot="2">2</span>
+    <span class="mat-step" data-step-dot="3">3</span>
+</div>
+<p class="mat-view-sub" id="reg-step-label">Step 1 of 3</p>
+
+<form id="form-register" novalidate>
+    <input type="hidden" id="reg-phone-session-token" value="" />
+    <input type="hidden" id="reg-phone-token" name="verified_phone_token" value="" />
+
+    {# ---- STEP 1 — Identity ---- #}
+    <div id="view-reg-step1" class="mat-view is-active" data-step="1">
+        {% for f in register_step1_fields %}{% include "account/_register_field.html" %}{% endfor %}
+        <button class="mat-btn mat-btn-primary" type="button" id="btn-reg-continue">
+            <span class="mat-btn-text">Continue</span>
+            <span class="mat-spinner"></span>
+        </button>
+    </div>
+
+    {# ---- STEP 2 — Verify ---- #}
+    <div id="view-reg-step2" class="mat-view" data-step="2">
+        <p class="mat-view-sub" id="reg-step2-help">Enter the 6-digit code we sent.</p>
+        <div class="mat-field">
+            <input class="mat-input" type="text" id="reg-phone-code"
+                   inputmode="numeric" pattern="\d*" maxlength="6"
+                   autocomplete="one-time-code" placeholder="6-digit code" />
+        </div>
+        <button class="mat-btn mat-btn-primary" type="button" id="btn-reg-verify">
+            <span class="mat-btn-text">Verify</span>
+            <span class="mat-spinner"></span>
+        </button>
+        <div class="mat-footer-links">
+            <span class="mat-footer-link"><button type="button" id="btn-reg-back">Back</button></span>
+            <span class="mat-footer-link"><button type="button" id="btn-reg-resend" disabled>Resend code</button></span>
+        </div>
+    </div>
+
+    {# ---- STEP 3 — Profile ---- #}
+    <div id="view-reg-step3" class="mat-view" data-step="3">
+        {% for row in register_step3_field_rows %}
+            {% if row|length == 2 %}
+            <div class="mat-field-row">
+                {% for f in row %}{% include "account/_register_field.html" %}{% endfor %}
+            </div>
+            {% else %}
+                {% for f in row %}{% include "account/_register_field.html" %}{% endfor %}
+            {% endif %}
+        {% endfor %}
+
+        {% block extra_fields_stepped %}{% endblock %}
+
+        <div class="mat-checkbox-row">
+            <input type="checkbox" id="reg-terms" />
+            <label for="reg-terms">I agree to the <a href="{{ terms_url|default:'#' }}" target="_blank">Terms &amp; Conditions</a></label>
+        </div>
+
+        <button class="mat-btn mat-btn-primary" type="submit" id="btn-register">
+            <span class="mat-btn-text">Create account</span>
+            <span class="mat-spinner"></span>
+        </button>
+    </div>
+</form>
+{% else %}
+{# ---- Single-pane flow: no SMS verify configured ---- #}
 <div id="view-register" class="mat-view is-active">
     <form id="form-register" novalidate>
         {% for row in register_field_rows %}
@@ -31,26 +98,27 @@ Already have an account? <a href="{{ auth_url|default:'/auth' }}">Log in</a>
             <span class="mat-spinner"></span>
         </button>
     </form>
+</div>
+{% endif %}
 
-    {% if enable_google or enable_apple or enable_passkeys %}
-    <div class="mat-divider">Or register with</div>
+{% if enable_google or enable_apple or enable_passkeys %}
+<div class="mat-divider">Or register with</div>
 
-    <div class="mat-oauth-row">
-        {% if enable_google %}
-        <button class="mat-btn mat-btn-outline" type="button" id="btn-google">
-            <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true"><path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v8.5h12.7c-.6 3-2.3 5.5-4.8 7.2v6h7.8c4.5-4.2 7.1-10.3 7.1-17.2z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.8-6c-2.1 1.4-4.8 2.3-8.1 2.3-6.2 0-11.5-4.2-13.4-9.9H2.6v6.2C6.5 42.7 14.7 48 24 48z"/><path fill="#FBBC05" d="M10.6 28.6c-.5-1.4-.7-2.9-.7-4.6s.3-3.2.7-4.6v-6.2H2.6C1 16.5 0 20.1 0 24s1 7.5 2.6 10.8l8-6.2z"/><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.5l6.8-6.8C35.9 2.1 30.5 0 24 0 14.7 0 6.5 5.3 2.6 13.2l8 6.2C12.5 13.7 17.8 9.5 24 9.5z"/></svg>
-            <span class="mat-btn-text">Google</span><span class="mat-spinner"></span>
-        </button>
-        {% endif %}
-        {% if enable_apple %}
-        <button class="mat-btn mat-btn-outline" type="button" id="btn-apple">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17.05 20.28c-.98.95-2.05.88-3.08.4-1.09-.5-2.08-.53-3.23 0-1.44.62-2.2.44-3.06-.4C3.79 16.17 4.36 9.04 8.93 8.78c1.27.07 2.16.72 2.91.77.99-.2 1.94-.78 3-.84 1.28-.08 2.24.38 2.87 1.14-2.63 1.56-2.01 4.98.45 5.94-.52 1.4-1.21 2.78-2.11 4.49zM12.03 8.7c-.13-2.28 1.73-4.2 3.93-4.4.31 2.56-2.31 4.5-3.93 4.4z"/></svg>
-            <span class="mat-btn-text">Apple</span><span class="mat-spinner"></span>
-        </button>
-        {% endif %}
-    </div>
+<div class="mat-oauth-row">
+    {% if enable_google %}
+    <button class="mat-btn mat-btn-outline" type="button" id="btn-google">
+        <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true"><path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v8.5h12.7c-.6 3-2.3 5.5-4.8 7.2v6h7.8c4.5-4.2 7.1-10.3 7.1-17.2z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.8-6c-2.1 1.4-4.8 2.3-8.1 2.3-6.2 0-11.5-4.2-13.4-9.9H2.6v6.2C6.5 42.7 14.7 48 24 48z"/><path fill="#FBBC05" d="M10.6 28.6c-.5-1.4-.7-2.9-.7-4.6s.3-3.2.7-4.6v-6.2H2.6C1 16.5 0 20.1 0 24s1 7.5 2.6 10.8l8-6.2z"/><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.5l6.8-6.8C35.9 2.1 30.5 0 24 0 14.7 0 6.5 5.3 2.6 13.2l8 6.2C12.5 13.7 17.8 9.5 24 9.5z"/></svg>
+        <span class="mat-btn-text">Google</span><span class="mat-spinner"></span>
+    </button>
+    {% endif %}
+    {% if enable_apple %}
+    <button class="mat-btn mat-btn-outline" type="button" id="btn-apple">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17.05 20.28c-.98.95-2.05.88-3.08.4-1.09-.5-2.08-.53-3.23 0-1.44.62-2.2.44-3.06-.4C3.79 16.17 4.36 9.04 8.93 8.78c1.27.07 2.16.72 2.91.77.99-.2 1.94-.78 3-.84 1.28-.08 2.24.38 2.87 1.14-2.63 1.56-2.01 4.98.45 5.94-.52 1.4-1.21 2.78-2.11 4.49zM12.03 8.7c-.13-2.28 1.73-4.2 3.93-4.4.31 2.56-2.31 4.5-3.93 4.4z"/></svg>
+        <span class="mat-btn-text">Apple</span><span class="mat-spinner"></span>
+    </button>
     {% endif %}
 </div>
+{% endif %}
 {% endblock %}
 
 {% block switcher %}{% endblock %}
@@ -67,6 +135,7 @@ Already have an account? <a href="{{ auth_url|default:'/auth' }}">Log in</a>
     // handler iterates this list to build the payload — the form layout and
     // the API contract come from the same source.
     var REG_FIELDS = JSON.parse(document.getElementById("reg-fields-data").textContent || "[]");
+    var STEPPED = {% if register_step2_active %}true{% else %}false{% endif %};
 
     var FIELD_INPUT_ID = {
         first_name: "reg-first-name",
@@ -86,48 +155,183 @@ Already have an account? <a href="{{ auth_url|default:'/auth' }}">Log in</a>
 
     {% block pre_submit_script %}{% endblock %}
 
-    // ---- Inline phone verification ----------------------------------------
-    var phoneSendBtn = $("reg-phone-send");
-    var phoneVerifyBtn = $("reg-phone-verify");
-    if (phoneSendBtn) {
-        phoneSendBtn.addEventListener("click", function () {
-            var phone = valueFor("phone");
-            if (!phone) { m.showMessage("Enter your phone number first.", "error"); return; }
-            m.setLoading(phoneSendBtn, true); m.hideMessage();
-            MojoAuth.startPhoneRegister(phone)
-                .then(function (data) {
-                    $("reg-phone-session-token").value = data.session_token;
-                    $("reg-phone-code-row").style.display = "";
-                    $("reg-phone-help").style.display = "";
-                    $("reg-phone-help").textContent = "We sent a 6-digit code to " + phone + ".";
-                    m.setLoading(phoneSendBtn, false);
-                })
-                .catch(function (err) {
-                    m.setLoading(phoneSendBtn, false);
-                    m.showMessage(MojoAuth.getError(err) || "Could not send verification code.", "error");
-                });
+    // ---- DOB segment auto-advance + paste + composition ------------------
+    function composeDob() {
+        var mm = ($("reg-dob-mm") || {}).value || "";
+        var dd = ($("reg-dob-dd") || {}).value || "";
+        var yyyy = ($("reg-dob-yyyy") || {}).value || "";
+        var hidden = $("reg-dob");
+        if (!hidden) return;
+        if (mm.length === 2 && dd.length === 2 && yyyy.length === 4) {
+            hidden.value = yyyy + "-" + mm + "-" + dd;
+        } else {
+            hidden.value = "";
+        }
+    }
+    function distributeDob(text) {
+        var s = (text || "").trim();
+        var mm = "", dd = "", yyyy = "";
+        var iso = s.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})$/);
+        var us = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+        if (iso) { yyyy = iso[1]; mm = iso[2].padStart(2, "0"); dd = iso[3].padStart(2, "0"); }
+        else if (us) { mm = us[1].padStart(2, "0"); dd = us[2].padStart(2, "0"); yyyy = us[3]; }
+        else return false;
+        if ($("reg-dob-mm")) $("reg-dob-mm").value = mm;
+        if ($("reg-dob-dd")) $("reg-dob-dd").value = dd;
+        if ($("reg-dob-yyyy")) $("reg-dob-yyyy").value = yyyy;
+        composeDob();
+        return true;
+    }
+    function wireDobSegment(srcId, nextId, segLen) {
+        var el = $(srcId);
+        if (!el) return;
+        el.addEventListener("input", function () {
+            // Strip non-digits
+            var stripped = el.value.replace(/\D/g, "");
+            if (stripped !== el.value) el.value = stripped;
+            if (el.value.length >= segLen && nextId) {
+                var nxt = $(nextId);
+                if (nxt) nxt.focus();
+            }
+            composeDob();
+        });
+        el.addEventListener("paste", function (e) {
+            var text = (e.clipboardData || window.clipboardData).getData("text") || "";
+            if (distributeDob(text)) { e.preventDefault(); }
+        });
+        el.addEventListener("keydown", function (e) {
+            // Backspace on empty segment jumps back to previous
+            if (e.key === "Backspace" && !el.value) {
+                var prevMap = {"reg-dob-dd": "reg-dob-mm", "reg-dob-yyyy": "reg-dob-dd"};
+                var prev = prevMap[srcId];
+                if (prev && $(prev)) { $(prev).focus(); }
+            }
         });
     }
-    if (phoneVerifyBtn) {
-        phoneVerifyBtn.addEventListener("click", function () {
-            var sessionToken = $("reg-phone-session-token").value;
-            var code = $("reg-phone-code").value.trim();
-            if (!sessionToken) { m.showMessage("Request a code first.", "error"); return; }
-            if (!code) { m.showMessage("Enter the 6-digit code.", "error"); return; }
-            m.setLoading(phoneVerifyBtn, true); m.hideMessage();
-            MojoAuth.verifyPhoneRegister(sessionToken, code)
-                .then(function (data) {
-                    $("reg-phone-token").value = data.verified_phone_token;
-                    $("reg-phone-help").textContent = "Phone verified.";
-                    m.setLoading(phoneVerifyBtn, false);
-                })
-                .catch(function (err) {
-                    m.setLoading(phoneVerifyBtn, false);
-                    m.showMessage(MojoAuth.getError(err) || "Invalid or expired code.", "error");
-                });
+    wireDobSegment("reg-dob-mm", "reg-dob-dd", 2);
+    wireDobSegment("reg-dob-dd", "reg-dob-yyyy", 2);
+    wireDobSegment("reg-dob-yyyy", null, 4);
+
+    // ---- Stepped state machine -------------------------------------------
+    var RESEND_COOLDOWN_SECONDS = 30;
+    var resendTimer = null;
+
+    function showStep(n) {
+        ["view-reg-step1", "view-reg-step2", "view-reg-step3"].forEach(function (id, i) {
+            var el = $(id);
+            if (el) el.classList.toggle("is-active", (i + 1) === n);
         });
+        ["1", "2", "3"].forEach(function (k) {
+            var dot = document.querySelector('[data-step-dot="' + k + '"]');
+            if (dot) dot.classList.toggle("is-active", parseInt(k, 10) === n);
+        });
+        var label = $("reg-step-label");
+        if (label) label.textContent = "Step " + n + " of 3";
+        m.hideMessage();
+        // Focus the first input in the now-active step for accessibility.
+        setTimeout(function () {
+            var view = $("view-reg-step" + n);
+            if (!view) return;
+            var firstInput = view.querySelector("input:not([type=hidden]), button");
+            if (firstInput) firstInput.focus();
+        }, 30);
     }
 
+    function startResendCooldown() {
+        var btn = $("btn-reg-resend");
+        if (!btn) return;
+        var remaining = RESEND_COOLDOWN_SECONDS;
+        btn.disabled = true;
+        function tick() {
+            if (remaining <= 0) {
+                btn.disabled = false;
+                btn.textContent = "Resend code";
+                if (resendTimer) { clearInterval(resendTimer); resendTimer = null; }
+                return;
+            }
+            var mm = Math.floor(remaining / 60);
+            var ss = (remaining % 60).toString().padStart(2, "0");
+            btn.textContent = "Resend code (" + mm + ":" + ss + ")";
+            remaining -= 1;
+        }
+        tick();
+        resendTimer = setInterval(tick, 1000);
+    }
+
+    function doStartPhoneVerify() {
+        var phone = valueFor("phone");
+        if (!phone) { m.showMessage("Enter your phone number.", "error"); return Promise.reject(); }
+        var btn = $("btn-reg-continue");
+        m.setLoading(btn, true); m.hideMessage();
+        return MojoAuth.startPhoneRegister(phone)
+            .then(function (data) {
+                $("reg-phone-session-token").value = data.session_token;
+                $("reg-step2-help").textContent = "We sent a 6-digit code to " + phone + ".";
+                m.setLoading(btn, false);
+                showStep(2);
+                startResendCooldown();
+            })
+            .catch(function (err) {
+                m.setLoading(btn, false);
+                m.showMessage(MojoAuth.getError(err) || "Could not send verification code.", "error");
+                throw err;
+            });
+    }
+
+    if (STEPPED) {
+        var continueBtn = $("btn-reg-continue");
+        if (continueBtn) {
+            continueBtn.addEventListener("click", function () { doStartPhoneVerify().catch(function(){}); });
+        }
+        var verifyBtn = $("btn-reg-verify");
+        if (verifyBtn) {
+            verifyBtn.addEventListener("click", function () {
+                var sessionToken = $("reg-phone-session-token").value;
+                var code = ($("reg-phone-code").value || "").trim();
+                if (!sessionToken) { m.showMessage("Session expired. Please go back and try again.", "error"); return; }
+                if (!code) { m.showMessage("Enter the 6-digit code.", "error"); return; }
+                m.setLoading(verifyBtn, true); m.hideMessage();
+                MojoAuth.verifyPhoneRegister(sessionToken, code)
+                    .then(function (data) {
+                        $("reg-phone-token").value = data.verified_phone_token;
+                        m.setLoading(verifyBtn, false);
+                        if (resendTimer) { clearInterval(resendTimer); resendTimer = null; }
+                        showStep(3);
+                    })
+                    .catch(function (err) {
+                        m.setLoading(verifyBtn, false);
+                        m.showMessage(MojoAuth.getError(err) || "Invalid or expired code.", "error");
+                    });
+            });
+        }
+        var backBtn = $("btn-reg-back");
+        if (backBtn) {
+            backBtn.addEventListener("click", function () {
+                // Clear the server-side session token but keep the phone value
+                // pre-filled so the user can edit or just re-Continue.
+                $("reg-phone-session-token").value = "";
+                $("reg-phone-token").value = "";
+                $("reg-phone-code").value = "";
+                if (resendTimer) { clearInterval(resendTimer); resendTimer = null; }
+                showStep(1);
+            });
+        }
+        var resendBtn = $("btn-reg-resend");
+        if (resendBtn) {
+            resendBtn.addEventListener("click", function () {
+                if (resendBtn.disabled) return;
+                doStartPhoneVerify()
+                    .then(function () {
+                        // doStartPhoneVerify already advances to step 2; we're
+                        // already there. Re-show step 2 explicitly is fine.
+                        showStep(2);
+                    })
+                    .catch(function () {});
+            });
+        }
+    }
+
+    // ---- Submit (final) ---------------------------------------------------
     $("form-register").addEventListener("submit", function (e) {
         e.preventDefault();
         var terms = $("reg-terms");
