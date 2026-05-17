@@ -380,6 +380,12 @@ def on_register(request):
             # or every candidate collides.
             user.username = user.generate_username_from_names(fallback=phone)
         user.set_password(password)
+        # on_rest_pre_save / on_rest_created don't fire on direct .save(),
+        # so mirror their two pieces of profile setup explicitly: infer
+        # first/last from a business email, then backfill display_name.
+        user.infer_names_from_email()
+        if not user.display_name:
+            user.display_name = user.generate_display_name()
         user.save()
 
         if group is not None:

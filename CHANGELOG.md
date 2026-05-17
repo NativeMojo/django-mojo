@@ -1,5 +1,7 @@
 ## v1.1.0 - (current)
 
+**account** — fix: `POST /api/auth/register` was leaving `display_name` NULL and skipping `infer_names_from_email()` because the handler calls Django `user.save()` directly, bypassing the REST framework's `on_rest_pre_save` / `on_rest_created` hooks. The handler now runs `infer_names_from_email()` and backfills `display_name` before save. `User.generate_display_name()` now walks a priority chain — first+last → email local-part → phone number → username-derived — so every caller (REST backfill, `full_name` property, OAuth fallbacks) gets a sensible value instead of a title-cased username regardless of which fields are populated.
+
 ## v1.2.15 - May 17, 2026
 
 bump version?

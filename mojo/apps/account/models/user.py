@@ -729,13 +729,23 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         return fallback
 
     def generate_display_name(self):
-        """Generate a display name from email, falling back to email if username exists."""
-        # Try using the part before @ as display name
-        # generate display name from usernames like "bob.smith", "bob_smith", "bob.smith@example.com"
-        # Extract the base part (before @ if email format)
-        base_username = self.username.split("@")[0] if "@" in self.username else self.username
-        # Replace underscores and dots with spaces, then title case
-        return base_username.replace("_", " ").replace(".", " ").title()
+        """Build a display name from the best signal available on this user.
+
+        Priority: first+last → email local-part → phone → username-derived.
+        Username-derived stays as the final fallback for users built with
+        only a username (test fixtures, service accounts).
+        """
+        if self.first_name and self.last_name:
+            return f"{self.first_name} {self.last_name}".strip()
+        if self.email:
+            local = self.email.split("@", 1)[0]
+            return local.replace("_", " ").replace(".", " ").title()
+        if self.phone_number:
+            return self.phone_number
+        if self.username:
+            base = self.username.split("@")[0] if "@" in self.username else self.username
+            return base.replace("_", " ").replace(".", " ").title()
+        return ""
 
     def infer_names_from_email(self):
         """

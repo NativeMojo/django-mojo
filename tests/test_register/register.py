@@ -135,6 +135,109 @@ def test_register_no_group(opts):
         f"login-handler is_new_user must be True for fresh register, got {login_calls[0]['is_new_user']}"
 
 
+@th.django_unit_test("register: display_name must be auto-populated from username (regression)")
+def test_register_sets_display_name(opts):
+    """Regression: users created via /auth/register must have display_name set.
+
+    The User model auto-generates display_name in on_rest_pre_save(), but the
+    register handler calls user.save() directly — bypassing the REST hook.
+    Result: registered users have display_name = None.
+    """
+    from mojo.apps.account.models import User
+
+    email = _fresh_email("displayname")
+    resp, _ = _post_register(
+        opts, {"email": email, "password": "RegPass##99"})
+
+    assert resp.status_code == 200, \
+        f"register must succeed, got {resp.status_code}: {opts.client.last_response.body}"
+
+    user = User.objects.filter(email=email).first()
+    assert user is not None, "user row must exist after register"
+    assert user.display_name, \
+        f"display_name must be populated after register, got {user.display_name!r} for username={user.username!r}"
+
+
+@th.django_unit_test("register: display_name prefers first+last when both provided")
+def test_register_display_name_priority_names(opts):
+    from mojo.apps.account.models import User
+
+    email = _fresh_email("priorityname")
+    resp, _ = _post_register(opts, {
+        "email": email,
+        "first_name": "Alice",
+        "last_name": "Cooper",
+        "password": "RegPass##99",
+    })
+    assert resp.status_code == 200, \
+        f"register must succeed, got {resp.status_code}: {opts.client.last_response.body}"
+
+    user = User.objects.filter(email=email).first()
+    assert user is not None, "user row must exist after register"
+    assert user.display_name == "Alice Cooper", \
+        f"display_name must equal 'Alice Cooper' when first+last provided, got {user.display_name!r}"
+
+
+@th.django_unit_test("register: display_name falls back to phone number when no names or email")
+def test_register_display_name_priority_phone_only(opts):
+    """Phone-only register: display_name should equal the normalized phone number."""
+    import json
+    from mojo.apps.account.models import User
+    from mojo.decorators.limits import clear_rate_limits
+
+    # Override schema to require phone (no email, no SMS verify) so we can
+    # exercise the phone-identity path without a real verified-phone-token.
+    phone_only_schema = json.dumps([
+        {"name": "phone", "required": True, "verify": None},
+        {"name": "password", "required": True, "verify": None},
+    ])
+
+    clear_rate_limits(ip="127.0.0.1", key="register")
+    headers = {
+        "X-Mojo-Test-Allow-User-Registration": "1",
+        "X-Mojo-Test-Register-Fields": phone_only_schema,
+    }
+    # Build a unique phone number per test run so we don't collide with
+    # other tests in this DB.
+    import uuid as _uuid
+    suffix_digits = _uuid.uuid4().int % 10_000_000
+    phone = f"+1555{suffix_digits:07d}"
+
+    resp = opts.client.post(
+        "/api/auth/register",
+        {"phone": phone, "password": "RegPass##99"},
+        headers=headers)
+    assert resp.status_code == 200, \
+        f"phone-only register must succeed, got {resp.status_code}: {opts.client.last_response.body}"
+
+    user = User.objects.filter(phone_number=phone).first()
+    assert user is not None, "user row must exist after phone-only register"
+    assert user.display_name == phone, \
+        f"display_name must equal phone number {phone!r} when no names or email, got {user.display_name!r}"
+
+
+@th.django_unit_test("register: business email infers first/last and display_name is built from them")
+def test_register_infers_names_from_business_email(opts):
+    from mojo.apps.account.models import User
+
+    # Business email (not in CONSUMER_DOMAINS), local part has exactly one dot,
+    # both parts >= 2 chars — triggers infer_names_from_email().
+    suffix = _uuid.uuid4().hex[:8]
+    email = f"john.smith@acme-{suffix}.test"
+    resp, _ = _post_register(opts, {"email": email, "password": "RegPass##99"})
+    assert resp.status_code == 200, \
+        f"register must succeed, got {resp.status_code}: {opts.client.last_response.body}"
+
+    user = User.objects.filter(email=email).first()
+    assert user is not None, "user row must exist after register"
+    assert user.first_name == "John", \
+        f"first_name must be inferred as 'John' from business email, got {user.first_name!r}"
+    assert user.last_name == "Smith", \
+        f"last_name must be inferred as 'Smith' from business email, got {user.last_name!r}"
+    assert user.display_name == "John Smith", \
+        f"display_name must be 'John Smith' (built from inferred names), got {user.display_name!r}"
+
+
 @th.django_unit_test("register: valid active group → user + GroupMember + handler receives group")
 def test_register_with_group(opts):
     from mojo.apps.account.models import User
