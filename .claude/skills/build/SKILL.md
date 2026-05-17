@@ -14,7 +14,7 @@ $ARGUMENTS — Path to a planned file (e.g., `planning/requests/webhook-retry.md
 ## Workflow
 
 ### 1. Read the Planned File
-Read the file at $ARGUMENTS. It must have `Status: planned` and a `## Plan` section. If not, stop and tell the user to run `/plan` first.
+Read the file at $ARGUMENTS. It must have `Status: planned` and a `## Plan` section. If not, stop and tell the user to run `/design` first.
 
 ### 2. Read All Files in Scope
 - Read every file listed in the plan's Steps section

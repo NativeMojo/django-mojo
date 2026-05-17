@@ -9,7 +9,7 @@ Django-mojo is a Django backend framework providing models, REST, auth, jobs, me
 ## How to Work Here
 
 - **Rules** are in `.claude/rules/` and load automatically. Follow them.
-- **Skills** are in `.claude/skills/` — invoked with `/<name>` (e.g., `/bug`, `/request`, `/plan`, `/build`, `/memory`).
+- **Skills** are in `.claude/skills/` — invoked with `/<name>` (e.g., `/issue`, `/request`, `/design`, `/build`, `/memory`).
 - **Agents** are in `.claude/agents/` — spawned automatically by the build skill.
 - See `AI_DEV.md` for the full developer workflow.
 - Read `docs/django_developer/README.md` before building — do not reinvent existing features.

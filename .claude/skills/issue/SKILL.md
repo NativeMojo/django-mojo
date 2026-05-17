@@ -1,11 +1,11 @@
 ---
 name: issue
-description: Investigate a issue report, confirm if possible, write a structured issue file to planning/issues/
+description: Investigate an issue report, confirm if possible, write a structured issue file to planning/issues/
 user-invocable: true
 argument-hint: <description of the problem>
 ---
 
-The user is reporting a issue. Your job is to investigate, confirm if possible, and write a structured issue file. Do NOT fix the issue in this session.
+The user is reporting an issue. Your job is to investigate, confirm if possible, and write a structured issue file. Do NOT fix the issue in this session.
 
 ## Arguments
 

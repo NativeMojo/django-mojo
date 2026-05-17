@@ -6,9 +6,9 @@ This project uses Claude Code with structured skills, rules, and agents for AI-a
 
 Skills are invoked with `/<name>` in Claude Code.
 
-### Report a Bug
+### Report an Issue
 ```
-/bug <description of the problem>
+/issue <description of the problem>
 ```
 Investigates the code, best-effort confirms the bug, writes an issue file to `planning/issues/`.
 
@@ -20,8 +20,8 @@ Explores the codebase, clarifies scope interactively, writes a request file to `
 
 ### Plan an Implementation
 ```
-/designplanning/issues/<file>.md
-/designplanning/requests/<file>.md
+/design planning/issues/<file>.md
+/design planning/requests/<file>.md
 ```
 Reads the file, designs an implementation approach, adds a `## Plan` section after user confirmation.
 
@@ -42,11 +42,11 @@ Displays all stored Claude Code memories for this project.
 Each step is ideally its own Claude session. The file carries context between sessions.
 
 ```
-/bug or /request
+/issue or /request
   |
   |  writes file to planning/issues/ or planning/requests/
   v
-/design<file>
+/design <file>
   |
   |  adds ## Plan section to the file
   v
@@ -68,7 +68,7 @@ Done.
 
 ```
 planning/
-  issues/      Bug reports (from /bug)
+  issues/      Bug reports (from /issue)
   requests/    Feature requests (from /request)
   done/        Resolved issues and requests (from /build)
   future/      Parked ideas — not ready to plan yet
@@ -81,9 +81,9 @@ Skills in `.claude/skills/` are invoked with `/<name>`. Each skill runs inline i
 
 | Skill | Purpose |
 |---|---|
-| `/bug` | Investigate a bug, write issue file |
+| `/issue` | Investigate a bug, write issue file |
 | `/request` | Explore and clarify a feature request, write request file |
-| `/plan` | Design implementation approach, add Plan section to file |
+| `/design` | Design implementation approach, add Plan section to file |
 | `/build` | Implement, test, commit, spawn post-build agents |
 | `/memory` | Show current Claude Code memory state |
 
@@ -116,8 +116,8 @@ Agents in `.claude/agents/` run in isolated context windows. The `/build` skill 
 
 Issues and requests follow a standardized format with sections added progressively:
 
-1. **Intake** (`/bug` or `/request`): Title, Type, Status, Date, Description, Context, Acceptance Criteria, Investigation
-2. **Planning** (`/plan`): appends `## Plan` with steps, decisions, edge cases, testing
+1. **Intake** (`/issue` or `/request`): Title, Type, Status, Date, Description, Context, Acceptance Criteria, Investigation
+2. **Planning** (`/design`): appends `## Plan` with steps, decisions, edge cases, testing
 3. **Resolution** (`/build`): appends `## Resolution` with summary, files changed, tests, docs, security review
 
 This progressive format means every resolved file in `planning/done/` tells the full story from bug report to fix.
