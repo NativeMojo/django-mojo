@@ -368,3 +368,81 @@ def test_phone_config_test_connection_mojo(opts):
     assert not m_get.called, (
         "test_connection must NOT call requests.get when credentials are missing"
     )
+
+
+@th.django_unit_test()
+def test_rest_post_routes_mojo_api_key_through_auto_setter(opts):
+    """
+    POSTing {"mojo_api_key": "<token>"} to /api/phonehub/config/<id>
+    routes through the auto-setter (set_mojo_api_key) and persists the
+    secret encrypted via MojoSecrets. This is the surface the admin
+    portal uses to attach an api key without exposing it in a graph.
+    """
+    from testit.helpers import get_mock_request
+    from mojo.apps.phonehub.models import PhoneConfig
+
+    cfg = PhoneConfig.objects.get(pk=opts.config_id)
+    request = get_mock_request()
+
+    new_token = "rotated-token-abc123"
+    cfg.on_rest_save(request, {"mojo_api_key": new_token})
+
+    # Reload from DB to confirm persistence
+    reloaded = PhoneConfig.objects.get(pk=opts.config_id)
+    assert reloaded.get_mojo_api_key() == new_token, (
+        f"auto-setter must persist the secret end-to-end via REST save, "
+        f"got {reloaded.get_mojo_api_key()!r}"
+    )
+
+    # And it must NOT appear in any user-visible graph
+    for graph_name in ("default", "full"):
+        d = reloaded.to_dict(graph=graph_name)
+        assert new_token not in repr(d), (
+            f"rotated api key must not leak into '{graph_name}' graph: {d}"
+        )
+
+    # Restore the original token so later tests in this module are unaffected
+    cfg.set_mojo_api_key(API_KEY)
+    cfg.save()
+
+
+@th.django_unit_test()
+def test_on_action_test_connection_returns_test_dict(opts):
+    """
+    POST {"test_connection": 1} routes to on_action_test_connection,
+    which returns the same dict test_connection() does — used by the
+    admin portal's "Test connection" button.
+    """
+    from mojo.apps.phonehub.models import PhoneConfig
+
+    cfg = PhoneConfig.objects.get(pk=opts.config_id)
+
+    fake_ok = mock.MagicMock()
+    fake_ok.status_code = 200
+    with mock.patch(
+        "mojo.apps.phonehub.models.config.requests.get",
+        return_value=fake_ok,
+    ):
+        result = cfg.on_action_test_connection(1)
+
+    assert isinstance(result, dict), (
+        f"on_action_test_connection must return a dict for JSON serialization, "
+        f"got {type(result).__name__}"
+    )
+    assert result.get("success") is True, (
+        f"on_action_test_connection must surface test_connection success, "
+        f"got {result!r}"
+    )
+
+    # And the full REST save+action path returns the same dict
+    from testit.helpers import get_mock_request
+    request = get_mock_request()
+    with mock.patch(
+        "mojo.apps.phonehub.models.config.requests.get",
+        return_value=fake_ok,
+    ):
+        save_result = cfg.on_rest_save(request, {"test_connection": 1})
+    assert isinstance(save_result, dict) and save_result.get("success") is True, (
+        f"on_rest_save with the test_connection action must return the "
+        f"test result dict, got {save_result!r}"
+    )

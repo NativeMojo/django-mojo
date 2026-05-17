@@ -240,6 +240,8 @@ config.set_mojo_api_key("apikey_token_from_remote")
 config.get_mojo_api_key()
 ```
 
+Each individual secret also has an auto-setter (`set_twilio_account_sid`, `set_twilio_auth_token`, `set_aws_access_key_id`, `set_aws_secret_access_key`, `set_mojo_api_key`) so the REST layer can route a write straight through a POST body field — see [rest.md — Writing encrypted credentials via REST](rest.md#writing-encrypted-credentials-via-rest).
+
 #### `config.test_connection()`
 Test that the configured credentials are valid. Dispatches to the per-provider
 test method (`_test_twilio` / `_test_aws` / `_test_mojo`). The mojo branch

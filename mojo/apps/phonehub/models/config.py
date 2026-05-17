@@ -66,6 +66,13 @@ class PhoneConfig(MojoSecrets, MojoModel):
         DELETE_PERMS = ["manage_phone_config", "manage_groups"]
         SEARCH_FIELDS = ["name"]
         LIST_DEFAULT_FILTERS = {"is_active": True}
+        # Per-instance actions invoked by POST /api/phonehub/config/<id>
+        # with a body containing the action key (e.g. {"test_connection": 1}).
+        # The standard auto-setter pattern handles secret writes — POST
+        # {"mojo_api_key": "<token>"} routes through set_mojo_api_key(),
+        # and likewise for twilio_account_sid / twilio_auth_token /
+        # aws_access_key_id / aws_secret_access_key.
+        POST_SAVE_ACTIONS = ["test_connection"]
         GRAPHS = {
             "basic": {
                 "fields": ["id", "name", "provider", "test_mode", "is_active"]
@@ -120,6 +127,18 @@ class PhoneConfig(MojoSecrets, MojoModel):
         self.set_secret('twilio_account_sid', account_sid)
         self.set_secret('twilio_auth_token', auth_token)
 
+    def set_twilio_account_sid(self, account_sid):
+        """Set the Twilio account SID (will be encrypted).
+
+        Named to match the auto-setter convention so REST POST/PUT bodies
+        carrying `twilio_account_sid` route through here transparently.
+        """
+        self.set_secret('twilio_account_sid', account_sid)
+
+    def set_twilio_auth_token(self, auth_token):
+        """Set the Twilio auth token (will be encrypted). Auto-setter shape."""
+        self.set_secret('twilio_auth_token', auth_token)
+
     def get_twilio_account_sid(self):
         """Get decrypted Twilio account SID."""
         return self.get_secret('twilio_account_sid', '')
@@ -132,6 +151,14 @@ class PhoneConfig(MojoSecrets, MojoModel):
     def set_aws_credentials(self, access_key_id, secret_access_key):
         """Set AWS credentials (will be encrypted)."""
         self.set_secret('aws_access_key_id', access_key_id)
+        self.set_secret('aws_secret_access_key', secret_access_key)
+
+    def set_aws_access_key_id(self, access_key_id):
+        """Set the AWS access key ID (will be encrypted). Auto-setter shape."""
+        self.set_secret('aws_access_key_id', access_key_id)
+
+    def set_aws_secret_access_key(self, secret_access_key):
+        """Set the AWS secret access key (will be encrypted). Auto-setter shape."""
         self.set_secret('aws_secret_access_key', secret_access_key)
 
     def get_aws_access_key_id(self):
@@ -150,6 +177,15 @@ class PhoneConfig(MojoSecrets, MojoModel):
     def get_mojo_api_key(self):
         """Get decrypted API key for the remote mojo SMS provider."""
         return self.get_secret('mojo_api_key', '')
+
+    # REST action handlers (see RestMeta.POST_SAVE_ACTIONS)
+    def on_action_test_connection(self, value):
+        """REST handler: POST /api/phonehub/config/<id> with body
+        `{"test_connection": 1}` returns the test_connection() result dict
+        as the response body. The frontend uses this for the "Test
+        connection" button on the admin PhoneConfig edit dialog.
+        """
+        return self.test_connection()
 
     def test_connection(self):
         """

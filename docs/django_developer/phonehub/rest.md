@@ -200,3 +200,53 @@ def on_phone_config(request, pk=None):
 **Permissions:** `manage_phone_config` or `manage_groups`
 
 `mojo_secrets` (encrypted credentials) is never returned in any response.
+
+#### Writing encrypted credentials via REST
+
+Provider credentials are stored encrypted in `mojo_secrets` and are **write-only over REST**. The standard auto-setter pattern routes each credential field through its `set_<field>` helper transparently:
+
+```http
+POST /api/phonehub/config/<id>
+Content-Type: application/json
+
+{
+  "mojo_api_key": "<token shown once by /api/group/apikey>"
+}
+```
+
+Supported credential body keys:
+
+| Key | Routes to | Provider |
+|---|---|---|
+| `twilio_account_sid` | `set_twilio_account_sid` | twilio |
+| `twilio_auth_token` | `set_twilio_auth_token` | twilio |
+| `aws_access_key_id` | `set_aws_access_key_id` | aws |
+| `aws_secret_access_key` | `set_aws_secret_access_key` | aws |
+| `mojo_api_key` | `set_mojo_api_key` | mojo |
+
+Leaving a credential key out of the body = no change. Setting any of these keys requires the same `SAVE_PERMS` as scalar updates. The response is the standard PhoneConfig payload (without secrets).
+
+#### Test the configured provider — `POST /api/phonehub/config/<id>` with `test_connection`
+
+Per-instance action that runs the per-provider connectivity check (`_test_twilio` / `_test_aws` / `_test_mojo`) and returns the result inline. Used by the admin portal's "Test connection" button.
+
+```http
+POST /api/phonehub/config/<id>
+Content-Type: application/json
+
+{
+  "test_connection": 1
+}
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "Mojo provider reachable and API key valid",
+  "remote_url": "https://sms-hub.example.com"
+}
+```
+
+On failure, `success` is `false` and `error` is one of `missing_credentials`, `invalid_credentials`, `timeout`, `connection_failed`, `missing_library`, or `invalid_provider`. Operators get a non-throwing dict either way; the underlying exception (if any) is logged via `mojo.helpers.logit` and not echoed back.
