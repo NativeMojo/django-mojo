@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## v1.2.14 - May 17, 2026
+
+group uuid
+
+
 **account** — new endpoint `GET /api/group/uuid/<uuid>` returns a Group by its uuid using the standard REST detail pipeline. Same permission gating as `GET /api/group/<int:pk>` (RestMeta `VIEW_PERMS`: `view_groups`, `manage_groups`, `manage_group`, `groups`). Returns 404 when the uuid doesn't match an existing group.
 
 **account** — register-page UX redesign. When the schema marks `phone` with `verify: "sms"`, the bouncer-hosted `/register` page now presents as a three-step state machine: Step 1 (phone only) → SMS → Step 2 (6-digit code, with 30s resend cooldown + Back) → Step 3 (rest of profile fields). The previous inline Send-code / Verify subwidget on the phone field is removed; verification gets its own focused screen. DOB is now collected via three auto-advancing numeric segments (MM / DD / YYYY) instead of `<input type="date">` — mobile-friendly numeric keyboard, paste-aware (`MM/DD/YYYY`, `MM-DD-YYYY`, or ISO `YYYY-MM-DD` distributes across segments), no JS library. Wire format unchanged (ISO `yyyy-mm-dd`). When the schema has no SMS-verify phone, the form falls back to a single-pane layout — today's behavior preserved. New optional setting `AUTH_PHONE_VERIFY_DEV_BYPASS_CODE` accepts a fixed bypass code at `POST /api/auth/phone/register/verify` so dev environments can exercise the verify flow without an SMS gateway; app startup logs a warning when set. **DO NOT SET IN PROD.**
