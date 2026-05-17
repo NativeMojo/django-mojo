@@ -181,7 +181,7 @@
       assessUrl: ("{{ api_base }}" || window.location.origin) + "/api/account/bouncer/assess",
       hpField: "{{ render_ctx.hp_field }}",
       btnSeed: "{{ render_ctx.btn_seed }}",
-      redirectUrl: "{{ login_url }}",
+      redirectUrl: "{{ login_url|escapejs }}",
       pageType: "{{ page_type|default:'login' }}",
       tier: {{ render_ctx.challenge_tier }}
     };

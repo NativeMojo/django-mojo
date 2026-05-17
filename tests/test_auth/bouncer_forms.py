@@ -369,6 +369,74 @@ def test_register_default_email_single_pane(opts):
                 "default email schema must NOT render the .mat-steps indicator")
 
 
+# ---------------------------------------------------------------------------
+# bouncer_challenge.html — JS redirectUrl must not be HTML-entity-escaped
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test("bouncer_challenge.html: redirectUrl JS string carries unescaped & (regression for &amp;)")
+def test_bouncer_challenge_redirect_url_not_html_entity_escaped(opts):
+    """The challenge template interpolates `login_url` into a JS string literal.
+
+    Without `|escapejs`, Django's default HTML autoescape rewrites `&` to
+    `&amp;`. The challenge JS then assigns that string verbatim to
+    `window.location.href`, so the next page sees `?amp;redirect=...` instead
+    of `?redirect=...`. The redirect param is silently dropped and the
+    post-register flow lands at AUTH_SUCCESS_REDIRECT (the API root) instead
+    of the SPA callback. This test renders _serve_challenge directly and
+    asserts the rendered `redirectUrl:` JS line never contains `&amp;`.
+    """
+    import objict
+    from django.test import RequestFactory
+    from mojo.apps.account.rest.bouncer.views import _serve_challenge
+
+    callback = 'http://localhost:3011/auth/callback'
+    factory = RequestFactory(REMOTE_ADDR='127.0.0.1')
+    request = factory.get('/register', {
+        'redirect': callback,
+        'group_uuid': opts.group.uuid,
+    })
+    # _serve_challenge reads request.DATA (set by mojo middleware, which
+    # RequestFactory bypasses) when forwarding the redirect param. Mirror
+    # the middleware so the forwarding branch at views._serve_challenge:319
+    # is exercised end-to-end.
+    request.DATA = objict.objict({
+        'redirect': callback,
+        'group_uuid': opts.group.uuid,
+    })
+    response = _serve_challenge(
+        request, challenge_tier=1, page_type='registration', group=opts.group)
+    html = response.content.decode('utf-8')
+
+    idx = html.find('redirectUrl:')
+    assert_true(idx != -1, "bouncer_challenge.html must declare a `redirectUrl:` JS property")
+    # Pull the single-line JS assignment (up to its trailing comma).
+    snippet = html[idx:idx+400]
+    line_end = snippet.find(',')
+    js_line = snippet[:line_end] if line_end != -1 else snippet
+
+    assert_true(
+        '&amp;' not in js_line,
+        f"bouncer_challenge.html `redirectUrl` JS string must not contain "
+        f"`&amp;` — the var is interpolated into a JS string literal, so use "
+        f"the `|escapejs` filter, not Django's default HTML autoescape. "
+        f"`&amp;` here makes the browser parse the post-challenge URL as "
+        f"`?amp;redirect=...` and silently drops the redirect param. "
+        f"Got: {js_line!r}"
+    )
+    # After the fix, escapejs renders `&` as the JS Unicode escape `&`
+    # (and `=` as `=`). The JS engine decodes those to literal `&` / `=`
+    # at runtime, so the URL the browser navigates to has the real ampersand.
+    # We tolerate either form: the unescaped `&redirect=` (e.g. if someone
+    # later switches to `|safe`) OR the escapejs form `&redirect`.
+    assert_true(
+        '&redirect=' in js_line or '\\u0026redirect' in js_line,
+        f"bouncer_challenge.html `redirectUrl` must carry the forwarded "
+        f"`redirect` param through the challenge — _serve_challenge built "
+        f"login_url with the redirect, but the template dropped it. "
+        f"Got: {js_line!r}"
+    )
+
+
 @th.django_unit_test("register.html: DOB renders three segmented inputs (MM/DD/YYYY)")
 def test_register_dob_segments(opts):
     html = _render_with_test_register_fields(
