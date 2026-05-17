@@ -381,11 +381,13 @@ def on_register(request):
             user.username = user.generate_username_from_names(fallback=phone)
         user.set_password(password)
         # on_rest_pre_save / on_rest_created don't fire on direct .save(),
-        # so mirror their two pieces of profile setup explicitly: infer
-        # first/last from a business email, then backfill display_name.
+        # so mirror their profile setup explicitly: infer first/last from a
+        # business email, backfill display_name, then run the same content
+        # guard the REST path would (blocks profanity in name fields).
         user.infer_names_from_email()
         if not user.display_name:
             user.display_name = user.generate_display_name()
+        user.validate_name_fields({}, created=True)
         user.save()
 
         if group is not None:

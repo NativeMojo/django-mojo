@@ -69,7 +69,7 @@ A read-only computed field. Returns the best available name in priority order:
 
 1. `first_name` + `last_name` (if either is set)
 2. `display_name`
-3. A name derived from the username/email (e.g. `alice.smith` → `Alice Smith`)
+3. A name derived via priority chain: email local-part → phone → username (e.g. `alice.smith` → `Alice Smith`)
 
 ---
 
