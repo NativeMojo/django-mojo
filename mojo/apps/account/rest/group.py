@@ -10,6 +10,22 @@ def on_group(request, pk=None):
     return Group.on_rest_request(request, pk)
 
 
+@md.GET('group/uuid/<str:uuid>')
+@md.uses_model_security(Group)
+def on_group_by_uuid(request, uuid=None):
+    """Look up a Group by its uuid and delegate to the standard REST detail
+    pipeline. Permission gating is identical to `GET /api/group/<int:pk>` —
+    the same RestMeta VIEW_PERMS check runs inside on_rest_request.
+
+    Returns 404 when no group matches the uuid (matches the framework's
+    standard not-found behavior for detail lookups).
+    """
+    group = Group.objects.filter(uuid=(uuid or "").strip()).first()
+    if group is None:
+        raise merrors.PermissionDeniedException("Group not found", 404, 404)
+    return Group.on_rest_request(request, group.pk)
+
+
 @md.URL('group/member')
 @md.URL('group/member/<int:pk>')
 @md.uses_model_security(GroupMember)

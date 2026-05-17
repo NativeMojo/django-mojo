@@ -379,3 +379,46 @@ def test_group_rest_update_auth_domain(opts):
     # Restore original
     group.auth_domain = TEST_AUTH_DOMAIN
     group.save(update_fields=['auth_domain'])
+
+
+# ---------------------------------------------------------------------------
+# GET /api/group/uuid/<uuid> — lookup-by-uuid endpoint
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test()
+def test_group_rest_get_by_uuid(opts):
+    """Authorized admin can fetch a group by its uuid; response matches
+    the standard detail-by-pk response (same RestMeta graph)."""
+    resp = opts.client.get(f'/api/group/uuid/{TEST_GROUP_UUID}')
+    assert_eq(resp.status_code, 200,
+              f"Expected 200 from /api/group/uuid/, got {resp.status_code}")
+    data = resp.response.data
+    assert_eq(data.id, opts.group.pk,
+              f"by-uuid endpoint must return the group's id, got {data.id}")
+    assert_eq(data.uuid, TEST_GROUP_UUID,
+              f"by-uuid endpoint must echo the uuid, got '{data.uuid}'")
+    assert_eq(data.auth_domain, TEST_AUTH_DOMAIN,
+              f"by-uuid response must include auth_domain, got '{data.auth_domain}'")
+
+
+@th.django_unit_test()
+def test_group_rest_get_by_uuid_unknown(opts):
+    """Unknown uuid returns 404."""
+    resp = opts.client.get('/api/group/uuid/this-uuid-does-not-exist')
+    assert_eq(resp.status_code, 404,
+              f"Expected 404 for unknown uuid, got {resp.status_code}: {opts.client.last_response.body}")
+
+
+@th.django_unit_test()
+def test_group_rest_get_by_uuid_unauthenticated(opts):
+    """Unauthenticated request must be rejected — same permission gating
+    as GET /api/group/<int:pk>."""
+    # The testit RestClient remembers auth tokens; drop them for this call.
+    saved_token = opts.client.access_token
+    opts.client.access_token = None
+    try:
+        resp = opts.client.get(f'/api/group/uuid/{TEST_GROUP_UUID}')
+        assert resp.status_code in (401, 403), \
+            f"Unauthenticated by-uuid lookup must be rejected, got {resp.status_code}"
+    finally:
+        opts.client.access_token = saved_token
