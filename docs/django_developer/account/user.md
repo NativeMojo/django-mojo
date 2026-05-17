@@ -61,7 +61,7 @@ Returns the best available display name in priority order:
 
 1. `first_name` + `last_name` (if either is set)
 2. `display_name`
-3. `generate_display_name()` — priority chain: first+last → email local-part → phone → username
+3. `generate_display_name()` — priority chain: first+last → email local-part → friendly random placeholder ("BraveTiger"-style) → username. Phone numbers are intentionally NEVER used (PII).
 
 ```python
 user.full_name  # e.g. "Alice Smith", "alice", or "Alice Smith" from "alice.smith@co.com"

@@ -178,11 +178,16 @@ def test_register_display_name_priority_names(opts):
         f"display_name must equal 'Alice Cooper' when first+last provided, got {user.display_name!r}"
 
 
-@th.django_unit_test("register: display_name falls back to phone number when no names or email")
+@th.django_unit_test("register: phone-only register gets a friendly placeholder display_name, NOT the phone number")
 def test_register_display_name_priority_phone_only(opts):
-    """Phone-only register: display_name should equal the normalized phone number."""
+    """Phone-only register: display_name must be a friendly placeholder
+    (Adjective + Animal). The raw phone number must NEVER be used —
+    display_name surfaces in member lists / search / push device names,
+    and PII leakage there is unacceptable.
+    """
     import json
     from mojo.apps.account.models import User
+    from mojo.apps.account.models.user import User as UserModel
     from mojo.decorators.limits import clear_rate_limits
 
     # Override schema to require phone (no email, no SMS verify) so we can
@@ -212,8 +217,19 @@ def test_register_display_name_priority_phone_only(opts):
 
     user = User.objects.filter(phone_number=phone).first()
     assert user is not None, "user row must exist after phone-only register"
-    assert user.display_name == phone, \
-        f"display_name must equal phone number {phone!r} when no names or email, got {user.display_name!r}"
+    assert user.display_name, \
+        f"display_name must be populated, got {user.display_name!r}"
+    assert phone not in user.display_name, (
+        f"display_name must NOT contain the phone number (PII leak), "
+        f"got {user.display_name!r} for phone {phone!r}")
+    parts = user.display_name.split(" ")
+    assert len(parts) == 2, \
+        f"friendly display_name must be 'Adjective Animal' (two words), got {user.display_name!r}"
+    adj, animal = parts
+    assert adj in UserModel._DISPLAY_NAME_ADJECTIVES, \
+        f"adjective {adj!r} must be from the curated list, got display_name={user.display_name!r}"
+    assert animal in UserModel._DISPLAY_NAME_ANIMALS, \
+        f"animal {animal!r} must be from the curated list, got display_name={user.display_name!r}"
 
 
 @th.django_unit_test("register: business email infers first/last and display_name is built from them")

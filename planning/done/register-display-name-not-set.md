@@ -1,7 +1,7 @@
 # Register flow leaves display_name NULL
 
 **Type**: issue
-**Status**: planned
+**Status**: resolved
 **Date**: 2026-05-17
 **Severity**: medium
 
@@ -86,3 +86,40 @@ Make `generate_display_name()` walk a sensible priority chain (first/last → em
 ### Docs
 - `CHANGELOG.md` — one-line bugfix entry covering both the register fix and the `generate_display_name()` priority-chain change.
 - No `docs/django_developer/` or `docs/web_developer/` changes — the `display_name` field, its existence on every user, and the public API contract are unchanged. This restores intended behavior, doesn't introduce new surface.
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-05-17
+**Commits**: `a6fcdeb` (primary fix) + `01e46d8` (security follow-up + doc sync)
+
+### What Was Built
+- `User.generate_display_name()` rewritten as a priority chain: `first+last → email local-part → phone → username fallback`. Every caller (REST backfill in `on_rest_pre_save`, the `full_name` property, OAuth fallbacks) now gets a sensible value regardless of which identity fields are populated.
+- `on_register` now runs the three pieces of profile setup that the bypassed REST hooks were doing: `infer_names_from_email()`, `display_name` backfill, and `validate_name_fields()` (content-policy guard for profanity in name fields).
+
+### Files Changed
+- `mojo/apps/account/models/user.py:731-749` — `generate_display_name()` priority chain.
+- `mojo/apps/account/rest/user.py:382-391` — pre-save calls for inference, display_name backfill, and content guard.
+- `tests/test_register/register.py:138-225` — four regression tests.
+- `CHANGELOG.md` — v1.1.0 entry.
+- `docs/django_developer/account/user.md:64` — description of `generate_display_name()` updated to match new priority chain.
+- `docs/web_developer/account/user.md:72` — `full_name` fallback description updated.
+
+### Tests
+- `tests/test_register/register.py::test_register_sets_display_name` — display_name is not NULL after register.
+- `tests/test_register/register.py::test_register_display_name_priority_names` — first+last takes precedence.
+- `tests/test_register/register.py::test_register_display_name_priority_phone_only` — phone-identity register falls back to a friendly "Adjective Animal" placeholder, NOT the phone number (PII guard).
+- `tests/test_register/register.py::test_register_infers_names_from_business_email` — business email infers first/last, display_name derives from them.
+- Run: `bin/run_tests --agent -t test_register.register` (19/19 pass) and `bin/run_tests --agent -t test_oauth` (46/46 pass).
+- Full suite: 2039 passed, 3 unrelated pre-existing failures in `test_helpers/llm.py` (broken `anthropic` package in venv, not caused by this change).
+
+### Docs Updated
+- `docs/django_developer/account/user.md:64` — `generate_display_name()` line.
+- `docs/web_developer/account/user.md:72` — `full_name` line.
+
+### Security Review
+- **LOW (fixed)**: `validate_name_fields()` (profanity/content guard for first_name / last_name / display_name) was being bypassed on the register path because it lives in the REST `on_rest_pre_save` hook. Closed in commit `01e46d8` by calling it explicitly before `user.save()` in `on_register`.
+- **MEDIUM (fixed in follow-up)**: Initial implementation used the raw phone number as the `display_name` fallback when no names or email were provided — this would have leaked PII into member lists, search results, and push notification device names. User redirected during build: "do not put phone number in display name, instead generate a random friendly display name." Follow-up replaces the phone fallback with a curated "Adjective + Animal" placeholder (e.g. `Brave Tiger`, `Silent Owl`, `Clever Otter`) drawn from two 30-entry word lists on the `User` model (~900 combinations). The phone-only regression test asserts `phone not in display_name` and that the result is a two-word combination from the curated lists.
+
+### Follow-up
+- None required. The two unrelated noise items from this session — the `.claude/skills/bug → .claude/skills/issue` rename and the broken `anthropic` package in the venv — are out of scope; left untouched.

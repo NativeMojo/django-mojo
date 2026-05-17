@@ -728,12 +728,33 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
                 return candidate
         return fallback
 
+    # Display-name fallback when the user has no name/email signal. PII like
+    # a phone number must NOT leak into display_name (it surfaces in member
+    # lists, search, push device names), so we mint a friendly placeholder.
+    _DISPLAY_NAME_ADJECTIVES = (
+        "Brave", "Calm", "Clever", "Cosmic", "Curious", "Daring", "Eager",
+        "Friendly", "Gentle", "Happy", "Jolly", "Keen", "Kind", "Lively",
+        "Lucky", "Merry", "Mighty", "Noble", "Polite", "Proud", "Quick",
+        "Quiet", "Silent", "Silly", "Smart", "Sunny", "Swift", "Wise",
+        "Witty", "Zesty",
+    )
+    _DISPLAY_NAME_ANIMALS = (
+        "Badger", "Bear", "Cheetah", "Dolphin", "Eagle", "Falcon", "Fox",
+        "Hawk", "Heron", "Hippo", "Koala", "Lemur", "Lion", "Lynx",
+        "Otter", "Owl", "Panda", "Panther", "Penguin", "Pony", "Rabbit",
+        "Raccoon", "Robin", "Seal", "Sparrow", "Stag", "Tiger", "Turtle",
+        "Walrus", "Wolf",
+    )
+
     def generate_display_name(self):
         """Build a display name from the best signal available on this user.
 
-        Priority: first+last → email local-part → phone → username-derived.
-        Username-derived stays as the final fallback for users built with
-        only a username (test fixtures, service accounts).
+        Priority: first+last → email local-part → random friendly placeholder.
+        The phone number is intentionally NOT used as a fallback (it would
+        leak PII into member lists, search results, and push device names).
+        Username-derived stays as the final safety net for users built with
+        only a username (test fixtures, service accounts) so the field is
+        never empty.
         """
         if self.first_name and self.last_name:
             return f"{self.first_name} {self.last_name}".strip()
@@ -741,7 +762,10 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             local = self.email.split("@", 1)[0]
             return local.replace("_", " ").replace(".", " ").title()
         if self.phone_number:
-            return self.phone_number
+            import random
+            adj = random.choice(self._DISPLAY_NAME_ADJECTIVES)
+            animal = random.choice(self._DISPLAY_NAME_ANIMALS)
+            return f"{adj} {animal}"
         if self.username:
             base = self.username.split("@")[0] if "@" in self.username else self.username
             return base.replace("_", " ").replace(".", " ").title()
