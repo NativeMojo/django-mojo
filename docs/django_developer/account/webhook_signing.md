@@ -149,6 +149,10 @@ The HMAC covers the body only. There is **no nonce and no timestamp** in the sig
 
 A future revision may add `X-Mojo-Webhook-Timestamp` to the signature input; for v1 the primitive is intentionally minimal.
 
+## Related: Webhook Subscriptions
+
+If you need a subscriber registry — storing (Group, URL, events[]) rows and fanning out one `dispatch()` call to every matching row — see [Webhook Subscriptions](webhook_subscriptions.md). Subscriptions delegate signing entirely to `publish_webhook(group=...)`, so everything in this doc applies automatically.
+
 ## Downstream Adoption Recipe
 
 For services migrating off bespoke webhook secrets:

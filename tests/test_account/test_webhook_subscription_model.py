@@ -79,6 +79,31 @@ def test_http_url_rejected(opts):
 
 
 @th.django_unit_test()
+def test_url_with_credentials_rejected(opts):
+    """https://user:pass@host/... must be rejected — credentials would leak
+    into logs and outbound request lines.
+    """
+    from mojo import errors as merrors
+    from mojo.apps.account.models import Group, WebhookSubscription
+
+    g = Group.objects.get(pk=opts.group_id)
+    sub = WebhookSubscription(
+        group=g,
+        url="https://alice:s3cret@hooks.example.test/x",
+        events=["evt.a"],
+    )
+    raised = False
+    try:
+        sub.on_rest_pre_save(changed_fields={}, created=True)
+    except merrors.ValueException as e:
+        raised = True
+        assert "credential" in str(e).lower() or "userinfo" in str(e).lower(), (
+            f"error must mention credentials/userinfo, got: {e}"
+        )
+    assert raised, "URL with embedded credentials must be rejected"
+
+
+@th.django_unit_test()
 def test_malformed_url_rejected(opts):
     from mojo import errors as merrors
     from mojo.apps.account.models import Group, WebhookSubscription

@@ -1,3 +1,5 @@
+from urllib.parse import urlsplit
+
 from django.core.exceptions import ValidationError
 from django.core.validators import URLValidator
 from django.db import models
@@ -73,6 +75,15 @@ class WebhookSubscription(models.Model, MojoModel):
             URLValidator(schemes=["https"])(url)
         except ValidationError as e:
             raise merrors.ValueException(f"url is not a valid URL: {e.messages[0] if e.messages else url!r}")
+        # Reject URLs that embed credentials in the userinfo component
+        # (e.g. https://user:pass@host/). The bare https:// prefix check above
+        # would otherwise allow these through, and the credentials would be
+        # logged in job metadata and outbound request lines.
+        parsed = urlsplit(url)
+        if parsed.username or parsed.password:
+            raise merrors.ValueException(
+                "url must not include credentials (user:pass@) — strip the userinfo component"
+            )
 
         events = self.events
         if events is None:

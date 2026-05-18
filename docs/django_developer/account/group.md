@@ -250,6 +250,8 @@ info = group.rotate_webhook_secret()
 
 The secret format is `"wsec_"` + 48 alphanumeric characters. The REST endpoint `POST /api/group/webhook_secret` exposes read and rotation to operators with `manage_group` permission. See [Webhook Signing](webhook_signing.md) for the full signing and verification pattern.
 
+Each Group's active webhook delivery targets are managed through the `WebhookSubscription` model (`group.webhook_subscriptions` related name). See [Webhook Subscriptions](webhook_subscriptions.md) for the subscription registry and fan-out dispatcher.
+
 ## Activity Tracking
 
 ```python

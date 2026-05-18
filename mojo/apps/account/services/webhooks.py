@@ -24,6 +24,22 @@ FANOUT_FUNC = "mojo.apps.account.services.webhooks.handle_fanout"
 # metadata blob bounded for Groups with many subscribers.
 PUBLISHED_JOB_ID_CAP = 50
 
+# Hard cap on exception repr length when reporting to the incident app.
+# Exception __repr__ values can embed HTTP response bodies, auth headers, or
+# other sensitive content from inner libraries; bound the surface area.
+ERROR_REPR_MAX_LEN = 500
+
+
+def _safe_error_repr(err):
+    """Bounded repr() of an exception for incident reporting. Truncates to
+    ERROR_REPR_MAX_LEN with an explicit marker so triage can tell something
+    was elided.
+    """
+    text = repr(err)
+    if len(text) > ERROR_REPR_MAX_LEN:
+        return text[: ERROR_REPR_MAX_LEN - 11] + "...truncated"
+    return text
+
 
 def dispatch(group, event_type, data, *, idempotency_key=None, channel="webhooks"):
     """Queue a fan-out job for `event_type` against `group`'s active subscriptions.
@@ -103,11 +119,12 @@ def handle_fanout(job):
                 published_job_ids.append(jid)
         except Exception as e:
             failed_count += 1
+            safe_repr = _safe_error_repr(e)
             try:
                 incident.report_event(
                     details=(
                         f"webhook fan-out failed to publish for subscription "
-                        f"{sub.id} (group={group.id}, event_type={event_type}): {e!r}"
+                        f"{sub.id} (group={group.id}, event_type={event_type}): {safe_repr}"
                     ),
                     category="webhook:fanout:error",
                     scope="account",
@@ -115,7 +132,7 @@ def handle_fanout(job):
                     group=group,
                     subscription_id=sub.id,
                     event_type=event_type,
-                    error_repr=repr(e),
+                    error_repr=safe_repr,
                 )
             except Exception as ie:
                 # Never let incident reporting crash the fan-out itself.

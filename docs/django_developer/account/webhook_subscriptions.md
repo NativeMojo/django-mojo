@@ -136,6 +136,13 @@ See [REST API → Webhook Subscriptions](../../web_developer/account/webhook_sub
 
 Permission: `manage_group` / `manage_groups` / `groups` — same threshold as `ApiKey` CRUD and `POST /api/group/webhook_secret`.
 
+## Security notes
+
+- **URL validation is at the syntactic level only**: `https://`-prefix, valid syntax, no embedded credentials (`user:pass@`). The framework does **not** restrict the target host. An operator with `manage_group` permission can register a URL pointing at `https://169.254.169.254/...` (AWS metadata), `https://10.0.0.1/...` (internal network), `https://localhost/...`, etc. — and the fan-out will dutifully deliver. **This is a deliberate trust model**: subscription writes require `manage_group` (same threshold as ApiKey CRUD), and `manage_group`-holders are considered trusted. If your deployment has a less-trusted operator tier and you need allow-list / deny-list enforcement of subscription URLs, layer that check in your own portal before POSTing to the framework endpoint, or open a follow-up request.
+- **Per-row failure reports are bounded**: `error_repr` is truncated to 500 chars before being recorded in incident events. Inner exceptions from `requests` / HTTP libraries can embed response bodies and auth headers in their reprs; the cap bounds that exposure window.
+- **Signing is automatic, not optional**: deliveries always go through `jobs.publish_webhook(group=...)` which always injects `X-Mojo-Signature`. There is no path through `dispatch()` that delivers unsigned.
+- **Group hierarchy is not traversed**: `dispatch(group=g, ...)` only matches subscriptions whose `group_id == g.id`. Parent/child groups are not included.
+
 ## Out of scope (v1)
 
 - **Per-subscription signing secrets** — the Group's webhook secret signs every delivery, no overrides.

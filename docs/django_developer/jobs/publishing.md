@@ -270,8 +270,10 @@ python manage.py jobs_engine --channels default --max-workers 10
 Configure available channels in settings:
 
 ```python
-JOBS_CHANNELS = ['default', 'emails', 'webhooks', 'heavy', 'maintenance']
+JOBS_CHANNELS = ['default', 'emails', 'webhooks', 'webhook_fanout', 'heavy', 'maintenance']
 ```
+
+The `webhook_fanout` channel is used by the framework's `WebhookSubscription` fan-out dispatcher (see [account — Webhook Subscriptions](../account/webhook_subscriptions.md)). It executes the DB query + per-row enqueue step; individual HTTP deliveries run on the `webhooks` channel. Keeping them on separate channels prevents fan-out coordination work from competing with HTTP delivery slots under load.
 
 Default channel is `"default"`.
 
