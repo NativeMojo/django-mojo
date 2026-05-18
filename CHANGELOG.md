@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## v1.2.17 - May 17, 2026
+
+new signing of webhooks
+
+
 **account / jobs / helpers** — Group-scoped webhook signing primitive. New `Group.get_webhook_secret()` / `get_webhook_secret_info()` / `rotate_webhook_secret()` accessors on top of the existing `MojoSecrets` blob (no migration); default is `auto_create=False` for safe verify paths. New REST endpoint `POST /api/group/webhook_secret` reads or rotates the per-Group HMAC-SHA256 secret (permission: `manage_group` / `manage_groups` / `groups`). New `mojo.helpers.crypto.sign.sign_for_group(group, body_bytes)` and `WEBHOOK_SIGNATURE_HEADER` constant ("X-Mojo-Signature"). New `mojo.helpers.request.verify_signed_request(request, secret)` Django adapter that pulls raw `request.body` + the signature header and verifies in constant time. `jobs.publish_webhook(url, data, group=...)` now auto-signs at delivery: the handler canonicalizes the body (`json.dumps(data, sort_keys=True, separators=(",",":"))`), injects `X-Mojo-Signature`, and sends those exact bytes — the secret never enters the queue payload (only `sign_group_id` does). Retries re-sign with the current secret, so rotations are safe in-flight. If the sign group is deleted between publish and delivery, the job is marked `'failed'` with `error_type='sign_group_missing'` — no silent unsigned send. The unsigned `publish_webhook(...)` path is unchanged. Existing service-specific signature headers should alias `X-Mojo-Signature` for one release cycle, then go away.
 
 ## v1.2.16 - May 17, 2026
