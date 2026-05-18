@@ -8,6 +8,7 @@
 - [Email Change](email_change.md) — Self-service email address change flow
 - [API Keys](api_keys.md) — Group-scoped programmatic access, permissions, token lifecycle
 - [Webhook Signing](webhook_signing.md) — Per-Group HMAC primitive for outbound webhooks, auto-signing via `jobs.publish_webhook(group=...)`, receiver verification helper
+- [Webhook Subscriptions](webhook_subscriptions.md) — Per-Group subscription registry, async fan-out dispatcher, signed delivery via the existing webhook primitive
 - [Notifications](notifications.md) — User inbox, WebSocket + push delivery, expiry
 - [GeoIP](geoip.md) — IP geolocation, threat intelligence, time lookup
 - [Geofencing](geofence.md) — Policy-based geographic access control: rule DSL, system+group rules, decorator, settings, bypass permission
