@@ -40,11 +40,28 @@ from mojo.helpers.crypto import sign
 # Generate signature
 signature = sign.generate_signature(data, secret_key="my-key")
 
-# Verify signature
+# Verify signature (constant-time compare)
 is_valid = sign.verify_signature(data, signature, secret_key="my-key")
 ```
 
 Use for webhook payloads, API request signing, and tamper detection.
+
+### Webhook signing helpers
+
+For signing outbound webhooks keyed on a Group secret, use the higher-level helpers instead of calling `generate_signature` directly:
+
+```python
+from mojo.helpers.crypto.sign import sign_for_group, WEBHOOK_SIGNATURE_HEADER
+
+# sign_for_group auto-mints the Group's webhook secret on first use
+body_bytes = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+sig = sign_for_group(group, body_bytes)
+response.headers[WEBHOOK_SIGNATURE_HEADER] = sig   # "X-Mojo-Signature"
+```
+
+`WEBHOOK_SIGNATURE_HEADER` is the string constant `"X-Mojo-Signature"`.
+
+Most webhook emission should go through `jobs.publish_webhook(group=...)`, which calls these helpers automatically. See [Webhook Signing](../account/webhook_signing.md).
 
 ## Asymmetric (Public/Private Key) Encryption
 

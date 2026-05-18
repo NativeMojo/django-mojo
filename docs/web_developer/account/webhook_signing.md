@@ -99,6 +99,17 @@ if not verify(request.body, request.headers["X-Mojo-Signature"], expected):
         return 401
 ```
 
+## Replay Protection — Your Responsibility
+
+The HMAC covers the request body only. There is **no nonce and no timestamp** baked into the signature. A captured `(body, X-Mojo-Signature)` pair will validate indefinitely until the Group secret is rotated.
+
+If you need replay protection (most production webhook receivers do):
+
+- **Dedupe on an event id**: have the sender include a stable id (e.g. `event_id`, `webhook_id`) in the payload, and short-circuit your handler on already-seen ids. Storing the ids in Redis/SQL for 24-48 hours is usually enough.
+- **Reject stale requests**: include an ISO-8601 `timestamp` field in the payload and reject anything older than N seconds (e.g. 5 minutes). The signature covers the timestamp because it covers the whole body — an attacker cannot bump the timestamp without invalidating the signature.
+
+The framework does not enforce either pattern — it is application-layer policy. A future revision may add a `X-Mojo-Webhook-Timestamp` header to the signature input; for now the primitive is intentionally minimal.
+
 ## Errors
 
 | Status | Reason |

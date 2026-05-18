@@ -60,6 +60,23 @@ from mojo.helpers.request_parser import parse_request_data
 data = parse_request_data(request)  # returns objict
 ```
 
+## Webhook Signature Verification
+
+### `verify_signed_request(request, secret)`
+
+Returns `True` if the raw request body matches the `X-Mojo-Signature` header using HMAC-SHA256 keyed on `secret`. Returns `False` (never raises) when the secret is `None`, the header is absent, or the signature does not match. Uses `hmac.compare_digest` for constant-time comparison.
+
+```python
+from mojo.helpers.request import verify_signed_request
+from mojo.apps.account.models import Group
+
+group = Group.objects.filter(uuid=group_uuid).first()
+if not verify_signed_request(request, group.get_webhook_secret() if group else None):
+    raise merrors.PermissionDeniedException("invalid signature", 401, 401)
+```
+
+The secret is typically fetched with `group.get_webhook_secret()` (defaults to `auto_create=False`, so a missing secret correctly returns `False` rather than minting one). See [Webhook Signing](../account/webhook_signing.md) for the full pattern.
+
 ## request.DATA
 
 `request.DATA` is an [`objict`](objict.md) — a dict subclass with attribute access, dot-notation nested keys, and type-safe getters. Set by `MojoMiddleware` from all request sources (POST body, GET params, JSON body).

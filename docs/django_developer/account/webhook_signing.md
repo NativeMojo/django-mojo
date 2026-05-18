@@ -139,6 +139,16 @@ response.headers[WEBHOOK_SIGNATURE_HEADER] = sig
 - **Group hierarchy is not auto-resolved**: the signing secret is on the Group you pass, not its parent or descendants. Pass the exact Group whose data the webhook represents.
 - **Header is masked in logs**: the jobs handler runs `X-Mojo-Signature` through its `_sanitize_headers` masking — full signatures don't end up in job metadata or log lines.
 
+### Replay protection — receiver's responsibility
+
+The HMAC covers the body only. There is **no nonce and no timestamp** in the signature itself. A captured `(body, X-Mojo-Signature)` pair will validate indefinitely until the Group secret rotates. Receivers that need replay protection must implement it at the application layer:
+
+- **Idempotency**: include a stable event id in the payload (e.g. `event_id`, `webhook_id`) and have the receiver short-circuit on already-seen ids. The jobs system already supports `idempotency_key` on the publisher side; pass the same value into `data` for the receiver to dedupe on.
+- **Freshness window**: include a `timestamp` (ISO-8601 or unix seconds) in the payload and reject anything older than N seconds at the receiver. The signature still covers the timestamp because it covers the whole body, so an attacker cannot alter the timestamp without invalidating the signature.
+- **Out-of-band rotation**: rotate the Group secret after a known compromise. Receivers must refresh their cached secret.
+
+A future revision may add `X-Mojo-Webhook-Timestamp` to the signature input; for v1 the primitive is intentionally minimal.
+
 ## Downstream Adoption Recipe
 
 For services migrating off bespoke webhook secrets:

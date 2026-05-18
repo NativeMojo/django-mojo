@@ -68,7 +68,8 @@ def post_webhook(job: Job) -> str:
         logit.info(f"Webhook job {job.id} cancelled before execution")
         return 'cancelled'
 
-    # Initialize tracking metadata
+    # Initialize tracking metadata (headers_sent is set after any signing,
+    # so it always reflects the final outbound headers — masked).
     start_time = datetime.now(timezone.utc)
     job.metadata.update({
         'webhook_started_at': start_time.isoformat(),
@@ -76,7 +77,6 @@ def post_webhook(job: Job) -> str:
         'webhook_id': webhook_id,
         'attempt': job.attempt,
         'timeout_seconds': timeout,
-        'headers_sent': _sanitize_headers(headers)
     })
 
     try:
@@ -110,7 +110,11 @@ def post_webhook(job: Job) -> str:
             headers.setdefault('Content-Type', 'application/json')
             job.metadata['signed'] = True
             job.metadata['sign_group_id'] = sign_group_id
-            job.metadata['headers_sent'] = _sanitize_headers(headers)
+
+        # Record the final outbound headers (signature is masked by
+        # _sanitize_headers). Always recorded — signed or unsigned —
+        # so a failure mid-send still leaves an audit trail of what was attempted.
+        job.metadata['headers_sent'] = _sanitize_headers(headers)
 
         # Make the request — when signing, send the same bytes we just hashed;
         # otherwise use requests' JSON encoding as before.

@@ -229,6 +229,27 @@ if request.group:
     queryset = queryset.filter(group=request.group)
 ```
 
+## Webhook Secret
+
+`Group` stores a per-tenant HMAC-SHA256 signing secret inside its `MojoSecrets` blob (no migration). Three methods manage it:
+
+```python
+# Read — safe for verify paths; returns None if not yet minted
+secret = group.get_webhook_secret()                  # auto_create=False
+
+# Read with auto-mint — use on the emitter side
+secret = group.get_webhook_secret(auto_create=True)
+
+# Full record with timestamps
+info = group.get_webhook_secret_info(auto_create=True)
+# objict(value="wsec_…", created_at="…", last_rotated_at="…")
+
+# Rotate — new value, preserves created_at, advances last_rotated_at
+info = group.rotate_webhook_secret()
+```
+
+The secret format is `"wsec_"` + 48 alphanumeric characters. The REST endpoint `POST /api/group/webhook_secret` exposes read and rotation to operators with `manage_group` permission. See [Webhook Signing](webhook_signing.md) for the full signing and verification pattern.
+
 ## Activity Tracking
 
 ```python
