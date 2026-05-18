@@ -305,6 +305,7 @@ def publish_webhook(
     url: str,
     data: Dict[str, Any],
     *,
+    group=None,
     headers: Optional[Dict[str, str]] = None,
     channel: str = "webhooks",
     delay: Optional[int] = None,
@@ -324,6 +325,10 @@ def publish_webhook(
     Args:
         url: Target webhook URL
         data: Data to POST (will be JSON encoded)
+        group: Optional account.Group (or int id). When provided, the job
+               handler signs the outbound body with the Group's webhook secret
+               and adds an `X-Mojo-Signature` header at delivery time. The
+               secret is never stored in the queue — only the group id.
         headers: Optional HTTP headers (default includes Content-Type: application/json)
         channel: Channel to publish to (default: "webhooks")
         delay: Delay in seconds from now
@@ -351,6 +356,13 @@ def publish_webhook(
             headers={"Authorization": "Bearer secret"},
             max_retries=3
         )
+
+        # Signed webhook — handler injects X-Mojo-Signature at delivery
+        job_id = publish_webhook(
+            url=receiver_url,
+            data={"event": "verification_complete", "customer_id": 42},
+            group=customer.group,
+        )
     """
     # Validate URL
     if not url or not isinstance(url, str):
@@ -374,13 +386,19 @@ def publish_webhook(
     if headers:
         webhook_headers.update(headers)
 
+    # Resolve sign_group_id without storing the secret in the queue payload
+    sign_group_id = None
+    if group is not None:
+        sign_group_id = group.id if hasattr(group, "id") else int(group)
+
     # Build payload for webhook handler
     payload = {
         'url': url,
         'data': data,
         'headers': webhook_headers,
         'timeout': timeout or 30,
-        'webhook_id': webhook_id
+        'webhook_id': webhook_id,
+        'sign_group_id': sign_group_id,
     }
 
     # Set webhook-specific defaults

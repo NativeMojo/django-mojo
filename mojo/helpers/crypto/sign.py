@@ -4,6 +4,9 @@ import json
 from mojo.helpers.settings import settings
 
 
+WEBHOOK_SIGNATURE_HEADER = "X-Mojo-Signature"
+
+
 def generate_signature(data, secret_key=None):
     """
     Generate an HMAC-SHA256 signature for the given data using the secret key.
@@ -38,3 +41,15 @@ def verify_signature(data, signature, secret_key=None):
         secret_key = settings.SECRET_KEY
     expected_signature = generate_signature(data, secret_key)
     return hmac.compare_digest(expected_signature, signature)
+
+
+def sign_for_group(group, body_bytes):
+    """Sign body_bytes with a Group's webhook secret (auto-mints on first use).
+
+    This is the emit-side convenience that bundles the "auto_create on sign"
+    rule next to the HMAC primitive so callers don't have to remember the flag.
+    Group is duck-typed — anything exposing `get_webhook_secret(auto_create=...)`
+    works.
+    """
+    secret = group.get_webhook_secret(auto_create=True)
+    return generate_signature(body_bytes, secret)

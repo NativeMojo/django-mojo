@@ -164,6 +164,8 @@ publish_webhook(
     url,                     # str — target URL (must start with http:// or https://)
     data,                    # dict — JSON data to POST
     *,
+    group=None,              # account.Group or int id — when set, the handler
+                             #   signs at delivery (see "Signed webhooks" below)
     headers=None,            # dict — additional HTTP headers
     channel="webhooks",      # str — job channel
     delay=None,              # int seconds
@@ -184,6 +186,31 @@ publish_webhook(
 **Raises**: `ValueError` for invalid URL or non-serializable data, `RuntimeError` on failure.
 
 Internally creates a job that calls `mojo.apps.jobs.handlers.webhook.post_webhook`.
+
+### Signed webhooks
+
+Pass `group=<account.Group or id>` to have the job handler sign the outbound body at delivery time:
+
+```python
+jobs.publish_webhook(
+    url=receiver_url,
+    data={"event": "verification_complete", "customer_id": 42},
+    group=customer.group,
+)
+```
+
+The handler:
+
+1. Stores **only** `sign_group_id` in the queue — the secret never enters the payload.
+2. At delivery, canonicalizes the body: `json.dumps(data, sort_keys=True, separators=(",", ":")).encode("utf-8")`.
+3. Computes `X-Mojo-Signature: <hex>` keyed on the Group's webhook secret (auto-minted on first use).
+4. Sends those exact bytes via `requests.post(..., data=body_bytes)` — signature and wire bytes are guaranteed identical.
+
+If the Group has been deleted between publish and delivery, the handler returns `'failed'` with `error_type='sign_group_missing'` — no retry, no silent unsigned send.
+
+Retries re-sign with the current secret, so an in-flight job that hits a rotation is delivered with the new signature.
+
+Full spec: [Webhook Signing](../account/webhook_signing.md).
 
 ## broadcast_execute()
 

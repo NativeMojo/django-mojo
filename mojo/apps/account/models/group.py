@@ -1,9 +1,15 @@
 from django.db import models
 from mojo.models import MojoModel, MojoSecrets
-from mojo.helpers import dates, logit
+from mojo.helpers import crypto, dates, logit
 from mojo.apps import metrics
 from mojo.helpers.settings import settings
+from objict import objict
 import uuid
+
+
+WEBHOOK_SECRET_KEY = "webhook_secret"
+WEBHOOK_SECRET_PREFIX = "wsec_"
+WEBHOOK_SECRET_TOKEN_LEN = 48
 
 
 GROUP_LAST_ACTIVITY_FREQ = settings.get_static("GROUP_LAST_ACTIVITY_FREQ", 300)
@@ -137,6 +143,63 @@ class Group(MojoSecrets, MojoModel):
             self.uuid = uuid.uuid4().hex
             self.save(update_fields=["uuid"])
         return self.uuid
+
+    # ------------------------------------------------------------------
+    # Webhook signing secret (per-Group HMAC key for outbound webhooks)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _mint_webhook_secret_value():
+        return WEBHOOK_SECRET_PREFIX + crypto.random_string(
+            WEBHOOK_SECRET_TOKEN_LEN, allow_special=False
+        )
+
+    def get_webhook_secret_info(self, auto_create=False):
+        """Return the webhook-secret record as an objict with keys:
+        value, created_at, last_rotated_at. Returns None if no secret exists
+        and auto_create=False (the safe default). Pass auto_create=True only
+        on emit-side paths that intentionally provision on first use.
+        """
+        record = self.get_secret(WEBHOOK_SECRET_KEY)
+        if record:
+            return objict.from_dict(record) if not isinstance(record, objict) else record
+        if not auto_create:
+            return None
+        now = dates.utcnow().isoformat()
+        record = objict(
+            value=self._mint_webhook_secret_value(),
+            created_at=now,
+            last_rotated_at=now,
+        )
+        self.set_secret(WEBHOOK_SECRET_KEY, dict(record))
+        self.save()
+        return record
+
+    def get_webhook_secret(self, auto_create=False):
+        """Return the raw `wsec_…` secret string, or None if not set.
+
+        Default `auto_create=False` keeps verify paths safe — a tampered
+        request can never trigger a fresh mint. Pass `auto_create=True` from
+        emit paths (`sign_for_group`, the REST endpoint).
+        """
+        info = self.get_webhook_secret_info(auto_create=auto_create)
+        return info.value if info else None
+
+    def rotate_webhook_secret(self):
+        """Generate a new secret value, preserve created_at, update
+        last_rotated_at. Returns the new info record (objict).
+        """
+        existing = self.get_secret(WEBHOOK_SECRET_KEY) or {}
+        now = dates.utcnow().isoformat()
+        created_at = existing.get("created_at") or now
+        record = objict(
+            value=self._mint_webhook_secret_value(),
+            created_at=created_at,
+            last_rotated_at=now,
+        )
+        self.set_secret(WEBHOOK_SECRET_KEY, dict(record))
+        self.save()
+        return record
 
     def get_local_day(self, dt_utc=None):
         return dates.get_local_day(self.timezone, dt_utc)

@@ -33,6 +33,7 @@
 - [Group API](group.md) — Groups, membership, permissions
 - [Admin Portal API Guide](admin_portal.md) — Building admin consoles (users, groups, secure settings)
 - [API Keys](api_keys.md) — Long-lived tokens for programmatic access
+- [Webhook Signing](webhook_signing.md) — Per-Group HMAC secret for outbound webhooks, `X-Mojo-Signature` header, rotation endpoint
 - [Custom Auth Models](custom_auth_models.md) — JWT, OAuth, and passkeys for non-User models (e.g. game.Player)
 - [Notifications](notifications.md) — Inbox, mark read, WebSocket delivery
 - [GeoIP & Geofencing](geoip.md) — IP geolocation, time lookup, and geofence pre-flight check (`GET /api/geo/check`)

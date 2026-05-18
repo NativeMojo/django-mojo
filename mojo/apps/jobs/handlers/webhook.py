@@ -11,9 +11,18 @@ from typing import Dict, Any, Optional
 from urllib.parse import urlparse
 
 from mojo.helpers.settings import settings
+from mojo.helpers.crypto.sign import sign_for_group, WEBHOOK_SIGNATURE_HEADER
 
 from mojo.helpers import logit
 from mojo.apps.jobs.models import Job
+
+
+def _canonical_body(data) -> bytes:
+    """Deterministic JSON encoding used for both HMAC input and the wire body
+    when signing. Sorted keys + compact separators ensure publisher and
+    receiver hash the same bytes.
+    """
+    return json.dumps(data, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
 def post_webhook(job: Job) -> str:
@@ -39,6 +48,7 @@ def post_webhook(job: Job) -> str:
     headers = job.payload.get('headers', {})
     timeout = job.payload.get('timeout', getattr(settings, 'JOBS_WEBHOOK_DEFAULT_TIMEOUT', 30))
     webhook_id = job.payload.get('webhook_id')
+    sign_group_id = job.payload.get('sign_group_id')
 
     # Validate required fields
     if not url:
@@ -81,14 +91,45 @@ def post_webhook(job: Job) -> str:
         logit.info(f"Sending webhook {job.id} to {parsed_url.netloc}{parsed_url.path} "
                   f"(attempt {job.attempt})")
 
-        # Make the request
-        response = requests.post(
-            url=url,
-            json=data,  # Auto JSON encoding and Content-Type header
-            headers=headers,
-            timeout=timeout,
-            allow_redirects=True  # Follow redirects for webhooks
-        )
+        # Signed path: canonicalize body, look up Group, compute HMAC, send
+        # those exact bytes. Unsigned path is unchanged.
+        signed_body = None
+        if sign_group_id is not None:
+            from mojo.apps.account.models import Group
+            group = Group.objects.filter(pk=sign_group_id).first()
+            if group is None:
+                job.metadata.update({
+                    'error_type': 'sign_group_missing',
+                    'error_message': f'sign_group_id={sign_group_id} not found',
+                    'failed_at': datetime.now(timezone.utc).isoformat(),
+                })
+                logit.error(f"Webhook {job.id} sign group {sign_group_id} missing — failing without retry")
+                return 'failed'
+            signed_body = _canonical_body(data)
+            headers[WEBHOOK_SIGNATURE_HEADER] = sign_for_group(group, signed_body)
+            headers.setdefault('Content-Type', 'application/json')
+            job.metadata['signed'] = True
+            job.metadata['sign_group_id'] = sign_group_id
+            job.metadata['headers_sent'] = _sanitize_headers(headers)
+
+        # Make the request — when signing, send the same bytes we just hashed;
+        # otherwise use requests' JSON encoding as before.
+        if signed_body is not None:
+            response = requests.post(
+                url=url,
+                data=signed_body,
+                headers=headers,
+                timeout=timeout,
+                allow_redirects=True
+            )
+        else:
+            response = requests.post(
+                url=url,
+                json=data,  # Auto JSON encoding and Content-Type header
+                headers=headers,
+                timeout=timeout,
+                allow_redirects=True  # Follow redirects for webhooks
+            )
 
         # Calculate duration
         end_time = datetime.now(timezone.utc)
@@ -220,7 +261,8 @@ def _sanitize_headers(headers: Dict[str, str]) -> Dict[str, str]:
     # Headers to mask
     sensitive_headers = {
         'authorization', 'x-api-key', 'x-auth-token', 'cookie',
-        'x-webhook-secret', 'x-hub-signature', 'x-signature'
+        'x-webhook-secret', 'x-hub-signature', 'x-signature',
+        'x-mojo-signature',
     }
 
     sanitized = {}

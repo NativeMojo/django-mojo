@@ -47,6 +47,42 @@ def on_group_invite_member(request):
     return ms.on_rest_get(request)
 
 
+@md.POST('group/webhook_secret')
+@md.requires_perms("manage_group", "manage_groups", "groups")
+def on_group_webhook_secret(request):
+    """Read or rotate the calling Group's webhook signing secret.
+
+    Body shapes:
+        {}              -> return the current secret; auto-mint on first call
+        {"rotate": true} -> generate a new secret, return it (prior invalidated)
+
+    The Group is taken from request.group (set by the dispatcher when the
+    request includes a `group` parameter, or by ApiKey auth). Permission
+    `manage_group` (or higher) on the calling user/api-key for that Group is
+    required — same threshold as ApiKey CRUD.
+    """
+    group = getattr(request, "group", None)
+    if group is None:
+        raise merrors.PermissionDeniedException(
+            reason="group required for webhook_secret",
+            model_name="Group",
+            branch="webhook_secret_missing_group",
+            event_type="user_permission_denied",
+        )
+    if request.DATA.get("rotate") is True:
+        info = group.rotate_webhook_secret()
+    else:
+        info = group.get_webhook_secret_info(auto_create=True)
+    return {
+        "status": True,
+        "data": {
+            "secret": info.value,
+            "created_at": info.created_at,
+            "last_rotated_at": info.last_rotated_at,
+        },
+    }
+
+
 @md.GET('group/<int:pk>/member')
 @md.requires_auth()
 def on_group_me_member(request, pk=None):

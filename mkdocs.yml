@@ -68,6 +68,7 @@ nav:
                 - User: django_developer/account/user.md
                 - Group: django_developer/account/group.md
                 - Auth: django_developer/account/auth.md
+                - Webhook Signing: django_developer/account/webhook_signing.md
           - Logging:
                 - Overview: django_developer/logging/README.md
                 - Log Model: django_developer/logging/logit.md
@@ -114,6 +115,7 @@ nav:
                 - Groups: web_developer/account/group.md
                 - Admin Portal Guide: web_developer/account/admin_portal.md
                 - API Keys: web_developer/account/api_keys.md
+                - Webhook Signing: web_developer/account/webhook_signing.md
           - Logging:
                 - Overview: web_developer/logging/README.md
                 - Logs: web_developer/logging/logs.md
