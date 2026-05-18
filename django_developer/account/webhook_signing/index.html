@@ -16,7 +16,7 @@
         <link rel="prev" href="../auth/">
       
       
-        <link rel="next" href="../../logging/">
+        <link rel="next" href="../webhook_subscriptions/">
       
       
         
@@ -1317,6 +1317,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#related-webhook-subscriptions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related: Webhook Subscriptions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#downstream-adoption-recipe" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1331,6 +1342,34 @@
   
 </nav>
       
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../webhook_subscriptions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Webhook Subscriptions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
     </li>
   
 
@@ -2975,6 +3014,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../web_developer/account/webhook_subscriptions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Webhook Subscriptions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -3959,6 +4026,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#related-webhook-subscriptions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related: Webhook Subscriptions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#downstream-adoption-recipe" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4121,6 +4199,8 @@
 <li><strong>Out-of-band rotation</strong>: rotate the Group secret after a known compromise. Receivers must refresh their cached secret.</li>
 </ul>
 <p>A future revision may add <code>X-Mojo-Webhook-Timestamp</code> to the signature input; for v1 the primitive is intentionally minimal.</p>
+<h2 id="related-webhook-subscriptions">Related: Webhook Subscriptions<a class="headerlink" href="#related-webhook-subscriptions" title="Permanent link">&para;</a></h2>
+<p>If you need a subscriber registry — storing (Group, URL, events[]) rows and fanning out one <code>dispatch()</code> call to every matching row — see <a href="../webhook_subscriptions/">Webhook Subscriptions</a>. Subscriptions delegate signing entirely to <code>publish_webhook(group=...)</code>, so everything in this doc applies automatically.</p>
 <h2 id="downstream-adoption-recipe">Downstream Adoption Recipe<a class="headerlink" href="#downstream-adoption-recipe" title="Permanent link">&para;</a></h2>
 <p>For services migrating off bespoke webhook secrets:</p>
 <ol>

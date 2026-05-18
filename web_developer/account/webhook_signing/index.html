@@ -16,7 +16,7 @@
         <link rel="prev" href="../api_keys/">
       
       
-        <link rel="next" href="../../logging/">
+        <link rel="next" href="../webhook_subscriptions/">
       
       
         
@@ -1159,6 +1159,34 @@
     
   
     Webhook Signing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../django_developer/account/webhook_subscriptions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Webhook Subscriptions
   
 
     
@@ -2910,6 +2938,78 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Verifying an Incoming Webhook">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#python-django-mojo-consumer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Python (django-mojo consumer)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#python-stdlib-any-framework" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Python (stdlib — any framework)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nodejs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Node.js
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#go" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Go
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ruby" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ruby
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#debug-with-curl-openssl" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Debug with curl + openssl
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -2949,6 +3049,34 @@
   
 </nav>
       
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../webhook_subscriptions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Webhook Subscriptions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
     </li>
   
 
@@ -3931,6 +4059,78 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Verifying an Incoming Webhook">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#python-django-mojo-consumer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Python (django-mojo consumer)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#python-stdlib-any-framework" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Python (stdlib — any framework)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nodejs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Node.js
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#go" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Go
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ruby" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ruby
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#debug-with-curl-openssl" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Debug with curl + openssl
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4031,25 +4231,88 @@
 </code></pre></div>
 <p>The signature is computed over the <strong>raw request body bytes</strong>. The sender uses a canonical JSON encoding (sorted keys, compact separators) — but receivers do not need to know this. <strong>Hash the bytes you actually receive on the wire</strong> — do not re-serialize the parsed JSON.</p>
 <h2 id="verifying-an-incoming-webhook">Verifying an Incoming Webhook<a class="headerlink" href="#verifying-an-incoming-webhook" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># Pseudo-code on the receiver side (any django-mojo project)</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers.request</span><span class="w"> </span><span class="kn">import</span> <span class="n">verify_signed_request</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">Group</span>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>
-<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="n">group</span> <span class="o">=</span> <span class="n">Group</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">uuid</span><span class="o">=</span><span class="n">request_group_uuid</span><span class="p">)</span>
-<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="k">if</span> <span class="ow">not</span> <span class="n">verify_signed_request</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">group</span><span class="o">.</span><span class="n">get_webhook_secret</span><span class="p">()):</span>
-<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>    <span class="k">return</span> <span class="mi">401</span>
-<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="c1"># process the verified body</span>
+<p>The recipe is the same in any language:</p>
+<ol>
+<li>Take the <strong>raw request body bytes</strong> (never the parsed JSON — re-serialization will change separators or key order, and the signature will fail).</li>
+<li>Compute <code>HMAC-SHA256(secret, raw_body)</code> and hex-encode.</li>
+<li><strong>Constant-time compare</strong> against the <code>X-Mojo-Signature</code> header. Never use <code>==</code>.</li>
+<li>Reject if the header is missing.</li>
+</ol>
+<h3 id="python-django-mojo-consumer">Python (django-mojo consumer)<a class="headerlink" href="#python-django-mojo-consumer" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers.request</span><span class="w"> </span><span class="kn">import</span> <span class="n">verify_signed_request</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="k">if</span> <span class="ow">not</span> <span class="n">verify_signed_request</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">group</span><span class="o">.</span><span class="n">get_webhook_secret</span><span class="p">()):</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>    <span class="k">raise</span> <span class="n">merrors</span><span class="o">.</span><span class="n">PermissionDeniedException</span><span class="p">(</span><span class="s2">&quot;invalid signature&quot;</span><span class="p">,</span> <span class="mi">401</span><span class="p">,</span> <span class="mi">401</span><span class="p">)</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="c1"># process the verified body</span>
 </code></pre></div>
-<p>Non-django consumers: compute <code>hmac.new(secret.encode(), request.body, sha256).hexdigest()</code> and compare against the <code>X-Mojo-Signature</code> header using a constant-time comparison (Python: <code>hmac.compare_digest</code>).</p>
+<p><code>verify_signed_request</code> handles the raw-body pull, the header lookup, the constant-time compare, and the <code>None</code>/missing-secret cases.</p>
+<h3 id="python-stdlib-any-framework">Python (stdlib — any framework)<a class="headerlink" href="#python-stdlib-any-framework" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">hmac</span><span class="o">,</span><span class="w"> </span><span class="nn">hashlib</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="k">def</span><span class="w"> </span><span class="nf">verify</span><span class="p">(</span><span class="n">raw_body</span><span class="p">:</span> <span class="nb">bytes</span><span class="p">,</span> <span class="n">signature_header</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">secret</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">signature_header</span><span class="p">:</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>        <span class="k">return</span> <span class="kc">False</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>    <span class="n">expected</span> <span class="o">=</span> <span class="n">hmac</span><span class="o">.</span><span class="n">new</span><span class="p">(</span><span class="n">secret</span><span class="o">.</span><span class="n">encode</span><span class="p">(),</span> <span class="n">raw_body</span><span class="p">,</span> <span class="n">hashlib</span><span class="o">.</span><span class="n">sha256</span><span class="p">)</span><span class="o">.</span><span class="n">hexdigest</span><span class="p">()</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>    <span class="k">return</span> <span class="n">hmac</span><span class="o">.</span><span class="n">compare_digest</span><span class="p">(</span><span class="n">expected</span><span class="p">,</span> <span class="n">signature_header</span><span class="p">)</span>
+</code></pre></div>
+<p>In Django views, use <code>request.body</code> (bytes) — not <code>request.POST</code> or any parsed form. In FastAPI, use <code>await request.body()</code>.</p>
+<h3 id="nodejs">Node.js<a class="headerlink" href="#nodejs" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="kd">const</span><span class="w"> </span><span class="nx">crypto</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">require</span><span class="p">(</span><span class="s1">&#39;crypto&#39;</span><span class="p">);</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="kd">function</span><span class="w"> </span><span class="nx">verify</span><span class="p">(</span><span class="nx">rawBody</span><span class="p">,</span><span class="w"> </span><span class="nx">signatureHeader</span><span class="p">,</span><span class="w"> </span><span class="nx">secret</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="nx">signatureHeader</span><span class="p">)</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="kc">false</span><span class="p">;</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">expected</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">crypto</span><span class="p">.</span><span class="nx">createHmac</span><span class="p">(</span><span class="s1">&#39;sha256&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">secret</span><span class="p">).</span><span class="nx">update</span><span class="p">(</span><span class="nx">rawBody</span><span class="p">).</span><span class="nx">digest</span><span class="p">(</span><span class="s1">&#39;hex&#39;</span><span class="p">);</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">a</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">Buffer</span><span class="p">.</span><span class="kr">from</span><span class="p">(</span><span class="nx">expected</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;hex&#39;</span><span class="p">);</span>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">b</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">Buffer</span><span class="p">.</span><span class="kr">from</span><span class="p">(</span><span class="nx">signatureHeader</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;hex&#39;</span><span class="p">);</span>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nx">a</span><span class="p">.</span><span class="nx">length</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="nx">b</span><span class="p">.</span><span class="nx">length</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">crypto</span><span class="p">.</span><span class="nx">timingSafeEqual</span><span class="p">(</span><span class="nx">a</span><span class="p">,</span><span class="w"> </span><span class="nx">b</span><span class="p">);</span>
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="p">}</span>
+</code></pre></div>
+<p><strong>Express gotcha</strong>: mount <code>express.raw({type: 'application/json'})</code> (or <code>bodyParser.raw</code>) on the webhook route, <strong>not</strong> <code>express.json()</code> — the latter parses and discards the raw bytes you need for hashing.</p>
+<h3 id="go">Go<a class="headerlink" href="#go" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">    </span><span class="s">&quot;crypto/hmac&quot;</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">    </span><span class="s">&quot;crypto/sha256&quot;</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">    </span><span class="s">&quot;encoding/hex&quot;</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="p">)</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="kd">func</span><span class="w"> </span><span class="nx">Verify</span><span class="p">(</span><span class="nx">rawBody</span><span class="w"> </span><span class="p">[]</span><span class="kt">byte</span><span class="p">,</span><span class="w"> </span><span class="nx">signatureHeader</span><span class="p">,</span><span class="w"> </span><span class="nx">secret</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">signatureHeader</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">false</span>
+<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="w">    </span><span class="nx">mac</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">hmac</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">sha256</span><span class="p">.</span><span class="nx">New</span><span class="p">,</span><span class="w"> </span><span class="p">[]</span><span class="nb">byte</span><span class="p">(</span><span class="nx">secret</span><span class="p">))</span>
+<a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a><span class="w">    </span><span class="nx">mac</span><span class="p">.</span><span class="nx">Write</span><span class="p">(</span><span class="nx">rawBody</span><span class="p">)</span>
+<a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a><span class="w">    </span><span class="nx">expected</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">hex</span><span class="p">.</span><span class="nx">EncodeToString</span><span class="p">(</span><span class="nx">mac</span><span class="p">.</span><span class="nx">Sum</span><span class="p">(</span><span class="kc">nil</span><span class="p">))</span>
+<a id="__codelineno-8-14" name="__codelineno-8-14" href="#__codelineno-8-14"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">hmac</span><span class="p">.</span><span class="nx">Equal</span><span class="p">([]</span><span class="nb">byte</span><span class="p">(</span><span class="nx">expected</span><span class="p">),</span><span class="w"> </span><span class="p">[]</span><span class="nb">byte</span><span class="p">(</span><span class="nx">signatureHeader</span><span class="p">))</span>
+<a id="__codelineno-8-15" name="__codelineno-8-15" href="#__codelineno-8-15"></a><span class="p">}</span>
+</code></pre></div>
+<p>Read the body with <code>io.ReadAll(r.Body)</code> once and reuse — don't read it twice or it will be empty the second time.</p>
+<h3 id="ruby">Ruby<a class="headerlink" href="#ruby" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="nb">require</span><span class="w"> </span><span class="s1">&#39;openssl&#39;</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="nb">require</span><span class="w"> </span><span class="s1">&#39;rack/utils&#39;</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="k">def</span><span class="w"> </span><span class="nf">verify</span><span class="p">(</span><span class="n">raw_body</span><span class="p">,</span><span class="w"> </span><span class="n">signature_header</span><span class="p">,</span><span class="w"> </span><span class="n">secret</span><span class="p">)</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="kp">false</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">signature_header</span><span class="o">.</span><span class="n">nil?</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="n">signature_header</span><span class="o">.</span><span class="n">empty?</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="w">  </span><span class="n">expected</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="no">OpenSSL</span><span class="o">::</span><span class="no">HMAC</span><span class="o">.</span><span class="n">hexdigest</span><span class="p">(</span><span class="s1">&#39;sha256&#39;</span><span class="p">,</span><span class="w"> </span><span class="n">secret</span><span class="p">,</span><span class="w"> </span><span class="n">raw_body</span><span class="p">)</span>
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="w">  </span><span class="no">Rack</span><span class="o">::</span><span class="no">Utils</span><span class="o">.</span><span class="n">secure_compare</span><span class="p">(</span><span class="n">expected</span><span class="p">,</span><span class="w"> </span><span class="n">signature_header</span><span class="p">)</span>
+<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="k">end</span>
+</code></pre></div>
+<p>In Rails, <code>request.raw_post</code> gives the body bytes. Don't use <code>params</code> — that's the parsed form.</p>
+<h3 id="debug-with-curl-openssl">Debug with curl + openssl<a class="headerlink" href="#debug-with-curl-openssl" title="Permanent link">&para;</a></h3>
+<p>To reproduce a signature on the command line (sanity-check before pointing a live receiver at the sender):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="nv">SECRET</span><span class="o">=</span><span class="s2">&quot;wsec_…&quot;</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="nb">echo</span><span class="w"> </span>-n<span class="w"> </span><span class="s2">&quot;</span><span class="k">$(</span>cat<span class="w"> </span>raw_body.json<span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>openssl<span class="w"> </span>dgst<span class="w"> </span>-sha256<span class="w"> </span>-hmac<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$SECRET</span><span class="s2">&quot;</span><span class="w"> </span>-hex
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="c1"># → SHA2-256(stdin)= a1b2c3…   ← compare against the X-Mojo-Signature you received</span>
+</code></pre></div>
+<p><code>echo -n</code> is critical — without it, a trailing newline changes the hash.</p>
 <h2 id="caching-the-secret">Caching the Secret<a class="headerlink" href="#caching-the-secret" title="Permanent link">&para;</a></h2>
 <p>Fetch once at startup (or on first incoming webhook), cache in memory, refresh on signature failure. Do not look up the secret per request — it is unchanged between rotations and the REST endpoint is not designed for high read volume.</p>
 <p>A typical cache invalidation loop:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="n">expected</span> <span class="o">=</span> <span class="n">cached_secret_for</span><span class="p">(</span><span class="n">group_id</span><span class="p">)</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="k">if</span> <span class="ow">not</span> <span class="n">verify</span><span class="p">(</span><span class="n">request</span><span class="o">.</span><span class="n">body</span><span class="p">,</span> <span class="n">request</span><span class="o">.</span><span class="n">headers</span><span class="p">[</span><span class="s2">&quot;X-Mojo-Signature&quot;</span><span class="p">],</span> <span class="n">expected</span><span class="p">):</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>    <span class="n">expected</span> <span class="o">=</span> <span class="n">refetch_secret_for</span><span class="p">(</span><span class="n">group_id</span><span class="p">)</span>   <span class="c1"># one extra REST call</span>
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>    <span class="n">cached_secret_for</span><span class="p">(</span><span class="n">group_id</span><span class="p">,</span> <span class="nb">set</span><span class="o">=</span><span class="n">expected</span><span class="p">)</span>
-<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">verify</span><span class="p">(</span><span class="n">request</span><span class="o">.</span><span class="n">body</span><span class="p">,</span> <span class="n">request</span><span class="o">.</span><span class="n">headers</span><span class="p">[</span><span class="s2">&quot;X-Mojo-Signature&quot;</span><span class="p">],</span> <span class="n">expected</span><span class="p">):</span>
-<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>        <span class="k">return</span> <span class="mi">401</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="n">expected</span> <span class="o">=</span> <span class="n">cached_secret_for</span><span class="p">(</span><span class="n">group_id</span><span class="p">)</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="k">if</span> <span class="ow">not</span> <span class="n">verify</span><span class="p">(</span><span class="n">request</span><span class="o">.</span><span class="n">body</span><span class="p">,</span> <span class="n">request</span><span class="o">.</span><span class="n">headers</span><span class="p">[</span><span class="s2">&quot;X-Mojo-Signature&quot;</span><span class="p">],</span> <span class="n">expected</span><span class="p">):</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>    <span class="n">expected</span> <span class="o">=</span> <span class="n">refetch_secret_for</span><span class="p">(</span><span class="n">group_id</span><span class="p">)</span>   <span class="c1"># one extra REST call</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>    <span class="n">cached_secret_for</span><span class="p">(</span><span class="n">group_id</span><span class="p">,</span> <span class="nb">set</span><span class="o">=</span><span class="n">expected</span><span class="p">)</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">verify</span><span class="p">(</span><span class="n">request</span><span class="o">.</span><span class="n">body</span><span class="p">,</span> <span class="n">request</span><span class="o">.</span><span class="n">headers</span><span class="p">[</span><span class="s2">&quot;X-Mojo-Signature&quot;</span><span class="p">],</span> <span class="n">expected</span><span class="p">):</span>
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>        <span class="k">return</span> <span class="mi">401</span>
 </code></pre></div>
 <h2 id="replay-protection-your-responsibility">Replay Protection — Your Responsibility<a class="headerlink" href="#replay-protection-your-responsibility" title="Permanent link">&para;</a></h2>
 <p>The HMAC covers the request body only. There is <strong>no nonce and no timestamp</strong> baked into the signature. A captured <code>(body, X-Mojo-Signature)</code> pair will validate indefinitely until the Group secret is rotated.</p>

@@ -1184,6 +1184,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../account/webhook_subscriptions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Webhook Subscriptions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -3153,6 +3181,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../web_developer/account/webhook_subscriptions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Webhook Subscriptions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -4626,8 +4682,9 @@
 <a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a>python<span class="w"> </span>manage.py<span class="w"> </span>jobs_engine<span class="w"> </span>--channels<span class="w"> </span>default<span class="w"> </span>--max-workers<span class="w"> </span><span class="m">10</span>
 </code></pre></div>
 <p>Configure available channels in settings:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="n">JOBS_CHANNELS</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;default&#39;</span><span class="p">,</span> <span class="s1">&#39;emails&#39;</span><span class="p">,</span> <span class="s1">&#39;webhooks&#39;</span><span class="p">,</span> <span class="s1">&#39;heavy&#39;</span><span class="p">,</span> <span class="s1">&#39;maintenance&#39;</span><span class="p">]</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="n">JOBS_CHANNELS</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;default&#39;</span><span class="p">,</span> <span class="s1">&#39;emails&#39;</span><span class="p">,</span> <span class="s1">&#39;webhooks&#39;</span><span class="p">,</span> <span class="s1">&#39;webhook_fanout&#39;</span><span class="p">,</span> <span class="s1">&#39;heavy&#39;</span><span class="p">,</span> <span class="s1">&#39;maintenance&#39;</span><span class="p">]</span>
 </code></pre></div>
+<p>The <code>webhook_fanout</code> channel is used by the framework's <code>WebhookSubscription</code> fan-out dispatcher (see <a href="../../account/webhook_subscriptions/">account — Webhook Subscriptions</a>). It executes the DB query + per-row enqueue step; individual HTTP deliveries run on the <code>webhooks</code> channel. Keeping them on separate channels prevents fan-out coordination work from competing with HTTP delivery slots under load.</p>
 <p>Default channel is <code>"default"</code>.</p>
 <h2 id="payload-best-practices">Payload Best Practices<a class="headerlink" href="#payload-best-practices" title="Permanent link">&para;</a></h2>
 <p>Payloads are persisted to PostgreSQL. Max size is <strong>16KB</strong> by default (<code>JOBS_PAYLOAD_MAX_BYTES</code>).</p>

@@ -1458,6 +1458,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../webhook_subscriptions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Webhook Subscriptions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -3097,6 +3125,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../web_developer/account/webhook_subscriptions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Webhook Subscriptions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -4475,6 +4531,7 @@ group is detected. This preserves the default branding for the default flow.</p>
 <a id="__codelineno-15-12" name="__codelineno-15-12" href="#__codelineno-15-12"></a><span class="n">info</span> <span class="o">=</span> <span class="n">group</span><span class="o">.</span><span class="n">rotate_webhook_secret</span><span class="p">()</span>
 </code></pre></div>
 <p>The secret format is <code>"wsec_"</code> + 48 alphanumeric characters. The REST endpoint <code>POST /api/group/webhook_secret</code> exposes read and rotation to operators with <code>manage_group</code> permission. See <a href="../webhook_signing/">Webhook Signing</a> for the full signing and verification pattern.</p>
+<p>Each Group's active webhook delivery targets are managed through the <code>WebhookSubscription</code> model (<code>group.webhook_subscriptions</code> related name). See <a href="../webhook_subscriptions/">Webhook Subscriptions</a> for the subscription registry and fan-out dispatcher.</p>
 <h2 id="activity-tracking">Activity Tracking<a class="headerlink" href="#activity-tracking" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="n">group</span><span class="o">.</span><span class="n">touch</span><span class="p">()</span>   <span class="c1"># updates last_activity (rate-limited by GROUP_LAST_ACTIVITY_FREQ)</span>
 </code></pre></div>

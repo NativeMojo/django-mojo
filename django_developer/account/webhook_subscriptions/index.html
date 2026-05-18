@@ -10,31 +10,31 @@
       
       
       
-        <link rel="canonical" href="https://NativeMojo.github.io/django-mojo/django_developer/realtime/">
+        <link rel="canonical" href="https://NativeMojo.github.io/django-mojo/django_developer/account/webhook_subscriptions/">
       
       
-        <link rel="prev" href="../metrics/fetching/">
+        <link rel="prev" href="../webhook_signing/">
       
       
-        <link rel="next" href="architecture/">
+        <link rel="next" href="../../logging/">
       
       
         
       
       
-      <link rel="icon" href="../../assets/images/favicon.png">
+      <link rel="icon" href="../../../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
     
     
       
-        <title>Overview - Django-MOJO</title>
+        <title>Webhook Subscriptions - Django-MOJO</title>
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
       
         
-        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
       
       
 
@@ -53,7 +53,7 @@
       
     
     
-    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -78,7 +78,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#realtime-websocket-django-developer-reference" class="md-skip">
+        <a href="#webhook-subscriptions-django-developer-reference" class="md-skip">
           Skip to content
         </a>
       
@@ -92,7 +92,7 @@
 
 <header class="md-header" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../.." title="Django-MOJO" class="md-header__button md-logo" aria-label="Django-MOJO" data-md-component="logo">
+    <a href="../../.." title="Django-MOJO" class="md-header__button md-logo" aria-label="Django-MOJO" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -112,7 +112,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Overview
+              Webhook Subscriptions
             
           </span>
         </div>
@@ -225,7 +225,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../.." class="md-tabs__link">
+      <a href="../../.." class="md-tabs__link">
         
   
   
@@ -248,7 +248,7 @@
     
     
       <li class="md-tabs__item md-tabs__item--active">
-        <a href="../" class="md-tabs__link">
+        <a href="../../" class="md-tabs__link">
           
   
   
@@ -268,7 +268,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../web_developer/" class="md-tabs__link">
+        <a href="../../../web_developer/" class="md-tabs__link">
           
   
   
@@ -302,7 +302,7 @@
 
 <nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../.." title="Django-MOJO" class="md-nav__button md-logo" aria-label="Django-MOJO" data-md-component="logo">
+    <a href="../../.." title="Django-MOJO" class="md-nav__button md-logo" aria-label="Django-MOJO" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -332,7 +332,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../.." class="md-nav__link">
+      <a href="../../.." class="md-nav__link">
         
   
   
@@ -416,7 +416,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../" class="md-nav__link">
+      <a href="../../" class="md-nav__link">
         
   
   
@@ -501,7 +501,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../core/" class="md-nav__link">
+      <a href="../../core/" class="md-nav__link">
         
   
   
@@ -529,7 +529,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../core/mojo_model/" class="md-nav__link">
+      <a href="../../core/mojo_model/" class="md-nav__link">
         
   
   
@@ -557,7 +557,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../core/decorators/" class="md-nav__link">
+      <a href="../../core/decorators/" class="md-nav__link">
         
   
   
@@ -585,7 +585,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../core/middleware/" class="md-nav__link">
+      <a href="../../core/middleware/" class="md-nav__link">
         
   
   
@@ -613,7 +613,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../core/graphs/" class="md-nav__link">
+      <a href="../../core/graphs/" class="md-nav__link">
         
   
   
@@ -641,7 +641,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../core/cache/" class="md-nav__link">
+      <a href="../../core/cache/" class="md-nav__link">
         
   
   
@@ -734,7 +734,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../helpers/" class="md-nav__link">
+      <a href="../../helpers/" class="md-nav__link">
         
   
   
@@ -762,7 +762,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../helpers/logit/" class="md-nav__link">
+      <a href="../../helpers/logit/" class="md-nav__link">
         
   
   
@@ -790,7 +790,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../helpers/dates/" class="md-nav__link">
+      <a href="../../helpers/dates/" class="md-nav__link">
         
   
   
@@ -818,7 +818,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../helpers/settings/" class="md-nav__link">
+      <a href="../../helpers/settings/" class="md-nav__link">
         
   
   
@@ -846,7 +846,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../helpers/settings_reference/" class="md-nav__link">
+      <a href="../../helpers/settings_reference/" class="md-nav__link">
         
   
   
@@ -874,7 +874,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../helpers/crypto/" class="md-nav__link">
+      <a href="../../helpers/crypto/" class="md-nav__link">
         
   
   
@@ -902,7 +902,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../helpers/request/" class="md-nav__link">
+      <a href="../../helpers/request/" class="md-nav__link">
         
   
   
@@ -930,7 +930,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../helpers/response/" class="md-nav__link">
+      <a href="../../helpers/response/" class="md-nav__link">
         
   
   
@@ -958,7 +958,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../helpers/other/" class="md-nav__link">
+      <a href="../../helpers/other/" class="md-nav__link">
         
   
   
@@ -991,8 +991,10 @@
                 
   
   
+    
   
   
+  
     
     
     
@@ -1006,13 +1008,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_4" checked>
         
           
           <label class="md-nav__link" for="__nav_2_4" id="__nav_2_4_label" tabindex="">
@@ -1033,7 +1033,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_4_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_4_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_2_4">
             <span class="md-nav__icon md-icon"></span>
             
@@ -1051,7 +1051,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../account/" class="md-nav__link">
+      <a href="../" class="md-nav__link">
         
   
   
@@ -1079,7 +1079,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../account/user/" class="md-nav__link">
+      <a href="../user/" class="md-nav__link">
         
   
   
@@ -1107,7 +1107,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../account/group/" class="md-nav__link">
+      <a href="../group/" class="md-nav__link">
         
   
   
@@ -1135,7 +1135,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../account/auth/" class="md-nav__link">
+      <a href="../auth/" class="md-nav__link">
         
   
   
@@ -1163,7 +1163,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../account/webhook_signing/" class="md-nav__link">
+      <a href="../webhook_signing/" class="md-nav__link">
         
   
   
@@ -1188,10 +1188,37 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../account/webhook_subscriptions/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Webhook Subscriptions
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -1207,6 +1234,136 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How It Works
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Model
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dispatching-events" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dispatching events
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#designing-your-event-vocabulary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Designing your event vocabulary
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#channel-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Channel configuration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#error-reporting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Error reporting
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rest-endpoints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        REST endpoints
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#security-notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Security notes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#out-of-scope-v1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Out of scope (v1)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#migration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Migration
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -1284,7 +1441,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../logging/" class="md-nav__link">
+      <a href="../../logging/" class="md-nav__link">
         
   
   
@@ -1312,7 +1469,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../logging/logit/" class="md-nav__link">
+      <a href="../../logging/logit/" class="md-nav__link">
         
   
   
@@ -1340,7 +1497,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../logging/incidents/" class="md-nav__link">
+      <a href="../../logging/incidents/" class="md-nav__link">
         
   
   
@@ -1433,7 +1590,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../files/README.md" class="md-nav__link">
+      <a href="../../files/README.md" class="md-nav__link">
         
   
   
@@ -1461,7 +1618,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../files/file.md" class="md-nav__link">
+      <a href="../../files/file.md" class="md-nav__link">
         
   
   
@@ -1489,7 +1646,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../files/file_manager.md" class="md-nav__link">
+      <a href="../../files/file_manager.md" class="md-nav__link">
         
   
   
@@ -1582,7 +1739,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../email/" class="md-nav__link">
+      <a href="../../email/" class="md-nav__link">
         
   
   
@@ -1610,7 +1767,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../email/architecture/" class="md-nav__link">
+      <a href="../../email/architecture/" class="md-nav__link">
         
   
   
@@ -1638,7 +1795,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../email/sending/" class="md-nav__link">
+      <a href="../../email/sending/" class="md-nav__link">
         
   
   
@@ -1666,7 +1823,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../email/receiving/" class="md-nav__link">
+      <a href="../../email/receiving/" class="md-nav__link">
         
   
   
@@ -1759,7 +1916,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../jobs/" class="md-nav__link">
+      <a href="../../jobs/" class="md-nav__link">
         
   
   
@@ -1787,7 +1944,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../jobs/publishing/" class="md-nav__link">
+      <a href="../../jobs/publishing/" class="md-nav__link">
         
   
   
@@ -1815,7 +1972,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../jobs/writing_jobs/" class="md-nav__link">
+      <a href="../../jobs/writing_jobs/" class="md-nav__link">
         
   
   
@@ -1843,7 +2000,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../jobs/job_model/" class="md-nav__link">
+      <a href="../../jobs/job_model/" class="md-nav__link">
         
   
   
@@ -1936,7 +2093,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../metrics/" class="md-nav__link">
+      <a href="../../metrics/" class="md-nav__link">
         
   
   
@@ -1964,7 +2121,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../metrics/recording/" class="md-nav__link">
+      <a href="../../metrics/recording/" class="md-nav__link">
         
   
   
@@ -1992,7 +2149,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../metrics/fetching/" class="md-nav__link">
+      <a href="../../metrics/fetching/" class="md-nav__link">
         
   
   
@@ -2025,8 +2182,6 @@
                 
   
   
-    
-  
   
   
     
@@ -2042,11 +2197,13 @@
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_10" checked>
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2_10" >
         
           
           <label class="md-nav__link" for="__nav_2_10" id="__nav_2_10_label" tabindex="">
@@ -2067,7 +2224,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_10_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_10_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_2_10">
             <span class="md-nav__icon md-icon"></span>
             
@@ -2082,19 +2239,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../realtime/" class="md-nav__link">
         
   
   
@@ -2110,7 +2258,6 @@
   
 
       </a>
-      
     </li>
   
 
@@ -2123,7 +2270,7 @@
   
   
     <li class="md-nav__item">
-      <a href="architecture/" class="md-nav__link">
+      <a href="../../realtime/architecture/" class="md-nav__link">
         
   
   
@@ -2151,7 +2298,7 @@
   
   
     <li class="md-nav__item">
-      <a href="publishing/" class="md-nav__link">
+      <a href="../../realtime/publishing/" class="md-nav__link">
         
   
   
@@ -2179,7 +2326,7 @@
   
   
     <li class="md-nav__item">
-      <a href="hooks/" class="md-nav__link">
+      <a href="../../realtime/hooks/" class="md-nav__link">
         
   
   
@@ -2215,7 +2362,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../phonehub/" class="md-nav__link">
+      <a href="../../phonehub/" class="md-nav__link">
         
   
   
@@ -2243,7 +2390,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../filevault/" class="md-nav__link">
+      <a href="../../filevault/" class="md-nav__link">
         
   
   
@@ -2271,7 +2418,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../docit/" class="md-nav__link">
+      <a href="../../docit/" class="md-nav__link">
         
   
   
@@ -2360,7 +2507,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/" class="md-nav__link">
+      <a href="../../../web_developer/" class="md-nav__link">
         
   
   
@@ -2442,7 +2589,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/core/" class="md-nav__link">
+      <a href="../../../web_developer/core/" class="md-nav__link">
         
   
   
@@ -2470,7 +2617,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/core/authentication/" class="md-nav__link">
+      <a href="../../../web_developer/core/authentication/" class="md-nav__link">
         
   
   
@@ -2498,7 +2645,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/core/request_response/" class="md-nav__link">
+      <a href="../../../web_developer/core/request_response/" class="md-nav__link">
         
   
   
@@ -2526,7 +2673,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/core/filtering/" class="md-nav__link">
+      <a href="../../../web_developer/core/filtering/" class="md-nav__link">
         
   
   
@@ -2554,7 +2701,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/core/pagination/" class="md-nav__link">
+      <a href="../../../web_developer/core/pagination/" class="md-nav__link">
         
   
   
@@ -2582,7 +2729,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/core/graphs/" class="md-nav__link">
+      <a href="../../../web_developer/core/graphs/" class="md-nav__link">
         
   
   
@@ -2672,7 +2819,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/account/" class="md-nav__link">
+      <a href="../../../web_developer/account/" class="md-nav__link">
         
   
   
@@ -2700,7 +2847,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/account/authentication/" class="md-nav__link">
+      <a href="../../../web_developer/account/authentication/" class="md-nav__link">
         
   
   
@@ -2728,7 +2875,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/account/user/" class="md-nav__link">
+      <a href="../../../web_developer/account/user/" class="md-nav__link">
         
   
   
@@ -2756,7 +2903,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/account/group/" class="md-nav__link">
+      <a href="../../../web_developer/account/group/" class="md-nav__link">
         
   
   
@@ -2784,7 +2931,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/account/admin_portal/" class="md-nav__link">
+      <a href="../../../web_developer/account/admin_portal/" class="md-nav__link">
         
   
   
@@ -2812,7 +2959,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/account/api_keys/" class="md-nav__link">
+      <a href="../../../web_developer/account/api_keys/" class="md-nav__link">
         
   
   
@@ -2840,7 +2987,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/account/webhook_signing/" class="md-nav__link">
+      <a href="../../../web_developer/account/webhook_signing/" class="md-nav__link">
         
   
   
@@ -2868,7 +3015,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/account/webhook_subscriptions/" class="md-nav__link">
+      <a href="../../../web_developer/account/webhook_subscriptions/" class="md-nav__link">
         
   
   
@@ -2958,7 +3105,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/logging/" class="md-nav__link">
+      <a href="../../../web_developer/logging/" class="md-nav__link">
         
   
   
@@ -2986,7 +3133,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/logging/logs/" class="md-nav__link">
+      <a href="../../../web_developer/logging/logs/" class="md-nav__link">
         
   
   
@@ -3014,7 +3161,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/logging/incidents/" class="md-nav__link">
+      <a href="../../../web_developer/logging/incidents/" class="md-nav__link">
         
   
   
@@ -3104,7 +3251,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/files/README.md" class="md-nav__link">
+      <a href="../../../web_developer/files/README.md" class="md-nav__link">
         
   
   
@@ -3132,7 +3279,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/files/upload.md" class="md-nav__link">
+      <a href="../../../web_developer/files/upload.md" class="md-nav__link">
         
   
   
@@ -3160,7 +3307,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/files/files.md" class="md-nav__link">
+      <a href="../../../web_developer/files/files.md" class="md-nav__link">
         
   
   
@@ -3250,7 +3397,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/email/" class="md-nav__link">
+      <a href="../../../web_developer/email/" class="md-nav__link">
         
   
   
@@ -3278,7 +3425,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/email/email/" class="md-nav__link">
+      <a href="../../../web_developer/email/email/" class="md-nav__link">
         
   
   
@@ -3368,7 +3515,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/jobs/" class="md-nav__link">
+      <a href="../../../web_developer/jobs/" class="md-nav__link">
         
   
   
@@ -3396,7 +3543,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/jobs/jobs/" class="md-nav__link">
+      <a href="../../../web_developer/jobs/jobs/" class="md-nav__link">
         
   
   
@@ -3486,7 +3633,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/metrics/" class="md-nav__link">
+      <a href="../../../web_developer/metrics/" class="md-nav__link">
         
   
   
@@ -3514,7 +3661,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/metrics/metrics/" class="md-nav__link">
+      <a href="../../../web_developer/metrics/metrics/" class="md-nav__link">
         
   
   
@@ -3604,7 +3751,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/realtime/" class="md-nav__link">
+      <a href="../../../web_developer/realtime/" class="md-nav__link">
         
   
   
@@ -3632,7 +3779,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/realtime/websocket/" class="md-nav__link">
+      <a href="../../../web_developer/realtime/websocket/" class="md-nav__link">
         
   
   
@@ -3668,7 +3815,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/phonehub/" class="md-nav__link">
+      <a href="../../../web_developer/phonehub/" class="md-nav__link">
         
   
   
@@ -3696,7 +3843,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/filevault/" class="md-nav__link">
+      <a href="../../../web_developer/filevault/" class="md-nav__link">
         
   
   
@@ -3724,7 +3871,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/docit/" class="md-nav__link">
+      <a href="../../../web_developer/docit/" class="md-nav__link">
         
   
   
@@ -3772,6 +3919,124 @@
     
   
   
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How It Works
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Model
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dispatching-events" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dispatching events
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#designing-your-event-vocabulary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Designing your event vocabulary
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#channel-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Channel configuration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#error-reporting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Error reporting
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rest-endpoints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        REST endpoints
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#security-notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Security notes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#out-of-scope-v1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Out of scope (v1)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#migration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Migration
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
 </nav>
                   </div>
                 </div>
@@ -3790,12 +4055,181 @@
   
 
 
-<h1 id="realtime-websocket-django-developer-reference">Realtime (WebSocket) — Django Developer Reference<a class="headerlink" href="#realtime-websocket-django-developer-reference" title="Permanent link">&para;</a></h1>
+<h1 id="webhook-subscriptions-django-developer-reference">Webhook Subscriptions — Django Developer Reference<a class="headerlink" href="#webhook-subscriptions-django-developer-reference" title="Permanent link">&para;</a></h1>
+<p>Django-MOJO ships a generic <code>WebhookSubscription</code> model + asynchronous fan-out dispatcher so every downstream SaaS gets a per-Group subscription registry, event fan-out, and signed delivery without re-implementing the same ~150 lines of model + REST + dispatch logic.</p>
+<blockquote>
+<p><strong>Pairs with <a href="../webhook_signing/">Webhook Signing</a>.</strong> Subscriptions are the <em>who, where, when</em>. Webhook Signing is <em>how the body is signed on its way out</em>. Both are framework-owned; downstream services own only their event vocabulary and their domain logic.</p>
+</blockquote>
+<h2 id="how-it-works">How It Works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>caller (request thread, sync)
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>   │
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>   └─ dispatch(group, event_type, data, ...)
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>         │
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>         └─ jobs.publish(handle_fanout, {...}, channel=&quot;webhook_fanout&quot;)
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>                                                            │
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>                                       (worker thread)─────┘
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>                                                            │
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>                                                            ▼
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>                                         handle_fanout(job):
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>                                            • load Group by id (missing → incident, &#39;failed&#39;, no retry)
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>                                            • SELECT subs WHERE group=g AND is_active AND events @&gt; [event_type]
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>                                            • for each sub:
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>                                                 try jobs.publish_webhook(url=sub.url, data=data, group=g)
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>                                                 except → incident.report_event(category=&quot;webhook:fanout:error&quot;); continue
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>                                            • record metadata: matched_count, published_count, failed_count
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>                                            • return &#39;success&#39;
+<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>                                                            │
+<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>                                          (worker)──────────┘
+<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>                                                            ▼
+<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>                                       jobs.publish_webhook handler signs + sends per receiver
+</code></pre></div>
+<p>Three properties this gives you for free:</p>
 <ul>
-<li><a href="architecture/">Architecture &amp; Setup</a> — Django Channels setup, configuration</li>
-<li><a href="publishing/">Publishing Messages</a> — Server-side publish helpers</li>
-<li><a href="hooks/">Instance Hooks</a> — Model hooks for WebSocket events</li>
+<li><strong>Signing</strong> — every published webhook job carries <code>sign_group_id</code>; the existing webhook handler injects <code>X-Mojo-Signature</code> at delivery (see <a href="../webhook_signing/">Webhook Signing</a>).</li>
+<li><strong>Retries / backoff / dead-letter</strong> — inherited from <code>publish_webhook</code> and the jobs system.</li>
+<li><strong>Skip-and-continue</strong> — one flaky subscription cannot poison the fan-out. Per-row failures land in the incident app for follow-up.</li>
 </ul>
+<h2 id="model">Model<a class="headerlink" href="#model" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">WebhookSubscription</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="n">WebhookSubscription</span><span class="p">(</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    <span class="n">group</span><span class="o">=</span><span class="n">group_instance</span><span class="p">,</span>              <span class="c1"># FK to account.Group (CASCADE)</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>    <span class="n">url</span><span class="o">=</span><span class="s2">&quot;https://hooks.example.com/x&quot;</span><span class="p">,</span> <span class="c1"># https only — http rejected at save time</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>    <span class="n">events</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;verification.completed&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>            <span class="s2">&quot;verification.failed&quot;</span><span class="p">],</span>    <span class="c1"># free-form strings; framework has no opinion</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>    <span class="n">is_active</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>                    <span class="c1"># toggle to pause without losing the URL</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>    <span class="n">metadata</span><span class="o">=</span><span class="p">{},</span>                       <span class="c1"># JSONField for caller-owned tags / labels</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="p">)</span>
+</code></pre></div>
+<p>Validation in <code>on_rest_pre_save</code>:</p>
+<ul>
+<li><code>url</code> must start with <code>https://</code> and pass Django's <code>URLValidator</code>.</li>
+<li><code>events</code> must be a list of non-empty strings (empty list is valid — "draft" state, matches no events).</li>
+</ul>
+<p>The framework imposes <strong>no event-name vocabulary</strong>. Strings in, strings out. Each emitting SaaS documents its own event names in its own docs.</p>
+<h2 id="dispatching-events">Dispatching events<a class="headerlink" href="#dispatching-events" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.services.webhooks</span><span class="w"> </span><span class="kn">import</span> <span class="n">dispatch</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_verification_complete</span><span class="p">(</span><span class="n">verification</span><span class="p">):</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>    <span class="n">dispatch</span><span class="p">(</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>        <span class="n">group</span><span class="o">=</span><span class="n">verification</span><span class="o">.</span><span class="n">group</span><span class="p">,</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>        <span class="n">event_type</span><span class="o">=</span><span class="s2">&quot;verification.completed&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>        <span class="n">data</span><span class="o">=</span><span class="p">{</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>            <span class="s2">&quot;verification_id&quot;</span><span class="p">:</span> <span class="n">verification</span><span class="o">.</span><span class="n">id</span><span class="p">,</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>            <span class="s2">&quot;customer_id&quot;</span><span class="p">:</span> <span class="n">verification</span><span class="o">.</span><span class="n">customer_id</span><span class="p">,</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>            <span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="s2">&quot;approved&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>            <span class="s2">&quot;completed_at&quot;</span><span class="p">:</span> <span class="n">verification</span><span class="o">.</span><span class="n">completed_at</span><span class="o">.</span><span class="n">isoformat</span><span class="p">(),</span>
+<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a>            <span class="s2">&quot;event_id&quot;</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">verification</span><span class="o">.</span><span class="n">uuid</span><span class="p">),</span>  <span class="c1"># for receiver-side dedupe</span>
+<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a>        <span class="p">},</span>
+<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a>        <span class="n">idempotency_key</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;verify_</span><span class="si">{</span><span class="n">verification</span><span class="o">.</span><span class="n">id</span><span class="si">}</span><span class="s2">_completed&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a>    <span class="p">)</span>
+</code></pre></div>
+<p><code>dispatch()</code> runs in the caller's thread, queues exactly one fan-out job, and returns instantly with the fan-out job id (or <code>None</code> if <code>group is None</code>). The fan-out runs on the <code>webhook_fanout</code> channel; per-receiver delivery happens on the <code>webhooks</code> channel.</p>
+<p><strong>Idempotency key suffixing</strong>: if you pass <code>idempotency_key="x"</code>, each per-receiver job gets <code>idempotency_key="x_&lt;sub_id&gt;"</code>. This is what makes retries safe — the job layer dedupes per receiver, so a retried fan-out cannot deliver twice to the same subscriber.</p>
+<h2 id="designing-your-event-vocabulary">Designing your event vocabulary<a class="headerlink" href="#designing-your-event-vocabulary" title="Permanent link">&para;</a></h2>
+<p>Pick names with a stable shape — your subscriptions will store these strings forever. Common conventions:</p>
+<ul>
+<li><code>noun.past_tense_verb</code> — <code>verification.completed</code>, <code>customer.suspended</code>, <code>payment.refunded</code>.</li>
+<li>Lower-case dot-separated. Avoid underscores or camelCase.</li>
+<li>Version in the name if you anticipate schema churn: <code>verification.completed.v2</code>.</li>
+</ul>
+<p><strong>Renaming an event is a multi-release flow</strong>:</p>
+<ol>
+<li>Release N: emit BOTH the old and new event names. Operators can subscribe to the new one.</li>
+<li>Release N+1: update docs, encourage subscribers to switch.</li>
+<li>Release N+M (after a deprecation window): drop the old name.</li>
+</ol>
+<p>The framework does not enforce this — it's purely operational discipline. There is no registry to manage; just the strings on each subscription row.</p>
+<h2 id="channel-configuration">Channel configuration<a class="headerlink" href="#channel-configuration" title="Permanent link">&para;</a></h2>
+<p>The fan-out uses two job channels. Either add both to your project's <code>JOBS_CHANNELS</code> setting so dedicated workers can subscribe, or let them fall back to <code>"default"</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># settings.py</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">JOBS_CHANNELS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;default&quot;</span><span class="p">,</span> <span class="s2">&quot;webhooks&quot;</span><span class="p">,</span> <span class="s2">&quot;webhook_fanout&quot;</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span>
+</code></pre></div>
+<p>Separating <code>webhook_fanout</code> from <code>webhooks</code> keeps fan-out work (DB query, per-row enqueue) from competing with HTTP delivery slots when traffic spikes.</p>
+<h2 id="error-reporting">Error reporting<a class="headerlink" href="#error-reporting" title="Permanent link">&para;</a></h2>
+<p>Per-row failures during fan-out are reported to the incident app, never to log files:</p>
+<table>
+<thead>
+<tr>
+<th>Scenario</th>
+<th><code>incident.report_event</code> <code>category</code></th>
+<th><code>level</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Group deleted between dispatch and fan-out</td>
+<td><code>webhook:fanout:group_missing</code></td>
+<td>4</td>
+</tr>
+<tr>
+<td><code>publish_webhook</code> raises for one subscription</td>
+<td><code>webhook:fanout:error</code></td>
+<td>6</td>
+</tr>
+</tbody>
+</table>
+<p>The incident events carry <code>subscription_id</code> (where applicable), <code>group_id</code>, <code>event_type</code>, and <code>error_repr</code> so post-incident triage has the full context.</p>
+<p>The fan-out job itself records <code>matched_count</code>, <code>published_count</code>, <code>failed_count</code>, and a capped list of <code>published_job_ids</code> in its <code>Job.metadata</code> — useful for debugging "did this event fire for everyone it should have?".</p>
+<h2 id="rest-endpoints">REST endpoints<a class="headerlink" href="#rest-endpoints" title="Permanent link">&para;</a></h2>
+<p>See <a href="../../../web_developer/account/webhook_subscriptions/">REST API → Webhook Subscriptions</a> for the consumer-facing contract. Quick reference:</p>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/group/webhook_subscriptions</code></td>
+<td>List the Group's subscriptions</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/group/webhook_subscriptions</code></td>
+<td>Create</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/group/webhook_subscriptions/&lt;id&gt;</code></td>
+<td>Detail</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/group/webhook_subscriptions/&lt;id&gt;</code></td>
+<td>Update (RestMeta convention: POST with body updates)</td>
+</tr>
+<tr>
+<td><code>DELETE</code></td>
+<td><code>/api/group/webhook_subscriptions/&lt;id&gt;</code></td>
+<td>Remove</td>
+</tr>
+</tbody>
+</table>
+<p>Permission: <code>manage_group</code> / <code>manage_groups</code> / <code>groups</code> — same threshold as <code>ApiKey</code> CRUD and <code>POST /api/group/webhook_secret</code>.</p>
+<h2 id="security-notes">Security notes<a class="headerlink" href="#security-notes" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>URL validation is at the syntactic level only</strong>: <code>https://</code>-prefix, valid syntax, no embedded credentials (<code>user:pass@</code>). The framework does <strong>not</strong> restrict the target host. An operator with <code>manage_group</code> permission can register a URL pointing at <code>https://169.254.169.254/...</code> (AWS metadata), <code>https://10.0.0.1/...</code> (internal network), <code>https://localhost/...</code>, etc. — and the fan-out will dutifully deliver. <strong>This is a deliberate trust model</strong>: subscription writes require <code>manage_group</code> (same threshold as ApiKey CRUD), and <code>manage_group</code>-holders are considered trusted. If your deployment has a less-trusted operator tier and you need allow-list / deny-list enforcement of subscription URLs, layer that check in your own portal before POSTing to the framework endpoint, or open a follow-up request.</li>
+<li><strong>Per-row failure reports are bounded</strong>: <code>error_repr</code> is truncated to 500 chars before being recorded in incident events. Inner exceptions from <code>requests</code> / HTTP libraries can embed response bodies and auth headers in their reprs; the cap bounds that exposure window.</li>
+<li><strong>Signing is automatic, not optional</strong>: deliveries always go through <code>jobs.publish_webhook(group=...)</code> which always injects <code>X-Mojo-Signature</code>. There is no path through <code>dispatch()</code> that delivers unsigned.</li>
+<li><strong>Group hierarchy is not traversed</strong>: <code>dispatch(group=g, ...)</code> only matches subscriptions whose <code>group_id == g.id</code>. Parent/child groups are not included.</li>
+</ul>
+<h2 id="out-of-scope-v1">Out of scope (v1)<a class="headerlink" href="#out-of-scope-v1" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Per-subscription signing secrets</strong> — the Group's webhook secret signs every delivery, no overrides.</li>
+<li><strong>Per-subscription retry policy overrides</strong> — use the lower-level <code>jobs.publish_webhook</code> path if you need different <code>max_retries</code> / <code>backoff_*</code> for a specific receiver.</li>
+<li><strong>Delivery dashboards / per-subscription history UIs</strong> — the <code>Job</code> model records every attempt with status, duration, and response; surfacing that is portal work, not framework work.</li>
+<li><strong>Typed event-payload schemas</strong> — <code>data</code> is opaque JSON. Project owns the shape.</li>
+</ul>
+<h2 id="migration">Migration<a class="headerlink" href="#migration" title="Permanent link">&para;</a></h2>
+<p>A new <code>account.WebhookSubscription</code> model means a migration. After pulling this code:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>./manage.py<span class="w"> </span>makemigrations
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>./manage.py<span class="w"> </span>migrate
+</code></pre></div>
+<p>(In the django-mojo repo itself, <code>bin/create_testproject</code> already regenerated the testproject migrations.)</p>
 
 
 
@@ -3851,10 +4285,10 @@
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.suggest", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.suggest", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
       
     
   </body>
