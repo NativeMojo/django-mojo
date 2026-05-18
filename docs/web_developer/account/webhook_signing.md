@@ -71,18 +71,103 @@ The signature is computed over the **raw request body bytes**. The sender uses a
 
 ## Verifying an Incoming Webhook
 
-```python
-# Pseudo-code on the receiver side (any django-mojo project)
-from mojo.helpers.request import verify_signed_request
-from mojo.apps.account.models import Group
+The recipe is the same in any language:
 
-group = Group.objects.get(uuid=request_group_uuid)
+1. Take the **raw request body bytes** (never the parsed JSON — re-serialization will change separators or key order, and the signature will fail).
+2. Compute `HMAC-SHA256(secret, raw_body)` and hex-encode.
+3. **Constant-time compare** against the `X-Mojo-Signature` header. Never use `==`.
+4. Reject if the header is missing.
+
+### Python (django-mojo consumer)
+
+```python
+from mojo.helpers.request import verify_signed_request
+
 if not verify_signed_request(request, group.get_webhook_secret()):
-    return 401
+    raise merrors.PermissionDeniedException("invalid signature", 401, 401)
 # process the verified body
 ```
 
-Non-django consumers: compute `hmac.new(secret.encode(), request.body, sha256).hexdigest()` and compare against the `X-Mojo-Signature` header using a constant-time comparison (Python: `hmac.compare_digest`).
+`verify_signed_request` handles the raw-body pull, the header lookup, the constant-time compare, and the `None`/missing-secret cases.
+
+### Python (stdlib — any framework)
+
+```python
+import hmac, hashlib
+
+def verify(raw_body: bytes, signature_header: str, secret: str) -> bool:
+    if not signature_header:
+        return False
+    expected = hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature_header)
+```
+
+In Django views, use `request.body` (bytes) — not `request.POST` or any parsed form. In FastAPI, use `await request.body()`.
+
+### Node.js
+
+```js
+const crypto = require('crypto');
+
+function verify(rawBody, signatureHeader, secret) {
+  if (!signatureHeader) return false;
+  const expected = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
+  const a = Buffer.from(expected, 'hex');
+  const b = Buffer.from(signatureHeader, 'hex');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+```
+
+**Express gotcha**: mount `express.raw({type: 'application/json'})` (or `bodyParser.raw`) on the webhook route, **not** `express.json()` — the latter parses and discards the raw bytes you need for hashing.
+
+### Go
+
+```go
+import (
+    "crypto/hmac"
+    "crypto/sha256"
+    "encoding/hex"
+)
+
+func Verify(rawBody []byte, signatureHeader, secret string) bool {
+    if signatureHeader == "" {
+        return false
+    }
+    mac := hmac.New(sha256.New, []byte(secret))
+    mac.Write(rawBody)
+    expected := hex.EncodeToString(mac.Sum(nil))
+    return hmac.Equal([]byte(expected), []byte(signatureHeader))
+}
+```
+
+Read the body with `io.ReadAll(r.Body)` once and reuse — don't read it twice or it will be empty the second time.
+
+### Ruby
+
+```ruby
+require 'openssl'
+require 'rack/utils'
+
+def verify(raw_body, signature_header, secret)
+  return false if signature_header.nil? || signature_header.empty?
+  expected = OpenSSL::HMAC.hexdigest('sha256', secret, raw_body)
+  Rack::Utils.secure_compare(expected, signature_header)
+end
+```
+
+In Rails, `request.raw_post` gives the body bytes. Don't use `params` — that's the parsed form.
+
+### Debug with curl + openssl
+
+To reproduce a signature on the command line (sanity-check before pointing a live receiver at the sender):
+
+```bash
+SECRET="wsec_…"
+echo -n "$(cat raw_body.json)" | openssl dgst -sha256 -hmac "$SECRET" -hex
+# → SHA2-256(stdin)= a1b2c3…   ← compare against the X-Mojo-Signature you received
+```
+
+`echo -n` is critical — without it, a trailing newline changes the hash.
 
 ## Caching the Secret
 
