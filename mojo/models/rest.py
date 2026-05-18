@@ -1219,8 +1219,10 @@ class MojoModel:
         post_save_data = {}
         action_resp = None  # an action may have a specific response
         actions_only = True  # track if request contains only post_save_actions (no real field data)
-        # Iterate through data_dict keys instead of model fields
-        for key, value in data_dict.items():
+        # Iterate a snapshot — perm checks (e.g. Group.check_view_permission)
+        # legitimately mutate request.DATA mid-save (graph downgrade etc.), so a
+        # live view trips CPython's dict-mutation guard.
+        for key, value in list(data_dict.items()):
             # Skip fields that shouldn't be saved
             if key in no_save_fields:
                 continue
