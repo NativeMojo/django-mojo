@@ -10,13 +10,13 @@
       
       
       
-        <link rel="canonical" href="https://NativeMojo.github.io/django-mojo/django_developer/helpers/settings/">
+        <link rel="canonical" href="https://NativeMojo.github.io/django-mojo/django_developer/account/webhook_signing/">
       
       
-        <link rel="prev" href="../dates/">
+        <link rel="prev" href="../auth/">
       
       
-        <link rel="next" href="../settings_reference/">
+        <link rel="next" href="../../logging/">
       
       
         
@@ -27,7 +27,7 @@
     
     
       
-        <title>Settings - Django-MOJO</title>
+        <title>Webhook Signing - Django-MOJO</title>
       
     
     
@@ -78,7 +78,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#settings-django-developer-reference" class="md-skip">
+        <a href="#webhook-signing-django-developer-reference" class="md-skip">
           Skip to content
         </a>
       
@@ -112,7 +112,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Settings
+              Webhook Signing
             
           </span>
         </div>
@@ -674,6 +674,323 @@
                 
   
   
+  
+  
+    
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_3" id="__nav_2_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Helpers
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Helpers
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../helpers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../helpers/logit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    logit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../helpers/dates/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Dates
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../helpers/settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Settings
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../helpers/settings_reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Settings Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../helpers/crypto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Crypto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../helpers/request/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Request
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../helpers/response/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Response
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../helpers/other/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Other
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
     
   
   
@@ -695,17 +1012,17 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_3" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_4" checked>
         
           
-          <label class="md-nav__link" for="__nav_2_3" id="__nav_2_3_label" tabindex="">
+          <label class="md-nav__link" for="__nav_2_4" id="__nav_2_4_label" tabindex="">
             
   
   
   <span class="md-ellipsis">
     
   
-    Helpers
+    Account
   
 
     
@@ -716,12 +1033,12 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_3_label" aria-expanded="true">
-          <label class="md-nav__title" for="__nav_2_3">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_2_4">
             <span class="md-nav__icon md-icon"></span>
             
   
-    Helpers
+    Account
   
 
           </label>
@@ -762,14 +1079,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../logit/" class="md-nav__link">
+      <a href="../user/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    logit
+    User
   
 
     
@@ -790,14 +1107,42 @@
   
   
     <li class="md-nav__item">
-      <a href="../dates/" class="md-nav__link">
+      <a href="../group/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Dates
+    Group
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../auth/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Auth
   
 
     
@@ -834,7 +1179,7 @@
   <span class="md-ellipsis">
     
   
-    Settings
+    Webhook Signing
   
 
     
@@ -852,7 +1197,7 @@
   <span class="md-ellipsis">
     
   
-    Settings
+    Webhook Signing
   
 
     
@@ -878,10 +1223,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#import" class="md-nav__link">
+  <a href="#how-it-works" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Import
+        How It Works
       
     </span>
   </a>
@@ -889,10 +1234,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#reading-settings" class="md-nav__link">
+  <a href="#group-secret-api" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Reading Settings
+        Group Secret API
       
     </span>
   </a>
@@ -900,10 +1245,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#checking-for-apps" class="md-nav__link">
+  <a href="#rest-endpoint" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Checking for Apps
+        REST Endpoint
       
     </span>
   </a>
@@ -911,10 +1256,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#app-specific-settings" class="md-nav__link">
+  <a href="#recommended-path-jobspublish_webhookgroup" class="md-nav__link">
     <span class="md-ellipsis">
       
-        App-Specific Settings
+        Recommended Path: jobs.publish_webhook(group=...)
       
     </span>
   </a>
@@ -922,10 +1267,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#settings-profile" class="md-nav__link">
+  <a href="#verifying-inbound-webhooks-consumer-side" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Settings Profile
+        Verifying Inbound Webhooks (Consumer Side)
       
     </span>
   </a>
@@ -933,10 +1278,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#defining-settings-in-django-settingspy" class="md-nav__link">
+  <a href="#escape-hatch-sign-outside-the-jobs-queue" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Defining Settings in Django settings.py
+        Escape Hatch: Sign Outside the Jobs Queue
       
     </span>
   </a>
@@ -944,21 +1289,38 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#notes" class="md-nav__link">
+  <a href="#security-notes" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Notes
+        Security Notes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Security Notes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#replay-protection-receivers-responsibility" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Replay protection — receiver's responsibility
       
     </span>
   </a>
   
 </li>
+        
+      </ul>
+    </nav>
+  
+</li>
       
         <li class="md-nav__item">
-  <a href="#framework-keys" class="md-nav__link">
+  <a href="#downstream-adoption-recipe" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Framework Keys
+        Downstream Adoption Recipe
       
     </span>
   </a>
@@ -969,351 +1331,6 @@
   
 </nav>
       
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../settings_reference/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Settings Reference
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../crypto/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Crypto
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../request/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Request
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../response/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Response
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../other/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Other
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-          </ul>
-        </nav>
-      
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    
-    
-    
-    
-      
-      
-        
-          
-          
-        
-      
-    
-    
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
-      
-        
-        
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2_4" >
-        
-          
-          <label class="md-nav__link" for="__nav_2_4" id="__nav_2_4_label" tabindex="">
-            
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Account
-  
-
-    
-  </span>
-  
-  
-
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_4_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_2_4">
-            <span class="md-nav__icon md-icon"></span>
-            
-  
-    Account
-  
-
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../account/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Overview
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../account/user/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    User
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../account/group/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Group
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../account/auth/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Auth
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../account/webhook_signing/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Webhook Signing
-  
-
-    
-  </span>
-  
-  
-
-      </a>
     </li>
   
 
@@ -3848,10 +3865,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#import" class="md-nav__link">
+  <a href="#how-it-works" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Import
+        How It Works
       
     </span>
   </a>
@@ -3859,10 +3876,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#reading-settings" class="md-nav__link">
+  <a href="#group-secret-api" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Reading Settings
+        Group Secret API
       
     </span>
   </a>
@@ -3870,10 +3887,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#checking-for-apps" class="md-nav__link">
+  <a href="#rest-endpoint" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Checking for Apps
+        REST Endpoint
       
     </span>
   </a>
@@ -3881,10 +3898,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#app-specific-settings" class="md-nav__link">
+  <a href="#recommended-path-jobspublish_webhookgroup" class="md-nav__link">
     <span class="md-ellipsis">
       
-        App-Specific Settings
+        Recommended Path: jobs.publish_webhook(group=...)
       
     </span>
   </a>
@@ -3892,10 +3909,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#settings-profile" class="md-nav__link">
+  <a href="#verifying-inbound-webhooks-consumer-side" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Settings Profile
+        Verifying Inbound Webhooks (Consumer Side)
       
     </span>
   </a>
@@ -3903,10 +3920,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#defining-settings-in-django-settingspy" class="md-nav__link">
+  <a href="#escape-hatch-sign-outside-the-jobs-queue" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Defining Settings in Django settings.py
+        Escape Hatch: Sign Outside the Jobs Queue
       
     </span>
   </a>
@@ -3914,21 +3931,38 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#notes" class="md-nav__link">
+  <a href="#security-notes" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Notes
+        Security Notes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Security Notes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#replay-protection-receivers-responsibility" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Replay protection — receiver's responsibility
       
     </span>
   </a>
   
 </li>
+        
+      </ul>
+    </nav>
+  
+</li>
       
         <li class="md-nav__item">
-  <a href="#framework-keys" class="md-nav__link">
+  <a href="#downstream-adoption-recipe" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Framework Keys
+        Downstream Adoption Recipe
       
     </span>
   </a>
@@ -3955,57 +3989,145 @@
   
 
 
-<h1 id="settings-django-developer-reference">settings — Django Developer Reference<a class="headerlink" href="#settings-django-developer-reference" title="Permanent link">&para;</a></h1>
-<h2 id="import">Import<a class="headerlink" href="#import" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers.settings</span><span class="w"> </span><span class="kn">import</span> <span class="n">settings</span>
+<h1 id="webhook-signing-django-developer-reference">Webhook Signing — Django Developer Reference<a class="headerlink" href="#webhook-signing-django-developer-reference" title="Permanent link">&para;</a></h1>
+<p>Django-MOJO ships a uniform primitive for signing outbound webhooks and verifying inbound ones, keyed on a <strong>per-Group HMAC-SHA256 secret</strong>. Every SaaS built on the framework can stop rolling its own signing scheme — there is one helper to sign, one to verify, and one standard header.</p>
+<blockquote>
+<p><strong>Why per-Group?</strong> Webhooks are almost always tied to a specific Group's data. Keying the HMAC on a Group secret lets you scope signatures by tenant without coordinating extra credentials.</p>
+</blockquote>
+<h2 id="how-it-works">How It Works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
+<ol>
+<li>The framework's <code>Group</code> model owns a webhook secret, stored inside its existing <code>MojoSecrets</code> blob (no migration). The secret is minted lazily on first use.</li>
+<li>Outbound jobs published with <code>jobs.publish_webhook(..., group=g)</code> are signed at <strong>delivery time</strong>: the handler looks up <code>g</code>, canonicalizes the body, computes the HMAC, sets <code>X-Mojo-Signature</code>, and sends those exact bytes. Retries re-sign with whatever secret is current — rotation is safe.</li>
+<li>Inbound receivers verify with <code>verify_signed_request(request, group.get_webhook_secret())</code>.</li>
+</ol>
+<p>The secret never enters the job queue payload — only the Group id is stored.</p>
+<h2 id="group-secret-api">Group Secret API<a class="headerlink" href="#group-secret-api" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">Group</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">g</span> <span class="o">=</span> <span class="n">Group</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">pk</span><span class="o">=</span><span class="mi">42</span><span class="p">)</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="c1"># Read (default — never auto-mints; safe for verify paths)</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="n">secret</span> <span class="o">=</span> <span class="n">g</span><span class="o">.</span><span class="n">get_webhook_secret</span><span class="p">()</span>              <span class="c1"># → &quot;wsec_...&quot; or None</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="c1"># Read with auto-mint (emit-side semantics)</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="n">secret</span> <span class="o">=</span> <span class="n">g</span><span class="o">.</span><span class="n">get_webhook_secret</span><span class="p">(</span><span class="n">auto_create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="c1"># Full record with timestamps</span>
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="n">info</span> <span class="o">=</span> <span class="n">g</span><span class="o">.</span><span class="n">get_webhook_secret_info</span><span class="p">(</span><span class="n">auto_create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="c1"># objict(value=&quot;wsec_…&quot;, created_at=&quot;2026-05-17T…&quot;, last_rotated_at=&quot;2026-05-17T…&quot;)</span>
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="c1"># Rotate — new value, preserves created_at, advances last_rotated_at</span>
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="n">info</span> <span class="o">=</span> <span class="n">g</span><span class="o">.</span><span class="n">rotate_webhook_secret</span><span class="p">()</span>
 </code></pre></div>
-<h2 id="reading-settings">Reading Settings<a class="headerlink" href="#reading-settings" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># With default</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="n">value</span> <span class="o">=</span> <span class="n">settings</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;MY_SETTING&quot;</span><span class="p">,</span> <span class="s2">&quot;default_value&quot;</span><span class="p">)</span>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="n">value</span> <span class="o">=</span> <span class="n">settings</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;TIMEOUT_SECONDS&quot;</span><span class="p">,</span> <span class="mi">30</span><span class="p">)</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="c1"># Without default (returns None if missing)</span>
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="n">value</span> <span class="o">=</span> <span class="n">settings</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;MY_SETTING&quot;</span><span class="p">)</span>
-<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>
-<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="c1"># Dict-style access</span>
-<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="n">value</span> <span class="o">=</span> <span class="n">settings</span><span class="p">[</span><span class="s2">&quot;MY_SETTING&quot;</span><span class="p">]</span>
-<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>
-<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="c1"># Attribute-style access</span>
-<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="n">value</span> <span class="o">=</span> <span class="n">settings</span><span class="o">.</span><span class="n">MY_SETTING</span>
+<p><strong>Default is <code>auto_create=False</code></strong> so a verify path can never accidentally mint a secret to make a tampered request "valid." The two places that pass <code>True</code> are the REST endpoint (operator workflow) and the <code>sign_for_group</code> helper (emit-time).</p>
+<p>The secret is <code>"wsec_"</code> + 48 alphanumeric characters (53 chars total), generated with <code>crypto.random_string(48, allow_special=False)</code> — same generator as <code>ApiKey</code> tokens.</p>
+<h2 id="rest-endpoint">REST Endpoint<a class="headerlink" href="#rest-endpoint" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>POST /api/group/webhook_secret
 </code></pre></div>
-<h2 id="checking-for-apps">Checking for Apps<a class="headerlink" href="#checking-for-apps" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="k">if</span> <span class="n">settings</span><span class="o">.</span><span class="n">is_app_installed</span><span class="p">(</span><span class="s2">&quot;mojo.apps.fileman&quot;</span><span class="p">):</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>    <span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.fileman.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">File</span>
+<table>
+<thead>
+<tr>
+<th>Body</th>
+<th>Behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>{}</code> (or <code>{"group": &lt;id&gt;}</code>)</td>
+<td>Return current secret; auto-mint on first call</td>
+</tr>
+<tr>
+<td><code>{"rotate": true}</code></td>
+<td>Generate a new secret, return it, invalidate the prior</td>
+</tr>
+</tbody>
+</table>
+<p>Response:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span><span class="nt">&quot;secret&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;wsec_&lt;48 chars&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span><span class="nt">&quot;created_at&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-05-17T01:23:45.000+00:00&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">    </span><span class="nt">&quot;last_rotated_at&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-05-17T01:23:45.000+00:00&quot;</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="p">}</span>
 </code></pre></div>
-<h2 id="app-specific-settings">App-Specific Settings<a class="headerlink" href="#app-specific-settings" title="Permanent link">&para;</a></h2>
-<p>Load settings scoped to a specific app:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">app_settings</span> <span class="o">=</span> <span class="n">settings</span><span class="o">.</span><span class="n">get_app_settings</span><span class="p">(</span><span class="s2">&quot;myapp&quot;</span><span class="p">)</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">value</span> <span class="o">=</span> <span class="n">app_settings</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;MYAPP_API_KEY&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+<p><strong>Permission:</strong> <code>manage_group</code>, <code>manage_groups</code>, or <code>groups</code> — same threshold as <code>ApiKey</code> CRUD. If you can mint API keys for a Group, you can read its signing secret.</p>
+<p>The Group is resolved by the framework dispatcher from <code>request.group</code> — either set by API-key auth (<code>Authorization: apikey &lt;token&gt;</code>) or by a <code>group=&lt;id&gt;</code> parameter on a session/JWT request.</p>
+<h2 id="recommended-path-jobspublish_webhookgroup">Recommended Path: <code>jobs.publish_webhook(group=...)</code><a class="headerlink" href="#recommended-path-jobspublish_webhookgroup" title="Permanent link">&para;</a></h2>
+<p>Almost all webhook emission should flow through the jobs queue (retries, backoff, dead-letter). Pass <code>group=</code> and signing happens automatically:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps</span><span class="w"> </span><span class="kn">import</span> <span class="n">jobs</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="n">jobs</span><span class="o">.</span><span class="n">publish_webhook</span><span class="p">(</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>    <span class="n">url</span><span class="o">=</span><span class="n">receiver_url</span><span class="p">,</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>    <span class="n">data</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;event&quot;</span><span class="p">:</span> <span class="s2">&quot;verification_complete&quot;</span><span class="p">,</span> <span class="s2">&quot;customer_id&quot;</span><span class="p">:</span> <span class="mi">42</span><span class="p">},</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>    <span class="n">group</span><span class="o">=</span><span class="n">customer</span><span class="o">.</span><span class="n">group</span><span class="p">,</span>        <span class="c1"># ← this is the whole API</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="p">)</span>
 </code></pre></div>
-<h2 id="settings-profile">Settings Profile<a class="headerlink" href="#settings-profile" title="Permanent link">&para;</a></h2>
-<p>Load a profile-specific settings module (useful for dev/staging/prod):</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers.settings</span><span class="w"> </span><span class="kn">import</span> <span class="n">load_settings_profile</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="n">load_settings_profile</span><span class="p">(</span><span class="n">context</span><span class="p">)</span>
+<p>What happens at delivery time:</p>
+<ol>
+<li>The handler reads <code>payload['sign_group_id']</code> and loads the Group.</li>
+<li>Canonicalizes the body: <code>json.dumps(data, sort_keys=True, separators=(",", ":")).encode("utf-8")</code>.</li>
+<li>Computes <code>X-Mojo-Signature: &lt;hex HMAC-SHA256&gt;</code> keyed on the Group's secret.</li>
+<li>Sends the exact bytes it hashed via <code>requests.post(..., data=body_bytes)</code> — guarantees signature and wire bytes match.</li>
+</ol>
+<p>If the Group has been deleted between publish and delivery, the handler returns <code>'failed'</code> with <code>error_type='sign_group_missing'</code> — it does <strong>not</strong> retry and does <strong>not</strong> silently send unsigned.</p>
+<h2 id="verifying-inbound-webhooks-consumer-side">Verifying Inbound Webhooks (Consumer Side)<a class="headerlink" href="#verifying-inbound-webhooks-consumer-side" title="Permanent link">&para;</a></h2>
+<p>Consumer endpoints look up the Group their own way (URL param, body field, header — whatever fits) and call the helper:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo</span><span class="w"> </span><span class="kn">import</span> <span class="n">decorators</span> <span class="k">as</span> <span class="n">md</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo</span><span class="w"> </span><span class="kn">import</span> <span class="n">errors</span> <span class="k">as</span> <span class="n">merrors</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">Group</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers.request</span><span class="w"> </span><span class="kn">import</span> <span class="n">verify_signed_request</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;webhook/&lt;str:group_uuid&gt;&#39;</span><span class="p">)</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="nd">@md</span><span class="o">.</span><span class="n">public_endpoint</span><span class="p">(</span><span class="s2">&quot;signature is the authentication&quot;</span><span class="p">)</span>
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_webhook</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">group_uuid</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>    <span class="n">group</span> <span class="o">=</span> <span class="n">Group</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">uuid</span><span class="o">=</span><span class="n">group_uuid</span><span class="p">)</span><span class="o">.</span><span class="n">first</span><span class="p">()</span>
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">verify_signed_request</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">group</span><span class="o">.</span><span class="n">get_webhook_secret</span><span class="p">()</span> <span class="k">if</span> <span class="n">group</span> <span class="k">else</span> <span class="kc">None</span><span class="p">):</span>
+<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a>        <span class="k">raise</span> <span class="n">merrors</span><span class="o">.</span><span class="n">PermissionDeniedException</span><span class="p">(</span><span class="s2">&quot;invalid signature&quot;</span><span class="p">,</span> <span class="mi">401</span><span class="p">,</span> <span class="mi">401</span><span class="p">)</span>
+<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a>    <span class="c1"># process the verified body...</span>
 </code></pre></div>
-<h2 id="defining-settings-in-django-settingspy">Defining Settings in Django settings.py<a class="headerlink" href="#defining-settings-in-django-settingspy" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># settings.py</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="n">MY_APP_API_KEY</span> <span class="o">=</span> <span class="s2">&quot;abc123&quot;</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">MY_APP_TIMEOUT</span> <span class="o">=</span> <span class="mi">30</span>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="n">MY_APP_FEATURE_FLAG</span> <span class="o">=</span> <span class="kc">True</span>
-</code></pre></div>
-<p>Then access via:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="n">settings</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;MY_APP_API_KEY&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
-</code></pre></div>
-<h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">&para;</a></h2>
+<p><code>verify_signed_request</code>:</p>
 <ul>
-<li>Always use <code>settings.get()</code> rather than importing directly from <code>django.conf</code> — it provides defaults and avoids <code>AttributeError</code> on missing keys.</li>
-<li>App-specific settings are cached after first load.</li>
+<li>Pulls raw <code>request.body</code> and the <code>X-Mojo-Signature</code> header.</li>
+<li>Returns <code>False</code> (never raises) when the secret is missing, the header is missing, or the signature does not match.</li>
+<li>Uses <code>hmac.compare_digest</code> (via <code>verify_signature</code>) for constant-time comparison.</li>
 </ul>
-<h2 id="framework-keys">Framework Keys<a class="headerlink" href="#framework-keys" title="Permanent link">&para;</a></h2>
-<p>For the framework-recognized setting names (without values), see:</p>
+<p><strong>Important for receivers:</strong> hash the <strong>raw request body bytes</strong>. Do not re-serialize the parsed JSON — <code>requests</code>/your framework may use different separators or key ordering, and the HMAC will fail.</p>
+<h2 id="escape-hatch-sign-outside-the-jobs-queue">Escape Hatch: Sign Outside the Jobs Queue<a class="headerlink" href="#escape-hatch-sign-outside-the-jobs-queue" title="Permanent link">&para;</a></h2>
+<p>For synchronous webhooks or custom transports, call the helper directly:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers.crypto.sign</span><span class="w"> </span><span class="kn">import</span> <span class="n">sign_for_group</span><span class="p">,</span> <span class="n">WEBHOOK_SIGNATURE_HEADER</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">body_bytes</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="n">payload</span><span class="p">,</span> <span class="n">sort_keys</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">separators</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;,&quot;</span><span class="p">,</span> <span class="s2">&quot;:&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">encode</span><span class="p">()</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="n">sig</span> <span class="o">=</span> <span class="n">sign_for_group</span><span class="p">(</span><span class="n">group</span><span class="p">,</span> <span class="n">body_bytes</span><span class="p">)</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="n">response</span><span class="o">.</span><span class="n">headers</span><span class="p">[</span><span class="n">WEBHOOK_SIGNATURE_HEADER</span><span class="p">]</span> <span class="o">=</span> <span class="n">sig</span>
+</code></pre></div>
+<p><code>sign_for_group</code> auto-mints on first use (same as the REST endpoint).</p>
+<h2 id="security-notes">Security Notes<a class="headerlink" href="#security-notes" title="Permanent link">&para;</a></h2>
 <ul>
-<li><a href="../settings_reference/">settings_reference.md</a></li>
+<li><strong>Constant-time compare</strong>: <code>verify_signature</code> uses <code>hmac.compare_digest</code>. Don't roll your own.</li>
+<li><strong>No auto-mint on verify</strong>: <code>get_webhook_secret()</code> defaults to <code>auto_create=False</code> so a tampered request cannot trigger a mint.</li>
+<li><strong>Secret never in the queue</strong>: <code>publish_webhook(group=...)</code> stores only <code>sign_group_id</code> in the job payload. Anyone reading the queue store sees no signing material.</li>
+<li><strong>Rotation is immediate</strong>: no overlap window. Receivers should accept transient signature-mismatch errors during operator-driven rotation, same as ApiKey rotation.</li>
+<li><strong>Group hierarchy is not auto-resolved</strong>: the signing secret is on the Group you pass, not its parent or descendants. Pass the exact Group whose data the webhook represents.</li>
+<li><strong>Header is masked in logs</strong>: the jobs handler runs <code>X-Mojo-Signature</code> through its <code>_sanitize_headers</code> masking — full signatures don't end up in job metadata or log lines.</li>
 </ul>
+<h3 id="replay-protection-receivers-responsibility">Replay protection — receiver's responsibility<a class="headerlink" href="#replay-protection-receivers-responsibility" title="Permanent link">&para;</a></h3>
+<p>The HMAC covers the body only. There is <strong>no nonce and no timestamp</strong> in the signature itself. A captured <code>(body, X-Mojo-Signature)</code> pair will validate indefinitely until the Group secret rotates. Receivers that need replay protection must implement it at the application layer:</p>
+<ul>
+<li><strong>Idempotency</strong>: include a stable event id in the payload (e.g. <code>event_id</code>, <code>webhook_id</code>) and have the receiver short-circuit on already-seen ids. The jobs system already supports <code>idempotency_key</code> on the publisher side; pass the same value into <code>data</code> for the receiver to dedupe on.</li>
+<li><strong>Freshness window</strong>: include a <code>timestamp</code> (ISO-8601 or unix seconds) in the payload and reject anything older than N seconds at the receiver. The signature still covers the timestamp because it covers the whole body, so an attacker cannot alter the timestamp without invalidating the signature.</li>
+<li><strong>Out-of-band rotation</strong>: rotate the Group secret after a known compromise. Receivers must refresh their cached secret.</li>
+</ul>
+<p>A future revision may add <code>X-Mojo-Webhook-Timestamp</code> to the signature input; for v1 the primitive is intentionally minimal.</p>
+<h2 id="downstream-adoption-recipe">Downstream Adoption Recipe<a class="headerlink" href="#downstream-adoption-recipe" title="Permanent link">&para;</a></h2>
+<p>For services migrating off bespoke webhook secrets:</p>
+<ol>
+<li><strong>Emitter side</strong> — replace your old <code>requests.post(..., headers={"X-MyService-Signature": ...})</code> call with <code>jobs.publish_webhook(url, data, group=...)</code>. Delete the old config field that stored the per-consumer secret.</li>
+<li><strong>Consumer side</strong> — drop your local <code>webhook_secret</code> model field and bespoke <code>_validate_signature</code>. Replace the validation with <code>verify_signed_request(request, remote_group.get_webhook_secret())</code>.</li>
+<li>Aliases: keep your old service-specific signature header working for one release cycle (read both headers, prefer <code>X-Mojo-Signature</code>), then remove the legacy path.</li>
+</ol>
 
 
 

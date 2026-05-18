@@ -975,6 +975,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="HMAC Signing">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#webhook-signing-helpers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Webhook signing helpers
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1267,6 +1284,34 @@
     
   
     Auth
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../account/webhook_signing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Webhook Signing
   
 
     
@@ -2891,6 +2936,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../web_developer/account/webhook_signing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Webhook Signing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -3822,6 +3895,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="HMAC Signing">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#webhook-signing-helpers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Webhook signing helpers
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -3904,31 +3994,42 @@
 <a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="c1"># Generate signature</span>
 <a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="n">signature</span> <span class="o">=</span> <span class="n">sign</span><span class="o">.</span><span class="n">generate_signature</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">secret_key</span><span class="o">=</span><span class="s2">&quot;my-key&quot;</span><span class="p">)</span>
 <a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>
-<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="c1"># Verify signature</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="c1"># Verify signature (constant-time compare)</span>
 <a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="n">is_valid</span> <span class="o">=</span> <span class="n">sign</span><span class="o">.</span><span class="n">verify_signature</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">signature</span><span class="p">,</span> <span class="n">secret_key</span><span class="o">=</span><span class="s2">&quot;my-key&quot;</span><span class="p">)</span>
 </code></pre></div>
 <p>Use for webhook payloads, API request signing, and tamper detection.</p>
-<h2 id="asymmetric-publicprivate-key-encryption">Asymmetric (Public/Private Key) Encryption<a class="headerlink" href="#asymmetric-publicprivate-key-encryption" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers.crypto.privpub</span><span class="w"> </span><span class="kn">import</span> <span class="n">hybrid</span>
+<h3 id="webhook-signing-helpers">Webhook signing helpers<a class="headerlink" href="#webhook-signing-helpers" title="Permanent link">&para;</a></h3>
+<p>For signing outbound webhooks keyed on a Group secret, use the higher-level helpers instead of calling <code>generate_signature</code> directly:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers.crypto.sign</span><span class="w"> </span><span class="kn">import</span> <span class="n">sign_for_group</span><span class="p">,</span> <span class="n">WEBHOOK_SIGNATURE_HEADER</span>
 <a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="n">enc</span> <span class="o">=</span> <span class="n">hybrid</span><span class="o">.</span><span class="n">PrivatePublicEncryption</span><span class="p">()</span>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="c1"># Encrypt with public key</span>
-<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="n">encrypted</span> <span class="o">=</span> <span class="n">enc</span><span class="o">.</span><span class="n">encrypt</span><span class="p">(</span><span class="n">plaintext</span><span class="p">,</span> <span class="n">public_key</span><span class="p">)</span>
-<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>
-<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="c1"># Decrypt with private key</span>
-<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="n">plaintext</span> <span class="o">=</span> <span class="n">enc</span><span class="o">.</span><span class="n">decrypt</span><span class="p">(</span><span class="n">encrypted</span><span class="p">,</span> <span class="n">private_key</span><span class="p">)</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="c1"># sign_for_group auto-mints the Group&#39;s webhook secret on first use</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="n">body_bytes</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="n">payload</span><span class="p">,</span> <span class="n">sort_keys</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">separators</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;,&quot;</span><span class="p">,</span> <span class="s2">&quot;:&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">encode</span><span class="p">()</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="n">sig</span> <span class="o">=</span> <span class="n">sign_for_group</span><span class="p">(</span><span class="n">group</span><span class="p">,</span> <span class="n">body_bytes</span><span class="p">)</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="n">response</span><span class="o">.</span><span class="n">headers</span><span class="p">[</span><span class="n">WEBHOOK_SIGNATURE_HEADER</span><span class="p">]</span> <span class="o">=</span> <span class="n">sig</span>   <span class="c1"># &quot;X-Mojo-Signature&quot;</span>
+</code></pre></div>
+<p><code>WEBHOOK_SIGNATURE_HEADER</code> is the string constant <code>"X-Mojo-Signature"</code>.</p>
+<p>Most webhook emission should go through <code>jobs.publish_webhook(group=...)</code>, which calls these helpers automatically. See <a href="../../account/webhook_signing/">Webhook Signing</a>.</p>
+<h2 id="asymmetric-publicprivate-key-encryption">Asymmetric (Public/Private Key) Encryption<a class="headerlink" href="#asymmetric-publicprivate-key-encryption" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers.crypto.privpub</span><span class="w"> </span><span class="kn">import</span> <span class="n">hybrid</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">enc</span> <span class="o">=</span> <span class="n">hybrid</span><span class="o">.</span><span class="n">PrivatePublicEncryption</span><span class="p">()</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="c1"># Encrypt with public key</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="n">encrypted</span> <span class="o">=</span> <span class="n">enc</span><span class="o">.</span><span class="n">encrypt</span><span class="p">(</span><span class="n">plaintext</span><span class="p">,</span> <span class="n">public_key</span><span class="p">)</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="c1"># Decrypt with private key</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="n">plaintext</span> <span class="o">=</span> <span class="n">enc</span><span class="o">.</span><span class="n">decrypt</span><span class="p">(</span><span class="n">encrypted</span><span class="p">,</span> <span class="n">private_key</span><span class="p">)</span>
 </code></pre></div>
 <p>Use for end-to-end encryption and secure key exchange.</p>
 <h2 id="mojosecrets-model-level-encryption">MojoSecrets (Model-Level Encryption)<a class="headerlink" href="#mojosecrets-model-level-encryption" title="Permanent link">&para;</a></h2>
 <p>For storing encrypted data on model instances, use <code>MojoSecrets</code> rather than calling <code>crypto</code> directly. See <a href="../../core/mojo_model/#mojosecrets">MojoModel</a>.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># Preferred — use MojoSecrets on your model</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="n">integration</span><span class="o">.</span><span class="n">set_secret</span><span class="p">(</span><span class="s2">&quot;api_key&quot;</span><span class="p">,</span> <span class="s2">&quot;sk-abc123&quot;</span><span class="p">)</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">key</span> <span class="o">=</span> <span class="n">integration</span><span class="o">.</span><span class="n">get_secret</span><span class="p">(</span><span class="s2">&quot;api_key&quot;</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># Preferred — use MojoSecrets on your model</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="n">integration</span><span class="o">.</span><span class="n">set_secret</span><span class="p">(</span><span class="s2">&quot;api_key&quot;</span><span class="p">,</span> <span class="s2">&quot;sk-abc123&quot;</span><span class="p">)</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="n">key</span> <span class="o">=</span> <span class="n">integration</span><span class="o">.</span><span class="n">get_secret</span><span class="p">(</span><span class="s2">&quot;api_key&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="kms-secrets-aws-kms">KMS Secrets (AWS KMS)<a class="headerlink" href="#kms-secrets-aws-kms" title="Permanent link">&para;</a></h2>
 <p>For AWS KMS-backed encryption:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">KSMSecrets</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">KSMSecrets</span>
 </code></pre></div>
 <p><code>KSMSecrets</code> uses AWS Key Management Service for envelope encryption. Requires AWS credentials and KMS key configuration in settings. See <a href="../../email/">AWS docs</a> for AWS setup.</p>
 

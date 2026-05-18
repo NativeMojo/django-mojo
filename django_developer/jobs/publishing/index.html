@@ -1156,6 +1156,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../account/webhook_signing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Webhook Signing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -1907,6 +1935,17 @@
     <span class="md-ellipsis">
       
         Signature
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#signed-webhooks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Signed webhooks
       
     </span>
   </a>
@@ -3086,6 +3125,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../web_developer/account/webhook_signing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Webhook Signing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -4098,6 +4165,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#signed-webhooks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Signed webhooks
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -4469,45 +4547,65 @@
 <a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>    <span class="n">url</span><span class="p">,</span>                     <span class="c1"># str — target URL (must start with http:// or https://)</span>
 <a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>    <span class="n">data</span><span class="p">,</span>                    <span class="c1"># dict — JSON data to POST</span>
 <a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>    <span class="o">*</span><span class="p">,</span>
-<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>    <span class="n">headers</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>            <span class="c1"># dict — additional HTTP headers</span>
-<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>    <span class="n">channel</span><span class="o">=</span><span class="s2">&quot;webhooks&quot;</span><span class="p">,</span>      <span class="c1"># str — job channel</span>
-<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>    <span class="n">delay</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>              <span class="c1"># int seconds</span>
-<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a>    <span class="n">run_at</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>             <span class="c1"># datetime</span>
-<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>    <span class="n">timeout</span><span class="o">=</span><span class="mi">30</span><span class="p">,</span>              <span class="c1"># int seconds — HTTP request timeout</span>
-<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a>    <span class="n">max_retries</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>        <span class="c1"># int — default 5 for webhooks</span>
-<a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a>    <span class="n">backoff_base</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>       <span class="c1"># float — default 2.0</span>
-<a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a>    <span class="n">backoff_max</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>        <span class="c1"># int — default 3600</span>
-<a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a>    <span class="n">expires_in</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>         <span class="c1"># int seconds</span>
-<a id="__codelineno-8-14" name="__codelineno-8-14" href="#__codelineno-8-14"></a>    <span class="n">expires_at</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>         <span class="c1"># datetime</span>
-<a id="__codelineno-8-15" name="__codelineno-8-15" href="#__codelineno-8-15"></a>    <span class="n">idempotency_key</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>    <span class="c1"># str</span>
-<a id="__codelineno-8-16" name="__codelineno-8-16" href="#__codelineno-8-16"></a>    <span class="n">webhook_id</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>         <span class="c1"># str — custom identifier for tracking</span>
-<a id="__codelineno-8-17" name="__codelineno-8-17" href="#__codelineno-8-17"></a><span class="p">)</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>    <span class="n">group</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>              <span class="c1"># account.Group or int id — when set, the handler</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>                             <span class="c1">#   signs at delivery (see &quot;Signed webhooks&quot; below)</span>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>    <span class="n">headers</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>            <span class="c1"># dict — additional HTTP headers</span>
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a>    <span class="n">channel</span><span class="o">=</span><span class="s2">&quot;webhooks&quot;</span><span class="p">,</span>      <span class="c1"># str — job channel</span>
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>    <span class="n">delay</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>              <span class="c1"># int seconds</span>
+<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a>    <span class="n">run_at</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>             <span class="c1"># datetime</span>
+<a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a>    <span class="n">timeout</span><span class="o">=</span><span class="mi">30</span><span class="p">,</span>              <span class="c1"># int seconds — HTTP request timeout</span>
+<a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a>    <span class="n">max_retries</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>        <span class="c1"># int — default 5 for webhooks</span>
+<a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a>    <span class="n">backoff_base</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>       <span class="c1"># float — default 2.0</span>
+<a id="__codelineno-8-14" name="__codelineno-8-14" href="#__codelineno-8-14"></a>    <span class="n">backoff_max</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>        <span class="c1"># int — default 3600</span>
+<a id="__codelineno-8-15" name="__codelineno-8-15" href="#__codelineno-8-15"></a>    <span class="n">expires_in</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>         <span class="c1"># int seconds</span>
+<a id="__codelineno-8-16" name="__codelineno-8-16" href="#__codelineno-8-16"></a>    <span class="n">expires_at</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>         <span class="c1"># datetime</span>
+<a id="__codelineno-8-17" name="__codelineno-8-17" href="#__codelineno-8-17"></a>    <span class="n">idempotency_key</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>    <span class="c1"># str</span>
+<a id="__codelineno-8-18" name="__codelineno-8-18" href="#__codelineno-8-18"></a>    <span class="n">webhook_id</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>         <span class="c1"># str — custom identifier for tracking</span>
+<a id="__codelineno-8-19" name="__codelineno-8-19" href="#__codelineno-8-19"></a><span class="p">)</span>
 </code></pre></div>
 <p><strong>Returns</strong>: Job ID string.</p>
 <p><strong>Raises</strong>: <code>ValueError</code> for invalid URL or non-serializable data, <code>RuntimeError</code> on failure.</p>
 <p>Internally creates a job that calls <code>mojo.apps.jobs.handlers.webhook.post_webhook</code>.</p>
+<h3 id="signed-webhooks">Signed webhooks<a class="headerlink" href="#signed-webhooks" title="Permanent link">&para;</a></h3>
+<p>Pass <code>group=&lt;account.Group or id&gt;</code> to have the job handler sign the outbound body at delivery time:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="n">jobs</span><span class="o">.</span><span class="n">publish_webhook</span><span class="p">(</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>    <span class="n">url</span><span class="o">=</span><span class="n">receiver_url</span><span class="p">,</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>    <span class="n">data</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;event&quot;</span><span class="p">:</span> <span class="s2">&quot;verification_complete&quot;</span><span class="p">,</span> <span class="s2">&quot;customer_id&quot;</span><span class="p">:</span> <span class="mi">42</span><span class="p">},</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>    <span class="n">group</span><span class="o">=</span><span class="n">customer</span><span class="o">.</span><span class="n">group</span><span class="p">,</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="p">)</span>
+</code></pre></div>
+<p>The handler:</p>
+<ol>
+<li>Stores <strong>only</strong> <code>sign_group_id</code> in the queue — the secret never enters the payload.</li>
+<li>At delivery, canonicalizes the body: <code>json.dumps(data, sort_keys=True, separators=(",", ":")).encode("utf-8")</code>.</li>
+<li>Computes <code>X-Mojo-Signature: &lt;hex&gt;</code> keyed on the Group's webhook secret (auto-minted on first use).</li>
+<li>Sends those exact bytes via <code>requests.post(..., data=body_bytes)</code> — signature and wire bytes are guaranteed identical.</li>
+</ol>
+<p>If the Group has been deleted between publish and delivery, the handler returns <code>'failed'</code> with <code>error_type='sign_group_missing'</code> — no retry, no silent unsigned send.</p>
+<p>Retries re-sign with the current secret, so an in-flight job that hits a rotation is delivered with the new signature.</p>
+<p>Full spec: <a href="../../account/webhook_signing/">Webhook Signing</a>.</p>
 <h2 id="broadcast_execute">broadcast_execute()<a class="headerlink" href="#broadcast_execute" title="Permanent link">&para;</a></h2>
 <p>Execute a function on ALL active runners without creating a Job record. This is a real-time control-channel operation.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="n">results</span> <span class="o">=</span> <span class="n">jobs</span><span class="o">.</span><span class="n">broadcast_execute</span><span class="p">(</span>
-<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>    <span class="s2">&quot;myapp.services.cache.clear_all&quot;</span><span class="p">,</span>
-<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>    <span class="n">data</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;prefix&quot;</span><span class="p">:</span> <span class="s2">&quot;user_*&quot;</span><span class="p">},</span>
-<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>    <span class="n">collect_replies</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
-<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>    <span class="n">timeout</span><span class="o">=</span><span class="mf">5.0</span><span class="p">,</span>
-<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="p">)</span>
-</code></pre></div>
-<h3 id="signature_2">Signature<a class="headerlink" href="#signature_2" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="n">jobs</span><span class="o">.</span><span class="n">broadcast_execute</span><span class="p">(</span>
-<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>    <span class="n">func_path</span><span class="p">,</span>              <span class="c1"># str — dotted path to function</span>
-<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>    <span class="n">data</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>              <span class="c1"># dict — passed to the function</span>
-<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>    <span class="n">timeout</span><span class="o">=</span><span class="mf">2.0</span><span class="p">,</span>            <span class="c1"># float seconds — wait for responses</span>
-<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>    <span class="n">collect_replies</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>  <span class="c1"># bool — True to gather return values</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="n">results</span> <span class="o">=</span> <span class="n">jobs</span><span class="o">.</span><span class="n">broadcast_execute</span><span class="p">(</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>    <span class="s2">&quot;myapp.services.cache.clear_all&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>    <span class="n">data</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;prefix&quot;</span><span class="p">:</span> <span class="s2">&quot;user_*&quot;</span><span class="p">},</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>    <span class="n">collect_replies</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>    <span class="n">timeout</span><span class="o">=</span><span class="mf">5.0</span><span class="p">,</span>
 <a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="p">)</span>
 </code></pre></div>
+<h3 id="signature_2">Signature<a class="headerlink" href="#signature_2" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="n">jobs</span><span class="o">.</span><span class="n">broadcast_execute</span><span class="p">(</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>    <span class="n">func_path</span><span class="p">,</span>              <span class="c1"># str — dotted path to function</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>    <span class="n">data</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>              <span class="c1"># dict — passed to the function</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>    <span class="n">timeout</span><span class="o">=</span><span class="mf">2.0</span><span class="p">,</span>            <span class="c1"># float seconds — wait for responses</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>    <span class="n">collect_replies</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>  <span class="c1"># bool — True to gather return values</span>
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="p">)</span>
+</code></pre></div>
 <p><strong>Returns</strong>: List of dicts, one per responding runner:
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="p">[</span>
-<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>    <span class="p">{</span><span class="s2">&quot;runner_id&quot;</span><span class="p">:</span> <span class="s2">&quot;runner-host1-abc&quot;</span><span class="p">,</span> <span class="s2">&quot;func&quot;</span><span class="p">:</span> <span class="s2">&quot;...&quot;</span><span class="p">,</span> <span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="s2">&quot;success&quot;</span><span class="p">,</span> <span class="s2">&quot;result&quot;</span><span class="p">:</span> <span class="p">{</span><span class="o">...</span><span class="p">}},</span>
-<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>    <span class="p">{</span><span class="s2">&quot;runner_id&quot;</span><span class="p">:</span> <span class="s2">&quot;runner-host2-def&quot;</span><span class="p">,</span> <span class="s2">&quot;func&quot;</span><span class="p">:</span> <span class="s2">&quot;...&quot;</span><span class="p">,</span> <span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="s2">&quot;error&quot;</span><span class="p">,</span> <span class="s2">&quot;error&quot;</span><span class="p">:</span> <span class="s2">&quot;...&quot;</span><span class="p">},</span>
-<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="p">]</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="p">[</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>    <span class="p">{</span><span class="s2">&quot;runner_id&quot;</span><span class="p">:</span> <span class="s2">&quot;runner-host1-abc&quot;</span><span class="p">,</span> <span class="s2">&quot;func&quot;</span><span class="p">:</span> <span class="s2">&quot;...&quot;</span><span class="p">,</span> <span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="s2">&quot;success&quot;</span><span class="p">,</span> <span class="s2">&quot;result&quot;</span><span class="p">:</span> <span class="p">{</span><span class="o">...</span><span class="p">}},</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>    <span class="p">{</span><span class="s2">&quot;runner_id&quot;</span><span class="p">:</span> <span class="s2">&quot;runner-host2-def&quot;</span><span class="p">,</span> <span class="s2">&quot;func&quot;</span><span class="p">:</span> <span class="s2">&quot;...&quot;</span><span class="p">,</span> <span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="s2">&quot;error&quot;</span><span class="p">,</span> <span class="s2">&quot;error&quot;</span><span class="p">:</span> <span class="s2">&quot;...&quot;</span><span class="p">},</span>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="p">]</span>
 </code></pre></div></p>
 <p>Empty list if no runners respond.</p>
 <h3 id="use-cases">Use Cases<a class="headerlink" href="#use-cases" title="Permanent link">&para;</a></h3>
@@ -4518,55 +4616,55 @@
 </ul>
 <h2 id="channels">Channels<a class="headerlink" href="#channels" title="Permanent link">&para;</a></h2>
 <p>Channels route jobs to specific worker pools. Run separate engine processes per channel:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="c1"># Email worker pool</span>
-<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>python<span class="w"> </span>manage.py<span class="w"> </span>jobs_engine<span class="w"> </span>--channels<span class="w"> </span>emails<span class="w"> </span>--max-workers<span class="w"> </span><span class="m">20</span>
-<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>
-<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="c1"># Heavy processing pool</span>
-<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>python<span class="w"> </span>manage.py<span class="w"> </span>jobs_engine<span class="w"> </span>--channels<span class="w"> </span>heavy<span class="w"> </span>--max-workers<span class="w"> </span><span class="m">5</span>
-<a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a>
-<a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a><span class="c1"># Default catches everything else</span>
-<a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a>python<span class="w"> </span>manage.py<span class="w"> </span>jobs_engine<span class="w"> </span>--channels<span class="w"> </span>default<span class="w"> </span>--max-workers<span class="w"> </span><span class="m">10</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="c1"># Email worker pool</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>python<span class="w"> </span>manage.py<span class="w"> </span>jobs_engine<span class="w"> </span>--channels<span class="w"> </span>emails<span class="w"> </span>--max-workers<span class="w"> </span><span class="m">20</span>
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="c1"># Heavy processing pool</span>
+<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a>python<span class="w"> </span>manage.py<span class="w"> </span>jobs_engine<span class="w"> </span>--channels<span class="w"> </span>heavy<span class="w"> </span>--max-workers<span class="w"> </span><span class="m">5</span>
+<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a>
+<a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a><span class="c1"># Default catches everything else</span>
+<a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a>python<span class="w"> </span>manage.py<span class="w"> </span>jobs_engine<span class="w"> </span>--channels<span class="w"> </span>default<span class="w"> </span>--max-workers<span class="w"> </span><span class="m">10</span>
 </code></pre></div>
 <p>Configure available channels in settings:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="n">JOBS_CHANNELS</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;default&#39;</span><span class="p">,</span> <span class="s1">&#39;emails&#39;</span><span class="p">,</span> <span class="s1">&#39;webhooks&#39;</span><span class="p">,</span> <span class="s1">&#39;heavy&#39;</span><span class="p">,</span> <span class="s1">&#39;maintenance&#39;</span><span class="p">]</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="n">JOBS_CHANNELS</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;default&#39;</span><span class="p">,</span> <span class="s1">&#39;emails&#39;</span><span class="p">,</span> <span class="s1">&#39;webhooks&#39;</span><span class="p">,</span> <span class="s1">&#39;heavy&#39;</span><span class="p">,</span> <span class="s1">&#39;maintenance&#39;</span><span class="p">]</span>
 </code></pre></div>
 <p>Default channel is <code>"default"</code>.</p>
 <h2 id="payload-best-practices">Payload Best Practices<a class="headerlink" href="#payload-best-practices" title="Permanent link">&para;</a></h2>
 <p>Payloads are persisted to PostgreSQL. Max size is <strong>16KB</strong> by default (<code>JOBS_PAYLOAD_MAX_BYTES</code>).</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="c1"># Good — pass IDs, fetch in job</span>
-<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="n">jobs</span><span class="o">.</span><span class="n">publish</span><span class="p">(</span><span class="s2">&quot;myapp.services.order.process&quot;</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;order_id&quot;</span><span class="p">:</span> <span class="mi">42</span><span class="p">})</span>
-<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>
-<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="c1"># Bad — large objects in payload</span>
-<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="n">jobs</span><span class="o">.</span><span class="n">publish</span><span class="p">(</span><span class="s2">&quot;myapp.services.order.process&quot;</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;order&quot;</span><span class="p">:</span> <span class="n">huge_dict</span><span class="p">})</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="c1"># Good — pass IDs, fetch in job</span>
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="n">jobs</span><span class="o">.</span><span class="n">publish</span><span class="p">(</span><span class="s2">&quot;myapp.services.order.process&quot;</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;order_id&quot;</span><span class="p">:</span> <span class="mi">42</span><span class="p">})</span>
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>
+<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="c1"># Bad — large objects in payload</span>
+<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a><span class="n">jobs</span><span class="o">.</span><span class="n">publish</span><span class="p">(</span><span class="s2">&quot;myapp.services.order.process&quot;</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;order&quot;</span><span class="p">:</span> <span class="n">huge_dict</span><span class="p">})</span>
 </code></pre></div>
 <p>Always pass identifiers and fetch the data inside the job function.</p>
 <h2 id="other-functions">Other Functions<a class="headerlink" href="#other-functions" title="Permanent link">&para;</a></h2>
 <h3 id="status">status()<a class="headerlink" href="#status" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="n">info</span> <span class="o">=</span> <span class="n">jobs</span><span class="o">.</span><span class="n">status</span><span class="p">(</span><span class="n">job_id</span><span class="p">)</span>
-<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="c1"># Returns dict: {id, status, channel, func, created, started_at, finished_at, attempt, last_error, metadata}</span>
-<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="c1"># Returns None if not found</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="n">info</span> <span class="o">=</span> <span class="n">jobs</span><span class="o">.</span><span class="n">status</span><span class="p">(</span><span class="n">job_id</span><span class="p">)</span>
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="c1"># Returns dict: {id, status, channel, func, created, started_at, finished_at, attempt, last_error, metadata}</span>
+<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a><span class="c1"># Returns None if not found</span>
 </code></pre></div>
 <h3 id="cancel">cancel()<a class="headerlink" href="#cancel" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="n">success</span> <span class="o">=</span> <span class="n">jobs</span><span class="o">.</span><span class="n">cancel</span><span class="p">(</span><span class="n">job_id</span><span class="p">)</span>
-<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="c1"># Returns True if cancel requested, False if not found or already terminal</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="n">success</span> <span class="o">=</span> <span class="n">jobs</span><span class="o">.</span><span class="n">cancel</span><span class="p">(</span><span class="n">job_id</span><span class="p">)</span>
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="c1"># Returns True if cancel requested, False if not found or already terminal</span>
 </code></pre></div>
 <p>Sets <code>cancel_requested=True</code> on the job. The running function must check via <code>job.check_cancel_requested()</code>.</p>
 <h3 id="get_runners">get_runners()<a class="headerlink" href="#get_runners" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="n">runners</span> <span class="o">=</span> <span class="n">jobs</span><span class="o">.</span><span class="n">get_runners</span><span class="p">(</span><span class="n">channel</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
-<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="c1"># Returns list of dicts with runner info and heartbeat data</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="n">runners</span> <span class="o">=</span> <span class="n">jobs</span><span class="o">.</span><span class="n">get_runners</span><span class="p">(</span><span class="n">channel</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="c1"># Returns list of dicts with runner info and heartbeat data</span>
 </code></pre></div>
 <h3 id="get_sysinfo">get_sysinfo()<a class="headerlink" href="#get_sysinfo" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="n">info</span> <span class="o">=</span> <span class="n">jobs</span><span class="o">.</span><span class="n">get_sysinfo</span><span class="p">(</span><span class="n">runner_id</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mf">5.0</span><span class="p">)</span>
-<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="c1"># Returns list of dicts with CPU, memory, disk, network info per runner</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="n">info</span> <span class="o">=</span> <span class="n">jobs</span><span class="o">.</span><span class="n">get_sysinfo</span><span class="p">(</span><span class="n">runner_id</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mf">5.0</span><span class="p">)</span>
+<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a><span class="c1"># Returns list of dicts with CPU, memory, disk, network info per runner</span>
 </code></pre></div>
 <p>Requires <code>psutil</code> installed on runners.</p>
 <h3 id="broadcast_command">broadcast_command()<a class="headerlink" href="#broadcast_command" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="n">responses</span> <span class="o">=</span> <span class="n">jobs</span><span class="o">.</span><span class="n">broadcast_command</span><span class="p">(</span><span class="s2">&quot;status&quot;</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mf">2.0</span><span class="p">)</span>
-<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a><span class="c1"># Commands: &quot;status&quot;, &quot;shutdown&quot;, &quot;pause&quot;, &quot;resume&quot;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="n">responses</span> <span class="o">=</span> <span class="n">jobs</span><span class="o">.</span><span class="n">broadcast_command</span><span class="p">(</span><span class="s2">&quot;status&quot;</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mf">2.0</span><span class="p">)</span>
+<a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a><span class="c1"># Commands: &quot;status&quot;, &quot;shutdown&quot;, &quot;pause&quot;, &quot;resume&quot;</span>
 </code></pre></div>
 <h3 id="ping">ping()<a class="headerlink" href="#ping" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="n">alive</span> <span class="o">=</span> <span class="n">jobs</span><span class="o">.</span><span class="n">ping</span><span class="p">(</span><span class="s2">&quot;runner-host1-abc123&quot;</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mf">2.0</span><span class="p">)</span>
-<a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a><span class="c1"># Returns True/False</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="n">alive</span> <span class="o">=</span> <span class="n">jobs</span><span class="o">.</span><span class="n">ping</span><span class="p">(</span><span class="s2">&quot;runner-host1-abc123&quot;</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mf">2.0</span><span class="p">)</span>
+<a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a><span class="c1"># Returns True/False</span>
 </code></pre></div>
 
 

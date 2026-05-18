@@ -1361,6 +1361,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#webhook-secret" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Webhook Secret
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#activity-tracking" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1406,6 +1417,34 @@
     
   
     Auth
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../webhook_signing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Webhook Signing
   
 
     
@@ -3030,6 +3069,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../web_developer/account/webhook_signing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Webhook Signing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -4114,6 +4181,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#webhook-secret" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Webhook Secret
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#activity-tracking" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4381,8 +4459,24 @@ group is detected. This preserves the default branding for the default flow.</p>
 <a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="k">if</span> <span class="n">request</span><span class="o">.</span><span class="n">group</span><span class="p">:</span>
 <a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>    <span class="n">queryset</span> <span class="o">=</span> <span class="n">queryset</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">group</span><span class="o">=</span><span class="n">request</span><span class="o">.</span><span class="n">group</span><span class="p">)</span>
 </code></pre></div>
+<h2 id="webhook-secret">Webhook Secret<a class="headerlink" href="#webhook-secret" title="Permanent link">&para;</a></h2>
+<p><code>Group</code> stores a per-tenant HMAC-SHA256 signing secret inside its <code>MojoSecrets</code> blob (no migration). Three methods manage it:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="c1"># Read — safe for verify paths; returns None if not yet minted</span>
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="n">secret</span> <span class="o">=</span> <span class="n">group</span><span class="o">.</span><span class="n">get_webhook_secret</span><span class="p">()</span>                  <span class="c1"># auto_create=False</span>
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>
+<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="c1"># Read with auto-mint — use on the emitter side</span>
+<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a><span class="n">secret</span> <span class="o">=</span> <span class="n">group</span><span class="o">.</span><span class="n">get_webhook_secret</span><span class="p">(</span><span class="n">auto_create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a>
+<a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a><span class="c1"># Full record with timestamps</span>
+<a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a><span class="n">info</span> <span class="o">=</span> <span class="n">group</span><span class="o">.</span><span class="n">get_webhook_secret_info</span><span class="p">(</span><span class="n">auto_create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<a id="__codelineno-15-9" name="__codelineno-15-9" href="#__codelineno-15-9"></a><span class="c1"># objict(value=&quot;wsec_…&quot;, created_at=&quot;…&quot;, last_rotated_at=&quot;…&quot;)</span>
+<a id="__codelineno-15-10" name="__codelineno-15-10" href="#__codelineno-15-10"></a>
+<a id="__codelineno-15-11" name="__codelineno-15-11" href="#__codelineno-15-11"></a><span class="c1"># Rotate — new value, preserves created_at, advances last_rotated_at</span>
+<a id="__codelineno-15-12" name="__codelineno-15-12" href="#__codelineno-15-12"></a><span class="n">info</span> <span class="o">=</span> <span class="n">group</span><span class="o">.</span><span class="n">rotate_webhook_secret</span><span class="p">()</span>
+</code></pre></div>
+<p>The secret format is <code>"wsec_"</code> + 48 alphanumeric characters. The REST endpoint <code>POST /api/group/webhook_secret</code> exposes read and rotation to operators with <code>manage_group</code> permission. See <a href="../webhook_signing/">Webhook Signing</a> for the full signing and verification pattern.</p>
 <h2 id="activity-tracking">Activity Tracking<a class="headerlink" href="#activity-tracking" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="n">group</span><span class="o">.</span><span class="n">touch</span><span class="p">()</span>   <span class="c1"># updates last_activity (rate-limited by GROUP_LAST_ACTIVITY_FREQ)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="n">group</span><span class="o">.</span><span class="n">touch</span><span class="p">()</span>   <span class="c1"># updates last_activity (rate-limited by GROUP_LAST_ACTIVITY_FREQ)</span>
 </code></pre></div>
 <h2 id="settings">Settings<a class="headerlink" href="#settings" title="Permanent link">&para;</a></h2>
 <table>
