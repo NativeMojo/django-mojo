@@ -125,7 +125,7 @@ def test_ensure_bouncer_rules_is_idempotent(opts):
     count2 = RuleSet.objects.filter(category__startswith="security:bouncer:").count()
 
     assert count1 == count2, f"Second call should not create duplicates: {count1} vs {count2}"
-    assert count1 == 3, f"Should create exactly 3 bouncer rulesets, got {count1}"
+    assert count1 == 7, f"Should create exactly 7 bouncer rulesets, got {count1}"
 
     # Cleanup
     RuleSet.objects.filter(category__startswith="security:bouncer:").delete()
