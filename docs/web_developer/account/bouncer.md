@@ -888,6 +888,13 @@ MojoSentinel.observe('rg_limit_change_attempt', {
 | `category` | string | Short event-type slug. Becomes `raw_signals.event_type` on the `BouncerSignal` row server-side. |
 | `payload` | object | Flat dict of primitives — int/float/string/bool. The framework's universal analyzers read certain keys (e.g. `target_tag`, `reaction_ms`); apps can include any extras they want. |
 
+Additional public methods:
+
+| Method | Notes |
+|---|---|
+| `MojoSentinel.flush()` | Force an immediate batch flush outside the normal interval. Useful before a navigation or form submit. |
+| `MojoSentinel.getDuid()` | Read the shared `mojo_device_uid` value that sentinel is using. |
+
 The event is buffered with the next periodic batch. Failures are silent —
 the host page is never affected by a slow or unreachable bouncer endpoint.
 

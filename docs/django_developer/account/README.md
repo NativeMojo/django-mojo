@@ -15,5 +15,5 @@
 - [Login Events](login_events.md) — UserLoginEvent model, geo tracking, anomaly flags, metrics
 - [Inactive User/Group Sweep](inactive_sweep.md) — Auto-warn and disable inactive users and groups; feature flags, exemptions, email templates, incident events
 - [Disable Lifecycle](disable_lifecycle.md) — Unified disable/reactivate state for User and Group: `metadata.protected.disable.*` schema, REST POST_SAVE_ACTIONS, throttle-read endpoint, service API
-- [Bouncer](bouncer.md) — Bot detection gate for login, registration, and public message pages; adaptive learning, device reputation, signature management
+- [Bouncer](bouncer.md) — Bot detection gate for login, registration, and public message pages; adaptive learning, device reputation, signature management; continuous in-session detection (stream scorer, stream analyzers, gradient enforcement), static-page gating via `verify_pass` + nginx `auth_request`, cross-origin embedding, Bouncer-as-a-Service
 - [Public Messages](bouncer.md#public-messages-contact--support) — Bouncer-gated contact/support intake; `PublicMessage` model, `KIND_SCHEMAS`, notify_admins, admin RestMeta

@@ -11,7 +11,7 @@
 
 ### Securing the Login Flow
 
-1. [Bouncer](bouncer.md) — bot detection gate, challenge page, assess endpoint, token lifecycle
+1. [Bouncer](bouncer.md) — bot detection gate, challenge page, assess endpoint, token lifecycle; embedding on static pages / SPAs, MojoSentinel continuous monitoring, nginx drop-in gating
 2. [Authentication](authentication.md) — login, MFA challenge, token refresh
 3. [Passkeys](passkeys.md) / [Magic Login](magic_login.md) — passwordless alternatives
 

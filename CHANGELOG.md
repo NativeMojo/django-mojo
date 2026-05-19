@@ -1,4 +1,4 @@
-## v1.1.0 - (current)
+## v1.2.20 - (current)
 
 bouncer continuous detection + static-page protection
 

@@ -116,6 +116,34 @@ def test_batched_events_trigger_scorer_inline(opts):
 
 
 @th.django_unit_test()
+def test_batched_events_capped_at_200(opts):
+    """Oversize batch (> 200 events) is truncated, not bulk-created in full.
+
+    Defense against a malicious client posting an unbounded batch to force
+    a huge bulk_create + scoring window. We persist what fits (200) and
+    silently drop the rest.
+    """
+    from mojo.apps.account.models import BouncerSignal
+    big_batch = [
+        {'event_type': 'sentinel_snapshot', 'data': {'i': i}, 'context': 'cap'}
+        for i in range(500)
+    ]
+    resp = opts.client.post('/api/account/bouncer/event', {
+        'duid': TEST_DUID,
+        'page_type': 'gameplay',
+        'session_id': 'sentinel-cap-1',
+        'events': big_batch,
+    })
+    assert_eq(resp.status_code, 200, f"oversize batch must still 200, got {resp.status_code}")
+    data = resp.json.data
+    assert_eq(data.count, 200, f"expected cap=200 in response, got {data.count}")
+    rows = BouncerSignal.objects.filter(
+        duid=TEST_DUID, session_id='sentinel-cap-1', stage='event'
+    ).count()
+    assert_eq(rows, 200, f"expected 200 BouncerSignal rows after cap, got {rows}")
+
+
+@th.django_unit_test()
 def test_empty_events_array_returns_200(opts):
     """Empty events array is a valid no-op — endpoint returns 200, no rows."""
     from mojo.apps.account.models import BouncerSignal

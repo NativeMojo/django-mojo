@@ -47,6 +47,11 @@ def on_bouncer_event(request):
 
     # ── Batched path (sentinel) ──────────────────────────────────
     if isinstance(events, list) and events:
+        # Hard cap on batch size — sentinel's default flush_size is 25 and a
+        # cooperative client tops out around 200. Reject larger payloads
+        # silently (truncate, persist what fits) so a malicious client can't
+        # force an unbounded bulk_create or scoring window.
+        events = events[:200]
         rows = []
         for evt in events:
             if not isinstance(evt, dict):
