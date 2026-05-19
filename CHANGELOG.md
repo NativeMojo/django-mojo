@@ -1,5 +1,10 @@
 ## v1.1.0 - (current)
 
+## v1.2.19 - May 18, 2026
+
+making live registration fix
+
+
 **account** — fix: switcher links on `/auth` and `/register` dropped post-auth forwarding params. A user landing at `/auth?redirect=/dashboard` who clicked "Create one" was sent to `/register` with no `redirect=`, then landed at `AUTH_SUCCESS_REDIRECT` instead of `/dashboard` after registering. `_auth_context()` now forwards `redirect`, `next`, `returnTo`, and `back` from the source URL alongside `group_uuid`. OAuth `code`/`state`, magic-link `token`, and reset tokens are intentionally not forwarded.
 
 ## v1.2.18 - May 17, 2026
