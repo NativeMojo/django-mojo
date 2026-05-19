@@ -4519,6 +4519,7 @@ not hidden by JS).</p>
 </tr>
 </tbody>
 </table>
+<p><strong>Per-request override params</strong> — <code>?redirect=</code>, <code>?next=</code>, <code>?returnTo=</code>, and <code>?back=</code> are read from <code>location.search</code> on the auth/register page (the first three override <code>AUTH_SUCCESS_REDIRECT</code>; <code>?back=</code> overrides <code>AUTH_BACK_TO_WEBSITE_URL</code>). They are also preserved across the login↔register switcher links, so a user who lands at <code>/auth?redirect=/dashboard</code> and clicks "Create one" continues to <code>/register?redirect=/dashboard</code>. Other query params (OAuth <code>code</code>/<code>state</code>, magic-link <code>token</code>, reset tokens) are intentionally NOT forwarded to avoid mis-triggering logic on the receiving page.</p>
 <h3 id="configurable-registration-form">Configurable Registration Form<a class="headerlink" href="#configurable-registration-form" title="Permanent link">&para;</a></h3>
 <p><code>AUTH_REGISTER_FIELDS</code> drives both the bouncer-rendered register form and the server-side validator. Group-scoped — different groups can have different signup shapes.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># settings.py — phone-as-identity project example</span>
