@@ -456,3 +456,126 @@ def test_register_dob_segments(opts):
     # And NOT the legacy <input type="date">
     assert_true('type="date"' not in html,
                 "DOB must NOT render as <input type='date'> any more")
+
+
+# ---------------------------------------------------------------------------
+# Switcher param forwarding — login <-> register cross-links preserve
+# `redirect`, `next`, `returnTo`, `back` (plus `group_uuid`).
+# ---------------------------------------------------------------------------
+
+def _render_switcher(template_name, query=None, group=None):
+    """Render an auth template with a query string and DATA dict.
+
+    Mirrors _serve_challenge's test pattern (line 402) — RequestFactory bypasses
+    the mojo middleware that populates `request.DATA`, so we set it explicitly
+    so the forwarding branch in _auth_context is exercised end-to-end.
+    """
+    import objict
+    from django.test import RequestFactory
+    from django.shortcuts import render
+    from mojo.apps.account.rest.bouncer.views import _auth_context
+
+    factory = RequestFactory()
+    path = '/auth' if 'login' in template_name else '/register'
+    request = factory.get(path, query or {})
+    request.DATA = objict.objict(dict(query or {}))
+    ctx = _auth_context(request, group=group)
+    ctx['page_mode'] = 'login' if 'login' in template_name else 'register'
+    ctx['page_title'] = 'Sign In' if 'login' in template_name else 'Create Account'
+    response = render(request, template_name, ctx)
+    return response.content.decode('utf-8'), ctx
+
+
+@th.django_unit_test("login switcher: ?redirect= survives the hop to /register")
+def test_switcher_preserves_redirect_param(opts):
+    html, ctx = _render_switcher(
+        'account/login.html', query={'redirect': '/dashboard'})
+    assert_eq(
+        ctx['register_url'], '/register?redirect=%2Fdashboard',
+        "register_url must carry the URL-encoded redirect param so the user "
+        "who clicks 'Create one' from /auth?redirect=/dashboard lands on "
+        f"/register?redirect=%2Fdashboard. Got: {ctx['register_url']!r}",
+    )
+    assert_true(
+        'href="/register?redirect=%2Fdashboard"' in html
+        or 'href="/register?redirect=%2Fdashboard"'.replace('&', '&amp;') in html,
+        "rendered login.html switcher href must contain the encoded redirect "
+        f"target. Got context register_url={ctx['register_url']!r}",
+    )
+
+
+@th.django_unit_test("register switcher: all four forwarding keys are preserved together")
+def test_switcher_preserves_all_forwarding_keys(opts):
+    html, ctx = _render_switcher(
+        'account/register.html',
+        query={'next': '/x', 'returnTo': '/y', 'back': '/z'})
+    url = ctx['auth_url']
+    for key, val in [('next', '%2Fx'), ('returnTo', '%2Fy'), ('back', '%2Fz')]:
+        assert_true(
+            f'{key}={val}' in url,
+            f"auth_url must carry {key}={val} from the source query. "
+            f"Got: {url!r}",
+        )
+    assert_true(
+        url.startswith('/auth?'),
+        f"auth_url must start with /auth? when forwarding params are present. "
+        f"Got: {url!r}",
+    )
+
+
+@th.django_unit_test("switcher whitelists: token/code/state are NOT forwarded")
+def test_switcher_whitelists_against_non_forwarded_params(opts):
+    html, ctx = _render_switcher(
+        'account/login.html',
+        query={'token': 'ml:abc', 'redirect': '/d', 'code': 'X', 'state': 'Y'})
+    url = ctx['register_url']
+    assert_true(
+        'redirect=%2Fd' in url,
+        f"register_url must forward `redirect` even when non-whitelisted "
+        f"params are also present. Got: {url!r}",
+    )
+    for leaked in ('token', 'code', 'state'):
+        assert_true(
+            f'{leaked}=' not in url,
+            f"register_url must NOT leak `{leaked}` across the switcher — "
+            f"OAuth callback and magic-link params would mis-trigger logic "
+            f"on the receiving page. Got: {url!r}",
+        )
+
+
+@th.django_unit_test("switcher merges group_uuid with forwarding params under one ?")
+def test_switcher_merges_group_uuid_with_forwarding(opts):
+    html, ctx = _render_switcher(
+        'account/login.html',
+        query={'redirect': '/d'},
+        group=opts.group)
+    url = ctx['register_url']
+    # urlencode preserves dict insertion order: group_uuid first, then redirect.
+    expected = f'/register?group_uuid={opts.group.uuid}&redirect=%2Fd'
+    assert_eq(
+        url, expected,
+        f"register_url must merge group_uuid and redirect under a single `?` "
+        f"with one `&` join. Got: {url!r}",
+    )
+    # And explicitly: no double `?` or `?&` artifacts.
+    assert_true(
+        url.count('?') == 1 and '?&' not in url,
+        f"register_url must have exactly one `?` and no `?&` artifact. "
+        f"Got: {url!r}",
+    )
+
+
+@th.django_unit_test("switcher regression: no query params -> unchanged URLs")
+def test_switcher_no_params_unchanged_regression(opts):
+    html, ctx = _render_switcher('account/login.html', query=None)
+    assert_eq(
+        ctx['register_url'], '/register',
+        "Plain /auth (no query params, no group) must yield the same "
+        "register_url as before the forwarding change — '/register' with no "
+        f"query string. Got: {ctx['register_url']!r}",
+    )
+    assert_eq(
+        ctx['auth_url'], '/auth',
+        f"Plain /auth must yield auth_url='/auth' (regression). "
+        f"Got: {ctx['auth_url']!r}",
+    )

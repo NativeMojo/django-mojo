@@ -228,10 +228,20 @@ def _auth_context(request, group=None):
     login_path = settings.get_static('BOUNCER_LOGIN_PATH', 'auth')
     register_path = settings.get_static('BOUNCER_REGISTER_PATH', 'register')
     group_uuid = group.uuid if group else ''
-    # Preserve ?group_uuid= param in auth/register URLs so branding survives
-    # navigation. The framework dispatcher reserves `?group=` for integer IDs
-    # and 400s on UUID values, so cross-links must use `?group_uuid=`.
-    group_qs = f'?group_uuid={group_uuid}' if group_uuid else ''
+    # Preserve ?group_uuid= plus the post-auth forwarding params on the
+    # switcher links so a user who lands at /auth?redirect=/x and clicks
+    # "Create one" carries the redirect onto /register. Whitelisted keys
+    # only — OAuth callback (`code`, `state`), magic-link `token`, and
+    # reset tokens must NOT bleed across the switch. Mirrors the precedent
+    # in _serve_challenge (group_uuid + redirect + back through urlencode).
+    fwd_params = {}
+    if group_uuid:
+        fwd_params['group_uuid'] = group_uuid
+    for key in ('redirect', 'next', 'returnTo', 'back'):
+        val = request.DATA.get(key) if hasattr(request, 'DATA') else request.GET.get(key)
+        if val:
+            fwd_params[key] = val
+    group_qs = f'?{urlencode(fwd_params)}' if fwd_params else ''
 
     # Schema-driven register form. The same schema drives the server-side
     # validator, so what the form collects matches what the API will accept.

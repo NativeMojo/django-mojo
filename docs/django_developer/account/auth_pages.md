@@ -322,6 +322,8 @@ not hidden by JS).
 | `AUTH_SUCCESS_REDIRECT` | `'/'` | Redirect target after login |
 | `AUTH_LAYOUT` | `'card'` | `'card'` or `'fullscreen'` |
 
+**Per-request override params** — `?redirect=`, `?next=`, `?returnTo=`, and `?back=` are read from `location.search` on the auth/register page (the first three override `AUTH_SUCCESS_REDIRECT`; `?back=` overrides `AUTH_BACK_TO_WEBSITE_URL`). They are also preserved across the login↔register switcher links, so a user who lands at `/auth?redirect=/dashboard` and clicks "Create one" continues to `/register?redirect=/dashboard`. Other query params (OAuth `code`/`state`, magic-link `token`, reset tokens) are intentionally NOT forwarded to avoid mis-triggering logic on the receiving page.
+
 ### Configurable Registration Form
 
 `AUTH_REGISTER_FIELDS` drives both the bouncer-rendered register form and the server-side validator. Group-scoped — different groups can have different signup shapes.
