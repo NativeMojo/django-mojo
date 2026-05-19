@@ -1,5 +1,28 @@
 ## v1.1.0 - (current)
 
+bouncer continuous detection + static-page protection
+
+
+**account** — Bouncer expanded to continuous in-session detection and static-page protection.
+
+(1) `mojo-sentinel.js` ships at `/account/static/mojo-sentinel.js` — a lightweight (~5KB) telemetry client with no UI, no fingerprinting, no gate logic. Auto-collects visibility transitions, focus/blur, paste events, click coordinate buckets, inter-action timing, page lifetime, idle gaps. Public `MojoSentinel.observe(category, payload)` lets host apps push their own events. Batched flushes (default every 15s or 25 events), final flush on `pagehide` via `navigator.sendBeacon`.
+
+(2) Streaming scorer (`mojo.apps.account.services.bouncer.stream_scoring.score_session(muid)`) runs inline on every batched-event POST. Five universal stream analyzers registered via `@register_stream_analyzer`: `extended_session_no_idle`, `tab_never_hidden`, `coordinate_quantization`, `action_interval_regular`, `paste_into_sensitive_field`. Apps add domain analyzers (game-specific, etc.) via the same registry. Score is a monotonic high-water mark in Redis (`bouncer:session_risk:{muid}`) within a TTL window — no flapping.
+
+(3) Gradient enforcement (`mojo.apps.account.services.bouncer.enforcement.apply_session_response`) maps score → 4 bands: freeze (≥90), shadow_ban (≥70), require_step_up (≥50), monitor (≥30). Each band fires a `security:bouncer:session_*` incident; freeze flips `BouncerDevice.risk_tier='blocked'` and optionally calls a `BOUNCER_SESSION_FREEZE_HANDLER` dotted-path callable; shadow_ban/step_up set `user.set_protected_metadata` flags apps read. Bands configurable via `BOUNCER_SESSION_BANDS` setting. Four new incident `RuleSet` defaults added via the existing `ensure_bouncer_rules` bootstrap.
+
+(4) `mojo-bouncer.js` v2.0.0 ships at `/account/static/mojo-bouncer.js` (+ companion `.css`). The legacy mverify_api version's `/api/bouncer/{assess,submit,event}` endpoints and `apikey` auth header are gone — the modernized client points at `/api/account/bouncer/{assess,event}`, drops the two-stage submit handshake (single-call assess + `@md.requires_bouncer_token` on downstream endpoints), and sends `credentials: 'include'` on every fetch so the HttpOnly mbp cookie sets cross-origin. `data-api-base` is the supported config attribute for cross-origin embedding.
+
+(5) `GET /api/account/bouncer/verify_pass` is the new nginx `auth_request` endpoint. Two-stage gate: (a) consults the existing `BotSignature` Redis cache — known-bot IPs/UAs return 401 with `X-Bouncer-Reason: signature` at the edge, before the cookie is even checked; (b) validates the mbp pass cookie. 200 with `X-Bouncer-Muid` on pass, 401 on miss. `BOUNCER_PASS_COOKIE_DOMAIN` lets the mbp cookie be shared across subdomains under a common parent.
+
+(6) CORS — `mojo/middleware/cors.py` modified to set specific-origin + `Access-Control-Allow-Credentials: true` for any request to a bouncer path whose Origin is in `BOUNCER_ALLOWED_ORIGINS`. All other paths keep the existing `*` behavior (regression-tested). OPTIONS preflights get the credentialed treatment.
+
+(7) `POST /api/account/bouncer/event` accepts a batched `{events: [...]}` payload (`bulk_create`-persisted as N `BouncerSignal(stage='event')` rows) plus calls `score_session(muid)` inline. Legacy `{event_type, data}` single-event payload still works.
+
+(8) nginx drop-in include — `docs/web_developer/account/nginx/mojo-bouncer.conf` ships as a config artifact. Consumer server blocks set two variables (`$mojo_bouncer_host`, `$mojo_bouncer_login`), `include` the file, and add `auth_request /_mojo_bouncer_check;` to any location to gate it through the bouncer. Worked example at `nginx/example-protected-site.conf`. Bouncer-as-a-Service deployment pattern documented — one django-mojo install can serve N consumer apps.
+
+Settings added: `BOUNCER_ALLOWED_ORIGINS` (default `[]`), `BOUNCER_PASS_COOKIE_DOMAIN` (default `''`), `BOUNCER_SESSION_RISK_TTL` (default 86400), `BOUNCER_SESSION_BANDS` (defaults: freeze=90, shadow_ban=70, require_step_up=50, monitor=30), `BOUNCER_SESSION_FREEZE_HANDLER` (default `None`). No migrations.
+
 ## v1.2.19 - May 18, 2026
 
 making live registration fix

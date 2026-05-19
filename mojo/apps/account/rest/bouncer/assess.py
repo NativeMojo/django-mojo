@@ -1,5 +1,7 @@
 import uuid
 
+from django.http import HttpResponse
+
 from mojo import decorators as md
 from mojo.helpers import logit
 from mojo.helpers.crypto import sign as crypto_sign, verify as crypto_verify
@@ -16,11 +18,19 @@ logger = logit.get_logger('bouncer', 'bouncer.log')
 _bouncer_defaults_checked = False
 
 def _ensure_bouncer_defaults():
+    """Bootstrap default RuleSets on first request. Idempotent — ensure_bouncer_rules
+    uses get_or_create. The guard checks the most recently added category so that
+    existing deployments backfill new rule categories on the next assess hit."""
     global _bouncer_defaults_checked
     if not _bouncer_defaults_checked:
         try:
             from mojo.apps.incident.models import RuleSet
-            if not RuleSet.objects.filter(category__startswith="security:bouncer:").exists():
+            # Use security:bouncer:session_freeze as the canary — it's the newest
+            # category, so missing means rules need to be (re-)bootstrapped.
+            has_session_rules = RuleSet.objects.filter(
+                category="security:bouncer:session_freeze"
+            ).exists()
+            if not has_session_rules:
                 RuleSet.ensure_bouncer_rules()
         except Exception:
             pass
@@ -248,13 +258,58 @@ def _set_pass_cookie(response, muid, ip):
     value = f"{muid}:{issued}:{sig}"
 
     ttl = settings.get_static('BOUNCER_PASS_COOKIE_TTL', 86400)
+    # BOUNCER_PASS_COOKIE_DOMAIN lets the mbp cookie be shared across subdomains
+    # under a common parent (e.g. ".example.com"), enabling nginx auth_request
+    # gating from app subdomains against the bouncer host. Unset → host-only.
+    cookie_domain = settings.get_static('BOUNCER_PASS_COOKIE_DOMAIN', '') or None
     response.set_cookie(
         'mbp', value,
         max_age=ttl,
         httponly=True,
         secure=not settings.DEBUG,
         samesite='Lax',
+        domain=cookie_domain,
     )
+
+
+@md.GET('account/bouncer/verify_pass')
+@md.public_endpoint("nginx auth_request — validates mbp pass cookie + signature cache")
+@md.rate_limit('bouncer_verify_pass', ip_limit=600)
+def on_verify_pass(request):
+    """
+    Lightweight endpoint for nginx `auth_request` directives. Returns 200 if
+    the request carries a valid `mbp` pass cookie and is not matched by the
+    Redis signature cache. 401 otherwise — nginx then redirects to the bouncer
+    challenge.
+
+    Body is intentionally empty (nginx auth_request discards it); diagnostic
+    info lives in response headers (`X-Bouncer-Muid`, `X-Bouncer-Reason`).
+    """
+    from mojo.apps.account.services.bouncer.learner import check_signature_cache
+
+    # 1. Signature cache pre-screen — known-bot IPs/UAs blocked at the edge
+    #    without ever checking the cookie. The challenge page does the same
+    #    check; doing it here means nginx-gated locations also benefit.
+    matched, sig_type, sig_value = check_signature_cache(
+        request.ip, request.user_agent, ''
+    )
+    if matched:
+        resp = HttpResponse(status=401)
+        resp['X-Bouncer-Reason'] = 'signature'
+        return resp
+
+    # 2. Pass cookie validation
+    cookie_value = request.COOKIES.get('mbp', '')
+    if cookie_value:
+        muid = verify_pass_cookie(cookie_value, request.ip)
+        if muid:
+            resp = HttpResponse(status=200)
+            resp['X-Bouncer-Muid'] = muid
+            return resp
+
+    resp = HttpResponse(status=401)
+    resp['X-Bouncer-Reason'] = 'no_cookie' if not cookie_value else 'invalid_cookie'
+    return resp
 
 
 def verify_pass_cookie(cookie_value, ip):

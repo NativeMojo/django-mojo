@@ -781,3 +781,193 @@ GET /api/incident/event?category__startswith=security:bouncer&search={muid}&sort
 | `list` | Compact list views — core fields only |
 | `default` | Standard views — all fields, linked device on signals |
 | `detail` | Investigation views — full signal payloads, linked device + GeoIP (signals only) |
+
+---
+
+## Embedding on Static Pages or Separate-Origin SPAs
+
+The bouncer ships two embeddable JS files. Both are served from the bouncer
+host at `/account/static/`.
+
+### mojo-bouncer.js — one-shot gate
+
+For pages with a sensitive action (form submit, deposit, RG-limit change).
+Pops a brief verification gate, collects environment + behavior signals,
+calls `/api/account/bouncer/assess`, and issues a `bouncer_token` for the
+next request.
+
+```html
+<!-- Same-origin (page served from the bouncer host) -->
+<script src="/account/static/mojo-bouncer.js"
+        data-page-type="login"
+        defer></script>
+
+<!-- Cross-origin (page served elsewhere, bouncer at auth.example.com) -->
+<script src="https://auth.example.com/account/static/mojo-bouncer.js"
+        data-api-base="https://auth.example.com"
+        data-page-type="login"
+        data-logo-url="/logo.svg"
+        data-brand="MyApp"
+        defer></script>
+```
+
+After the gate completes:
+
+```js
+var token = window._mojoBouncerInstance.getToken();
+var duid  = window._mojoBouncerInstance.getDuid();
+
+await fetch('/api/login', {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password, bouncer_token: token, duid }),
+});
+```
+
+### mojo-sentinel.js — continuous monitoring
+
+For long-lived pages (lobbies, dashboards, in-game wrappers). No UI; runs
+in the background streaming behavioral signals to
+`/api/account/bouncer/event`.
+
+```html
+<script src="https://auth.example.com/account/static/mojo-sentinel.js"
+        data-api-base="https://auth.example.com"
+        data-page-type="gameplay"
+        data-context="game:roulette"
+        defer></script>
+```
+
+| Attribute | Default | Purpose |
+|---|---|---|
+| `data-api-base` | same-origin | Bouncer host (no trailing slash) |
+| `data-page-type` | `"embed"` | Stored on every event; used by server-side analyzers to scope |
+| `data-context` | `""` | Free-form app-side correlation string |
+| `data-flush-interval-ms` | `15000` | Periodic batch flush interval |
+| `data-flush-size` | `25` | Force flush when buffer hits this size |
+
+Both scripts include `credentials: 'include'` on every fetch so the HttpOnly
+`mbp` pass cookie sets cross-origin. The bouncer's allowlist
+(`BOUNCER_ALLOWED_ORIGINS` on the server) must contain your page's origin
+for credentialed CORS to work.
+
+**Identity continuity** — both scripts share the `mojo_device_uid`
+localStorage key with `mojo-auth.js`, so a user authenticated via the gate
+keeps the same device identity throughout the session. Cross-origin embeds
+are best-effort: localStorage is per-origin, so a SPA at `client.com`
+calling sentinel from `auth.example.com` generates its own duid; the server
+stitches by fingerprint when available.
+
+---
+
+## MojoSentinel.observe API
+
+The host page pushes app-specific events into the telemetry stream:
+
+```js
+MojoSentinel.observe('deposit_open', {
+    amount: 50.00,
+    method: 'card',
+});
+
+MojoSentinel.observe('game_action', {
+    action: 'spin',
+    reaction_ms: 142,
+    bet: 25,
+});
+
+MojoSentinel.observe('rg_limit_change_attempt', {
+    field: 'daily_loss_limit',
+    new_value: 500,
+});
+```
+
+| Argument | Type | Notes |
+|---|---|---|
+| `category` | string | Short event-type slug. Becomes `raw_signals.event_type` on the `BouncerSignal` row server-side. |
+| `payload` | object | Flat dict of primitives — int/float/string/bool. The framework's universal analyzers read certain keys (e.g. `target_tag`, `reaction_ms`); apps can include any extras they want. |
+
+The event is buffered with the next periodic batch. Failures are silent —
+the host page is never affected by a slow or unreachable bouncer endpoint.
+
+Recommended categories:
+- `game_action` — single in-game action (bet, click, move)
+- `nav_event` — page-level navigation a router does
+- `form_event` — form-level interaction (open, validate-fail, abandon)
+- `api_call` — outbound API call from the SPA
+- `error` — caught JS error
+
+The framework doesn't enforce a category vocabulary — pick names that match
+how your stream analyzers look up data.
+
+---
+
+## nginx Drop-in Protection
+
+Any nginx-served location can be gated through the bouncer in three lines
+of config plus one include. The mojo repo ships the shared include +
+worked example as commitable artifacts:
+
+```
+docs/web_developer/account/nginx/mojo-bouncer.conf
+docs/web_developer/account/nginx/example-protected-site.conf
+```
+
+### Install
+
+Copy `mojo-bouncer.conf` into your nginx `conf.d/` directory (or somewhere
+on the include path).
+
+### Use
+
+In any `server { }` block:
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name app.example.com;
+
+    set $mojo_bouncer_host  "auth.example.com";
+    set $mojo_bouncer_login "/auth";
+    include conf.d/mojo-bouncer.conf;
+
+    location /vip/ {
+        auth_request /_mojo_bouncer_check;
+        error_page 401 = @mojo_bouncer_redirect;
+        try_files $uri $uri/ /vip/index.html;
+    }
+}
+```
+
+### What happens
+
+1. Request to `/vip/foo` triggers an internal subrequest to
+   `GET /api/account/bouncer/verify_pass` on the bouncer host.
+2. verify_pass first consults the Redis signature cache — known-bot IPs/UAs
+   get 401 with `X-Bouncer-Reason: signature` at the edge.
+3. Otherwise, the mbp pass cookie is validated. 200 if valid, 401 if not.
+4. nginx serves `/vip/foo` on 200; redirects to the bouncer challenge page
+   (with `?redirect=` set to the original URL) on 401. After the user
+   passes the challenge, the bouncer redirects them back, this time
+   carrying a valid mbp cookie, and the next nginx pass succeeds.
+
+### Required deployment shape
+
+The mbp cookie must reach both the bouncer host AND the protected nginx
+host. Two shapes work:
+
+| Shape | Static / app host | Bouncer host | Configuration |
+|---|---|---|---|
+| A | `example.com/protected` | `example.com/auth` | natural — same host |
+| B | `app.example.com` | `auth.example.com` | set `BOUNCER_PASS_COOKIE_DOMAIN='.example.com'` on the bouncer's Django settings |
+
+Cross-domain deployments (e.g. `marketing.com` gated by `auth.example.com`)
+are not supported in v1 — browser cookie policy blocks the share.
+
+### Capacity & latency
+
+`verify_pass` is sub-50ms (Redis lookup + HMAC verify). The 2s proxy
+timeouts in the shipped include are conservative defaults — sized so a
+slow bouncer host fails closed (returns 401 → redirect to challenge)
+rather than serving uncatchable 504s.

@@ -61,3 +61,21 @@ def on_mojo_auth_css(request):
 @md.public_endpoint("Serves mojo-auth-theme.css — dark premium auth theme")
 def on_mojo_auth_theme_css(request):
     return _serve_static('mojo-auth-theme.css')
+
+
+@md.GET('account/static/mojo-bouncer.js')
+@md.public_endpoint("Serves mojo-bouncer.js — embeddable bot-detection gate")
+def on_mojo_bouncer_js(request):
+    return _serve_static('mojo-bouncer.js')
+
+
+@md.GET('account/static/mojo-bouncer.css')
+@md.public_endpoint("Serves mojo-bouncer.css — bouncer overlay stylesheet")
+def on_mojo_bouncer_css(request):
+    return _serve_static('mojo-bouncer.css')
+
+
+@md.GET('account/static/mojo-sentinel.js')
+@md.public_endpoint("Serves mojo-sentinel.js — in-session bot-detection telemetry")
+def on_mojo_sentinel_js(request):
+    return _serve_static('mojo-sentinel.js')

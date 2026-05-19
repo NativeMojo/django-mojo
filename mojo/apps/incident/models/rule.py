@@ -642,6 +642,67 @@ class RuleSet(models.Model, MojoModel):
             ],
         )
 
+        # ── In-session enforcement rules (continuous stream scorer) ──
+        # Freeze band — confirmed bot inside an authenticated session.
+        # Block IP fleet-wide for 24h.
+        cls._create_ruleset(
+            category="security:bouncer:session_freeze",
+            name="Bouncer - In-Session Freeze",
+            priority=1,
+            match_by=MatchBy.ALL,
+            bundle_by=BundleBy.SOURCE_IP,
+            bundle_minutes=60,
+            handler="block://?ttl=86400&fleet_wide=1,notify://perm@manage_security",
+            rules=[
+                {"name": "Level >= 9", "field_name": "level",
+                 "comparator": ">=", "value": "9", "value_type": "int"},
+            ],
+        )
+
+        # Shadow-ban band — suspected bot, isolated rather than blocked outright.
+        # Notify ops but don't auto-block — app handles via flag.
+        cls._create_ruleset(
+            category="security:bouncer:session_shadow_ban",
+            name="Bouncer - In-Session Shadow Ban",
+            priority=1,
+            match_by=MatchBy.ALL,
+            bundle_by=BundleBy.SOURCE_IP,
+            bundle_minutes=60,
+            handler="notify://perm@manage_security",
+            rules=[
+                {"name": "Level >= 8", "field_name": "level",
+                 "comparator": ">=", "value": "8", "value_type": "int"},
+            ],
+        )
+
+        # Step-up band — require fresh bouncer challenge on next sensitive action.
+        # No firewall action; logged for visibility.
+        cls._create_ruleset(
+            category="security:bouncer:session_step_up",
+            name="Bouncer - In-Session Step-Up Required",
+            priority=2,
+            match_by=MatchBy.ALL,
+            bundle_by=BundleBy.SOURCE_IP,
+            bundle_minutes=60,
+            handler="",
+            rules=[
+                {"name": "Level >= 6", "field_name": "level",
+                 "comparator": ">=", "value": "6", "value_type": "int"},
+            ],
+        )
+
+        # Monitor band — low-confidence suspicion. Logged only.
+        cls._create_ruleset(
+            category="security:bouncer:session_suspect",
+            name="Bouncer - In-Session Suspect",
+            priority=3,
+            match_by=MatchBy.ALL,
+            bundle_by=BundleBy.SOURCE_IP,
+            bundle_minutes=60,
+            handler="",
+            rules=[],
+        )
+
     def check_rules(self, event):
         """
         Checks if an event satisfies the rules in this RuleSet based

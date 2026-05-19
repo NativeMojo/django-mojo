@@ -390,6 +390,229 @@ See [group.md](group.md) for the full `auth_domain` field and `resolve_by_auth_d
 Static assets in `account/static/account/`:
 - `mojo-auth.js` — authentication webapp
 - `mojo-auth.css` — stylesheet (CSS variable theming)
+- `mojo-bouncer.js` — embeddable bot-detection gate (v2.0.0) for any page
+- `mojo-bouncer.css` — overlay stylesheet
+- `mojo-sentinel.js` — lightweight in-session telemetry client
+
+All five are served via `/account/static/<filename>` from the bouncer host.
+
+---
+
+## Continuous Detection
+
+The one-shot `RiskScorer` handles the gate. For activity *after* the gate
+(in-session, gameplay, sustained API use), the streaming scorer runs every
+time new `BouncerSignal(stage='event')` rows are written and accumulates a
+session-level risk score per `muid`.
+
+Three pieces:
+
+1. **`mojo-sentinel.js`** — client-side telemetry. Auto-collects passive
+   signals (visibility transitions, focus/blur, paste events, click coordinate
+   buckets, inter-action timing, page lifetime, idle gaps). Exposes
+   `MojoSentinel.observe(category, payload)` so the host app pushes its own
+   events. Batched flushes (default every 15s or 25 events) POST to
+   `/api/account/bouncer/event` with `credentials: 'include'`.
+
+2. **Streaming scorer** — `score_session(muid)` walks the last ~1k
+   `BouncerSignal` rows in the window, runs every registered stream analyzer,
+   accumulates `score_delta`, and writes a Redis high-water value at
+   `bouncer:session_risk:{muid}` with TTL `BOUNCER_SESSION_RISK_TTL` (default
+   24h). Inline, ~10–50ms; called automatically by the `/event` endpoint
+   after batched-event persist and by app backends after their own
+   `BouncerSignal.objects.create(...)`.
+
+3. **Gradient enforcement** — `apply_session_response(device, score, user)`
+   maps the new score to one of four bands. The framework sets flags and
+   fires incidents; apps decide what each flag means.
+
+### Stream analyzer plugin pattern
+
+Same shape as the one-shot `@register_analyzer`:
+
+```python
+from mojo.apps.account.services.bouncer.stream_scoring import (
+    BaseStreamAnalyzer, register_stream_analyzer,
+)
+
+@register_stream_analyzer
+class MyDomainAnalyzer(BaseStreamAnalyzer):
+    """Domain-specific heuristic (e.g. game reaction-time floor)."""
+    name = 'my_domain_signal'
+
+    @classmethod
+    def analyze(cls, muid, signal_window, device):
+        # signal_window is a list of BouncerSignal rows (newest first).
+        # Read only from these rows; don't query the DB here.
+        score_delta = 0
+        triggered = []
+        for sig in signal_window:
+            raw = sig.raw_signals or {}
+            if raw.get('event_type') == 'my_event_kind':
+                score_delta += 20
+                triggered.append(cls.name)
+                break
+        return score_delta, triggered
+```
+
+Register the module via your app's `apps.py:ready()` (import the module so
+the decorators run).
+
+### Universal stream analyzers (shipped)
+
+| Name | Heuristic |
+|---|---|
+| `extended_session_no_idle` | 4h+ session with zero idle gaps; scaled severity at 4h/8h/12h |
+| `tab_never_hidden` | 4h+ session with zero `visibilitychange` events |
+| `coordinate_quantization` | > 100 clicks confined to < 5 coordinate buckets |
+| `action_interval_regular` | Lag-1 autocorrelation > 0.9 on ≥ 50 inter-action intervals |
+| `paste_into_sensitive_field` | Paste event with target = `input[type=password]` |
+
+Score deltas are hardcoded in the analyzer classes — no parallel
+`BOUNCER_STREAM_WEIGHTS` setting.
+
+### Enforcement bands
+
+| Score | Band | Side effects |
+|---|---|---|
+| ≥ 90 | `freeze` | `device.risk_tier='blocked'`, `block_count++`, fires `security:bouncer:session_freeze` (level 9), calls `BOUNCER_SESSION_FREEZE_HANDLER` if set |
+| ≥ 70 | `shadow_ban` | `user.set_protected_metadata('bouncer_shadow_banned', True)`, fires `security:bouncer:session_shadow_ban` (level 8) |
+| ≥ 50 | `require_step_up` | `user.set_protected_metadata('bouncer_require_step_up', True)`, fires `security:bouncer:session_step_up` (level 6) |
+| ≥ 30 | `monitor` | Fires `security:bouncer:session_suspect` (level 6), no flag changes |
+| < 30 | `noop` | nothing |
+
+Override the band thresholds via settings:
+
+```python
+BOUNCER_SESSION_BANDS = {
+    'freeze': 95,
+    'shadow_ban': 80,
+    'require_step_up': 60,
+    'monitor': 40,
+}
+```
+
+### Registering a freeze handler
+
+Apps own the meaning of "freeze" in their domain. Point the framework at a
+callable via the `BOUNCER_SESSION_FREEZE_HANDLER` dotted-path setting:
+
+```python
+# settings.py
+BOUNCER_SESSION_FREEZE_HANDLER = 'apps.foo.services.bouncer.freeze_user'
+
+# apps/foo/services/bouncer.py
+def freeze_user(user, device, risk_score):
+    # Close active gameplay sessions, force-logout, notify compliance, etc.
+    user.is_active = False
+    user.save(update_fields=['is_active'])
+```
+
+The framework wraps the call in try/except — handler failures don't break
+scoring or device-tier updates.
+
+---
+
+## Static Page Gating
+
+`GET /api/account/bouncer/verify_pass` is a lightweight endpoint designed
+for nginx `auth_request`. It does two checks in order:
+
+1. **Signature cache pre-screen** — known-bot IPs/UAs (from the existing
+   `BotSignature` Redis cache) get 401 with `X-Bouncer-Reason: signature`
+   at the edge, before the cookie is even consulted. Means nginx blocks
+   signature-matched bots across every protected location without the
+   request reaching application code.
+2. **`mbp` cookie validation** — if the request carries a valid pass
+   cookie, returns 200 with `X-Bouncer-Muid: <muid>` for upstream logging.
+
+Otherwise: 401 with `X-Bouncer-Reason: no_cookie` or `invalid_cookie`. Body
+is always empty (nginx `auth_request` discards it).
+
+### Deployment shapes
+
+| Shape | App host | Bouncer host | Works? |
+|---|---|---|---|
+| A — Same domain | `example.com/protected` | `example.com/auth` | Yes — natural cookie sharing |
+| B — Subdomains | `app.example.com` | `auth.example.com` | Yes — set `BOUNCER_PASS_COOKIE_DOMAIN='.example.com'` |
+| C — Separate eTLD+1 | `marketing.com` | `auth.example.com` | **Not in v1.** Browsers will not share cookies across registrable domains. Would require a signed-token redirect dance — separate request when a real consumer surfaces. |
+
+### nginx drop-in
+
+The shared include + worked example ship in this repo at
+[`docs/web_developer/account/nginx/`](../../web_developer/account/nginx/). See the
+"nginx Drop-in Protection" section in the web_developer bouncer doc for the
+exact config.
+
+---
+
+## Cross-Origin Embedding
+
+The bouncer endpoints are normally same-origin. To allow a separate origin
+(SPA at `app.example.com` calling bouncer at `auth.example.com`) to call
+the bouncer with credentials, list the SPA origin in `BOUNCER_ALLOWED_ORIGINS`:
+
+```python
+BOUNCER_ALLOWED_ORIGINS = [
+    'https://app.example.com',
+    'https://playground.example.com',
+]
+```
+
+The CORS middleware sets `Access-Control-Allow-Origin: <origin>` (specific
+origin, not `*`) and `Access-Control-Allow-Credentials: true` only for
+requests whose `Origin` matches the allowlist AND whose path is a bouncer
+path (`/api/account/bouncer/*` or `/account/static/mojo-*`). Non-bouncer
+paths and non-allowlisted origins keep the existing wildcard behavior.
+
+OPTIONS preflights from allowlisted origins return 200 with the same
+credentialed headers, so JS clients can `fetch(..., credentials: 'include')`
+without ceremony.
+
+**Identity stitching across origins** — `mojo_device_uid` localStorage is
+per-origin. A static site at `marketing.example.com` embedding sentinel
+served from `auth.example.com` cannot read the auth host's localStorage —
+each origin generates its own duid. Server-side fingerprint stitching is
+the fallback. Same-origin and subdomain (Shape A/B) deployments stitch
+automatically via shared cookies and a shared localStorage key.
+
+---
+
+## Bouncer-as-a-Service Deployment
+
+Any django-mojo install can serve as the bot-detection backplane for N
+consumer apps. The bouncer host runs Django; consumer apps (static sites,
+SPAs, server-rendered pages on other stacks) point at it via:
+
+- `mojo-bouncer.js` and `mojo-sentinel.js` loaded from the bouncer host
+- `/api/account/bouncer/{assess,event,verify_pass}` called cross-origin
+- nginx `auth_request` against the bouncer host for static-page gating
+
+Per-consumer branding works automatically via the existing group resolution
+(`Group.auth_domain` or `?group_uuid=<uuid>`) — the bouncer challenge page
+shows the right logo and brand for each consumer with no extra wiring.
+
+Capacity planning: `verify_pass` is the highest-volume endpoint (one hit
+per `auth_request`-gated page load until the mbp cookie short-circuits it).
+The work is one Redis read for the signature cache and one HMAC verification
+for the cookie — sub-millisecond on a healthy instance. The `assess` and
+batched `/event` endpoints are heavier (DB writes + scoring) but lower
+volume.
+
+To onboard a new consumer:
+
+1. Add its origin to `BOUNCER_ALLOWED_ORIGINS` in the bouncer's settings.
+2. (Optional) Create a `Group` with `auth_domain` set to the consumer's
+   bouncer-page host, or instruct the consumer to pass `?group_uuid=<uuid>`
+   on bouncer redirects. Configure per-group branding via the standard
+   `settings.set('AUTH_LOGO_URL', '...', group=group)` pattern.
+3. Consumer embeds `mojo-bouncer.js` and/or `mojo-sentinel.js` from the
+   bouncer host with `data-api-base="https://<bouncer-host>"`.
+4. If the consumer also wants nginx-level gating, install the
+   `mojo-bouncer.conf` include and add `auth_request /_mojo_bouncer_check;`
+   to the protected locations.
+
+No new database rows, no new permissions, no migrations.
 
 ---
 
