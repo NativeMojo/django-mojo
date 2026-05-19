@@ -499,9 +499,63 @@ Run all five with `bin/run_tests --agent -t test_security.bouncer_verify_pass te
 - Game-domain stream analyzers (reaction time, accuracy percentiles, action-grammar replay, win-rate anomalies) — owned by consumer apps via `@register_stream_analyzer`, tracked in `wmx_api/planning/requests/34-bouncer-session-game-detection.md`.
 
 ---
-<!-- Filled in on resolution -->
+
 ## Resolution
-**Status**: Resolved — YYYY-MM-DD
-**Files changed**:
-**Tests added**:
-**Validation**:
+
+**Status**: Resolved — 2026-05-19
+
+### What Was Built
+
+Continuous in-session bot detection + static-page protection landed in two commits on `main`:
+
+1. **`account/bouncer: continuous in-session detection + static-page protection`** — primary implementation (3,808 insertions, 25 files)
+2. **`account/bouncer: post-review polish — batch cap, doc index, version`** — security-review follow-up (43 insertions, 6 files)
+
+### Files Changed
+
+**Server-side (Python):**
+- `mojo/middleware/cors.py` — credentialed CORS for bouncer paths via `BOUNCER_ALLOWED_ORIGINS`
+- `mojo/apps/account/rest/bouncer/assess.py` — new `verify_pass` endpoint with sig-cache pre-screen; `BOUNCER_PASS_COOKIE_DOMAIN` support
+- `mojo/apps/account/rest/bouncer/event.py` — batched `{events: [...]}` payload format + inline `score_session()` call + 200-row hard cap
+- `mojo/apps/account/rest/bouncer/static.py` — three new static-serving endpoints
+- `mojo/apps/account/services/bouncer/stream_scoring.py` (new) — `BaseStreamAnalyzer`, `register_stream_analyzer`, `score_session`
+- `mojo/apps/account/services/bouncer/stream_analyzers.py` (new) — 5 universal analyzers
+- `mojo/apps/account/services/bouncer/enforcement.py` (new) — gradient bands + freeze-handler resolver
+- `mojo/apps/account/services/bouncer/__init__.py` — re-exports + stream_analyzers import
+- `mojo/apps/incident/models/rule.py` — 4 new session-band ruleset defaults
+
+**Client (JS/CSS):**
+- `mojo/apps/account/static/account/mojo-bouncer.js` (new, v2.0.0) — modernized embeddable gate
+- `mojo/apps/account/static/account/mojo-bouncer.css` (new) — overlay stylesheet
+- `mojo/apps/account/static/account/mojo-sentinel.js` (new) — lightweight in-session telemetry
+
+**nginx config artifacts:**
+- `docs/web_developer/account/nginx/mojo-bouncer.conf` (new) — drop-in include
+- `docs/web_developer/account/nginx/example-protected-site.conf` (new) — worked example
+
+### Tests
+- `tests/test_security/bouncer_verify_pass.py` — 5 tests, covers cookie path + sig-cache pre-screen + cookie-domain attribute
+- `tests/test_security/bouncer_cors.py` — 4 tests, credentialed/wildcard branches + OPTIONS preflight + regression on non-bouncer paths
+- `tests/test_security/bouncer_sentinel_endpoint.py` — 5 tests, batched persist + inline scoring + legacy back-compat + 200-row cap + empty-array
+- `tests/test_security/bouncer_stream_scoring.py` — 10 tests, every universal analyzer (trigger + no-trigger) + high-water + cap-100 + empty-muid
+- `tests/test_security/bouncer_enforcement.py` — 7 tests, all 4 bands + custom-band override + freeze-handler failure isolation
+- `tests/test_security/_enforcement_helpers.py` (new) — module-loaded helpers for dotted-path resolver tests
+- 31 new tests total, all green. Run via `bin/run_tests --agent --full -t test_security.bouncer_verify_pass -t test_security.bouncer_cors -t test_security.bouncer_sentinel_endpoint -t test_security.bouncer_stream_scoring -t test_security.bouncer_enforcement`
+
+### Docs Updated
+- `docs/django_developer/account/bouncer.md` — four new sections: Continuous Detection, Static Page Gating, Cross-Origin Embedding, Bouncer-as-a-Service Deployment
+- `docs/django_developer/account/README.md` — index entry expanded
+- `docs/web_developer/account/bouncer.md` — three new sections: Embedding on Static Pages or Separate-Origin SPAs, MojoSentinel.observe API (including `flush()` and `getDuid()`), nginx Drop-in Protection
+- `docs/web_developer/account/README.md` — index entry expanded
+- `CHANGELOG.md` — entry under v1.2.20
+
+### Security Review
+- No critical findings. The freeze-handler dotted-path is settings-controlled (operator-trusted), the CORS allowlist is exact-match, raw_signals data is stored as JSON and never eval'd/templated, and the new endpoint headers (`X-Bouncer-Muid`, `X-Bouncer-Reason`) are not secrets.
+- One concrete hardening applied in the polish commit: 200-row batch cap on `/event` to bound payload-driven bulk_create and scoring-window size.
+- One pre-existing concern flagged for separate follow-up: the bouncer challenge page forwards the `redirect` query param through without origin-validation. Not introduced by this work; recommend a dedicated request to validate the post-pass redirect URL against `BOUNCER_ALLOWED_ORIGINS` or a same-host check.
+
+### Follow-up
+- **Redirect validation** on the bouncer challenge page (pre-existing; file separate request when surfaced).
+- **Cross-domain Shape C support** — signed-token redirect dance for static sites whose eTLD+1 differs from the bouncer host. Out of scope for v1; addressed when a concrete consumer surfaces.
+- **mverify_api legacy bouncer cleanup** — delete `mojo-verify/mverify_api/apps/mojoverify/bouncer/` once consumers are migrated. Tracked in that repo separately.
+- **Game-domain analyzers** — registered by consumer apps (e.g. wmx_api) via `@register_stream_analyzer`. Tracked in `wmx_api/planning/requests/34-bouncer-session-game-detection.md`.
