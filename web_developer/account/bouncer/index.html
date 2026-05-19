@@ -4381,6 +4381,128 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#embedding-on-static-pages-or-separate-origin-spas" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Embedding on Static Pages or Separate-Origin SPAs
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Embedding on Static Pages or Separate-Origin SPAs">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#mojo-bouncerjs-one-shot-gate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        mojo-bouncer.js — one-shot gate
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#mojo-sentineljs-continuous-monitoring" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        mojo-sentinel.js — continuous monitoring
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#mojosentinelobserve-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MojoSentinel.observe API
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nginx-drop-in-protection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        nginx Drop-in Protection
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="nginx Drop-in Protection">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#install" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Install
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#use" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Use
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-happens" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What happens
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#required-deployment-shape" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Required deployment shape
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#capacity-latency" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Capacity &amp; latency
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -5314,6 +5436,238 @@ original request are forwarded to the post-challenge login redirect:</p>
 </tr>
 </tbody>
 </table>
+<hr />
+<h2 id="embedding-on-static-pages-or-separate-origin-spas">Embedding on Static Pages or Separate-Origin SPAs<a class="headerlink" href="#embedding-on-static-pages-or-separate-origin-spas" title="Permanent link">&para;</a></h2>
+<p>The bouncer ships two embeddable JS files. Both are served from the bouncer
+host at <code>/account/static/</code>.</p>
+<h3 id="mojo-bouncerjs-one-shot-gate">mojo-bouncer.js — one-shot gate<a class="headerlink" href="#mojo-bouncerjs-one-shot-gate" title="Permanent link">&para;</a></h3>
+<p>For pages with a sensitive action (form submit, deposit, RG-limit change).
+Pops a brief verification gate, collects environment + behavior signals,
+calls <code>/api/account/bouncer/assess</code>, and issues a <code>bouncer_token</code> for the
+next request.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-36-1" name="__codelineno-36-1" href="#__codelineno-36-1"></a><span class="cm">&lt;!-- Same-origin (page served from the bouncer host) --&gt;</span>
+<a id="__codelineno-36-2" name="__codelineno-36-2" href="#__codelineno-36-2"></a><span class="p">&lt;</span><span class="nt">script</span> <span class="na">src</span><span class="o">=</span><span class="s">&quot;/account/static/mojo-bouncer.js&quot;</span>
+<a id="__codelineno-36-3" name="__codelineno-36-3" href="#__codelineno-36-3"></a>        <span class="na">data-page-type</span><span class="o">=</span><span class="s">&quot;login&quot;</span>
+<a id="__codelineno-36-4" name="__codelineno-36-4" href="#__codelineno-36-4"></a>        <span class="na">defer</span><span class="p">&gt;&lt;/</span><span class="nt">script</span><span class="p">&gt;</span>
+<a id="__codelineno-36-5" name="__codelineno-36-5" href="#__codelineno-36-5"></a>
+<a id="__codelineno-36-6" name="__codelineno-36-6" href="#__codelineno-36-6"></a><span class="cm">&lt;!-- Cross-origin (page served elsewhere, bouncer at auth.example.com) --&gt;</span>
+<a id="__codelineno-36-7" name="__codelineno-36-7" href="#__codelineno-36-7"></a><span class="p">&lt;</span><span class="nt">script</span> <span class="na">src</span><span class="o">=</span><span class="s">&quot;https://auth.example.com/account/static/mojo-bouncer.js&quot;</span>
+<a id="__codelineno-36-8" name="__codelineno-36-8" href="#__codelineno-36-8"></a>        <span class="na">data-api-base</span><span class="o">=</span><span class="s">&quot;https://auth.example.com&quot;</span>
+<a id="__codelineno-36-9" name="__codelineno-36-9" href="#__codelineno-36-9"></a>        <span class="na">data-page-type</span><span class="o">=</span><span class="s">&quot;login&quot;</span>
+<a id="__codelineno-36-10" name="__codelineno-36-10" href="#__codelineno-36-10"></a>        <span class="na">data-logo-url</span><span class="o">=</span><span class="s">&quot;/logo.svg&quot;</span>
+<a id="__codelineno-36-11" name="__codelineno-36-11" href="#__codelineno-36-11"></a>        <span class="na">data-brand</span><span class="o">=</span><span class="s">&quot;MyApp&quot;</span>
+<a id="__codelineno-36-12" name="__codelineno-36-12" href="#__codelineno-36-12"></a>        <span class="na">defer</span><span class="p">&gt;&lt;/</span><span class="nt">script</span><span class="p">&gt;</span>
+</code></pre></div>
+<p>After the gate completes:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-37-1" name="__codelineno-37-1" href="#__codelineno-37-1"></a><span class="kd">var</span><span class="w"> </span><span class="nx">token</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">window</span><span class="p">.</span><span class="nx">_mojoBouncerInstance</span><span class="p">.</span><span class="nx">getToken</span><span class="p">();</span>
+<a id="__codelineno-37-2" name="__codelineno-37-2" href="#__codelineno-37-2"></a><span class="kd">var</span><span class="w"> </span><span class="nx">duid</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="nb">window</span><span class="p">.</span><span class="nx">_mojoBouncerInstance</span><span class="p">.</span><span class="nx">getDuid</span><span class="p">();</span>
+<a id="__codelineno-37-3" name="__codelineno-37-3" href="#__codelineno-37-3"></a>
+<a id="__codelineno-37-4" name="__codelineno-37-4" href="#__codelineno-37-4"></a><span class="k">await</span><span class="w"> </span><span class="nx">fetch</span><span class="p">(</span><span class="s1">&#39;/api/login&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-37-5" name="__codelineno-37-5" href="#__codelineno-37-5"></a><span class="w">    </span><span class="nx">method</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;POST&#39;</span><span class="p">,</span>
+<a id="__codelineno-37-6" name="__codelineno-37-6" href="#__codelineno-37-6"></a><span class="w">    </span><span class="nx">credentials</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;include&#39;</span><span class="p">,</span>
+<a id="__codelineno-37-7" name="__codelineno-37-7" href="#__codelineno-37-7"></a><span class="w">    </span><span class="nx">headers</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="s1">&#39;Content-Type&#39;</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;application/json&#39;</span><span class="w"> </span><span class="p">},</span>
+<a id="__codelineno-37-8" name="__codelineno-37-8" href="#__codelineno-37-8"></a><span class="w">    </span><span class="nx">body</span><span class="o">:</span><span class="w"> </span><span class="nb">JSON</span><span class="p">.</span><span class="nx">stringify</span><span class="p">({</span><span class="w"> </span><span class="nx">username</span><span class="p">,</span><span class="w"> </span><span class="nx">password</span><span class="p">,</span><span class="w"> </span><span class="nx">bouncer_token</span><span class="o">:</span><span class="w"> </span><span class="nx">token</span><span class="p">,</span><span class="w"> </span><span class="nx">duid</span><span class="w"> </span><span class="p">}),</span>
+<a id="__codelineno-37-9" name="__codelineno-37-9" href="#__codelineno-37-9"></a><span class="p">});</span>
+</code></pre></div>
+<h3 id="mojo-sentineljs-continuous-monitoring">mojo-sentinel.js — continuous monitoring<a class="headerlink" href="#mojo-sentineljs-continuous-monitoring" title="Permanent link">&para;</a></h3>
+<p>For long-lived pages (lobbies, dashboards, in-game wrappers). No UI; runs
+in the background streaming behavioral signals to
+<code>/api/account/bouncer/event</code>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-38-1" name="__codelineno-38-1" href="#__codelineno-38-1"></a><span class="p">&lt;</span><span class="nt">script</span> <span class="na">src</span><span class="o">=</span><span class="s">&quot;https://auth.example.com/account/static/mojo-sentinel.js&quot;</span>
+<a id="__codelineno-38-2" name="__codelineno-38-2" href="#__codelineno-38-2"></a>        <span class="na">data-api-base</span><span class="o">=</span><span class="s">&quot;https://auth.example.com&quot;</span>
+<a id="__codelineno-38-3" name="__codelineno-38-3" href="#__codelineno-38-3"></a>        <span class="na">data-page-type</span><span class="o">=</span><span class="s">&quot;gameplay&quot;</span>
+<a id="__codelineno-38-4" name="__codelineno-38-4" href="#__codelineno-38-4"></a>        <span class="na">data-context</span><span class="o">=</span><span class="s">&quot;game:roulette&quot;</span>
+<a id="__codelineno-38-5" name="__codelineno-38-5" href="#__codelineno-38-5"></a>        <span class="na">defer</span><span class="p">&gt;&lt;/</span><span class="nt">script</span><span class="p">&gt;</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Default</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>data-api-base</code></td>
+<td>same-origin</td>
+<td>Bouncer host (no trailing slash)</td>
+</tr>
+<tr>
+<td><code>data-page-type</code></td>
+<td><code>"embed"</code></td>
+<td>Stored on every event; used by server-side analyzers to scope</td>
+</tr>
+<tr>
+<td><code>data-context</code></td>
+<td><code>""</code></td>
+<td>Free-form app-side correlation string</td>
+</tr>
+<tr>
+<td><code>data-flush-interval-ms</code></td>
+<td><code>15000</code></td>
+<td>Periodic batch flush interval</td>
+</tr>
+<tr>
+<td><code>data-flush-size</code></td>
+<td><code>25</code></td>
+<td>Force flush when buffer hits this size</td>
+</tr>
+</tbody>
+</table>
+<p>Both scripts include <code>credentials: 'include'</code> on every fetch so the HttpOnly
+<code>mbp</code> pass cookie sets cross-origin. The bouncer's allowlist
+(<code>BOUNCER_ALLOWED_ORIGINS</code> on the server) must contain your page's origin
+for credentialed CORS to work.</p>
+<p><strong>Identity continuity</strong> — both scripts share the <code>mojo_device_uid</code>
+localStorage key with <code>mojo-auth.js</code>, so a user authenticated via the gate
+keeps the same device identity throughout the session. Cross-origin embeds
+are best-effort: localStorage is per-origin, so a SPA at <code>client.com</code>
+calling sentinel from <code>auth.example.com</code> generates its own duid; the server
+stitches by fingerprint when available.</p>
+<hr />
+<h2 id="mojosentinelobserve-api">MojoSentinel.observe API<a class="headerlink" href="#mojosentinelobserve-api" title="Permanent link">&para;</a></h2>
+<p>The host page pushes app-specific events into the telemetry stream:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-39-1" name="__codelineno-39-1" href="#__codelineno-39-1"></a><span class="nx">MojoSentinel</span><span class="p">.</span><span class="nx">observe</span><span class="p">(</span><span class="s1">&#39;deposit_open&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-39-2" name="__codelineno-39-2" href="#__codelineno-39-2"></a><span class="w">    </span><span class="nx">amount</span><span class="o">:</span><span class="w"> </span><span class="mf">50.00</span><span class="p">,</span>
+<a id="__codelineno-39-3" name="__codelineno-39-3" href="#__codelineno-39-3"></a><span class="w">    </span><span class="nx">method</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;card&#39;</span><span class="p">,</span>
+<a id="__codelineno-39-4" name="__codelineno-39-4" href="#__codelineno-39-4"></a><span class="p">});</span>
+<a id="__codelineno-39-5" name="__codelineno-39-5" href="#__codelineno-39-5"></a>
+<a id="__codelineno-39-6" name="__codelineno-39-6" href="#__codelineno-39-6"></a><span class="nx">MojoSentinel</span><span class="p">.</span><span class="nx">observe</span><span class="p">(</span><span class="s1">&#39;game_action&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-39-7" name="__codelineno-39-7" href="#__codelineno-39-7"></a><span class="w">    </span><span class="nx">action</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;spin&#39;</span><span class="p">,</span>
+<a id="__codelineno-39-8" name="__codelineno-39-8" href="#__codelineno-39-8"></a><span class="w">    </span><span class="nx">reaction_ms</span><span class="o">:</span><span class="w"> </span><span class="mf">142</span><span class="p">,</span>
+<a id="__codelineno-39-9" name="__codelineno-39-9" href="#__codelineno-39-9"></a><span class="w">    </span><span class="nx">bet</span><span class="o">:</span><span class="w"> </span><span class="mf">25</span><span class="p">,</span>
+<a id="__codelineno-39-10" name="__codelineno-39-10" href="#__codelineno-39-10"></a><span class="p">});</span>
+<a id="__codelineno-39-11" name="__codelineno-39-11" href="#__codelineno-39-11"></a>
+<a id="__codelineno-39-12" name="__codelineno-39-12" href="#__codelineno-39-12"></a><span class="nx">MojoSentinel</span><span class="p">.</span><span class="nx">observe</span><span class="p">(</span><span class="s1">&#39;rg_limit_change_attempt&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-39-13" name="__codelineno-39-13" href="#__codelineno-39-13"></a><span class="w">    </span><span class="nx">field</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;daily_loss_limit&#39;</span><span class="p">,</span>
+<a id="__codelineno-39-14" name="__codelineno-39-14" href="#__codelineno-39-14"></a><span class="w">    </span><span class="nx">new_value</span><span class="o">:</span><span class="w"> </span><span class="mf">500</span><span class="p">,</span>
+<a id="__codelineno-39-15" name="__codelineno-39-15" href="#__codelineno-39-15"></a><span class="p">});</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Argument</th>
+<th>Type</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>category</code></td>
+<td>string</td>
+<td>Short event-type slug. Becomes <code>raw_signals.event_type</code> on the <code>BouncerSignal</code> row server-side.</td>
+</tr>
+<tr>
+<td><code>payload</code></td>
+<td>object</td>
+<td>Flat dict of primitives — int/float/string/bool. The framework's universal analyzers read certain keys (e.g. <code>target_tag</code>, <code>reaction_ms</code>); apps can include any extras they want.</td>
+</tr>
+</tbody>
+</table>
+<p>Additional public methods:</p>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>MojoSentinel.flush()</code></td>
+<td>Force an immediate batch flush outside the normal interval. Useful before a navigation or form submit.</td>
+</tr>
+<tr>
+<td><code>MojoSentinel.getDuid()</code></td>
+<td>Read the shared <code>mojo_device_uid</code> value that sentinel is using.</td>
+</tr>
+</tbody>
+</table>
+<p>The event is buffered with the next periodic batch. Failures are silent —
+the host page is never affected by a slow or unreachable bouncer endpoint.</p>
+<p>Recommended categories:
+- <code>game_action</code> — single in-game action (bet, click, move)
+- <code>nav_event</code> — page-level navigation a router does
+- <code>form_event</code> — form-level interaction (open, validate-fail, abandon)
+- <code>api_call</code> — outbound API call from the SPA
+- <code>error</code> — caught JS error</p>
+<p>The framework doesn't enforce a category vocabulary — pick names that match
+how your stream analyzers look up data.</p>
+<hr />
+<h2 id="nginx-drop-in-protection">nginx Drop-in Protection<a class="headerlink" href="#nginx-drop-in-protection" title="Permanent link">&para;</a></h2>
+<p>Any nginx-served location can be gated through the bouncer in three lines
+of config plus one include. The mojo repo ships the shared include +
+worked example as commitable artifacts:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-40-1" name="__codelineno-40-1" href="#__codelineno-40-1"></a>docs/web_developer/account/nginx/mojo-bouncer.conf
+<a id="__codelineno-40-2" name="__codelineno-40-2" href="#__codelineno-40-2"></a>docs/web_developer/account/nginx/example-protected-site.conf
+</code></pre></div>
+<h3 id="install">Install<a class="headerlink" href="#install" title="Permanent link">&para;</a></h3>
+<p>Copy <code>mojo-bouncer.conf</code> into your nginx <code>conf.d/</code> directory (or somewhere
+on the include path).</p>
+<h3 id="use">Use<a class="headerlink" href="#use" title="Permanent link">&para;</a></h3>
+<p>In any <code>server { }</code> block:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-41-1" name="__codelineno-41-1" href="#__codelineno-41-1"></a><span class="k">server</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-41-2" name="__codelineno-41-2" href="#__codelineno-41-2"></a><span class="w">    </span><span class="kn">listen</span><span class="w"> </span><span class="mi">443</span><span class="w"> </span><span class="s">ssl</span><span class="p">;</span>
+<a id="__codelineno-41-3" name="__codelineno-41-3" href="#__codelineno-41-3"></a><span class="w">    </span><span class="kn">server_name</span><span class="w"> </span><span class="s">app.example.com</span><span class="p">;</span>
+<a id="__codelineno-41-4" name="__codelineno-41-4" href="#__codelineno-41-4"></a>
+<a id="__codelineno-41-5" name="__codelineno-41-5" href="#__codelineno-41-5"></a><span class="w">    </span><span class="kn">set</span><span class="w"> </span><span class="nv">$mojo_bouncer_host</span><span class="w">  </span><span class="s">&quot;auth.example.com&quot;</span><span class="p">;</span>
+<a id="__codelineno-41-6" name="__codelineno-41-6" href="#__codelineno-41-6"></a><span class="w">    </span><span class="kn">set</span><span class="w"> </span><span class="nv">$mojo_bouncer_login</span><span class="w"> </span><span class="s">&quot;/auth&quot;</span><span class="p">;</span>
+<a id="__codelineno-41-7" name="__codelineno-41-7" href="#__codelineno-41-7"></a><span class="w">    </span><span class="kn">include</span><span class="w"> </span><span class="s">conf.d/mojo-bouncer.conf</span><span class="p">;</span>
+<a id="__codelineno-41-8" name="__codelineno-41-8" href="#__codelineno-41-8"></a>
+<a id="__codelineno-41-9" name="__codelineno-41-9" href="#__codelineno-41-9"></a><span class="w">    </span><span class="kn">location</span><span class="w"> </span><span class="s">/vip/</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-41-10" name="__codelineno-41-10" href="#__codelineno-41-10"></a><span class="w">        </span><span class="kn">auth_request</span><span class="w"> </span><span class="s">/_mojo_bouncer_check</span><span class="p">;</span>
+<a id="__codelineno-41-11" name="__codelineno-41-11" href="#__codelineno-41-11"></a><span class="w">        </span><span class="kn">error_page</span><span class="w"> </span><span class="mi">401</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">@mojo_bouncer_redirect</span><span class="p">;</span>
+<a id="__codelineno-41-12" name="__codelineno-41-12" href="#__codelineno-41-12"></a><span class="w">        </span><span class="kn">try_files</span><span class="w"> </span><span class="nv">$uri</span><span class="w"> </span><span class="nv">$uri/</span><span class="w"> </span><span class="s">/vip/index.html</span><span class="p">;</span>
+<a id="__codelineno-41-13" name="__codelineno-41-13" href="#__codelineno-41-13"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-41-14" name="__codelineno-41-14" href="#__codelineno-41-14"></a><span class="p">}</span>
+</code></pre></div>
+<h3 id="what-happens">What happens<a class="headerlink" href="#what-happens" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Request to <code>/vip/foo</code> triggers an internal subrequest to
+   <code>GET /api/account/bouncer/verify_pass</code> on the bouncer host.</li>
+<li>verify_pass first consults the Redis signature cache — known-bot IPs/UAs
+   get 401 with <code>X-Bouncer-Reason: signature</code> at the edge.</li>
+<li>Otherwise, the mbp pass cookie is validated. 200 if valid, 401 if not.</li>
+<li>nginx serves <code>/vip/foo</code> on 200; redirects to the bouncer challenge page
+   (with <code>?redirect=</code> set to the original URL) on 401. After the user
+   passes the challenge, the bouncer redirects them back, this time
+   carrying a valid mbp cookie, and the next nginx pass succeeds.</li>
+</ol>
+<h3 id="required-deployment-shape">Required deployment shape<a class="headerlink" href="#required-deployment-shape" title="Permanent link">&para;</a></h3>
+<p>The mbp cookie must reach both the bouncer host AND the protected nginx
+host. Two shapes work:</p>
+<table>
+<thead>
+<tr>
+<th>Shape</th>
+<th>Static / app host</th>
+<th>Bouncer host</th>
+<th>Configuration</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A</td>
+<td><code>example.com/protected</code></td>
+<td><code>example.com/auth</code></td>
+<td>natural — same host</td>
+</tr>
+<tr>
+<td>B</td>
+<td><code>app.example.com</code></td>
+<td><code>auth.example.com</code></td>
+<td>set <code>BOUNCER_PASS_COOKIE_DOMAIN='.example.com'</code> on the bouncer's Django settings</td>
+</tr>
+</tbody>
+</table>
+<p>Cross-domain deployments (e.g. <code>marketing.com</code> gated by <code>auth.example.com</code>)
+are not supported in v1 — browser cookie policy blocks the share.</p>
+<h3 id="capacity-latency">Capacity &amp; latency<a class="headerlink" href="#capacity-latency" title="Permanent link">&para;</a></h3>
+<p><code>verify_pass</code> is sub-50ms (Redis lookup + HMAC verify). The 2s proxy
+timeouts in the shipped include are conservative defaults — sized so a
+slow bouncer host fails closed (returns 401 → redirect to challenge)
+rather than serving uncatchable 504s.</p>
 
 
 

@@ -3988,6 +3988,128 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#continuous-detection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Continuous Detection
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Continuous Detection">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#stream-analyzer-plugin-pattern" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stream analyzer plugin pattern
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#universal-stream-analyzers-shipped" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Universal stream analyzers (shipped)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#enforcement-bands" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Enforcement bands
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#registering-a-freeze-handler" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Registering a freeze handler
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#static-page-gating" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Static Page Gating
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Static Page Gating">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#deployment-shapes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deployment shapes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nginx-drop-in" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        nginx drop-in
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cross-origin-embedding" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cross-Origin Embedding
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#bouncer-as-a-service-deployment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bouncer-as-a-Service Deployment
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#refreshing-the-signature-cache" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4441,30 +4563,292 @@ to identify the group.</p>
 </ul>
 <p>Static assets in <code>account/static/account/</code>:
 - <code>mojo-auth.js</code> — authentication webapp
-- <code>mojo-auth.css</code> — stylesheet (CSS variable theming)</p>
+- <code>mojo-auth.css</code> — stylesheet (CSS variable theming)
+- <code>mojo-bouncer.js</code> — embeddable bot-detection gate (v2.0.0) for any page
+- <code>mojo-bouncer.css</code> — overlay stylesheet
+- <code>mojo-sentinel.js</code> — lightweight in-session telemetry client</p>
+<p>All five are served via <code>/account/static/&lt;filename&gt;</code> from the bouncer host.</p>
+<hr />
+<h2 id="continuous-detection">Continuous Detection<a class="headerlink" href="#continuous-detection" title="Permanent link">&para;</a></h2>
+<p>The one-shot <code>RiskScorer</code> handles the gate. For activity <em>after</em> the gate
+(in-session, gameplay, sustained API use), the streaming scorer runs every
+time new <code>BouncerSignal(stage='event')</code> rows are written and accumulates a
+session-level risk score per <code>muid</code>.</p>
+<p>Three pieces:</p>
+<ol>
+<li>
+<p><strong><code>mojo-sentinel.js</code></strong> — client-side telemetry. Auto-collects passive
+   signals (visibility transitions, focus/blur, paste events, click coordinate
+   buckets, inter-action timing, page lifetime, idle gaps). Exposes
+   <code>MojoSentinel.observe(category, payload)</code> so the host app pushes its own
+   events. Batched flushes (default every 15s or 25 events) POST to
+   <code>/api/account/bouncer/event</code> with <code>credentials: 'include'</code>.</p>
+</li>
+<li>
+<p><strong>Streaming scorer</strong> — <code>score_session(muid)</code> walks the last ~1k
+   <code>BouncerSignal</code> rows in the window, runs every registered stream analyzer,
+   accumulates <code>score_delta</code>, and writes a Redis high-water value at
+   <code>bouncer:session_risk:{muid}</code> with TTL <code>BOUNCER_SESSION_RISK_TTL</code> (default
+   24h). Inline, ~10–50ms; called automatically by the <code>/event</code> endpoint
+   after batched-event persist and by app backends after their own
+   <code>BouncerSignal.objects.create(...)</code>.</p>
+</li>
+<li>
+<p><strong>Gradient enforcement</strong> — <code>apply_session_response(device, score, user)</code>
+   maps the new score to one of four bands. The framework sets flags and
+   fires incidents; apps decide what each flag means.</p>
+</li>
+</ol>
+<h3 id="stream-analyzer-plugin-pattern">Stream analyzer plugin pattern<a class="headerlink" href="#stream-analyzer-plugin-pattern" title="Permanent link">&para;</a></h3>
+<p>Same shape as the one-shot <code>@register_analyzer</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.services.bouncer.stream_scoring</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>    <span class="n">BaseStreamAnalyzer</span><span class="p">,</span> <span class="n">register_stream_analyzer</span><span class="p">,</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="p">)</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="nd">@register_stream_analyzer</span>
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="k">class</span><span class="w"> </span><span class="nc">MyDomainAnalyzer</span><span class="p">(</span><span class="n">BaseStreamAnalyzer</span><span class="p">):</span>
+<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Domain-specific heuristic (e.g. game reaction-time floor).&quot;&quot;&quot;</span>
+<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a>    <span class="n">name</span> <span class="o">=</span> <span class="s1">&#39;my_domain_signal&#39;</span>
+<a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a>
+<a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a>    <span class="nd">@classmethod</span>
+<a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">analyze</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">muid</span><span class="p">,</span> <span class="n">signal_window</span><span class="p">,</span> <span class="n">device</span><span class="p">):</span>
+<a id="__codelineno-11-12" name="__codelineno-11-12" href="#__codelineno-11-12"></a>        <span class="c1"># signal_window is a list of BouncerSignal rows (newest first).</span>
+<a id="__codelineno-11-13" name="__codelineno-11-13" href="#__codelineno-11-13"></a>        <span class="c1"># Read only from these rows; don&#39;t query the DB here.</span>
+<a id="__codelineno-11-14" name="__codelineno-11-14" href="#__codelineno-11-14"></a>        <span class="n">score_delta</span> <span class="o">=</span> <span class="mi">0</span>
+<a id="__codelineno-11-15" name="__codelineno-11-15" href="#__codelineno-11-15"></a>        <span class="n">triggered</span> <span class="o">=</span> <span class="p">[]</span>
+<a id="__codelineno-11-16" name="__codelineno-11-16" href="#__codelineno-11-16"></a>        <span class="k">for</span> <span class="n">sig</span> <span class="ow">in</span> <span class="n">signal_window</span><span class="p">:</span>
+<a id="__codelineno-11-17" name="__codelineno-11-17" href="#__codelineno-11-17"></a>            <span class="n">raw</span> <span class="o">=</span> <span class="n">sig</span><span class="o">.</span><span class="n">raw_signals</span> <span class="ow">or</span> <span class="p">{}</span>
+<a id="__codelineno-11-18" name="__codelineno-11-18" href="#__codelineno-11-18"></a>            <span class="k">if</span> <span class="n">raw</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;event_type&#39;</span><span class="p">)</span> <span class="o">==</span> <span class="s1">&#39;my_event_kind&#39;</span><span class="p">:</span>
+<a id="__codelineno-11-19" name="__codelineno-11-19" href="#__codelineno-11-19"></a>                <span class="n">score_delta</span> <span class="o">+=</span> <span class="mi">20</span>
+<a id="__codelineno-11-20" name="__codelineno-11-20" href="#__codelineno-11-20"></a>                <span class="n">triggered</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="bp">cls</span><span class="o">.</span><span class="n">name</span><span class="p">)</span>
+<a id="__codelineno-11-21" name="__codelineno-11-21" href="#__codelineno-11-21"></a>                <span class="k">break</span>
+<a id="__codelineno-11-22" name="__codelineno-11-22" href="#__codelineno-11-22"></a>        <span class="k">return</span> <span class="n">score_delta</span><span class="p">,</span> <span class="n">triggered</span>
+</code></pre></div>
+<p>Register the module via your app's <code>apps.py:ready()</code> (import the module so
+the decorators run).</p>
+<h3 id="universal-stream-analyzers-shipped">Universal stream analyzers (shipped)<a class="headerlink" href="#universal-stream-analyzers-shipped" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Heuristic</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>extended_session_no_idle</code></td>
+<td>4h+ session with zero idle gaps; scaled severity at 4h/8h/12h</td>
+</tr>
+<tr>
+<td><code>tab_never_hidden</code></td>
+<td>4h+ session with zero <code>visibilitychange</code> events</td>
+</tr>
+<tr>
+<td><code>coordinate_quantization</code></td>
+<td>&gt; 100 clicks confined to &lt; 5 coordinate buckets</td>
+</tr>
+<tr>
+<td><code>action_interval_regular</code></td>
+<td>Lag-1 autocorrelation &gt; 0.9 on ≥ 50 inter-action intervals</td>
+</tr>
+<tr>
+<td><code>paste_into_sensitive_field</code></td>
+<td>Paste event with target = <code>input[type=password]</code></td>
+</tr>
+</tbody>
+</table>
+<p>Score deltas are hardcoded in the analyzer classes — no parallel
+<code>BOUNCER_STREAM_WEIGHTS</code> setting.</p>
+<h3 id="enforcement-bands">Enforcement bands<a class="headerlink" href="#enforcement-bands" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Score</th>
+<th>Band</th>
+<th>Side effects</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>≥ 90</td>
+<td><code>freeze</code></td>
+<td><code>device.risk_tier='blocked'</code>, <code>block_count++</code>, fires <code>security:bouncer:session_freeze</code> (level 9), calls <code>BOUNCER_SESSION_FREEZE_HANDLER</code> if set</td>
+</tr>
+<tr>
+<td>≥ 70</td>
+<td><code>shadow_ban</code></td>
+<td><code>user.set_protected_metadata('bouncer_shadow_banned', True)</code>, fires <code>security:bouncer:session_shadow_ban</code> (level 8)</td>
+</tr>
+<tr>
+<td>≥ 50</td>
+<td><code>require_step_up</code></td>
+<td><code>user.set_protected_metadata('bouncer_require_step_up', True)</code>, fires <code>security:bouncer:session_step_up</code> (level 6)</td>
+</tr>
+<tr>
+<td>≥ 30</td>
+<td><code>monitor</code></td>
+<td>Fires <code>security:bouncer:session_suspect</code> (level 6), no flag changes</td>
+</tr>
+<tr>
+<td>&lt; 30</td>
+<td><code>noop</code></td>
+<td>nothing</td>
+</tr>
+</tbody>
+</table>
+<p>Override the band thresholds via settings:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="n">BOUNCER_SESSION_BANDS</span> <span class="o">=</span> <span class="p">{</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>    <span class="s1">&#39;freeze&#39;</span><span class="p">:</span> <span class="mi">95</span><span class="p">,</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>    <span class="s1">&#39;shadow_ban&#39;</span><span class="p">:</span> <span class="mi">80</span><span class="p">,</span>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>    <span class="s1">&#39;require_step_up&#39;</span><span class="p">:</span> <span class="mi">60</span><span class="p">,</span>
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>    <span class="s1">&#39;monitor&#39;</span><span class="p">:</span> <span class="mi">40</span><span class="p">,</span>
+<a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a><span class="p">}</span>
+</code></pre></div>
+<h3 id="registering-a-freeze-handler">Registering a freeze handler<a class="headerlink" href="#registering-a-freeze-handler" title="Permanent link">&para;</a></h3>
+<p>Apps own the meaning of "freeze" in their domain. Point the framework at a
+callable via the <code>BOUNCER_SESSION_FREEZE_HANDLER</code> dotted-path setting:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="c1"># settings.py</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="n">BOUNCER_SESSION_FREEZE_HANDLER</span> <span class="o">=</span> <span class="s1">&#39;apps.foo.services.bouncer.freeze_user&#39;</span>
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="c1"># apps/foo/services/bouncer.py</span>
+<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="k">def</span><span class="w"> </span><span class="nf">freeze_user</span><span class="p">(</span><span class="n">user</span><span class="p">,</span> <span class="n">device</span><span class="p">,</span> <span class="n">risk_score</span><span class="p">):</span>
+<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a>    <span class="c1"># Close active gameplay sessions, force-logout, notify compliance, etc.</span>
+<a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a>    <span class="n">user</span><span class="o">.</span><span class="n">is_active</span> <span class="o">=</span> <span class="kc">False</span>
+<a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a>    <span class="n">user</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="n">update_fields</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;is_active&#39;</span><span class="p">])</span>
+</code></pre></div>
+<p>The framework wraps the call in try/except — handler failures don't break
+scoring or device-tier updates.</p>
+<hr />
+<h2 id="static-page-gating">Static Page Gating<a class="headerlink" href="#static-page-gating" title="Permanent link">&para;</a></h2>
+<p><code>GET /api/account/bouncer/verify_pass</code> is a lightweight endpoint designed
+for nginx <code>auth_request</code>. It does two checks in order:</p>
+<ol>
+<li><strong>Signature cache pre-screen</strong> — known-bot IPs/UAs (from the existing
+   <code>BotSignature</code> Redis cache) get 401 with <code>X-Bouncer-Reason: signature</code>
+   at the edge, before the cookie is even consulted. Means nginx blocks
+   signature-matched bots across every protected location without the
+   request reaching application code.</li>
+<li><strong><code>mbp</code> cookie validation</strong> — if the request carries a valid pass
+   cookie, returns 200 with <code>X-Bouncer-Muid: &lt;muid&gt;</code> for upstream logging.</li>
+</ol>
+<p>Otherwise: 401 with <code>X-Bouncer-Reason: no_cookie</code> or <code>invalid_cookie</code>. Body
+is always empty (nginx <code>auth_request</code> discards it).</p>
+<h3 id="deployment-shapes">Deployment shapes<a class="headerlink" href="#deployment-shapes" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Shape</th>
+<th>App host</th>
+<th>Bouncer host</th>
+<th>Works?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A — Same domain</td>
+<td><code>example.com/protected</code></td>
+<td><code>example.com/auth</code></td>
+<td>Yes — natural cookie sharing</td>
+</tr>
+<tr>
+<td>B — Subdomains</td>
+<td><code>app.example.com</code></td>
+<td><code>auth.example.com</code></td>
+<td>Yes — set <code>BOUNCER_PASS_COOKIE_DOMAIN='.example.com'</code></td>
+</tr>
+<tr>
+<td>C — Separate eTLD+1</td>
+<td><code>marketing.com</code></td>
+<td><code>auth.example.com</code></td>
+<td><strong>Not in v1.</strong> Browsers will not share cookies across registrable domains. Would require a signed-token redirect dance — separate request when a real consumer surfaces.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="nginx-drop-in">nginx drop-in<a class="headerlink" href="#nginx-drop-in" title="Permanent link">&para;</a></h3>
+<p>The shared include + worked example ship in this repo at
+<a href="../../web_developer/account/nginx/"><code>docs/web_developer/account/nginx/</code></a>. See the
+"nginx Drop-in Protection" section in the web_developer bouncer doc for the
+exact config.</p>
+<hr />
+<h2 id="cross-origin-embedding">Cross-Origin Embedding<a class="headerlink" href="#cross-origin-embedding" title="Permanent link">&para;</a></h2>
+<p>The bouncer endpoints are normally same-origin. To allow a separate origin
+(SPA at <code>app.example.com</code> calling bouncer at <code>auth.example.com</code>) to call
+the bouncer with credentials, list the SPA origin in <code>BOUNCER_ALLOWED_ORIGINS</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="n">BOUNCER_ALLOWED_ORIGINS</span> <span class="o">=</span> <span class="p">[</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>    <span class="s1">&#39;https://app.example.com&#39;</span><span class="p">,</span>
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>    <span class="s1">&#39;https://playground.example.com&#39;</span><span class="p">,</span>
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="p">]</span>
+</code></pre></div>
+<p>The CORS middleware sets <code>Access-Control-Allow-Origin: &lt;origin&gt;</code> (specific
+origin, not <code>*</code>) and <code>Access-Control-Allow-Credentials: true</code> only for
+requests whose <code>Origin</code> matches the allowlist AND whose path is a bouncer
+path (<code>/api/account/bouncer/*</code> or <code>/account/static/mojo-*</code>). Non-bouncer
+paths and non-allowlisted origins keep the existing wildcard behavior.</p>
+<p>OPTIONS preflights from allowlisted origins return 200 with the same
+credentialed headers, so JS clients can <code>fetch(..., credentials: 'include')</code>
+without ceremony.</p>
+<p><strong>Identity stitching across origins</strong> — <code>mojo_device_uid</code> localStorage is
+per-origin. A static site at <code>marketing.example.com</code> embedding sentinel
+served from <code>auth.example.com</code> cannot read the auth host's localStorage —
+each origin generates its own duid. Server-side fingerprint stitching is
+the fallback. Same-origin and subdomain (Shape A/B) deployments stitch
+automatically via shared cookies and a shared localStorage key.</p>
+<hr />
+<h2 id="bouncer-as-a-service-deployment">Bouncer-as-a-Service Deployment<a class="headerlink" href="#bouncer-as-a-service-deployment" title="Permanent link">&para;</a></h2>
+<p>Any django-mojo install can serve as the bot-detection backplane for N
+consumer apps. The bouncer host runs Django; consumer apps (static sites,
+SPAs, server-rendered pages on other stacks) point at it via:</p>
+<ul>
+<li><code>mojo-bouncer.js</code> and <code>mojo-sentinel.js</code> loaded from the bouncer host</li>
+<li><code>/api/account/bouncer/{assess,event,verify_pass}</code> called cross-origin</li>
+<li>nginx <code>auth_request</code> against the bouncer host for static-page gating</li>
+</ul>
+<p>Per-consumer branding works automatically via the existing group resolution
+(<code>Group.auth_domain</code> or <code>?group_uuid=&lt;uuid&gt;</code>) — the bouncer challenge page
+shows the right logo and brand for each consumer with no extra wiring.</p>
+<p>Capacity planning: <code>verify_pass</code> is the highest-volume endpoint (one hit
+per <code>auth_request</code>-gated page load until the mbp cookie short-circuits it).
+The work is one Redis read for the signature cache and one HMAC verification
+for the cookie — sub-millisecond on a healthy instance. The <code>assess</code> and
+batched <code>/event</code> endpoints are heavier (DB writes + scoring) but lower
+volume.</p>
+<p>To onboard a new consumer:</p>
+<ol>
+<li>Add its origin to <code>BOUNCER_ALLOWED_ORIGINS</code> in the bouncer's settings.</li>
+<li>(Optional) Create a <code>Group</code> with <code>auth_domain</code> set to the consumer's
+   bouncer-page host, or instruct the consumer to pass <code>?group_uuid=&lt;uuid&gt;</code>
+   on bouncer redirects. Configure per-group branding via the standard
+   <code>settings.set('AUTH_LOGO_URL', '...', group=group)</code> pattern.</li>
+<li>Consumer embeds <code>mojo-bouncer.js</code> and/or <code>mojo-sentinel.js</code> from the
+   bouncer host with <code>data-api-base="https://&lt;bouncer-host&gt;"</code>.</li>
+<li>If the consumer also wants nginx-level gating, install the
+   <code>mojo-bouncer.conf</code> include and add <code>auth_request /_mojo_bouncer_check;</code>
+   to the protected locations.</li>
+</ol>
+<p>No new database rows, no new permissions, no migrations.</p>
 <hr />
 <h2 id="refreshing-the-signature-cache">Refreshing the Signature Cache<a class="headerlink" href="#refreshing-the-signature-cache" title="Permanent link">&para;</a></h2>
 <p>After manually adding/editing <code>BotSignature</code> records:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.services.bouncer.learner</span><span class="w"> </span><span class="kn">import</span> <span class="n">refresh_sig_cache</span>
-<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="n">refresh_sig_cache</span><span class="p">()</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.services.bouncer.learner</span><span class="w"> </span><span class="kn">import</span> <span class="n">refresh_sig_cache</span>
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="n">refresh_sig_cache</span><span class="p">()</span>
 </code></pre></div>
 <p>Or publish the scheduled job:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps</span><span class="w"> </span><span class="kn">import</span> <span class="n">jobs</span>
-<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="n">jobs</span><span class="o">.</span><span class="n">publish</span><span class="p">(</span><span class="s1">&#39;mojo.apps.account.asyncjobs.refresh_bouncer_sig_cache&#39;</span><span class="p">,</span> <span class="p">{})</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps</span><span class="w"> </span><span class="kn">import</span> <span class="n">jobs</span>
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="n">jobs</span><span class="o">.</span><span class="n">publish</span><span class="p">(</span><span class="s1">&#39;mojo.apps.account.asyncjobs.refresh_bouncer_sig_cache&#39;</span><span class="p">,</span> <span class="p">{})</span>
 </code></pre></div>
 <hr />
 <h2 id="public-messages-contact-support">Public Messages (Contact / Support)<a class="headerlink" href="#public-messages-contact-support" title="Permanent link">&para;</a></h2>
 <p>Public (unauthenticated) contact / support intake reuses the bouncer gate so the
 same bot protection that covers login also covers every inbound message.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>Request → GET BOUNCER_CONTACT_PATH (default: /contact)
-<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>              ↓  (same pipeline as /auth, page_type=&#39;public_message&#39;)
-<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>     signature cache → pass cookie → pre-screen → decoy / challenge / page
-<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>              ↓
-<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a>     POST /api/account/bouncer/message
-<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a>        @md.requires_bouncer_token(&#39;public_message&#39;) — single-use token
-<a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a>        @md.strict_rate_limit(&#39;public_message_submit&#39;, ip_limit=5, ip_window=300)
-<a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a>              ↓
-<a id="__codelineno-13-9" name="__codelineno-13-9" href="#__codelineno-13-9"></a>     PublicMessage saved + incident event + metric + notify_admins(msg)
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>Request → GET BOUNCER_CONTACT_PATH (default: /contact)
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>              ↓  (same pipeline as /auth, page_type=&#39;public_message&#39;)
+<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a>     signature cache → pass cookie → pre-screen → decoy / challenge / page
+<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a>              ↓
+<a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a>     POST /api/account/bouncer/message
+<a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a>        @md.requires_bouncer_token(&#39;public_message&#39;) — single-use token
+<a id="__codelineno-17-7" name="__codelineno-17-7" href="#__codelineno-17-7"></a>        @md.strict_rate_limit(&#39;public_message_submit&#39;, ip_limit=5, ip_window=300)
+<a id="__codelineno-17-8" name="__codelineno-17-8" href="#__codelineno-17-8"></a>              ↓
+<a id="__codelineno-17-9" name="__codelineno-17-9" href="#__codelineno-17-9"></a>     PublicMessage saved + incident event + metric + notify_admins(msg)
 </code></pre></div>
 <h3 id="kinds">Kinds<a class="headerlink" href="#kinds" title="Permanent link">&para;</a></h3>
 <p>Field schemas live in <code>mojo.apps.account.services.public_message.KIND_SCHEMAS</code> —
@@ -4509,22 +4893,22 @@ alongside the normal form fields. The service sanitizes it:</p>
 kind-known keys with friendly labels and fall through to a generic
 <code>key → value</code> list for anything else.</p>
 <h3 id="endpoint">Endpoint<a class="headerlink" href="#endpoint" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>GET  /contact?kind=&lt;kind&gt;      — bouncer-gated HTML form page
-<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>POST /api/account/bouncer/message  — submit (bouncer token required)
-<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>GET/POST /api/account/public_message[/&lt;pk&gt;]  — admin list / detail
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>GET  /contact?kind=&lt;kind&gt;      — bouncer-gated HTML form page
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>POST /api/account/bouncer/message  — submit (bouncer token required)
+<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a>GET/POST /api/account/public_message[/&lt;pk&gt;]  — admin list / detail
 </code></pre></div>
 <p>Unknown <code>kind</code> on the page falls back to <code>contact_us</code>. Unknown <code>kind</code> on the
 submit endpoint returns 400.</p>
 <h3 id="model">Model<a class="headerlink" href="#model" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">PublicMessage</span>
-<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>
-<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="n">msg</span> <span class="o">=</span> <span class="n">PublicMessage</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">status</span><span class="o">=</span><span class="s1">&#39;open&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">latest</span><span class="p">(</span><span class="s1">&#39;created&#39;</span><span class="p">)</span>
-<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="n">msg</span><span class="o">.</span><span class="n">kind</span>          <span class="c1"># &#39;contact_us&#39; | &#39;support&#39;</span>
-<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a><span class="n">msg</span><span class="o">.</span><span class="n">name</span><span class="p">,</span> <span class="n">msg</span><span class="o">.</span><span class="n">email</span><span class="p">,</span> <span class="n">msg</span><span class="o">.</span><span class="n">subject</span><span class="p">,</span> <span class="n">msg</span><span class="o">.</span><span class="n">message</span>
-<a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a><span class="n">msg</span><span class="o">.</span><span class="n">metadata</span>      <span class="c1"># kind-specific fields (company, category, severity, …)</span>
-<a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a><span class="n">msg</span><span class="o">.</span><span class="n">status</span>        <span class="c1"># &#39;open&#39; | &#39;closed&#39;</span>
-<a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a><span class="n">msg</span><span class="o">.</span><span class="n">group</span>         <span class="c1"># set when the bouncer resolved a group for the request</span>
-<a id="__codelineno-15-9" name="__codelineno-15-9" href="#__codelineno-15-9"></a><span class="n">msg</span><span class="o">.</span><span class="n">ip_address</span>    <span class="c1"># captured at submit</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">PublicMessage</span>
+<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a>
+<a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a><span class="n">msg</span> <span class="o">=</span> <span class="n">PublicMessage</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">status</span><span class="o">=</span><span class="s1">&#39;open&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">latest</span><span class="p">(</span><span class="s1">&#39;created&#39;</span><span class="p">)</span>
+<a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a><span class="n">msg</span><span class="o">.</span><span class="n">kind</span>          <span class="c1"># &#39;contact_us&#39; | &#39;support&#39;</span>
+<a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a><span class="n">msg</span><span class="o">.</span><span class="n">name</span><span class="p">,</span> <span class="n">msg</span><span class="o">.</span><span class="n">email</span><span class="p">,</span> <span class="n">msg</span><span class="o">.</span><span class="n">subject</span><span class="p">,</span> <span class="n">msg</span><span class="o">.</span><span class="n">message</span>
+<a id="__codelineno-19-6" name="__codelineno-19-6" href="#__codelineno-19-6"></a><span class="n">msg</span><span class="o">.</span><span class="n">metadata</span>      <span class="c1"># kind-specific fields (company, category, severity, …)</span>
+<a id="__codelineno-19-7" name="__codelineno-19-7" href="#__codelineno-19-7"></a><span class="n">msg</span><span class="o">.</span><span class="n">status</span>        <span class="c1"># &#39;open&#39; | &#39;closed&#39;</span>
+<a id="__codelineno-19-8" name="__codelineno-19-8" href="#__codelineno-19-8"></a><span class="n">msg</span><span class="o">.</span><span class="n">group</span>         <span class="c1"># set when the bouncer resolved a group for the request</span>
+<a id="__codelineno-19-9" name="__codelineno-19-9" href="#__codelineno-19-9"></a><span class="n">msg</span><span class="o">.</span><span class="n">ip_address</span>    <span class="c1"># captured at submit</span>
 </code></pre></div>
 <p>RestMeta:
 - <code>VIEW_PERMS = ["view_support", "security", "support"]</code>
@@ -4534,7 +4918,7 @@ submit endpoint returns 400.</p>
 <h3 id="notifications">Notifications<a class="headerlink" href="#notifications" title="Permanent link">&para;</a></h3>
 <p>Every flagged user receives a templated email when a message is submitted.
 Flag is a single boolean under the <code>protected</code> metadata namespace:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="n">user</span><span class="o">.</span><span class="n">set_protected_metadata</span><span class="p">(</span><span class="s2">&quot;notify_public_messages&quot;</span><span class="p">,</span> <span class="kc">True</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="n">user</span><span class="o">.</span><span class="n">set_protected_metadata</span><span class="p">(</span><span class="s2">&quot;notify_public_messages&quot;</span><span class="p">,</span> <span class="kc">True</span><span class="p">)</span>
 </code></pre></div>
 <ul>
 <li>Ungrouped message → every flagged user across the system.</li>

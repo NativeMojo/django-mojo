@@ -3807,7 +3807,7 @@
 <li><a href="login_events/">Login Events</a> — UserLoginEvent model, geo tracking, anomaly flags, metrics</li>
 <li><a href="inactive_sweep/">Inactive User/Group Sweep</a> — Auto-warn and disable inactive users and groups; feature flags, exemptions, email templates, incident events</li>
 <li><a href="disable_lifecycle/">Disable Lifecycle</a> — Unified disable/reactivate state for User and Group: <code>metadata.protected.disable.*</code> schema, REST POST_SAVE_ACTIONS, throttle-read endpoint, service API</li>
-<li><a href="bouncer/">Bouncer</a> — Bot detection gate for login, registration, and public message pages; adaptive learning, device reputation, signature management</li>
+<li><a href="bouncer/">Bouncer</a> — Bot detection gate for login, registration, and public message pages; adaptive learning, device reputation, signature management; continuous in-session detection (stream scorer, stream analyzers, gradient enforcement), static-page gating via <code>verify_pass</code> + nginx <code>auth_request</code>, cross-origin embedding, Bouncer-as-a-Service</li>
 <li><a href="bouncer/#public-messages-contact--support">Public Messages</a> — Bouncer-gated contact/support intake; <code>PublicMessage</code> model, <code>KIND_SCHEMAS</code>, notify_admins, admin RestMeta</li>
 </ul>
 
