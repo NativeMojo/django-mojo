@@ -150,9 +150,13 @@ def test_ws_manager_online_status(opts):
     uid = opts.client.jwt_data.uid
     assert uid is not None, "missing user id from jwt"
 
-    # Clean up any existing online status for this user
+    # Wipe ALL realtime online-status keys, not just this user's — `get_auth_count`
+    # globs `realtime:online:user:*` so any leftover key from a parallel test
+    # (or a previous suite run that didn't tear down cleanly) would make the
+    # initial-state assertion fail.
     redis_client = get_connection()
-    redis_client.delete(f"realtime:online:user:{uid}")
+    for key in redis_client.scan_iter("realtime:online:*"):
+        redis_client.delete(key)
 
     # Initially user should not be online
     assert not realtime.is_online("user", uid), "user should not be online initially"
