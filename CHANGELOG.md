@@ -1,5 +1,10 @@
 ## v1.2.20 - (current)
 
+## v1.2.20 - May 19, 2026
+
+fixing broken tests
+
+
 bouncer continuous detection + static-page protection
 
 
