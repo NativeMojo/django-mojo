@@ -1,7 +1,7 @@
 # Auth switcher preserves redirect/back params
 
 **Type**: request
-**Status**: planned
+**Status**: resolved
 **Date**: 2026-05-18
 **Priority**: medium
 
@@ -167,3 +167,46 @@ All in [tests/test_auth/bouncer_forms.py](tests/test_auth/bouncer_forms.py):
 ### Docs
 - [docs/django_developer/account/auth_pages.md](docs/django_developer/account/auth_pages.md) — short note that the switcher preserves the four forwarding params.
 - `docs/web_developer/` — no change needed; the API contract for consumers is unchanged.
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-05-18
+
+### What Was Built
+`_auth_context()` in the bouncer views now forwards a whitelisted set of URL
+params (`redirect`, `next`, `returnTo`, `back`) from `request.DATA` into the
+rendered `auth_url` / `register_url` switcher links, alongside the existing
+`group_uuid`. The querystring is assembled with `urllib.parse.urlencode`,
+mirroring the precedent already in `_serve_challenge`. Templates were not
+touched — both switcher hrefs (login.html:161, register.html:6) pick up the
+enriched URL through the same `{{ register_url }}` / `{{ auth_url }}`
+variables they already render. OAuth (`code`/`state`), magic-link `token`,
+and reset tokens are intentionally NOT forwarded.
+
+### Files Changed
+- `mojo/apps/account/rest/bouncer/views.py` — `_auth_context()` lines 228-245 now build `group_qs` via `urlencode` over `group_uuid` + the four whitelisted forwarding keys.
+- `tests/test_auth/bouncer_forms.py` — added `_render_switcher()` helper plus five new tests.
+- `docs/django_developer/account/auth_pages.md` — added a "Per-request override params" paragraph after the Routing settings table.
+- `CHANGELOG.md` — added entry under `v1.1.0 - (current)`.
+
+### Tests
+- `tests/test_auth/bouncer_forms.py` — five new tests:
+  - `test_switcher_preserves_redirect_param`
+  - `test_switcher_preserves_all_forwarding_keys`
+  - `test_switcher_whitelists_against_non_forwarded_params`
+  - `test_switcher_merges_group_uuid_with_forwarding`
+  - `test_switcher_no_params_unchanged_regression`
+- Run: `bin/run_tests --agent -t test_auth.bouncer_forms` — 24/24 pass (19 existing + 5 new).
+- Full suite: 2089 passed, 2 skipped failures unrelated to this change (pre-existing flakes in `test_mfa.zz_throttle` and `test_realtime.basic`).
+
+### Docs Updated
+- `docs/django_developer/account/auth_pages.md` — paragraph after the Routing settings table documenting that the four forwarding params are preserved across the login↔register switcher.
+- `docs/web_developer/` — no change (API contract for consumers is unchanged).
+- `CHANGELOG.md` — fix entry under `v1.1.0 - (current)`.
+
+### Security Review
+No concerns. `urlencode` percent-encodes all values; Django auto-escapes the rendered href; the whitelist correctly excludes OAuth/magic-link/reset tokens. The forwarded value is just carried one hop further on the same origin — destination-page redirect validation is unchanged. One LOW observation: `_serve_challenge` collapses `next`/`returnTo` into `redirect` while `_auth_context` preserves original key names (intentional per design decision, but a consistency note for future readers).
+
+### Follow-up
+- None required.
