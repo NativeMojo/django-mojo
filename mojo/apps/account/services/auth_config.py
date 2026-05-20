@@ -1,7 +1,9 @@
 """
-Portal config — group-owned auth-page configuration.
+Auth config — group-owned configuration for the hosted auth experience.
 
-A single structured object with three sections resolved per group:
+Drives how the login and registration pages of any web app backed by this
+framework look and behave. A single structured object with three sections
+resolved per group:
 
     theme         — how the login/register pages look
     registration  — which fields the signup form collects, which signup
@@ -10,9 +12,9 @@ A single structured object with three sections resolved per group:
 
 Resolution order (deep-merged, last wins):
 
-    DEFAULT_PORTAL (code)
-      <- AUTH_PORTAL setting (deployment-wide default)
-      <- group.metadata["portal"], walked root -> group down the parent chain
+    DEFAULT_AUTH_CONFIG (code)
+      <- AUTH_CONFIG setting (deployment-wide default)
+      <- group.metadata["auth_config"], walked root -> group down the chain
 
 Deep-merge semantics: dicts merge key-by-key, lists and scalars replace
 wholesale. So a group setting `login.methods` replaces the inherited list
@@ -44,7 +46,7 @@ LAYOUTS = ("card", "fullscreen")
 
 # Code defaults — reproduce today's behavior when nothing is customized:
 # email + password registration, every login method on, no passkey prompt.
-DEFAULT_PORTAL = {
+DEFAULT_AUTH_CONFIG = {
     "theme": {
         "app_title": "DJANGO MOJO",
         "logo_url": "",
@@ -116,9 +118,9 @@ def _group_chain(group):
     return chain
 
 
-def _global_portal():
-    """The AUTH_PORTAL setting as a dict, or {} when unset/malformed."""
-    raw = settings.get("AUTH_PORTAL", None)
+def _global_config():
+    """The AUTH_CONFIG setting as a dict, or {} when unset/malformed."""
+    raw = settings.get("AUTH_CONFIG", None)
     if isinstance(raw, str):
         try:
             raw = json.loads(raw)
@@ -127,22 +129,22 @@ def _global_portal():
     return raw if isinstance(raw, dict) else {}
 
 
-def resolve_portal_config(group=None, request=None):
-    """Resolve the portal config for `group`, returned as an objict.
+def resolve_auth_config(group=None, request=None):
+    """Resolve the auth config for `group`, returned as an objict.
 
-    `request` enables the `X-Mojo-Test-Portal-Config` header override (JSON
+    `request` enables the `X-Mojo-Test-Auth-Config` header override (JSON
     object), honored only when the test-mode gate passes.
     """
-    cfg = copy.deepcopy(DEFAULT_PORTAL)
-    cfg = _deep_merge(cfg, _global_portal())
+    cfg = copy.deepcopy(DEFAULT_AUTH_CONFIG)
+    cfg = _deep_merge(cfg, _global_config())
 
     if group is not None:
         for ancestor in _group_chain(group):
-            portal = (ancestor.metadata or {}).get("portal")
-            if isinstance(portal, dict):
-                cfg = _deep_merge(cfg, portal)
+            override = (ancestor.metadata or {}).get("auth_config")
+            if isinstance(override, dict):
+                cfg = _deep_merge(cfg, override)
 
-    header_value = _read_test_header(request, "X-Mojo-Test-Portal-Config")
+    header_value = _read_test_header(request, "X-Mojo-Test-Auth-Config")
     if header_value:
         try:
             override = json.loads(header_value)
@@ -154,8 +156,8 @@ def resolve_portal_config(group=None, request=None):
     return objict.from_dict(cfg)
 
 
-def public_portal_config(cfg):
-    """Return the safe, public subset of a resolved portal config.
+def public_auth_config(cfg):
+    """Return the safe, public subset of a resolved auth config.
 
     Everything here is already rendered into the public auth pages, so the
     subset is a stable-shape whitelist rather than a redaction.
@@ -181,8 +183,8 @@ def public_portal_config(cfg):
 
 
 # ---------------------------------------------------------------------------
-# Validation — run on Group save so a bad metadata.portal is rejected at write
-# time, not discovered at render time.
+# Validation — run on Group save so a bad metadata.auth_config is rejected at
+# write time, not discovered at render time.
 # ---------------------------------------------------------------------------
 
 def _validate_methods(methods, allowed, label):
@@ -204,63 +206,63 @@ def validate_custom_css(css):
     """Reject custom CSS that could break out of the <style> tag (XSS) or
     pull in external resources (CSS-based data exfiltration)."""
     if not isinstance(css, str):
-        raise merrors.ValueException("portal.theme.custom_css must be a string")
+        raise merrors.ValueException("auth_config.theme.custom_css must be a string")
     # A <style> raw-text element can only be terminated by a sequence
     # starting with '<'. Valid CSS never needs '<' — reject it outright.
     if "<" in css:
         raise merrors.ValueException(
-            "portal.theme.custom_css cannot contain '<' — it would allow "
+            "auth_config.theme.custom_css cannot contain '<' — it would allow "
             "breaking out of the <style> tag")
     lowered = css.lower()
     if "@import" in lowered:
         raise merrors.ValueException(
-            "portal.theme.custom_css cannot use @import (external resource)")
+            "auth_config.theme.custom_css cannot use @import (external resource)")
     if "://" in lowered or re.search(r"url\(\s*['\"]?\s*//", lowered):
         raise merrors.ValueException(
-            "portal.theme.custom_css cannot reference external URLs "
+            "auth_config.theme.custom_css cannot reference external URLs "
             "(data: URIs are allowed)")
 
 
-def validate_portal_config(cfg):
-    """Validate a portal config object. Raises ValueException on bad config."""
+def validate_auth_config(cfg):
+    """Validate an auth config object. Raises ValueException on bad config."""
     if not isinstance(cfg, dict):
-        raise merrors.ValueException("portal config must be an object")
+        raise merrors.ValueException("auth config must be an object")
 
     theme = cfg.get("theme")
     if theme is not None:
         if not isinstance(theme, dict):
-            raise merrors.ValueException("portal.theme must be an object")
+            raise merrors.ValueException("auth_config.theme must be an object")
         layout = theme.get("layout")
         if layout is not None and layout not in LAYOUTS:
             raise merrors.ValueException(
-                f"portal.theme.layout must be one of: {', '.join(LAYOUTS)}")
+                f"auth_config.theme.layout must be one of: {', '.join(LAYOUTS)}")
         if theme.get("custom_css"):
             validate_custom_css(theme["custom_css"])
         if theme.get("custom_css_url"):
-            _validate_https_url(theme["custom_css_url"], "portal.theme.custom_css_url")
+            _validate_https_url(theme["custom_css_url"], "auth_config.theme.custom_css_url")
 
     login = cfg.get("login")
     if login is not None:
         if not isinstance(login, dict):
-            raise merrors.ValueException("portal.login must be an object")
+            raise merrors.ValueException("auth_config.login must be an object")
         methods = login.get("methods")
         if methods is not None:
-            _validate_methods(methods, LOGIN_METHODS, "portal.login.methods")
+            _validate_methods(methods, LOGIN_METHODS, "auth_config.login.methods")
             if len(methods) == 0:
                 raise merrors.ValueException(
-                    "portal.login.methods cannot be empty — no way to log in")
+                    "auth_config.login.methods cannot be empty — no way to log in")
 
     registration = cfg.get("registration")
     if registration is not None:
         if not isinstance(registration, dict):
-            raise merrors.ValueException("portal.registration must be an object")
+            raise merrors.ValueException("auth_config.registration must be an object")
         methods = registration.get("methods")
         if methods is not None:
-            _validate_methods(methods, REGISTRATION_METHODS, "portal.registration.methods")
+            _validate_methods(methods, REGISTRATION_METHODS, "auth_config.registration.methods")
         prompt = registration.get("passkey_prompt")
         if prompt is not None and prompt not in PASSKEY_PROMPTS:
             raise merrors.ValueException(
-                f"portal.registration.passkey_prompt must be one of: "
+                f"auth_config.registration.passkey_prompt must be one of: "
                 f"{', '.join(PASSKEY_PROMPTS)}")
         fields = registration.get("fields")
         if fields:
@@ -289,8 +291,8 @@ def assert_login_method(method, group):
     """
     if group is None:
         return
-    cfg = resolve_portal_config(group)
+    cfg = resolve_auth_config(group)
     methods = cfg.login.methods or []
     if method not in methods:
         raise merrors.PermissionDeniedException(
-            "This sign-in method is not available for this portal", 403, 403)
+            "This sign-in method is not available for this app", 403, 403)

@@ -3,7 +3,7 @@ Tests for per-group registration toggle and the passkey-during-registration
 prompt.
 
 Contracts enforced:
-  - on_register rejects signup when the group's portal config disables it
+  - on_register rejects signup when the group's auth config disables it
   - on_register still works for a group with registration enabled
   - _auth_context exposes passkey_prompt + passkey_url
   - register.html redirects to the passkey page when passkey_prompt != off
@@ -32,13 +32,13 @@ def setup_passkey_prompt(opts):
 
     opts.group_disabled = Group.objects.create(
         name='test-pp-disabled', uuid=PP_GROUP_DISABLED_UUID, is_active=True,
-        metadata={"portal": {"registration": {"enabled": False}}})
+        metadata={"auth_config": {"registration": {"enabled": False}}})
     opts.group_optional = Group.objects.create(
         name='test-pp-optional', uuid=PP_GROUP_OPTIONAL_UUID, is_active=True,
-        metadata={"portal": {"registration": {"passkey_prompt": "optional"}}})
+        metadata={"auth_config": {"registration": {"passkey_prompt": "optional"}}})
     opts.group_required = Group.objects.create(
         name='test-pp-required', uuid=PP_GROUP_REQUIRED_UUID, is_active=True,
-        metadata={"portal": {"registration": {"passkey_prompt": "required"}}})
+        metadata={"auth_config": {"registration": {"passkey_prompt": "required"}}})
 
 
 def _render(template_name, group=None):

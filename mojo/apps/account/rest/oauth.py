@@ -22,7 +22,7 @@ from mojo.apps.account.models import User
 from mojo.apps.account.models.oauth import OAuthConnection
 from mojo.apps.account.rest.user import jwt_login
 from mojo.apps.account.services import extensions as account_extensions
-from mojo.apps.account.services import portal_config
+from mojo.apps.account.services import auth_config
 from mojo.apps.account.services.oauth import get_provider
 from mojo.helpers import logit
 from mojo.helpers.response import JsonResponse
@@ -138,12 +138,12 @@ def _find_or_create_user(provider_name, profile, state_data=None, request=None):
         if not settings.get("OAUTH_ALLOW_REGISTRATION", True):
             raise merrors.PermissionDeniedException("Account registration via OAuth is not permitted")
         # Per-group registration method gate — a group can disable signup via
-        # a given OAuth provider in its portal config. Only applies to the
+        # a given OAuth provider in its auth config. Only applies to the
         # toggleable providers (google/apple) and when a group is resolved.
-        if provider_name in portal_config.REGISTRATION_METHODS:
+        if provider_name in auth_config.REGISTRATION_METHODS:
             _reg_group = _resolve_state_group(state_data)
             if _reg_group is not None:
-                _reg_cfg = portal_config.resolve_portal_config(group=_reg_group)
+                _reg_cfg = auth_config.resolve_auth_config(group=_reg_group)
                 if provider_name not in (_reg_cfg.registration.methods or []):
                     raise merrors.PermissionDeniedException(
                         "Account registration via this provider is not permitted")
@@ -211,11 +211,11 @@ def on_oauth_begin(request, provider):
     except ValueError:
         raise merrors.ValueException(f"Unknown provider: {provider}")
 
-    # UX-only per-group method gate — only google/apple are toggleable portal
+    # UX-only per-group method gate — only google/apple are toggleable
     # login methods; other providers (e.g. github) are never gated here.
-    if provider in portal_config.LOGIN_METHODS:
-        portal_config.assert_login_method(
-            provider, portal_config.resolve_group_from_request(request))
+    if provider in auth_config.LOGIN_METHODS:
+        auth_config.assert_login_method(
+            provider, auth_config.resolve_group_from_request(request))
 
     # frontend_uri = where the browser lands after the callback bounce
     custom_frontend_uri = request.DATA.get("redirect_uri", "")

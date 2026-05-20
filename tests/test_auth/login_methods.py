@@ -45,10 +45,10 @@ def setup_login_methods(opts):
 
     opts.group_a = Group.objects.create(
         name='test-lm-group-a', uuid=LM_GROUP_A_UUID, is_active=True,
-        metadata={"portal": {"login": {"methods": ["sms", "passkey"]}}})
+        metadata={"auth_config": {"login": {"methods": ["sms", "passkey"]}}})
     opts.group_b = Group.objects.create(
         name='test-lm-group-b', uuid=LM_GROUP_B_UUID, is_active=True,
-        metadata={"portal": {"login": {"methods": ["password"]}}})
+        metadata={"auth_config": {"login": {"methods": ["password"]}}})
 
 
 # ---------------------------------------------------------------------------
@@ -57,14 +57,14 @@ def setup_login_methods(opts):
 
 @th.django_unit_test("assert_login_method is a no-op when no group is resolved")
 def test_assert_no_group_noop(opts):
-    from mojo.apps.account.services import portal_config as pc
+    from mojo.apps.account.services import auth_config as pc
     # Must not raise — absent group context means no restriction.
     pc.assert_login_method("password", None)
 
 
 @th.django_unit_test("assert_login_method raises when the group disables the method")
 def test_assert_blocked(opts):
-    from mojo.apps.account.services import portal_config as pc
+    from mojo.apps.account.services import auth_config as pc
     from mojo import errors as merrors
     try:
         pc.assert_login_method("password", opts.group_a)

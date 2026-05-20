@@ -1,4 +1,4 @@
-# Auth Portal Config — REST API Reference
+# Auth Config — REST API Reference
 
 Per-group structured configuration that controls what the hosted auth pages
 look like and which login/registration methods they offer.
@@ -7,21 +7,21 @@ look like and which login/registration methods they offer.
 
 ## Overview
 
-The portal config has three sections:
+The auth config has three sections:
 
 - `theme` — branding, layout, and CSS
 - `login` — which sign-in methods are shown
 - `registration` — which sign-up methods are shown, passkey policy
 
 Configuration is resolved per group: code defaults are overridden by a
-deployment-wide `AUTH_PORTAL` setting, then further overridden by
-`group.metadata["portal"]` walked down the group parent chain.
+deployment-wide `AUTH_CONFIG` setting, then further overridden by
+`group.metadata["auth_config"]` walked down the group parent chain.
 
 ---
 
-## `GET /api/auth/portal`
+## `GET /api/auth/config`
 
-Returns the resolved, public-safe portal config for a group. Use this to
+Returns the resolved, public-safe auth config for a group. Use this to
 drive your own custom auth UI so it respects the group's theming and offered
 methods.
 
@@ -77,15 +77,15 @@ render. Use `theme` to apply branding.
 ## Login Method Soft-Gating
 
 When you call a login or registration endpoint with a `group_uuid` and the
-resolved portal config does not include the method you are using, the server
+resolved auth config does not include the method you are using, the server
 returns 403:
 
 ```json
-{"status": false, "message": "This sign-in method is not available for this portal"}
+{"status": false, "message": "This sign-in method is not available for this group"}
 ```
 
 This is a **UX guardrail** — it is only enforced when `group_uuid` is present.
-Omitting `group_uuid` bypasses the restriction. Fetch `GET /api/auth/portal`
+Omitting `group_uuid` bypasses the restriction. Fetch `GET /api/auth/config`
 first and only offer buttons for the methods listed.
 
 Affected endpoints:
@@ -116,7 +116,7 @@ is not bouncer-gated — the visitor must already be authenticated.
 ## Per-Group Branding via `group_uuid`
 
 All hosted auth pages (`/auth`, `/register`, `/passkey`) resolve a group from
-`?group_uuid=<uuid>` and apply the group's portal config (theme, methods,
+`?group_uuid=<uuid>` and apply the group's auth config (theme, methods,
 passkey policy). Use this for multi-tenant deployments where multiple groups
 share one auth domain.
 
@@ -133,8 +133,8 @@ login → passkey enrollment redirect.
 ## `mojo-auth.js` Helpers
 
 ```javascript
-// Fetch the resolved portal config
-const cfg = await MojoAuth.getPortalConfig({ groupUuid: 'abc123' });
+// Fetch the resolved auth config
+const cfg = await MojoAuth.getAuthConfig({ groupUuid: 'abc123' });
 // cfg.theme.appTitle, cfg.login.methods, cfg.registration.passsKeyPrompt, …
 
 // Register a passkey for the currently authenticated user

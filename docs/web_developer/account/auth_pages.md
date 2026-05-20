@@ -4,9 +4,9 @@ Django-served login and registration pages. These are fully functional out of
 the box — no frontend app required. The pages handle all auth flows including
 OAuth, passkeys, SMS login, password reset, and magic login links.
 
-All branding and feature configuration is controlled per group via the portal
-config. See [Portal Config](portal_config.md) for details and the
-`GET /api/auth/portal` endpoint.
+All branding and feature configuration is controlled per group via the auth
+config. See [Auth Config](auth_config.md) for details and the
+`GET /api/auth/config` endpoint.
 
 ---
 
@@ -26,7 +26,7 @@ receive an HttpOnly pass cookie that skips the challenge on subsequent visits.
 
 ## Login Page (`/auth`)
 
-Which methods are shown depends on the resolved portal config's `login.methods`.
+Which methods are shown depends on the resolved auth config's `login.methods`.
 Default set: `password`, `sms`, `passkey`, `magic`, `google`, `apple`.
 
 - **password** — email/password sign in
@@ -59,7 +59,7 @@ Default set: `password`, `sms`, `passkey`, `magic`, `google`, `apple`.
 
 ## Registration Page (`/register`)
 
-Default fields (configurable via `registration.fields` in the portal config):
+Default fields (configurable via `registration.fields` in the auth config):
 - First name / Last name (optional, side-by-side)
 - Email (required)
 - Password (required, with visibility toggle)
@@ -138,15 +138,15 @@ redirect back from the provider.
 ## Per-Group Branding
 
 When the platform hosts multiple groups with different branding, the auth pages
-resolve a group automatically and apply its portal config (theme, methods,
+resolve a group automatically and apply its auth config (theme, methods,
 passkey policy).
 
 **Custom auth domain** — point `auth.clientbrand.com` at the same Django
 backend. The server detects the hostname, resolves the group, and serves that
-group's portal config. No URL params needed.
+group's auth config. No URL params needed.
 
 **`?group_uuid=<uuid>` param** — for shared-domain deployments, append
-`?group_uuid=<uuid>` to the auth page URL. The group's portal config is applied
+`?group_uuid=<uuid>` to the auth page URL. The group's auth config is applied
 and the param is preserved through navigation (login ↔ register switcher), the
 OAuth round-trip, and the login → passkey enrollment redirect.
 
@@ -154,8 +154,8 @@ OAuth round-trip, and the login → passkey enrollment redirect.
 rendered forms automatically include `group_uuid` in the POST body. This
 satisfies servers configured with `REQUIRE_GROUP_ON_REGISTRATION = True`.
 
-Fetch `GET /api/auth/portal?group_uuid=<uuid>` to get the resolved config for
-a group — useful for custom front-ends. See [Portal Config](portal_config.md).
+Fetch `GET /api/auth/config?group_uuid=<uuid>` to get the resolved config for
+a group — useful for custom front-ends. See [Auth Config](auth_config.md).
 
 ---
 

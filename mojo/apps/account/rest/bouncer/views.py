@@ -231,7 +231,7 @@ def on_passkey_enroll_page(request):
 
     Not bouncer-gated — the visitor is already authenticated (the page reads
     the access token from localStorage and runs the WebAuthn registration
-    round-trip). Themed by the request's resolved portal config. The hosted
+    round-trip). Themed by the request's resolved auth config. The hosted
     register page redirects here after signup when `passkey_prompt != off`;
     it is also linkable standalone from account settings.
     """
@@ -253,18 +253,18 @@ def on_passkey_enroll_page(request):
 
 def _auth_context(request, group=None):
     """Build the shared template context for auth pages from the group's
-    resolved portal config.
+    resolved auth config.
 
     Theme, registration, and login config all come from
-    `portal_config.resolve_portal_config(group)` — code defaults, overlaid
-    by the AUTH_PORTAL setting, overlaid by `group.metadata["portal"]` down
-    the parent chain. Single-tenant deployments (group=None) get the
+    `auth_config.resolve_auth_config(group)` — code defaults, overlaid
+    by the AUTH_CONFIG setting, overlaid by `group.metadata["auth_config"]`
+    down the parent chain. Single-tenant deployments (group=None) get the
     deployment default.
     """
     from mojo.apps.account.services import register_schema
-    from mojo.apps.account.services import portal_config
+    from mojo.apps.account.services import auth_config
 
-    cfg = portal_config.resolve_portal_config(group=group, request=request)
+    cfg = auth_config.resolve_auth_config(group=group, request=request)
     theme = cfg.theme
     login_methods = list(cfg.login.methods or [])
     registration_methods = list(cfg.registration.methods or [])

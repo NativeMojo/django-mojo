@@ -8,7 +8,7 @@ Contracts enforced:
   - resolve_by_auth_domain returns None for inactive group
   - _resolve_group prefers hostname over ?group= query param
   - _resolve_group falls back to ?group=<uuid> when hostname doesn't match
-  - _auth_context resolves portal config per-group when group is provided
+  - _auth_context resolves auth config per-group when group is provided
   - _auth_context falls back to deployment defaults when group has no overrides
   - auth_domain uniqueness is enforced at DB level
   - OAuth state preserves group_uuid through the round-trip
@@ -68,10 +68,10 @@ def setup_whitelabel(opts):
     )
     opts.group = group
 
-    # Group-level branding now lives in the portal config (metadata["portal"]).
+    # Group-level branding now lives in the auth config (metadata["auth_config"]).
     Setting.objects.filter(group__in=[group, parent]).delete()
     group.metadata = {
-        "portal": {
+        "auth_config": {
             "theme": {
                 "logo_url": "https://testoperator.com/logo.png",
                 "app_title": "Test Operator",
@@ -81,9 +81,9 @@ def setup_whitelabel(opts):
     group.save(update_fields=["metadata"])
 
     # Parent-level theme override — the child inherits it via the
-    # portal-config parent-chain merge (root -> group).
+    # auth-config parent-chain merge (root -> group).
     parent.metadata = {
-        "portal": {"theme": {"hero_headline": "Parent Platform Welcome"}}
+        "auth_config": {"theme": {"hero_headline": "Parent Platform Welcome"}}
     }
     parent.save(update_fields=["metadata"])
 
@@ -253,7 +253,7 @@ def test_auth_context_parent_fallback(opts):
     factory = RequestFactory()
     request = factory.get('/auth')
     ctx = _auth_context(request, group=opts.group)
-    # hero_headline is set on the parent's portal config, not the child's
+    # hero_headline is set on the parent's auth config, not the child's
     assert_eq(ctx['hero_headline'], 'Parent Platform Welcome',
               f"Expected parent headline, got '{ctx['hero_headline']}'")
 

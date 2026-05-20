@@ -19,7 +19,7 @@ from mojo import errors as merrors
 from mojo.apps.account.models import User
 from mojo.apps.account.rest.user import jwt_login
 from mojo.apps.account.services import mfa as mfa_service
-from mojo.apps.account.services import portal_config
+from mojo.apps.account.services import auth_config
 from mojo.apps import phonehub
 from mojo.apps.phonehub.services.phonenumbers import normalize as normalize_phone
 from mojo.helpers import crypto, dates, logit
@@ -154,8 +154,8 @@ def on_sms_verify(request):
 def on_sms_login(request):
     """Send an SMS OTP to start a passwordless login."""
     # UX-only per-group method gate (no-op without a resolving group_uuid).
-    portal_config.assert_login_method(
-        "sms", portal_config.resolve_group_from_request(request))
+    auth_config.assert_login_method(
+        "sms", auth_config.resolve_group_from_request(request))
 
     user = User.lookup_from_request(request, phone_as_username=True)
     if not user:

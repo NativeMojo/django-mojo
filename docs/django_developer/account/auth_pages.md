@@ -3,7 +3,7 @@
 Django-served login and registration pages with bouncer bot detection,
 OAuth (Google, Apple), passkeys, SMS login, password reset, and magic link
 support. All branding and feature configuration is controlled through the
-[portal config](portal_config.md).
+[auth config](auth_config.md).
 
 ---
 
@@ -11,7 +11,7 @@ support. All branding and feature configuration is controlled through the
 
 The framework serves fully-featured auth pages directly from Django — no
 separate frontend app required. Pages are bouncer-gated so bots never see the
-login form, and all branding is configured via the structured portal config
+login form, and all branding is configured via the structured auth config
 object (group-owned, deep-merged from the parent chain).
 
 ```
@@ -37,8 +37,8 @@ BOUNCER_LOGIN_PATH    = 'auth'      # real login page path (default: 'auth')
 BOUNCER_REGISTER_PATH = 'register'  # real registration page path
 BOUNCER_PASSKEY_PATH  = 'passkey'   # passkey enrollment page path
 
-# ---- Deployment-wide portal config default ----
-AUTH_PORTAL = {
+# ---- Deployment-wide auth config default ----
+AUTH_CONFIG = {
     "theme": {
         "app_title": "My App",
         "logo_url": "https://cdn.example.com/logo.svg",
@@ -55,8 +55,8 @@ AUTH_PORTAL = {
 }
 ```
 
-`AUTH_PORTAL` replaces all retired flat `AUTH_*` / `AUTH_REGISTER_*` settings.
-See [Portal Config](portal_config.md) for the full schema and migration table.
+`AUTH_CONFIG` replaces all retired flat `AUTH_*` / `AUTH_REGISTER_*` settings.
+See [Auth Config](auth_config.md) for the full schema and migration table.
 
 ### 2. Nginx — Static Assets & Favicon
 
@@ -99,14 +99,14 @@ server {
 }
 ```
 
-Set `theme.favicon_url` in `AUTH_PORTAL` to your favicon path — the template
+Set `theme.favicon_url` in `AUTH_CONFIG` to your favicon path — the template
 includes `<link rel="icon" href="...">` when this key is non-empty.
 
 ### 3. OAuth Setup
 
 Enable Google/Apple by configuring their provider credentials. The login
-methods must also be included in `AUTH_PORTAL.login.methods` (or the group's
-`metadata.portal.login.methods`):
+methods must also be included in `AUTH_CONFIG.login.methods` (or the group's
+`metadata.auth_config.login.methods`):
 
 ```python
 # Google OAuth
@@ -121,8 +121,8 @@ APPLE_OAUTH_KEY_ID    = 'your-key-id'
 ```
 
 ```python
-# AUTH_PORTAL must include the provider in login.methods:
-AUTH_PORTAL = {
+# AUTH_CONFIG must include the provider in login.methods:
+AUTH_CONFIG = {
     "login": {"methods": ["password", "google", "apple"]},
     ...
 }
@@ -143,7 +143,7 @@ placing a file with the same path in your project's `TEMPLATES` directories.
 |----------|---------|
 | `auth_base.html` | Base layout: overlay, card, hero include, script setup |
 | `auth_hero.html` | Left panel partial — override to swap imagery/messaging |
-| `login.html` | Login page — extends base; all views + methods from portal config |
+| `login.html` | Login page — extends base; all views + methods from auth config |
 | `register.html` | Registration page — extends base; redirects to `/passkey` when `passkey_prompt != off` |
 | `passkey_enroll.html` | Standalone passkey enrollment page |
 | `bouncer_challenge.html` | Bouncer challenge (default branded, opt-in override per group) |
@@ -178,7 +178,7 @@ Create `templates/account/auth_hero.html` in your project:
 </div>
 ```
 
-Or set the appropriate keys in `AUTH_PORTAL.theme` and the default template
+Or set the appropriate keys in `AUTH_CONFIG.theme` and the default template
 handles it.
 
 ---
@@ -205,11 +205,11 @@ The dark premium theme is in `mojo-auth-theme.css` using CSS custom properties:
 
 ### Custom CSS — runtime overrides
 
-Set via `AUTH_PORTAL.theme.custom_css` (inline `<style>` block) or
-`AUTH_PORTAL.theme.custom_css_url` (external `<link>`):
+Set via `AUTH_CONFIG.theme.custom_css` (inline `<style>` block) or
+`AUTH_CONFIG.theme.custom_css_url` (external `<link>`):
 
 ```python
-AUTH_PORTAL = {
+AUTH_CONFIG = {
     "theme": {
         "custom_css": ":root { --mat-accent: #e74c3c; --mat-page-bg: #1a1a2e; }",
         # OR:
@@ -220,8 +220,8 @@ AUTH_PORTAL = {
 
 `custom_css` must not contain `<`, `@import`, or external URL references
 (`://`). `custom_css_url` must be an `https://` URL. These are enforced at save
-time on Group REST writes and recommended to enforce on `AUTH_PORTAL` too
-(the validator is public: `portal_config.validate_portal_config`).
+time on Group REST writes and recommended to enforce on `AUTH_CONFIG` too
+(the validator is public: `auth_config.validate_auth_config`).
 
 ### Layouts
 
@@ -244,7 +244,7 @@ time on Group REST writes and recommended to enforce on `AUTH_PORTAL` too
 | `/login` | POST | `on_decoy_post` | Dead endpoint — logs, returns fake error |
 | `/signin` | GET/POST | (same) | Honeypot decoy |
 | `/signup` | GET/POST | (same) | Honeypot decoy |
-| `/api/auth/portal` | GET | `on_auth_portal` | Public portal config for custom front-ends |
+| `/api/auth/config` | GET | `on_auth_config` | Public auth config for custom front-ends |
 | `/api/account/bouncer/assess` | POST | `on_bouncer_assess` | Bouncer signal assessment |
 | `/api/account/bouncer/event` | POST | `on_bouncer_event` | Client event reporting |
 | `/api/account/static/mojo-auth-theme.css` | GET | Static | Dark theme CSS |
@@ -260,7 +260,7 @@ as absolute URLs and bypass the `/api/` prefix.
 
 ### Login page (`/auth`)
 
-Methods rendered are those listed in the resolved portal config's
+Methods rendered are those listed in the resolved auth config's
 `login.methods`. Available tokens: `password`, `sms`, `passkey`, `magic`,
 `google`, `apple`.
 
@@ -288,7 +288,7 @@ Methods rendered are those listed in the resolved portal config's
 
 ### Passkey enrollment page (`/passkey`)
 
-Not bouncer-gated. Themed by the resolved portal config. Reads the JWT from
+Not bouncer-gated. Themed by the resolved auth config. Reads the JWT from
 localStorage and runs the WebAuthn registration round-trip client-side. Used
 post-registration (when `passkey_prompt != off`) and standalone from account
 settings.
@@ -304,12 +304,12 @@ absent, the "or continue with" divider is excluded entirely.
 ## Configurable Registration Form
 
 `registration.fields` drives both the bouncer-rendered register form and the
-server-side validator. See [Portal Config — registration](portal_config.md)
+server-side validator. See [Auth Config — registration](auth_config.md)
 for the schema and `register_schema.py` for the field resolution logic.
 
 ```python
-# Phone-as-identity example via AUTH_PORTAL
-AUTH_PORTAL = {
+# Phone-as-identity example via AUTH_CONFIG
+AUTH_CONFIG = {
     "registration": {
         "fields": [
             {"name": "first_name", "required": True},
@@ -347,7 +347,7 @@ The hosted pages resolve the operator group from:
 
 The resolved group's `uuid` is emitted as `window._matConfig.groupUuid`. Submit
 handlers in `register.html` and `login.html` include it in the POST payload
-automatically. See [portal_config.md](portal_config.md) for how the config
+automatically. See [auth_config.md](auth_config.md) for how the config
 resolves down the parent chain.
 
 ---

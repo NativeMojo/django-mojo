@@ -1,4 +1,4 @@
-# Auth Portal Config — Django Developer Reference
+# Auth Config — Django Developer Reference
 
 Per-group structured configuration for the hosted auth pages. Replaces the
 retired flat `AUTH_*` / `AUTH_REGISTER_*` settings.
@@ -7,7 +7,7 @@ retired flat `AUTH_*` / `AUTH_REGISTER_*` settings.
 
 ## Overview
 
-A portal config is a three-section object:
+An auth config is a three-section object:
 
 ```
 theme        — branding, layout, CSS overrides
@@ -18,9 +18,9 @@ login        — which login methods are offered
 Resolution order (deep-merged, last wins):
 
 ```
-Code defaults (DEFAULT_PORTAL)
-  <- AUTH_PORTAL setting (deployment-wide JSON)
-  <- group.metadata["portal"], walked root → group down the parent chain
+Code defaults (DEFAULT_AUTH_CONFIG)
+  <- AUTH_CONFIG setting (deployment-wide JSON)
+  <- group.metadata["auth_config"], walked root → group down the parent chain
 ```
 
 Deep-merge semantics: dicts merge key-by-key, lists and scalars replace
@@ -71,14 +71,14 @@ Valid registration method tokens: `password`, `google`, `apple`.
 
 ---
 
-## Deployment-Wide Default — `AUTH_PORTAL`
+## Deployment-Wide Default — `AUTH_CONFIG`
 
 Set a JSON object in `settings.py` to apply to all groups before per-group
 overrides:
 
 ```python
 # settings.py
-AUTH_PORTAL = {
+AUTH_CONFIG = {
     "theme": {
         "app_title": "Acme Platform",
         "logo_url": "https://cdn.acme.com/logo.svg",
@@ -95,20 +95,20 @@ AUTH_PORTAL = {
 }
 ```
 
-`AUTH_PORTAL` can also be a JSON string (e.g. when set via an environment
+`AUTH_CONFIG` can also be a JSON string (e.g. when set via an environment
 variable or the `Setting` model at runtime).
 
 ---
 
-## Per-Group Config — `group.metadata["portal"]`
+## Per-Group Config — `group.metadata["auth_config"]`
 
-Store a partial portal config in `group.metadata["portal"]`. Only the keys
+Store a partial auth config in `group.metadata["auth_config"]`. Only the keys
 present are merged — absent keys inherit from the deployment default or code
 defaults.
 
 ```python
 group.metadata = group.metadata or {}
-group.metadata["portal"] = {
+group.metadata["auth_config"] = {
     "theme": {
         "app_title": "Client Brand",
         "logo_url": "https://cdn.clientbrand.com/logo.svg",
@@ -125,7 +125,7 @@ group.metadata["portal"] = {
 group.save()
 ```
 
-Validation runs in `Group.on_rest_pre_save` — a bad `metadata.portal` on a
+Validation runs in `Group.on_rest_pre_save` — a bad `metadata.auth_config` on a
 REST PATCH returns 400 immediately rather than breaking the auth page at render
 time. Validated constraints:
 
@@ -143,29 +143,29 @@ time. Validated constraints:
 ## Service API
 
 ```python
-from mojo.apps.account.services import portal_config
+from mojo.apps.account.services import auth_config
 
 # Resolve the full config for a group (returns objict)
-cfg = portal_config.resolve_portal_config(group=group, request=request)
+cfg = auth_config.resolve_auth_config(group=group, request=request)
 cfg.theme.app_title          # → "Acme Platform"
 cfg.login.methods            # → ["password", "google"]
 cfg.registration.passkey_prompt  # → "optional"
 
-# Public-safe subset (what GET /api/auth/portal returns)
-pub = portal_config.public_portal_config(cfg)
+# Public-safe subset (what GET /api/auth/config returns)
+pub = auth_config.public_auth_config(cfg)
 
 # Resolve group from request.DATA["group_uuid"]
-group = portal_config.resolve_group_from_request(request)
+group = auth_config.resolve_group_from_request(request)
 
 # Soft-gate: raise PermissionDeniedException if method is disabled for group
-portal_config.assert_login_method("sms", group)  # no-op if group is None
+auth_config.assert_login_method("sms", group)  # no-op if group is None
 
 # Validate a raw dict before saving
-portal_config.validate_portal_config(raw_dict)   # raises ValueException on bad config
+auth_config.validate_auth_config(raw_dict)   # raises ValueException on bad config
 ```
 
-The `request` parameter on `resolve_portal_config` enables the
-`X-Mojo-Test-Portal-Config` header override in test mode (loopback + test flag
+The `request` parameter on `resolve_auth_config` enables the
+`X-Mojo-Test-Auth-Config` header override in test mode (loopback + test flag
 only — not honoured in production).
 
 ---
@@ -173,7 +173,7 @@ only — not honoured in production).
 ## Login Method Soft-Gating
 
 When a `group_uuid` resolves a group on a login or registration request, the
-portal config's `login.methods` / `registration.methods` lists are consulted.
+auth config's `login.methods` / `registration.methods` lists are consulted.
 Disabled methods return a 403 with a human-readable message. This is a **UX
 guardrail only** — it is not enforced when `group_uuid` is absent. Callers
 that omit `group_uuid` are not restricted.
@@ -187,7 +187,7 @@ Endpoints that enforce this:
 ## Passkey Enrollment Page
 
 A reusable passkey enrollment page is served at `/{BOUNCER_PASSKEY_PATH}`
-(default `/passkey`). It is themed by the resolved portal config.
+(default `/passkey`). It is themed by the resolved auth config.
 
 ```
 BOUNCER_PASSKEY_PATH = 'passkey'   # file-backed setting (default)
@@ -225,7 +225,7 @@ round-trip client-side). Use cases:
 
 These settings are **retired** — remove them from `settings.py`:
 
-| Retired setting | Replacement in `AUTH_PORTAL` |
+| Retired setting | Replacement in `AUTH_CONFIG` |
 |----------------|------------------------------|
 | `AUTH_APP_TITLE` | `theme.app_title` |
 | `AUTH_LOGO_URL` | `theme.logo_url` |

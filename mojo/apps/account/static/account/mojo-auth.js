@@ -58,7 +58,7 @@
         register:           '/api/auth/register',
         phoneRegisterStart: '/api/auth/phone/register/start',
         phoneRegisterVerify:'/api/auth/phone/register/verify',
-        portalConfig:       '/api/auth/portal',
+        authConfig:         '/api/auth/config',
         refreshToken:       '/api/refresh_token',
         handoff:            '/api/auth/handoff',
         exchange:           '/api/auth/exchange'
@@ -610,18 +610,18 @@
         },
 
         // -----------------------------------------------------------------------
-        // Portal config
+        // Auth config
         // -----------------------------------------------------------------------
 
         /**
-         * Fetch the resolved auth portal config (theme + which registration
-         * and login methods are offered) so a custom front-end can render its
+         * Fetch the resolved auth config (theme + which registration and
+         * login methods are offered) so a custom front-end can render its
          * own login UI. Public — no authentication required.
          * @param {string} [groupUuid] - operator/group UUID
          * @returns {Promise<object>}
          */
-        getPortalConfig: function (groupUuid) {
-            var url = ep('portalConfig');
+        getAuthConfig: function (groupUuid) {
+            var url = ep('authConfig');
             if (groupUuid) url += '?group_uuid=' + encodeURIComponent(groupUuid);
             return get(url).then(function (resp) { return resp.data || resp; });
         },
