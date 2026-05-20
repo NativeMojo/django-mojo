@@ -1,7 +1,7 @@
 # Group-Owned Auth Portal Config (Theming, Registration, Passkey & Login Methods)
 
 **Type**: request
-**Status**: planned
+**Status**: resolved
 **Date**: 2026-05-20
 **Priority**: medium
 
@@ -496,3 +496,73 @@ No model/schema change → no migration, no `bin/create_testproject`.
 - `docs/django_developer/account/passkeys.md` + `docs/web_developer/account/passkeys.md`
   — add the enrollment-page flow and `registerPasskey()` helper.
 - Update both `docs/*/account/README.md` indexes; update `CHANGELOG.md`.
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-05-20
+
+### What Was Built
+A group-owned `portal` config (`theme` / `registration` / `login`) resolved
+per group from code defaults ← `AUTH_PORTAL` setting ← `group.metadata["portal"]`
+down the parent chain. It drives the hosted login/register page theming and
+which auth methods each group offers, adds a reusable `/passkey` enrollment
+page, an SMS-code login view, and a public `GET /api/auth/portal` endpoint.
+The flat `AUTH_*` / `AUTH_REGISTER_*` settings are retired. Login/registration
+endpoints soft-gate disabled methods when a `group_uuid` resolves a group
+(UX guardrail, not a security boundary).
+
+### Files Changed
+- `mojo/apps/account/services/portal_config.py` *(new)* — schema, resolution,
+  validation, `public_portal_config`, `resolve_group_from_request`,
+  `assert_login_method`.
+- `mojo/apps/account/services/register_schema.py` — sources fields/identity/
+  min-age from portal config; added `validate_fields_config`.
+- `mojo/apps/account/models/group.py` — `on_rest_pre_save` validates `metadata.portal`.
+- `mojo/apps/account/rest/bouncer/views.py` — `_auth_context` from portal config;
+  new `/passkey` route + `on_passkey_enroll_page`.
+- `mojo/apps/account/rest/portal.py` *(new)* — public `GET /api/auth/portal`.
+- `mojo/apps/account/rest/{user,sms,oauth,passkeys}.py` — soft method-gating;
+  `on_register` honors `registration.enabled`.
+- `mojo/apps/account/rest/__init__.py` — registers the portal module.
+- `mojo/apps/account/templates/account/{auth_base,login,register}.html` —
+  method-gated rendering, SMS-code login view, passkey redirect.
+- `mojo/apps/account/templates/account/passkey_enroll.html` *(new)*.
+- `mojo/apps/account/static/account/mojo-auth.js` — `registerPasskey`,
+  `startSmsLogin`/`verifySmsLogin`, `getPortalConfig`.
+
+### Tests
+- `tests/test_portal/portal_config.py` *(new)* — resolution precedence,
+  deep-merge, validation, Group save-time guard, `GET /api/auth/portal`.
+- `tests/test_auth/login_methods.py` *(new)* — `assert_login_method`, endpoint
+  soft-gating, login.html method rendering, mojo-auth.js helper surface.
+- `tests/test_register/passkey_prompt.py` *(new)* — `registration.enabled`
+  gate, `passkey_prompt` rendering on register + passkey_enroll pages.
+- `tests/test_register/schema.py`, `tests/test_whitelabel/whitelabel.py` —
+  updated to the portal-config mechanism.
+- Run: `bin/run_tests -t test_portal -t test_auth -t test_register -t test_whitelabel`
+- Full suite: 2120 passed, 0 failed (56 opt-in slow tests skipped).
+
+### Docs Updated
+- `docs/django_developer/account/portal_config.md`,
+  `docs/web_developer/account/portal_config.md` *(new)* — schema, resolution,
+  validation, retired-settings migration table, API reference.
+- `docs/django_developer/account/auth_pages.md`,
+  `docs/web_developer/account/auth_pages.md` — rewritten around portal config.
+- Both `docs/*/account/README.md` indexes; `CHANGELOG.md` (v1.2.21 entry).
+
+### Security Review
+No concerns. `validate_custom_css` (rejects `<` and external URLs) runs on
+every Group write via `on_rest_pre_save`; the method soft-gate touches no
+existing auth/verification gate and fails open only as intended (no group
+context = no restriction); `GET /api/auth/portal` exposes nothing not already
+public; the `X-Mojo-Test-Portal-Config` override is test-mode gated; the
+passkey register/complete endpoints are unchanged.
+
+### Follow-up
+- `uv.lock` had a pre-existing `django-mojo` version mismatch (1.2.19 → 1.2.20)
+  that `bin/run_tests` synced; left unstaged as it is unrelated to this work.
+- `registration.methods` accepts a `password` token that is currently only
+  enforced via `registration.enabled` (password signup is the form itself);
+  OAuth provider tokens (`google`/`apple`) are fully enforced. Revisit if a
+  distinct "OAuth-only signup" config is needed.
