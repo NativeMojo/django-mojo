@@ -5,6 +5,7 @@
 {% block content %}
 <!-- VIEW: Sign In -->
 <div id="view-signin" class="mat-view is-active">
+    {% if 'password' in login_methods %}
     <form id="form-signin" novalidate>
         <div class="mat-field">
             <label class="mat-label" for="signin-username">Email or Username</label>
@@ -24,24 +25,25 @@
             <span class="mat-spinner"></span>
         </button>
     </form>
+    {% endif %}
 
-    {% if enable_google or enable_apple or enable_passkeys %}
-    <div class="mat-divider">or continue with</div>
+    {% if 'google' in login_methods or 'apple' in login_methods or 'passkey' in login_methods %}
+    {% if 'password' in login_methods %}<div class="mat-divider">or continue with</div>{% endif %}
 
     <div class="mat-oauth-row">
-        {% if enable_google %}
+        {% if 'google' in login_methods %}
         <button class="mat-btn mat-btn-outline" type="button" id="btn-google">
             <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true"><path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v8.5h12.7c-.6 3-2.3 5.5-4.8 7.2v6h7.8c4.5-4.2 7.1-10.3 7.1-17.2z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.8-6c-2.1 1.4-4.8 2.3-8.1 2.3-6.2 0-11.5-4.2-13.4-9.9H2.6v6.2C6.5 42.7 14.7 48 24 48z"/><path fill="#FBBC05" d="M10.6 28.6c-.5-1.4-.7-2.9-.7-4.6s.3-3.2.7-4.6v-6.2H2.6C1 16.5 0 20.1 0 24s1 7.5 2.6 10.8l8-6.2z"/><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.5l6.8-6.8C35.9 2.1 30.5 0 24 0 14.7 0 6.5 5.3 2.6 13.2l8 6.2C12.5 13.7 17.8 9.5 24 9.5z"/></svg>
             <span class="mat-btn-text">Google</span><span class="mat-spinner"></span>
         </button>
         {% endif %}
-        {% if enable_apple %}
+        {% if 'apple' in login_methods %}
         <button class="mat-btn mat-btn-outline" type="button" id="btn-apple">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17.05 20.28c-.98.95-2.05.88-3.08.4-1.09-.5-2.08-.53-3.23 0-1.44.62-2.2.44-3.06-.4C3.79 16.17 4.36 9.04 8.93 8.78c1.27.07 2.16.72 2.91.77.99-.2 1.94-.78 3-.84 1.28-.08 2.24.38 2.87 1.14-2.63 1.56-2.01 4.98.45 5.94-.52 1.4-1.21 2.78-2.11 4.49zM12.03 8.7c-.13-2.28 1.73-4.2 3.93-4.4.31 2.56-2.31 4.5-3.93 4.4z"/></svg>
             <span class="mat-btn-text">Apple</span><span class="mat-spinner"></span>
         </button>
         {% endif %}
-        {% if enable_passkeys %}
+        {% if 'passkey' in login_methods %}
         <button class="mat-btn mat-btn-outline" type="button" id="btn-passkey" style="display:none">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12C2 6.5 6.5 2 12 2a10 10 0 0 1 8 4"/><path d="M5 19.5C5.5 14 8 10 12 10c2.5 0 4.5 1.5 5 4"/><path d="M8 21c.5-3.5 2-6 4-6 1.5 0 2.5 1 2.5 3v4"/><path d="M17.5 15c1.5 1 2.5 3 2.5 6"/><path d="M22 12c0 3-1 5.5-2.5 7.5"/></svg>
             <span class="mat-btn-text">Passkey</span><span class="mat-spinner"></span>
@@ -51,11 +53,13 @@
     {% endif %}
 
     <div class="mat-footer-links">
-        <span class="mat-footer-link"><button type="button" id="link-forgot">Forgot password?</button></span>
-        <span class="mat-footer-link"><button type="button" id="link-magic">Email me a link</button></span>
+        {% if 'password' in login_methods %}<span class="mat-footer-link"><button type="button" id="link-forgot">Forgot password?</button></span>{% endif %}
+        {% if 'sms' in login_methods %}<span class="mat-footer-link"><button type="button" id="link-sms">Sign in with a code</button></span>{% endif %}
+        {% if 'magic' in login_methods %}<span class="mat-footer-link"><button type="button" id="link-magic">Email me a link</button></span>{% endif %}
     </div>
 </div>
 
+{% if 'password' in login_methods %}
 <!-- VIEW: Forgot Password -->
 <div id="view-forgot" class="mat-view" data-forgot-channel="{{ forgot_channel|default:'email' }}">
     <button class="mat-back" type="button" id="btn-back-signin"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg> Back</button>
@@ -140,7 +144,31 @@
         <button class="mat-btn mat-btn-primary" type="submit" id="btn-set-password"><span class="mat-btn-text">Set Password</span><span class="mat-spinner"></span></button>
     </form>
 </div>
+{% endif %}
 
+{% if 'sms' in login_methods %}
+<!-- VIEW: SMS Code Login (passwordless) -->
+<div id="view-sms" class="mat-view">
+    <button class="mat-back" type="button" id="btn-back-signin-sms"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg> Back</button>
+    <p class="mat-view-title">Sign in with a code</p>
+    <p class="mat-view-sub" id="sms-help">We'll text a 6-digit code to your phone.</p>
+    <form id="form-sms" novalidate>
+        <div class="mat-field">
+            <label class="mat-label" for="sms-phone">Phone Number</label>
+            <input class="mat-input" type="tel" id="sms-phone" autocomplete="tel" placeholder="+15555550100" required />
+        </div>
+        <div id="sms-code-block" style="display:none">
+            <div class="mat-field">
+                <label class="mat-label" for="sms-code">Verification Code</label>
+                <input class="mat-input" type="text" id="sms-code" inputmode="numeric" pattern="\d*" maxlength="6" autocomplete="one-time-code" placeholder="6-digit code" />
+            </div>
+        </div>
+        <button class="mat-btn mat-btn-primary" type="submit" id="btn-sms"><span class="mat-btn-text">Send Code</span><span class="mat-spinner"></span></button>
+    </form>
+</div>
+{% endif %}
+
+{% if 'magic' in login_methods %}
 <!-- VIEW: Magic Login Link -->
 <div id="view-magic" class="mat-view">
     <button class="mat-back" type="button" id="btn-back-signin-magic"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg> Back</button>
@@ -154,6 +182,7 @@
         <button class="mat-btn mat-btn-primary" type="submit" id="btn-magic"><span class="mat-btn-text">Send Login Link</span><span class="mat-spinner"></span></button>
     </form>
 </div>
+{% endif %}
 {% endblock %}
 
 {% block switcher %}
@@ -169,19 +198,32 @@
     var $ = m.$;
     var cfg = window._matConfig;
 
+    // Views are conditionally rendered server-side based on the group's
+    // login_methods, so any of these may be absent — keep all access guarded.
     var views = {
         signin: $("view-signin"),
         forgot: $("view-forgot"),
         resetCode: $("view-reset-code"),
         setPassword: $("view-set-password"),
         magic: $("view-magic"),
+        sms: $("view-sms"),
     };
 
     function showView(name) {
-        Object.keys(views).forEach(function (k) { views[k].classList.toggle("is-active", k === name); });
+        Object.keys(views).forEach(function (k) {
+            if (views[k]) views[k].classList.toggle("is-active", k === name);
+        });
         m.hideMessage();
-        setTimeout(function () { var f = views[name] && views[name].querySelector("input, button"); if (f) f.focus(); }, 60);
+        setTimeout(function () {
+            var v = views[name];
+            var f = v && v.querySelector("input, button");
+            if (f) f.focus();
+        }, 60);
     }
+
+    // Safe bind — elements may not exist when their method is disabled.
+    function on(id, evt, fn) { var el = $(id); if (el) el.addEventListener(evt, fn); }
+    function onForm(id, fn) { var el = $(id); if (el) el.addEventListener("submit", fn); }
 
     // OAuth callback — provider redirects back with ?code=&state=
     var oauthCode = cfg.params.get("code");
@@ -210,21 +252,21 @@
         showView("resetCode");
     })();
 
-    $("form-signin").addEventListener("submit", function (e) {
-        e.preventDefault();
-        var u = $("signin-username").value.trim(), p = $("signin-password").value;
-        if (!u || !p) { m.showMessage("Please enter your username and password.", "error"); return; }
-        var btn = $("btn-signin"); m.setLoading(btn, true); m.hideMessage();
-        MojoAuth.login(u, p, { group_uuid: cfg.groupUuid })
-            .then(function (data) {
-                if (data && data.mfa_required) { m.showMessage("MFA required — check your authenticator app or phone.", "info"); m.setLoading(btn, false); return; }
-                m.onAuthSuccess();
-            })
-            .catch(function (err) { m.setLoading(btn, false); m.showMessage(MojoAuth.getError(err) || "Invalid credentials.", "error"); });
-    });
-
-    // Safe bind — buttons may not exist if provider is disabled server-side
-    function on(id, evt, fn) { var el = $(id); if (el) el.addEventListener(evt, fn); }
+    var signinForm = $("form-signin");
+    if (signinForm) {
+        signinForm.addEventListener("submit", function (e) {
+            e.preventDefault();
+            var u = $("signin-username").value.trim(), p = $("signin-password").value;
+            if (!u || !p) { m.showMessage("Please enter your username and password.", "error"); return; }
+            var btn = $("btn-signin"); m.setLoading(btn, true); m.hideMessage();
+            MojoAuth.login(u, p, { group_uuid: cfg.groupUuid })
+                .then(function (data) {
+                    if (data && data.mfa_required) { m.showMessage("MFA required — check your authenticator app or phone.", "info"); m.setLoading(btn, false); return; }
+                    m.onAuthSuccess();
+                })
+                .catch(function (err) { m.setLoading(btn, false); m.showMessage(MojoAuth.getError(err) || "Invalid credentials.", "error"); });
+        });
+    }
 
     on("btn-google", "click", function () {
         m.setLoading($("btn-google"), true);
@@ -243,15 +285,50 @@
             .catch(function (err) { m.setLoading(btn, false); m.showMessage(MojoAuth.getError(err) || "Passkey authentication failed.", "error"); });
     });
 
-    $("link-forgot").addEventListener("click", function () { showView("forgot"); });
-    $("link-magic").addEventListener("click", function () { showView("magic"); });
-    $("btn-back-signin").addEventListener("click", function () { showView("signin"); });
-    $("btn-back-forgot").addEventListener("click", function () { showView("forgot"); });
-    $("btn-back-signin-magic").addEventListener("click", function () { showView("signin"); });
+    on("link-forgot", "click", function () { showView("forgot"); });
+    on("link-magic", "click", function () { showView("magic"); });
+    on("link-sms", "click", function () { showView("sms"); });
+    on("btn-back-signin", "click", function () { showView("signin"); });
+    on("btn-back-forgot", "click", function () { showView("forgot"); });
+    on("btn-back-signin-magic", "click", function () { showView("signin"); });
+    on("btn-back-signin-sms", "click", function () { showView("signin"); });
+
+    // ---- SMS-code login (passwordless) -----------------------------------
+    var smsForm = $("form-sms");
+    if (smsForm) {
+        smsForm.addEventListener("submit", function (e) {
+            e.preventDefault();
+            var phone = $("sms-phone").value.trim();
+            var codeBlock = $("sms-code-block");
+            var btn = $("btn-sms");
+            var sent = codeBlock.style.display !== "none";
+            if (!sent) {
+                if (!phone) { m.showMessage("Please enter your phone number.", "error"); return; }
+                m.setLoading(btn, true); m.hideMessage();
+                MojoAuth.startSmsLogin(phone, { group_uuid: cfg.groupUuid })
+                    .then(function () {
+                        m.setLoading(btn, false);
+                        codeBlock.style.display = "";
+                        $("sms-help").textContent = "Enter the 6-digit code we sent to " + phone + ".";
+                        var label = btn.querySelector(".mat-btn-text");
+                        if (label) label.textContent = "Verify & Sign In";
+                        $("sms-code").focus();
+                    })
+                    .catch(function (err) { m.setLoading(btn, false); m.showMessage(MojoAuth.getError(err) || "Could not send code.", "error"); });
+            } else {
+                var code = $("sms-code").value.trim();
+                if (!code) { m.showMessage("Enter the 6-digit code.", "error"); return; }
+                m.setLoading(btn, true); m.hideMessage();
+                MojoAuth.verifySmsLogin(phone, code)
+                    .then(m.onAuthSuccess)
+                    .catch(function (err) { m.setLoading(btn, false); m.showMessage(MojoAuth.getError(err) || "Invalid or expired code.", "error"); });
+            }
+        });
+    }
 
     var forgotChannel = ($("view-forgot") && $("view-forgot").dataset.forgotChannel) || "email";
 
-    $("form-forgot").addEventListener("submit", function (e) {
+    onForm("form-forgot", function (e) {
         e.preventDefault();
         if (forgotChannel === "sms") {
             var phone = $("forgot-phone").value.trim();
@@ -291,7 +368,7 @@
             .catch(function (err) { m.setLoading(btn2, false); m.showMessage(MojoAuth.getError(err) || "Something went wrong.", "error"); });
     });
 
-    $("form-reset-code").addEventListener("submit", function (e) {
+    onForm("form-reset-code", function (e) {
         e.preventDefault();
         var code = $("reset-code").value.trim(), np = $("reset-password-new").value, cp = $("reset-password-confirm").value;
         var identifier = sessionStorage.getItem("mat_reset_identifier")
@@ -311,7 +388,7 @@
             .catch(function (err) { m.setLoading(btn, false); m.showMessage(MojoAuth.getError(err) || "Invalid or expired code.", "error"); });
     });
 
-    $("form-set-password").addEventListener("submit", function (e) {
+    onForm("form-set-password", function (e) {
         e.preventDefault();
         var np = $("set-password-new").value, cp = $("set-password-confirm").value;
         var token = sessionStorage.getItem("mat_reset_token");
@@ -324,7 +401,7 @@
             .catch(function (err) { m.setLoading(btn, false); m.showMessage(MojoAuth.getError(err) || "Invalid or expired link.", "error"); });
     });
 
-    $("form-magic").addEventListener("submit", function (e) {
+    onForm("form-magic", function (e) {
         e.preventDefault();
         var email = $("magic-email").value.trim();
         if (!email) { m.showMessage("Please enter your email address.", "error"); return; }

@@ -25,6 +25,7 @@ from mojo import decorators as md
 from mojo import errors as merrors
 from mojo.apps.account.models import Passkey, User
 from mojo.apps.account.rest.user import jwt_login
+from mojo.apps.account.services import portal_config
 from mojo.apps.account.utils.passkeys import (
     PasskeyService,
     get_origin_from_request,
@@ -158,6 +159,10 @@ def on_passkeys_login_begin(request):
     scoped to that user's passkeys. When omitted, a discoverable-credential
     challenge is issued and the browser presents all available passkeys.
     """
+    # UX-only per-group method gate (no-op without a resolving group_uuid).
+    portal_config.assert_login_method(
+        "passkey", portal_config.resolve_group_from_request(request))
+
     origin = get_origin_from_request(request)
     rp_id = origin_to_rp_id(origin)
     service = PasskeyService(rp_id=rp_id, origin=origin)

@@ -1,0 +1,107 @@
+{% extends "account/auth_base.html" %}
+
+{% block page_title %}{{ page_title|default:"Secure Your Account" }}{% endblock %}
+
+{% block subtitle_block %}{% endblock %}
+
+{% block content %}
+<!-- VIEW: Add a passkey -->
+<div id="view-passkey" class="mat-view is-active">
+    <div style="display:flex;justify-content:center;margin-bottom:1rem;color:var(--mat-accent)" aria-hidden="true">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12C2 6.5 6.5 2 12 2a10 10 0 0 1 8 4"/><path d="M5 19.5C5.5 14 8 10 12 10c2.5 0 4.5 1.5 5 4"/><path d="M8 21c.5-3.5 2-6 4-6 1.5 0 2.5 1 2.5 3v4"/><path d="M17.5 15c1.5 1 2.5 3 2.5 6"/><path d="M22 12c0 3-1 5.5-2.5 7.5"/></svg>
+    </div>
+    <p class="mat-view-sub">
+        Add a passkey to sign in faster next time &mdash; with your fingerprint,
+        face, or device PIN. There is no password to remember.
+    </p>
+    <button class="mat-btn mat-btn-primary" type="button" id="btn-add-passkey">
+        <span class="mat-btn-text">Add a passkey</span>
+        <span class="mat-spinner"></span>
+    </button>
+    <div class="mat-footer-links">
+        {% if passkey_prompt != 'required' %}
+        <span class="mat-footer-link"><button type="button" id="btn-skip-passkey">Skip for now</button></span>
+        {% endif %}
+    </div>
+</div>
+
+<!-- VIEW: Session expired (no stored token) -->
+<div id="view-passkey-expired" class="mat-view">
+    <p class="mat-view-title">Session expired</p>
+    <p class="mat-view-sub">Please sign in again to add a passkey to your account.</p>
+    <a class="mat-btn mat-btn-primary" href="{{ auth_url|default:'/auth' }}">
+        <span class="mat-btn-text">Go to sign in</span>
+    </a>
+</div>
+{% endblock %}
+
+{% block switcher %}{% endblock %}
+
+{% block page_script %}
+<script>
+(function () {
+    var m = window._mat;
+    var $ = m.$;
+    var cfg = window._matConfig;
+
+    function showExpired() {
+        var enroll = $("view-passkey");
+        var expired = $("view-passkey-expired");
+        if (enroll) enroll.classList.remove("is-active");
+        if (expired) expired.classList.add("is-active");
+    }
+
+    // Passkey registration needs a Bearer token — bail to a friendly
+    // "session expired" view if the visitor has no stored credentials.
+    if (!MojoAuth.isAuthenticated()) {
+        showExpired();
+        return;
+    }
+
+    var addBtn = $("btn-add-passkey");
+    var skipBtn = $("btn-skip-passkey");
+
+    if (!MojoAuth.isPasskeySupported()) {
+        // The browser can't do WebAuthn. Never strand the user — even when
+        // the group marks the prompt 'required', degrade to a skippable step.
+        m.showMessage(
+            "This browser does not support passkeys. You can add one later "
+            + "from your account settings.", "info");
+        if (addBtn) addBtn.style.display = "none";
+        if (!skipBtn) {
+            // 'required' suppressed the Skip link — synthesize a Continue
+            // action so the user is never trapped on this page.
+            var cont = document.createElement("button");
+            cont.className = "mat-btn mat-btn-primary";
+            cont.type = "button";
+            cont.innerHTML = '<span class="mat-btn-text">Continue</span>';
+            cont.addEventListener("click", function () { m.redirect(); });
+            var host = $("view-passkey");
+            if (host) host.appendChild(cont);
+        }
+    }
+
+    if (addBtn) {
+        addBtn.addEventListener("click", function () {
+            m.setLoading(addBtn, true);
+            m.hideMessage();
+            MojoAuth.registerPasskey()
+                .then(function () {
+                    m.showOverlay("Passkey added!", "Taking you there now…");
+                    setTimeout(function () { m.redirect(); }, 800);
+                })
+                .catch(function (err) {
+                    m.setLoading(addBtn, false);
+                    m.showMessage(
+                        MojoAuth.getError(err)
+                        || "Could not add a passkey. Please try again.", "error");
+                });
+        });
+    }
+
+    if (skipBtn) {
+        skipBtn.addEventListener("click", function () { m.redirect(); });
+    }
+})();
+</script>
+{% endblock %}

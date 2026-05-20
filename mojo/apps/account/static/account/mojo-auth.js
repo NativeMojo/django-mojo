@@ -49,11 +49,16 @@
         magicLogin:         '/api/auth/magic/login',
         passkeyLoginBegin:  '/api/auth/passkeys/login/begin',
         passkeyLoginComplete: '/api/auth/passkeys/login/complete',
+        passkeyRegisterBegin: '/api/account/passkeys/register/begin',
+        passkeyRegisterComplete: '/api/account/passkeys/register/complete',
+        smsLogin:           '/api/auth/sms/login',
+        smsVerify:          '/api/auth/sms/verify',
         oauthBegin:         '/api/auth/oauth/{provider}/begin',
         oauthComplete:      '/api/auth/oauth/{provider}/complete',
         register:           '/api/auth/register',
         phoneRegisterStart: '/api/auth/phone/register/start',
         phoneRegisterVerify:'/api/auth/phone/register/verify',
+        portalConfig:       '/api/auth/portal',
         refreshToken:       '/api/refresh_token',
         handoff:            '/api/auth/handoff',
         exchange:           '/api/auth/exchange'
@@ -121,6 +126,12 @@
                 return json;
             });
         });
+    }
+
+    function authedPost(url, body) {
+        var auth = MojoAuth.getAuthHeader();
+        if (!auth) return Promise.reject(new Error('Not authenticated'));
+        return post(url, body, { 'Authorization': auth });
     }
 
     function saveTokens(data) {
@@ -500,6 +511,119 @@
                         });
                 })
                 .then(saveTokens);
+        },
+
+        // -----------------------------------------------------------------------
+        // Passkey Registration (WebAuthn) — requires an authenticated session
+        // -----------------------------------------------------------------------
+
+        /**
+         * Register a new passkey for the currently authenticated user.
+         * Runs the full begin → navigator.credentials.create() → complete
+         * round-trip. Requires a stored access token (sent as Bearer auth).
+         * @param {string} [friendlyName] - optional label for the passkey
+         * @returns {Promise<object>} the saved passkey record
+         */
+        registerPasskey: function (friendlyName) {
+            if (typeof navigator === 'undefined' || !navigator.credentials ||
+                typeof navigator.credentials.create !== 'function') {
+                return Promise.reject(
+                    new Error('Passkeys are not supported in this browser'));
+            }
+            return authedPost(ep('passkeyRegisterBegin'), {})
+                .then(function (resp) {
+                    var d = resp.data || resp;
+                    var challengeId = d.challenge_id;
+                    var publicKey = d.publicKey;
+
+                    publicKey.challenge = base64urlToBuffer(publicKey.challenge);
+                    publicKey.user.id = base64urlToBuffer(publicKey.user.id);
+                    if (publicKey.excludeCredentials) {
+                        publicKey.excludeCredentials = publicKey.excludeCredentials.map(
+                            function (c) {
+                                return Object.assign({}, c,
+                                    { id: base64urlToBuffer(c.id) });
+                            });
+                    }
+
+                    return navigator.credentials.create({ publicKey: publicKey })
+                        .then(function (credential) {
+                            if (!credential) {
+                                throw new Error('No credential created by authenticator');
+                            }
+                            var transports = [];
+                            try {
+                                if (credential.response.getTransports) {
+                                    transports = credential.response.getTransports();
+                                }
+                            } catch (e) { transports = []; }
+
+                            var body = {
+                                challenge_id: challengeId,
+                                credential: {
+                                    id: credential.id,
+                                    rawId: bufferToBase64url(credential.rawId),
+                                    type: credential.type,
+                                    response: {
+                                        clientDataJSON:    bufferToBase64url(credential.response.clientDataJSON),
+                                        attestationObject: bufferToBase64url(credential.response.attestationObject)
+                                    },
+                                    transports: transports
+                                }
+                            };
+                            if (friendlyName) body.friendly_name = friendlyName;
+                            return authedPost(ep('passkeyRegisterComplete'), body);
+                        });
+                })
+                .then(function (resp) { return resp.data || resp; });
+        },
+
+        // -----------------------------------------------------------------------
+        // SMS-code login (passwordless)
+        // -----------------------------------------------------------------------
+
+        /**
+         * Start a passwordless SMS-code login — sends a 6-digit code to the
+         * phone on file. Always resolves (the server returns a generic
+         * success even for unknown accounts, to avoid user enumeration).
+         * @param {string} phone - phone number / username
+         * @param {object} [options] - { group_uuid }
+         * @returns {Promise<object>}
+         */
+        startSmsLogin: function (phone, options) {
+            var payload = { username: phone };
+            if (options && options.group_uuid) payload.group_uuid = options.group_uuid;
+            return post(ep('smsLogin'), _withDevice(payload));
+        },
+
+        /**
+         * Complete a passwordless SMS-code login. Stores tokens on success.
+         * @param {string} identifier - phone number / username used to start
+         * @param {string} code       - 6-digit code from the SMS
+         * @returns {Promise<object>}
+         */
+        verifySmsLogin: function (identifier, code) {
+            return post(ep('smsVerify'), _withDevice({
+                username: identifier,
+                code: code
+            })).then(saveTokens);
+        },
+
+        // -----------------------------------------------------------------------
+        // Portal config
+        // -----------------------------------------------------------------------
+
+        /**
+         * Fetch the resolved auth portal config (theme + which registration
+         * and login methods are offered) so a custom front-end can render its
+         * own login UI. Public — no authentication required.
+         * @param {string} [groupUuid] - operator/group UUID
+         * @returns {Promise<object>}
+         */
+        getPortalConfig: function (groupUuid) {
+            var url = ep('portalConfig');
+            if (groupUuid) url += '?group_uuid=' + encodeURIComponent(groupUuid);
+            return get(url).then(function (resp) { return resp.data || resp; });
         },
 
         // -----------------------------------------------------------------------

@@ -48,6 +48,7 @@
         </div>
     </div>
 
+    {{ login_methods|json_script:"mat-login-methods" }}
     <script src="{{ api_base }}/api/account/static/mojo-auth.js"></script>
     <script>
     (function () {
@@ -56,9 +57,21 @@
         var ON_SUCCESS = "{{ success_redirect|default:'/' }}";
         var AUTH_URL = "{{ auth_url|default:'/auth' }}";
         var REGISTER_URL = "{{ register_url|default:'/register' }}";
-        var ENABLE_GOOGLE = {{ enable_google|yesno:"true,false" }};
-        var ENABLE_APPLE = {{ enable_apple|yesno:"true,false" }};
-        var ENABLE_PASSKEYS = {{ enable_passkeys|yesno:"true,false" }};
+        var PASSKEY_URL = "{{ passkey_url|default:'/passkey' }}";
+
+        // Portal config — which login methods this group offers, and the
+        // passkey-during-registration policy (off / optional / required).
+        var LOGIN_METHODS = [];
+        try {
+            LOGIN_METHODS = JSON.parse(
+                document.getElementById("mat-login-methods").textContent || "[]");
+        } catch (e) { LOGIN_METHODS = []; }
+        var PASSKEY_PROMPT = "{{ passkey_prompt|default:'off'|escapejs }}";
+        var SKIP_SESSION_CHECK = {{ skip_session_check|yesno:"true,false" }};
+        function hasMethod(m) { return LOGIN_METHODS.indexOf(m) !== -1; }
+        var ENABLE_GOOGLE = hasMethod("google");
+        var ENABLE_APPLE = hasMethod("apple");
+        var ENABLE_PASSKEYS = hasMethod("passkey");
 
         var params = new URLSearchParams(location.search);
         var paramRedirect = params.get("redirect") || params.get("next") || params.get("returnTo") || "";
@@ -76,9 +89,12 @@
             redirectTo: redirectTo,
             authUrl: AUTH_URL,
             registerUrl: REGISTER_URL,
+            passkeyUrl: PASSKEY_URL,
             enableGoogle: ENABLE_GOOGLE,
             enableApple: ENABLE_APPLE,
             enablePasskeys: ENABLE_PASSKEYS,
+            loginMethods: LOGIN_METHODS,
+            passkeyPrompt: PASSKEY_PROMPT,
             groupUuid: GROUP_UUID,
             backUrl: paramBack,
             params: params,
@@ -151,8 +167,9 @@
         // Init MojoAuth — API_BASE defaults to current origin (same-server API)
         MojoAuth.init({ baseURL: API_BASE });
 
-        // Session check
-        if (!params.get("token") && !(params.get("code") && params.get("state"))) {
+        // Session check — skipped on the passkey enrollment page, where the
+        // visitor is already authenticated and must not be auto-redirected.
+        if (!SKIP_SESSION_CHECK && !params.get("token") && !(params.get("code") && params.get("state"))) {
             var refreshToken = MojoAuth.getRefreshToken();
             if (refreshToken) {
                 window._mat.showOverlay("Checking session\u2026", "Verifying your credentials");

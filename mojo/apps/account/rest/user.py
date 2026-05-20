@@ -7,6 +7,7 @@ from django.shortcuts import render
 from django.http import HttpResponseRedirect
 from mojo.apps.account.models.user import User
 from mojo.apps.account.services import extensions as account_extensions
+from mojo.apps.account.services import portal_config
 from mojo.apps.account.utils import tokens
 from mojo.apps.account.utils.webapp_url import build_token_url
 from mojo.apps.shortlink import maybe_shorten_url
@@ -146,6 +147,11 @@ def on_user_login(request):
 
     username = request.DATA.username
     password = request.DATA.password
+
+    # UX-only per-group method gate. No-op unless a group_uuid on the request
+    # resolves a group whose portal config disables password login.
+    portal_config.assert_login_method(
+        "password", portal_config.resolve_group_from_request(request))
 
     user, source = User.lookup_from_request_with_source(request, phone_as_username=settings.get("ALLOW_PHONE_LOGIN", False, kind="bool"))
     if user is None:
@@ -288,6 +294,13 @@ def on_register(request):
             raise merrors.ValueException("Group is not active")
     elif require_group:
         raise merrors.ValueException("group_uuid is required")
+
+    # ---- Per-group registration toggle -------------------------------------
+    # Layered on the global ALLOW_USER_REGISTRATION kill-switch above: a group
+    # can disable signup for its own portal via portal config.
+    if not portal_config.resolve_portal_config(
+            group=group, request=request).registration.enabled:
+        raise merrors.PermissionDeniedException("Registration is not enabled", 403, 403)
 
     # ---- Resolve schema + identity for this group --------------------------
     # Test-mode override mirrors the existing X-Mojo-Test-* pattern so per-
@@ -693,6 +706,10 @@ def on_user_password_reset_token(request):
 @md.requires_geofence(scope="auth")
 def on_magic_login_send(request):
     """Send a magic login link via email (default) or SMS (method=sms)."""
+    # UX-only per-group method gate (no-op without a resolving group_uuid).
+    portal_config.assert_login_method(
+        "magic", portal_config.resolve_group_from_request(request))
+
     channel = request.DATA.get("method", "email")
     if channel not in ("email", "sms"):
         channel = "email"

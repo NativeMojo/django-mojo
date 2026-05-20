@@ -4,6 +4,7 @@ from .group import *
 from .device import *
 from .push import *
 from .passkeys import *
+from .portal import *
 from .api_key import *
 from .webhook_subscription import *
 from .user_api_key import *

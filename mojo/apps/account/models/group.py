@@ -613,6 +613,14 @@ class Group(MojoSecrets, MojoModel):
             request=self.active_request,
         )
 
+    def on_rest_pre_save(self, changed_fields, created):
+        # Reject an invalid auth portal config at write time so a bad
+        # metadata.portal surfaces as a 400 here, not a render error later.
+        portal = (self.metadata or {}).get("portal")
+        if portal is not None:
+            from mojo.apps.account.services.portal_config import validate_portal_config
+            validate_portal_config(portal)
+
     def on_rest_created(self):
         metrics.set_value("total_groups", Group.objects.filter(is_active=True).count(), account="global")
 

@@ -10,8 +10,9 @@ Public surface:
 
     resolve_fields(group=None) -> list[dict]
         Canonical list of `{"name", "required", "verify"}` dicts. Pulls
-        `AUTH_REGISTER_FIELDS` from settings (group-scoped), falls back to
-        DEFAULT_FIELDS, filters unknown names, forces password to required.
+        `registration.fields` from the group's resolved portal config
+        (see portal_config), falls back to DEFAULT_FIELDS, filters unknown
+        names, forces password to required.
 
     resolve_identity_field(fields, group=None) -> str
         "email" or "phone". Honors `AUTH_REGISTER_IDENTITY_FIELD` if set,
@@ -36,7 +37,6 @@ import json
 
 from mojo import errors as merrors
 from mojo.helpers import test_mode as _tm
-from mojo.helpers.settings import settings
 
 
 # Closed set of canonical field names. Anything outside this set is silently
@@ -84,28 +84,12 @@ def _read_test_header(request, header_name):
     return request.META.get(key)
 
 
-def resolve_fields(group=None, request=None):
-    """Resolve the register field schema.
-
-    `request` enables the test-mode header override
-    (`X-Mojo-Test-Register-Fields`, a JSON list). The override is
-    only honored when the test-mode gate passes (loopback + flag + no
-    proxy chain), so production traffic can't influence the schema.
-    """
-    raw = None
-    header_value = _read_test_header(request, "X-Mojo-Test-Register-Fields")
-    if header_value is not None:
-        try:
-            parsed = json.loads(header_value)
-            if isinstance(parsed, list):
-                raw = parsed
-        except (json.JSONDecodeError, TypeError):
-            raw = None
-    if raw is None:
-        raw = settings.get("AUTH_REGISTER_FIELDS", None, group=group)
-    if not raw:
-        return [dict(f) for f in DEFAULT_FIELDS]
-    if not isinstance(raw, (list, tuple)):
+def _normalize_field_list(raw):
+    """Normalize a raw field-config list into canonical `{name, required,
+    verify}` dicts. Drops unknown/duplicate entries, ensures `password` is
+    present, and falls back to a copy of DEFAULT_FIELDS when `raw` is empty
+    or unusable."""
+    if not raw or not isinstance(raw, (list, tuple)):
         return [dict(f) for f in DEFAULT_FIELDS]
     normalized = []
     seen = set()
@@ -125,8 +109,51 @@ def resolve_fields(group=None, request=None):
     return normalized
 
 
+def resolve_fields(group=None, request=None):
+    """Resolve the register field schema.
+
+    Fields come from the group's resolved portal config
+    (`registration.fields`); see `mojo.apps.account.services.portal_config`.
+
+    `request` enables the test-mode header override
+    (`X-Mojo-Test-Register-Fields`, a JSON list). The override is
+    only honored when the test-mode gate passes (loopback + flag + no
+    proxy chain), so production traffic can't influence the schema.
+    """
+    raw = None
+    header_value = _read_test_header(request, "X-Mojo-Test-Register-Fields")
+    if header_value is not None:
+        try:
+            parsed = json.loads(header_value)
+            if isinstance(parsed, list):
+                raw = parsed
+        except (json.JSONDecodeError, TypeError):
+            raw = None
+    if raw is None:
+        from mojo.apps.account.services import portal_config
+        cfg = portal_config.resolve_portal_config(group=group, request=request)
+        raw = cfg.registration.fields
+    return _normalize_field_list(raw)
+
+
+def validate_fields_config(raw):
+    """Validate a portal `registration.fields` list. Raises ValueException on
+    bad config. Unknown field names are dropped (existing lenient contract);
+    the result must still resolve a usable identity field."""
+    if not isinstance(raw, (list, tuple)):
+        raise merrors.ValueException("registration.fields must be a list")
+    fields = _normalize_field_list(raw)
+    names = {f["name"] for f in fields}
+    if "email" not in names and "phone" not in names:
+        raise merrors.ValueException(
+            "registration.fields must include 'email' or 'phone'")
+    return fields
+
+
 def resolve_identity_field(fields, group=None):
-    explicit = (settings.get("AUTH_REGISTER_IDENTITY_FIELD", "", group=group) or "").strip()
+    from mojo.apps.account.services import portal_config
+    cfg = portal_config.resolve_portal_config(group=group)
+    explicit = (cfg.registration.identity_field or "").strip()
     if explicit in ("email", "phone"):
         return explicit
     by_name = {f["name"]: f for f in fields}
@@ -145,11 +172,16 @@ def resolve_identity_field(fields, group=None):
 
 
 def resolve_min_age(group=None, request=None):
-    """Resolve AUTH_MIN_AGE_YEARS. Accepts an X-Mojo-Test-Min-Age-Years
+    """Resolve the registration minimum-age gate from the group's portal
+    config (`registration.min_age`). Accepts an X-Mojo-Test-Min-Age-Years
     header override when the test-mode gate passes."""
     header_value = _read_test_header(request, "X-Mojo-Test-Min-Age-Years")
-    raw = header_value if header_value is not None else settings.get(
-        "AUTH_MIN_AGE_YEARS", None, group=group)
+    if header_value is not None:
+        raw = header_value
+    else:
+        from mojo.apps.account.services import portal_config
+        cfg = portal_config.resolve_portal_config(group=group, request=request)
+        raw = cfg.registration.min_age
     if raw in (None, ""):
         return None
     try:

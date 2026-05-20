@@ -3,7 +3,7 @@ import datetime
 from testit import helpers as th
 
 
-@th.django_unit_test("resolve_fields returns the default config when AUTH_REGISTER_FIELDS is unset")
+@th.django_unit_test("resolve_fields returns the default config when no portal config is set")
 def test_resolve_fields_default(opts):
     from mojo.apps.account.services import register_schema as rs
     fields = rs.resolve_fields(group=None)
@@ -30,12 +30,13 @@ def test_resolve_fields_phone_only(opts):
         {"name": "password",   "required": True},
     ]
     fields = rs._normalize_entry  # touch to confirm import
-    # Drive through resolve_fields by monkeypatching settings via the public API.
+    # Drive through resolve_fields by monkeypatching settings via the public
+    # API. Register fields now come from the portal config's AUTH_PORTAL.
     from mojo.helpers.settings import settings
     original_get = settings.get
     def patched(key, default=None, **kwargs):
-        if key == "AUTH_REGISTER_FIELDS":
-            return raw
+        if key == "AUTH_PORTAL":
+            return {"registration": {"fields": raw}}
         return original_get(key, default=default, **kwargs)
     settings.get = patched
     try:
@@ -56,10 +57,11 @@ def test_resolve_fields_drops_unknown(opts):
     from mojo.helpers.settings import settings
     original_get = settings.get
     def patched(key, default=None, **kwargs):
-        if key == "AUTH_REGISTER_FIELDS":
-            return [{"name": "email", "required": True},
-                    {"name": "evil_admin_flag", "required": True},
-                    {"name": "password", "required": True}]
+        if key == "AUTH_PORTAL":
+            return {"registration": {"fields": [
+                {"name": "email", "required": True},
+                {"name": "evil_admin_flag", "required": True},
+                {"name": "password", "required": True}]}}
         return original_get(key, default=default, **kwargs)
     settings.get = patched
     try:
@@ -79,8 +81,8 @@ def test_resolve_fields_forces_password(opts):
     from mojo.helpers.settings import settings
     original_get = settings.get
     def patched(key, default=None, **kwargs):
-        if key == "AUTH_REGISTER_FIELDS":
-            return [{"name": "email", "required": True}]
+        if key == "AUTH_PORTAL":
+            return {"registration": {"fields": [{"name": "email", "required": True}]}}
         return original_get(key, default=default, **kwargs)
     settings.get = patched
     try:

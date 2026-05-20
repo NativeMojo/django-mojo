@@ -8,8 +8,8 @@ Contracts enforced:
   - resolve_by_auth_domain returns None for inactive group
   - _resolve_group prefers hostname over ?group= query param
   - _resolve_group falls back to ?group=<uuid> when hostname doesn't match
-  - _auth_context resolves settings per-group when group is provided
-  - _auth_context falls back to global settings when group has no overrides
+  - _auth_context resolves portal config per-group when group is provided
+  - _auth_context falls back to deployment defaults when group has no overrides
   - auth_domain uniqueness is enforced at DB level
   - OAuth state preserves group_uuid through the round-trip
   - Cache invalidation clears stale entries on auth_domain change
@@ -68,20 +68,24 @@ def setup_whitelabel(opts):
     )
     opts.group = group
 
-    # Set group-level branding overrides
+    # Group-level branding now lives in the portal config (metadata["portal"]).
     Setting.objects.filter(group__in=[group, parent]).delete()
-    Setting.objects.create(key='AUTH_LOGO_URL', value='https://testoperator.com/logo.png', group=group)
-    Setting.objects.create(key='AUTH_APP_TITLE', value='Test Operator', group=group)
+    group.metadata = {
+        "portal": {
+            "theme": {
+                "logo_url": "https://testoperator.com/logo.png",
+                "app_title": "Test Operator",
+            }
+        }
+    }
+    group.save(update_fields=["metadata"])
 
-    # Set a parent-level override (for fallback testing)
-    Setting.objects.create(key='AUTH_HERO_HEADLINE', value='Parent Platform Welcome', group=parent)
-
-    # Warm the Setting cache
-    try:
-        Setting.warm_cache(group_id=group.pk)
-        Setting.warm_cache(group_id=parent.pk)
-    except Exception:
-        pass
+    # Parent-level theme override — the child inherits it via the
+    # portal-config parent-chain merge (root -> group).
+    parent.metadata = {
+        "portal": {"theme": {"hero_headline": "Parent Platform Welcome"}}
+    }
+    parent.save(update_fields=["metadata"])
 
     # Login admin via the test server
     resp = opts.client.login(TEST_ADMIN_USER, TEST_ADMIN_PWORD)
@@ -249,7 +253,7 @@ def test_auth_context_parent_fallback(opts):
     factory = RequestFactory()
     request = factory.get('/auth')
     ctx = _auth_context(request, group=opts.group)
-    # AUTH_HERO_HEADLINE is set on parent but not on child
+    # hero_headline is set on the parent's portal config, not the child's
     assert_eq(ctx['hero_headline'], 'Parent Platform Welcome',
               f"Expected parent headline, got '{ctx['hero_headline']}'")
 

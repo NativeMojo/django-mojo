@@ -216,17 +216,62 @@ def on_register_page(request):
     return _serve_challenge(request, challenge_tier, page_type='registration', group=group)
 
 
-def _auth_context(request, group=None):
-    """Build the shared template context for auth pages from settings.
+# ---------------------------------------------------------------------------
+# Passkey enrollment page — reusable post-auth page
+# ---------------------------------------------------------------------------
 
-    When group is provided, settings resolve per-group with parent chain
-    fallback → global fallback. Single-tenant deployments (group=None)
-    behave identically to before.
+_PASSKEY_PATH = settings.get_static('BOUNCER_PASSKEY_PATH', 'passkey')
+_ABS_PASSKEY_PATH = f'/{_PASSKEY_PATH}'
+
+
+@md.GET(_ABS_PASSKEY_PATH)
+@md.public_endpoint("Passkey enrollment page (post-registration / account settings)")
+def on_passkey_enroll_page(request):
+    """Reusable passkey enrollment page.
+
+    Not bouncer-gated — the visitor is already authenticated (the page reads
+    the access token from localStorage and runs the WebAuthn registration
+    round-trip). Themed by the request's resolved portal config. The hosted
+    register page redirects here after signup when `passkey_prompt != off`;
+    it is also linkable standalone from account settings.
+    """
+    if DISABLE_LOGIN:
+        from django.http import Http404
+        raise Http404("Page not found")
+
+    group = _resolve_group(request)
+    ctx = _auth_context(request, group=group)
+    ctx['page_mode'] = 'passkey'
+    ctx['page_title'] = 'Secure Your Account'
+    ctx['subtitle'] = 'Add a passkey'
+    # The visitor already holds a session — suppress auth_base's session-check
+    # auto-redirect so they land on the enrollment step instead of being
+    # bounced straight to success_redirect.
+    ctx['skip_session_check'] = True
+    return render(request, 'account/passkey_enroll.html', ctx)
+
+
+def _auth_context(request, group=None):
+    """Build the shared template context for auth pages from the group's
+    resolved portal config.
+
+    Theme, registration, and login config all come from
+    `portal_config.resolve_portal_config(group)` — code defaults, overlaid
+    by the AUTH_PORTAL setting, overlaid by `group.metadata["portal"]` down
+    the parent chain. Single-tenant deployments (group=None) get the
+    deployment default.
     """
     from mojo.apps.account.services import register_schema
+    from mojo.apps.account.services import portal_config
+
+    cfg = portal_config.resolve_portal_config(group=group, request=request)
+    theme = cfg.theme
+    login_methods = list(cfg.login.methods or [])
+    registration_methods = list(cfg.registration.methods or [])
 
     login_path = settings.get_static('BOUNCER_LOGIN_PATH', 'auth')
     register_path = settings.get_static('BOUNCER_REGISTER_PATH', 'register')
+    passkey_path = settings.get_static('BOUNCER_PASSKEY_PATH', 'passkey')
     group_uuid = group.uuid if group else ''
     # Preserve ?group_uuid= plus the post-auth forwarding params on the
     # switcher links so a user who lands at /auth?redirect=/x and clicks
@@ -245,7 +290,7 @@ def _auth_context(request, group=None):
 
     # Schema-driven register form. The same schema drives the server-side
     # validator, so what the form collects matches what the API will accept.
-    register_fields = register_schema.resolve_fields(group=group)
+    register_fields = register_schema.resolve_fields(group=group, request=request)
     register_field_rows = register_schema.field_rows(register_fields)
     try:
         identity_field = register_schema.resolve_identity_field(register_fields, group=group)
@@ -263,24 +308,26 @@ def _auth_context(request, group=None):
         register_fields)
 
     return {
-        'api_base': settings.get('AUTH_API_BASE', '', group=group),
-        'success_redirect': settings.get('AUTH_SUCCESS_REDIRECT', '/', group=group),
-        'logo_url': settings.get('AUTH_LOGO_URL', '', group=group),
-        'favicon_url': settings.get('AUTH_FAVICON_URL', '', group=group),
-        'brand_name': settings.get('AUTH_APP_TITLE', 'DJANGO MOJO', group=group),
-        'hero_image_url': settings.get('AUTH_HERO_IMAGE_URL', '', group=group),
-        'hero_headline': settings.get('AUTH_HERO_HEADLINE', 'Welcome back', group=group),
-        'hero_subheadline': settings.get('AUTH_HERO_SUBHEADLINE', 'Admin Portal', group=group),
-        'back_to_website_url': settings.get('AUTH_BACK_TO_WEBSITE_URL', '', group=group),
-        'enable_google': settings.get('AUTH_ENABLE_GOOGLE', False, group=group, kind='bool'),
-        'enable_apple': settings.get('AUTH_ENABLE_APPLE', False, group=group, kind='bool'),
-        'enable_passkeys': settings.get('AUTH_ENABLE_PASSKEYS', False, group=group, kind='bool'),
+        'api_base': theme.api_base or '',
+        'success_redirect': theme.success_redirect or '/',
+        'logo_url': theme.logo_url or '',
+        'favicon_url': theme.favicon_url or '',
+        'brand_name': theme.app_title or 'DJANGO MOJO',
+        'hero_image_url': theme.hero_image_url or '',
+        'hero_headline': theme.hero_headline or 'Welcome back',
+        'hero_subheadline': theme.hero_subheadline or 'Admin Portal',
+        'back_to_website_url': theme.back_to_website_url or '',
+        'login_methods': login_methods,
+        'registration_methods': registration_methods,
+        'registration_enabled': bool(cfg.registration.enabled),
+        'passkey_prompt': cfg.registration.passkey_prompt or 'off',
         'auth_url': f'/{login_path}{group_qs}',
         'register_url': f'/{register_path}{group_qs}',
-        'auth_layout': settings.get('AUTH_LAYOUT', 'card', group=group),
-        'terms_url': settings.get('AUTH_TERMS_URL', '', group=group),
-        'custom_css_url': settings.get('AUTH_CUSTOM_CSS_URL', '', group=group),
-        'custom_css': settings.get('AUTH_CUSTOM_CSS', '', group=group),
+        'passkey_url': f'/{passkey_path}{group_qs}',
+        'auth_layout': theme.layout or 'card',
+        'terms_url': theme.terms_url or '',
+        'custom_css_url': theme.custom_css_url or '',
+        'custom_css': theme.custom_css or '',
         'group_uuid': group_uuid,
         'register_fields': register_fields,
         'register_field_rows': register_field_rows,
