@@ -1,7 +1,9 @@
 # Auth Pages — Django Developer Reference
 
 Django-served login and registration pages with bouncer bot detection,
-OAuth (Google, Apple), passkeys, password reset, and magic link support.
+OAuth (Google, Apple), passkeys, SMS login, password reset, and magic link
+support. All branding and feature configuration is controlled through the
+[portal config](portal_config.md).
 
 ---
 
@@ -9,12 +11,13 @@ OAuth (Google, Apple), passkeys, password reset, and magic link support.
 
 The framework serves fully-featured auth pages directly from Django — no
 separate frontend app required. Pages are bouncer-gated so bots never see the
-login form, and all branding is configurable via DB-backed settings (runtime
-changeable from the admin portal).
+login form, and all branding is configured via the structured portal config
+object (group-owned, deep-merged from the parent chain).
 
 ```
 /auth       → bouncer gate → login page
 /register   → bouncer gate → registration page
+/passkey    → passkey enrollment page (authenticated, not bouncer-gated)
 /login      → honeypot decoy (traps bots)
 /signin     → honeypot decoy
 /signup     → honeypot decoy
@@ -26,41 +29,34 @@ changeable from the admin portal).
 
 ### 1. Settings
 
-All auth page settings use `settings.get()` (DB-backed with file fallback).
-Configure in `settings.py` for defaults, override at runtime via the `Setting`
-model in the admin portal.
-
 ```python
 # settings.py
 
-# ---- Bouncer gate ----
-BOUNCER_LOGIN_PATH = 'auth'          # real login page path (default: 'auth')
-BOUNCER_REGISTER_PATH = 'register'   # real registration page path
+# ---- Bouncer gate paths (file-backed, no runtime override) ----
+BOUNCER_LOGIN_PATH    = 'auth'      # real login page path (default: 'auth')
+BOUNCER_REGISTER_PATH = 'register'  # real registration page path
+BOUNCER_PASSKEY_PATH  = 'passkey'   # passkey enrollment page path
 
-# ---- Auth page branding ----
-AUTH_APP_TITLE = 'My App'            # brand name shown in header
-AUTH_LOGO_URL = ''                   # logo image URL (header + hero panel)
-AUTH_FAVICON_URL = ''                # favicon URL (served by nginx, see below)
-AUTH_HERO_IMAGE_URL = ''             # left panel background image
-AUTH_HERO_HEADLINE = 'Welcome back'  # text over the hero image
-AUTH_HERO_SUBHEADLINE = ''           # optional supporting text
-AUTH_BACK_TO_WEBSITE_URL = ''        # "Back to website" pill link in hero panel (overridable via ?back= URL param)
-AUTH_TERMS_URL = ''                  # Terms & Conditions link on register page
-
-# ---- Auth features ----
-AUTH_ENABLE_GOOGLE = False           # show Google OAuth button
-AUTH_ENABLE_APPLE = False            # show Apple OAuth button
-AUTH_ENABLE_PASSKEYS = False         # show Passkey button (also requires browser support)
-
-# ---- Routing ----
-AUTH_API_BASE = ''                   # API host (empty = same origin, which is correct for most projects)
-AUTH_SUCCESS_REDIRECT = '/'          # where to redirect after login (relative or absolute; overridable via ?redirect= URL param)
-
-# ---- Layout ----
-AUTH_LAYOUT = 'card'                 # 'card' (centered card) or 'fullscreen' (edge-to-edge)
+# ---- Deployment-wide portal config default ----
+AUTH_PORTAL = {
+    "theme": {
+        "app_title": "My App",
+        "logo_url": "https://cdn.example.com/logo.svg",
+        "layout": "card",
+        "success_redirect": "/",
+    },
+    "login": {
+        "methods": ["password", "google", "passkey"],
+    },
+    "registration": {
+        "methods": ["password", "google"],
+        "passkey_prompt": "optional",
+    },
+}
 ```
 
-All settings can be overridden per-group via `Setting.set(key, value, group=group)`.
+`AUTH_PORTAL` replaces all retired flat `AUTH_*` / `AUTH_REGISTER_*` settings.
+See [Portal Config](portal_config.md) for the full schema and migration table.
 
 ### 2. Nginx — Static Assets & Favicon
 
@@ -69,7 +65,7 @@ The auth pages load CSS and JS from API endpoints (no Django static files):
 ```
 GET /api/account/static/mojo-auth-theme.css   → dark premium theme
 GET /api/account/static/mojo-auth.js          → MojoAuth library
-GET /api/account/static/mojo-auth.css          → legacy light theme (if needed)
+GET /api/account/static/mojo-auth.css         → legacy light theme (if needed)
 ```
 
 These are served by Django with `Cache-Control` headers. In production, nginx
@@ -80,7 +76,6 @@ server {
     listen 443 ssl;
     server_name app.yourproject.com;
 
-    # Favicon — served by nginx directly
     location = /favicon.ico {
         alias /var/www/yourproject/static/favicon.ico;
     }
@@ -88,14 +83,12 @@ server {
         alias /var/www/yourproject/static/apple-touch-icon.png;
     }
 
-    # Auth page static assets — optional nginx cache
     location /api/account/static/ {
         proxy_pass http://127.0.0.1:8000;
         proxy_cache_valid 200 1d;
         add_header X-Cache $upstream_cache_status;
     }
 
-    # Everything else to Django
     location / {
         proxy_pass http://127.0.0.1:8000;
         proxy_set_header Host $host;
@@ -106,32 +99,37 @@ server {
 }
 ```
 
-Set `AUTH_FAVICON_URL` to your favicon path (e.g., `/favicon.ico`) — the template
-includes `<link rel="icon" href="...">` when this setting is set.
+Set `theme.favicon_url` in `AUTH_PORTAL` to your favicon path — the template
+includes `<link rel="icon" href="...">` when this key is non-empty.
 
 ### 3. OAuth Setup
 
-Enable Google/Apple by setting the OAuth provider credentials and the auth page flags:
+Enable Google/Apple by configuring their provider credentials. The login
+methods must also be included in `AUTH_PORTAL.login.methods` (or the group's
+`metadata.portal.login.methods`):
 
 ```python
 # Google OAuth
-GOOGLE_OAUTH_CLIENT_ID = 'your-client-id'
+GOOGLE_OAUTH_CLIENT_ID     = 'your-client-id'
 GOOGLE_OAUTH_CLIENT_SECRET = 'your-client-secret'
-AUTH_ENABLE_GOOGLE = True
 
 # Apple OAuth
 APPLE_OAUTH_CLIENT_ID = 'your-service-id'
-APPLE_OAUTH_TEAM_ID = 'your-team-id'
-APPLE_OAUTH_KEY_ID = 'your-key-id'
+APPLE_OAUTH_TEAM_ID   = 'your-team-id'
+APPLE_OAUTH_KEY_ID    = 'your-key-id'
 # Place your .p8 key in var/keys/
-AUTH_ENABLE_APPLE = True
+```
 
-# Passkeys
-AUTH_ENABLE_PASSKEYS = True   # button shown only when browser supports WebAuthn
+```python
+# AUTH_PORTAL must include the provider in login.methods:
+AUTH_PORTAL = {
+    "login": {"methods": ["password", "google", "apple"]},
+    ...
+}
 ```
 
 The OAuth callback URL is the auth page itself (`/auth?code=xxx&state=yyy`).
-The `mbp` pass cookie uses `SameSite=Lax` so it's included on the OAuth
+The `mbp` pass cookie uses `SameSite=Lax` so it is included on the OAuth
 redirect back from Google/Apple.
 
 ---
@@ -145,8 +143,9 @@ placing a file with the same path in your project's `TEMPLATES` directories.
 |----------|---------|
 | `auth_base.html` | Base layout: overlay, card, hero include, script setup |
 | `auth_hero.html` | Left panel partial — override to swap imagery/messaging |
-| `login.html` | Login page — extends base, all 5 views + OAuth |
-| `register.html` | Registration page — extends base |
+| `login.html` | Login page — extends base; all views + methods from portal config |
+| `register.html` | Registration page — extends base; redirects to `/passkey` when `passkey_prompt != off` |
+| `passkey_enroll.html` | Standalone passkey enrollment page |
 | `bouncer_challenge.html` | Bouncer challenge (default branded, opt-in override per group) |
 | `bouncer_decoy.html` | Honeypot decoy login page |
 
@@ -179,7 +178,8 @@ Create `templates/account/auth_hero.html` in your project:
 </div>
 ```
 
-Or just set the `AUTH_HERO_*` settings and the default template handles it.
+Or set the appropriate keys in `AUTH_PORTAL.theme` and the default template
+handles it.
 
 ---
 
@@ -205,30 +205,28 @@ The dark premium theme is in `mojo-auth-theme.css` using CSS custom properties:
 
 ### Custom CSS — runtime overrides
 
-Two settings for injecting custom styles without touching template files:
-
-**`AUTH_CUSTOM_CSS`** — inline CSS block, injected as a `<style>` tag after the
-theme stylesheet. Set via admin portal for instant runtime changes:
+Set via `AUTH_PORTAL.theme.custom_css` (inline `<style>` block) or
+`AUTH_PORTAL.theme.custom_css_url` (external `<link>`):
 
 ```python
-# Via admin portal / Setting model:
-Setting.set('AUTH_CUSTOM_CSS', ':root { --mat-accent: #e74c3c; --mat-page-bg: #1a1a2e; }')
+AUTH_PORTAL = {
+    "theme": {
+        "custom_css": ":root { --mat-accent: #e74c3c; --mat-page-bg: #1a1a2e; }",
+        # OR:
+        "custom_css_url": "https://cdn.yourapp.com/auth-overrides.css",
+    }
+}
 ```
 
-**`AUTH_CUSTOM_CSS_URL`** — URL to an external CSS file, loaded as a `<link>` tag:
-
-```python
-Setting.set('AUTH_CUSTOM_CSS_URL', 'https://cdn.yourapp.com/auth-overrides.css')
-```
-
-Both are loaded after `mojo-auth-theme.css`, so they override any theme values.
-Use `AUTH_CUSTOM_CSS` for quick variable overrides. Use `AUTH_CUSTOM_CSS_URL`
-for a full custom stylesheet hosted on your CDN.
+`custom_css` must not contain `<`, `@import`, or external URL references
+(`://`). `custom_css_url` must be an `https://` URL. These are enforced at save
+time on Group REST writes and recommended to enforce on `AUTH_PORTAL` too
+(the validator is public: `portal_config.validate_portal_config`).
 
 ### Layouts
 
-| `AUTH_LAYOUT` | Behavior |
-|---------------|----------|
+| `theme.layout` | Behavior |
+|----------------|----------|
 | `card` (default) | Centered card with rounded corners on the page background |
 | `fullscreen` | Edge-to-edge, no border radius, hero 50% / form 50% |
 
@@ -240,19 +238,21 @@ for a full custom stylesheet hosted on your CDN.
 |------|--------|------|-------------|
 | `/{BOUNCER_LOGIN_PATH}` | GET | `on_login_page` | Bouncer-gated login page |
 | `/{BOUNCER_REGISTER_PATH}` | GET | `on_register_page` | Bouncer-gated registration page |
+| `/{BOUNCER_PASSKEY_PATH}` | GET | `on_passkey_enroll_page` | Passkey enrollment (authenticated) |
 | `/{BOUNCER_CONTACT_PATH}` | GET | `on_contact_page` | Bouncer-gated contact/support page |
 | `/login` | GET | `on_decoy_page` | Honeypot decoy |
 | `/login` | POST | `on_decoy_post` | Dead endpoint — logs, returns fake error |
 | `/signin` | GET/POST | (same) | Honeypot decoy |
 | `/signup` | GET/POST | (same) | Honeypot decoy |
+| `/api/auth/portal` | GET | `on_auth_portal` | Public portal config for custom front-ends |
 | `/api/account/bouncer/assess` | POST | `on_bouncer_assess` | Bouncer signal assessment |
 | `/api/account/bouncer/event` | POST | `on_bouncer_event` | Client event reporting |
 | `/api/account/static/mojo-auth-theme.css` | GET | Static | Dark theme CSS |
 | `/api/account/static/mojo-auth.js` | GET | Static | MojoAuth JS library |
 | `/api/account/static/mojo-auth.css` | GET | Static | Legacy light theme CSS |
 
-All root-level paths (`/auth`, `/login`, etc.) are registered as absolute URLs
-and bypass the `/api/` prefix.
+All root-level paths (`/auth`, `/register`, `/passkey`, etc.) are registered
+as absolute URLs and bypass the `/api/` prefix.
 
 ---
 
@@ -260,142 +260,105 @@ and bypass the `/api/` prefix.
 
 ### Login page (`/auth`)
 
-- Email/password sign in
-- Google OAuth (when `AUTH_ENABLE_GOOGLE=True`)
-- Apple OAuth (when `AUTH_ENABLE_APPLE=True`)
-- Passkey authentication (when `AUTH_ENABLE_PASSKEYS=True` + browser support)
-- Forgot password (code or link method)
-- Reset code entry
-- Set new password (from emailed `pr:` token link)
-- Magic login link request
+Methods rendered are those listed in the resolved portal config's
+`login.methods`. Available tokens: `password`, `sms`, `passkey`, `magic`,
+`google`, `apple`.
+
+- `password` — email/password sign in
+- `sms` — phone number + 6-digit SMS code sign in
+- `google` — Google OAuth redirect flow
+- `apple` — Apple OAuth redirect flow
+- `passkey` — WebAuthn discoverable credential flow
+- `magic` — send a one-click sign-in email
+- Forgot password (code or link method; auto-routes via SMS when identity is phone)
+- Reset code entry / set new password (from `?token=pr:...`)
 - Session check on load (auto-redirect if already authenticated)
-- OAuth callback handling (Google/Apple redirect back)
+- OAuth callback handling (`?code=...&state=...`)
 - Magic link token handling (`?token=ml:...`)
-- Password reset link handling (`?token=pr:...`)
 
 ### Registration page (`/register`)
 
-- Fields driven by `AUTH_REGISTER_FIELDS` (default: first name, last name, email, password)
-- Terms & conditions checkbox (when `AUTH_TERMS_URL` is set)
-- Google/Apple OAuth sign-up
-- Link to login page
-- When `phone` is in the schema with `verify: "sms"`: form becomes a three-step state machine (phone → SMS verify → profile) — see Configurable Registration Form below
+- Fields and identity field driven by `registration.fields` / `registration.identity_field`
+- Methods rendered from `registration.methods`: `password`, `google`, `apple`
+- Terms & conditions checkbox (when `theme.terms_url` is set)
+- When `registration.passkey_prompt` is `"optional"` or `"required"`, redirects
+  to `/passkey` after signup
+- Phone-first flow when `phone` field has `verify: "sms"` in the schema
+  (3-step state machine: phone → SMS code → profile)
 
-### When providers are disabled
+### Passkey enrollment page (`/passkey`)
 
-When all OAuth providers and passkeys are disabled, the "or continue with"
-divider and button row are excluded from the HTML entirely (server-side,
-not hidden by JS).
+Not bouncer-gated. Themed by the resolved portal config. Reads the JWT from
+localStorage and runs the WebAuthn registration round-trip client-side. Used
+post-registration (when `passkey_prompt != off`) and standalone from account
+settings.
+
+### When methods are disabled
+
+Methods absent from `login.methods` / `registration.methods` are excluded from
+the rendered HTML server-side. When all OAuth providers and passkeys are
+absent, the "or continue with" divider is excluded entirely.
 
 ---
 
-## Settings Reference
+## Configurable Registration Form
 
-### Branding (DB-backed via `settings.get()`)
-
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `AUTH_APP_TITLE` | `'DJANGO MOJO'` | Brand name in card header |
-| `AUTH_LOGO_URL` | `''` | Logo image URL (header + hero) |
-| `AUTH_FAVICON_URL` | `''` | Favicon URL |
-| `AUTH_HERO_IMAGE_URL` | `''` | Left panel background image |
-| `AUTH_HERO_HEADLINE` | `'Welcome back'` | Text over hero image |
-| `AUTH_HERO_SUBHEADLINE` | `''` | Supporting text below headline |
-| `AUTH_BACK_TO_WEBSITE_URL` | `''` | "Back to website" link in hero (overridable per-request via `?back=<url>`) |
-| `AUTH_TERMS_URL` | `''` | Terms link on register page |
-| `AUTH_CUSTOM_CSS` | `''` | Inline CSS block injected after the theme stylesheet |
-| `AUTH_CUSTOM_CSS_URL` | `''` | URL to an external CSS file loaded after the theme |
-
-### Features (DB-backed)
-
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `AUTH_ENABLE_GOOGLE` | `False` | Show Google OAuth button |
-| `AUTH_ENABLE_APPLE` | `False` | Show Apple OAuth button |
-| `AUTH_ENABLE_PASSKEYS` | `False` | Show Passkey button |
-
-### Routing (DB-backed)
-
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `AUTH_API_BASE` | `''` | API host (empty = same origin) |
-| `AUTH_SUCCESS_REDIRECT` | `'/'` | Redirect target after login |
-| `AUTH_LAYOUT` | `'card'` | `'card'` or `'fullscreen'` |
-
-**Per-request override params** — `?redirect=`, `?next=`, `?returnTo=`, and `?back=` are read from `location.search` on the auth/register page (the first three override `AUTH_SUCCESS_REDIRECT`; `?back=` overrides `AUTH_BACK_TO_WEBSITE_URL`). They are also preserved across the login↔register switcher links, so a user who lands at `/auth?redirect=/dashboard` and clicks "Create one" continues to `/register?redirect=/dashboard`. Other query params (OAuth `code`/`state`, magic-link `token`, reset tokens) are intentionally NOT forwarded to avoid mis-triggering logic on the receiving page.
-
-### Configurable Registration Form
-
-`AUTH_REGISTER_FIELDS` drives both the bouncer-rendered register form and the server-side validator. Group-scoped — different groups can have different signup shapes.
+`registration.fields` drives both the bouncer-rendered register form and the
+server-side validator. See [Portal Config — registration](portal_config.md)
+for the schema and `register_schema.py` for the field resolution logic.
 
 ```python
-# settings.py — phone-as-identity project example
-AUTH_REGISTER_FIELDS = [
-    {"name": "first_name", "required": True},
-    {"name": "last_name",  "required": True},
-    {"name": "phone",      "required": True, "verify": "sms"},
-    {"name": "dob",        "required": True},
-    {"name": "password",   "required": True},
-]
-AUTH_MIN_AGE_YEARS = 13   # optional age gate when dob is required
+# Phone-as-identity example via AUTH_PORTAL
+AUTH_PORTAL = {
+    "registration": {
+        "fields": [
+            {"name": "first_name", "required": True},
+            {"name": "last_name",  "required": True},
+            {"name": "phone",      "required": True, "verify": "sms"},
+            {"name": "dob",        "required": True},
+            {"name": "password",   "required": True},
+        ],
+        "identity_field": "phone",
+        "min_age": 13,
+    }
+}
 ```
 
-Canonical field set: `first_name`, `last_name`, `email`, `phone`, `dob`, `password`. Unknown names are silently dropped from the config — consumer-specific keys keep using `REGISTRATION_EXTRA_FIELDS`. Password is always required (passwordless registration is a separate flow and out of scope).
-
-**Identity field** — auto-picked: `email` if required + present, else `phone`. `AUTH_REGISTER_IDENTITY_FIELD = "phone"` or `"email"` overrides explicitly. `User.username` is set to the identity value at create time (the existing `User.lookup_from_request(phone_as_username=True)` path then handles phone-based login transparently).
-
-**Phone verification (verify-then-register)** — when a field has `verify: "sms"`, the rendered form switches to a **three-step state machine** (phone-first flow):
-
-1. **Step 1 — Identity**: phone input only. Submit calls `POST /api/auth/phone/register/start` and advances.
-2. **Step 2 — Verify**: 6-digit code input, "Resend code" (30s client-side cooldown) and "Back" links. Submit calls `POST /api/auth/phone/register/verify` and stashes the `verified_phone_token`.
-3. **Step 3 — Profile**: remaining schema fields (first/last name, DOB, password). Final submit POSTs `/api/auth/register` with the `verified_phone_token`.
-
-The Back link on Step 2 clears the session token but keeps the phone value pre-filled. When the schema has no SMS-verify phone, the form falls back to a single-pane layout (single submit, no step UI).
-
-**DOB collection** — when `dob` is in the schema, the form renders three auto-advancing numeric segments (`MM` `DD` `YYYY`) with `inputmode="numeric"` for mobile keyboards. Paste of `MM/DD/YYYY`, `MM-DD-YYYY`, or ISO `YYYY-MM-DD` into any segment distributes across the three. Submits as ISO `yyyy-mm-dd` to the server.
-
-**Dev-mode bypass for SMS-less testing**:
+**Dev-mode SMS bypass:**
 
 ```python
 AUTH_PHONE_VERIFY_DEV_BYPASS_CODE = "000000"   # DO NOT SET IN PROD
 ```
 
-When set, `POST /api/auth/phone/register/verify` accepts the fixed bypass code in addition to the real generated code. The verified-phone token still binds to the session's phone — bypass does not let an attacker mint a token for an arbitrary phone. App startup logs a warning when the setting is non-empty so misconfiguration is visible in prod logs.
-
-Two endpoints back the flow:
-
+Two endpoints back the phone-verify flow:
 
 | Method | Path | Purpose |
-|---|---|---|
-| POST | `/api/auth/phone/register/start` | Body `{phone}` → `{session_token, expires_in}`. Generates a 6-digit code, sends via `phonehub.send_sms`. |
-| POST | `/api/auth/phone/register/verify` | Body `{session_token, code}` → `{verified_phone_token, expires_in}`. |
+|--------|------|---------|
+| POST | `/api/auth/phone/register/start` | Body `{phone}` → `{session_token, expires_in}` |
+| POST | `/api/auth/phone/register/verify` | Body `{session_token, code}` → `{verified_phone_token, expires_in}` |
 
-Tokens are Redis-backed (`phone:register:session:*` and `phone:register:verified:*`), single-use, and TTL-bound (`PHONE_REGISTER_SESSION_TTL` / `PHONE_REGISTER_VERIFIED_TTL`, both default 600s). The endpoints are rate-limited per IP. No User row is created until phone ownership is proven — this is intentional spam control on a scarce resource.
+---
 
-**Forgot-password dispatch** — `POST /api/auth/forgot` now routes the 6-digit reset code via SMS automatically when the matched user has no email on file, or when `channel: "sms"` is supplied explicitly. The bouncer's login page forgot-password subview switches to a phone-input UI when `identity_field == "phone"`. Existing email flows are unchanged.
+## Multi-Tenant: Group Resolution
 
-### Bouncer gate (file-based via `settings.get_static()`)
+The hosted pages resolve the operator group from:
+1. The request hostname matching a `Group.auth_domain`, or
+2. The `?group_uuid=<uuid>` query parameter.
+
+The resolved group's `uuid` is emitted as `window._matConfig.groupUuid`. Submit
+handlers in `register.html` and `login.html` include it in the POST payload
+automatically. See [portal_config.md](portal_config.md) for how the config
+resolves down the parent chain.
+
+---
+
+## Bouncer Gate
+
+See [bouncer.md](bouncer.md) for the full bouncer settings reference.
 
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `BOUNCER_LOGIN_PATH` | `'auth'` | Real login page URL path |
 | `BOUNCER_REGISTER_PATH` | `'register'` | Real registration page URL path |
+| `BOUNCER_PASSKEY_PATH` | `'passkey'` | Passkey enrollment page URL path |
 | `BOUNCER_CONTACT_PATH` | `'contact'` | Bouncer-gated contact/support page URL path |
-
-See [bouncer.md](bouncer.md) for the full bouncer settings reference.
-
----
-
-## Multi-Tenant: Forwarding `group_uuid` From the Hosted Forms
-
-The hosted register and login pages resolve the operator group in `on_register_page` / `on_login_page` from either:
-
-1. The request hostname matching a `Group.auth_domain`, or
-2. The `?group_uuid=<uuid>` query parameter (the framework dispatcher reserves `?group=` for integer IDs and rejects UUID values upstream, so the bouncer's public UUID slot is `group_uuid`).
-
-The resolved group's `uuid` is plumbed into `_auth_context()` and emitted by `auth_base.html` as `window._matConfig.groupUuid`. The submit handlers in `register.html` and `login.html` then add it to the POST payload automatically:
-
-- `register.html` adds `payload.group_uuid = cfg.groupUuid` before calling `MojoAuth.register(payload)`. This means deployments with `REQUIRE_GROUP_ON_REGISTRATION = True` are satisfied from the hosted page — no custom front-end is required.
-- `login.html` calls `MojoAuth.login(u, p, { group_uuid: cfg.groupUuid })` so `request.group` middleware and `USER_LOGIN_HANDLER` receive the operator on password logins.
-
-When `_matConfig.groupUuid` is empty (single-tenant deployment), neither form adds the key — payloads are identical to pre-multi-tenant behavior. Hand-crafted invalid `group_uuid` values reaching the POST follow current middleware behavior: on register the lookup is strict and returns 400; on login `request.group` falls back to other resolvers.

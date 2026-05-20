@@ -4,7 +4,8 @@
 
 ### User Registration & Onboarding
 
-1. [Auth Pages](auth_pages.md) — built-in bouncer-gated `/register` page (or build your own)
+1. [Auth Pages](auth_pages.md) — built-in bouncer-gated `/auth`, `/register`, and `/passkey` pages (or build your own)
+   - [Portal Config](portal_config.md) — `GET /api/auth/portal`; per-group branding, enabled methods, passkey enrollment policy
 2. [Authentication § Registration](authentication.md#registration) — `POST /api/auth/register` endpoint
 3. [Email Verification](email_verification.md) — verification gate, send/confirm flow, invite links
 4. [Authentication § Login](authentication.md#login) — first login after verification
@@ -20,6 +21,7 @@
 ## API Reference
 
 - [Authentication](authentication.md) — Login, registration, token refresh, password reset
+- [Portal Config](portal_config.md) — `GET /api/auth/portal`; per-group branding and enabled auth methods for custom front-ends
 - [Passkeys](passkeys.md) — Passwordless login with WebAuthn/FIDO2
 - [TOTP / Authenticator App](mfa_totp.md) — 2FA and standalone login with Google Authenticator etc.
 - [SMS OTP](mfa_sms.md) — 2FA and standalone login via SMS code

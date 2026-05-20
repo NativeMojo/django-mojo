@@ -1,4 +1,14 @@
-## v1.2.20 - (current)
+## v1.2.21 - (current)
+
+**account** — Per-group auth portal config. All auth-page branding and method control is now driven by a structured `AUTH_PORTAL` setting (deployment-wide) and `group.metadata["portal"]` (per-group, deep-merged down the parent chain) instead of the retired flat `AUTH_*` / `AUTH_REGISTER_*` settings. The three-section config (`theme` / `registration` / `login`) is the single source of truth for what the hosted pages render.
+
+- **Retired settings** (remove from `settings.py`): `AUTH_APP_TITLE`, `AUTH_LOGO_URL`, `AUTH_FAVICON_URL`, `AUTH_HERO_IMAGE_URL`, `AUTH_HERO_HEADLINE`, `AUTH_HERO_SUBHEADLINE`, `AUTH_BACK_TO_WEBSITE_URL`, `AUTH_TERMS_URL`, `AUTH_LAYOUT`, `AUTH_API_BASE`, `AUTH_SUCCESS_REDIRECT`, `AUTH_CUSTOM_CSS`, `AUTH_CUSTOM_CSS_URL`, `AUTH_ENABLE_GOOGLE`, `AUTH_ENABLE_APPLE`, `AUTH_ENABLE_PASSKEYS`, `AUTH_REGISTER_FIELDS`, `AUTH_REGISTER_IDENTITY_FIELD`, `AUTH_MIN_AGE_YEARS`. All map to keys in the `AUTH_PORTAL` object — see `docs/django_developer/account/portal_config.md` for the migration table.
+- **`login.methods`** (tokens: `password`, `sms`, `passkey`, `magic`, `google`, `apple`) and **`registration.methods`** (`password`, `google`, `apple`) control which buttons are rendered and soft-gate which methods are accepted when a `group_uuid` is supplied. This is a UX guardrail, not a security boundary.
+- **`registration.passkey_prompt`** (`off` / `optional` / `required`) drives a new reusable passkey enrollment page at `/{BOUNCER_PASSKEY_PATH}` (default `/passkey`). The hosted register page redirects there after signup when the prompt is enabled.
+- **SMS login** — new SMS-code sign-in view on the hosted `/auth` page (requires `sms` in `login.methods`).
+- **New public endpoint** `GET /api/auth/portal` returns the resolved config for an optional `group_uuid` — for custom front-ends building their own auth UI.
+- **`Group.on_rest_pre_save`** validates `metadata["portal"]` on write (rejects bad method tokens, invalid enums, `custom_css` with `<` / `@import` / external URLs, `custom_css_url` without `https://`).
+- **`mojo-auth.js`** adds `registerPasskey`, `startSmsLogin` / `verifySmsLogin`, and `getPortalConfig` helpers.
 
 ## v1.2.20 - May 19, 2026
 
