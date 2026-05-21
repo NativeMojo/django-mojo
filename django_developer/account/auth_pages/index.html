@@ -3917,10 +3917,21 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#when-providers-are-disabled" class="md-nav__link">
+  <a href="#passkey-enrollment-page-passkey" class="md-nav__link">
     <span class="md-ellipsis">
       
-        When providers are disabled
+        Passkey enrollment page (/passkey)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#when-methods-are-disabled" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When methods are disabled
       
     </span>
   </a>
@@ -3933,51 +3944,6 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#settings-reference" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Settings Reference
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Settings Reference">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#branding-db-backed-via-settingsget" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Branding (DB-backed via settings.get())
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#features-db-backed" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Features (DB-backed)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#routing-db-backed" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Routing (DB-backed)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#configurable-registration-form" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3987,28 +3953,23 @@
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#bouncer-gate-file-based-via-settingsget_static" class="md-nav__link">
+      
+        <li class="md-nav__item">
+  <a href="#multi-tenant-group-resolution" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Bouncer gate (file-based via settings.get_static())
+        Multi-Tenant: Group Resolution
       
     </span>
   </a>
   
 </li>
-        
-      </ul>
-    </nav>
-  
-</li>
       
         <li class="md-nav__item">
-  <a href="#multi-tenant-forwarding-group_uuid-from-the-hosted-forms" class="md-nav__link">
+  <a href="#bouncer-gate" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Multi-Tenant: Forwarding group_uuid From the Hosted Forms
+        Bouncer Gate
       
     </span>
   </a>
@@ -4037,59 +3998,56 @@
 
 <h1 id="auth-pages-django-developer-reference">Auth Pages — Django Developer Reference<a class="headerlink" href="#auth-pages-django-developer-reference" title="Permanent link">&para;</a></h1>
 <p>Django-served login and registration pages with bouncer bot detection,
-OAuth (Google, Apple), passkeys, password reset, and magic link support.</p>
+OAuth (Google, Apple), passkeys, SMS login, password reset, and magic link
+support. All branding and feature configuration is controlled through the
+<a href="../auth_config/">auth config</a>.</p>
 <hr />
 <h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
 <p>The framework serves fully-featured auth pages directly from Django — no
 separate frontend app required. Pages are bouncer-gated so bots never see the
-login form, and all branding is configurable via DB-backed settings (runtime
-changeable from the admin portal).</p>
+login form, and all branding is configured via the structured auth config
+object (group-owned, deep-merged from the parent chain).</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>/auth       → bouncer gate → login page
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>/register   → bouncer gate → registration page
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>/login      → honeypot decoy (traps bots)
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>/signin     → honeypot decoy
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>/signup     → honeypot decoy
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>/passkey    → passkey enrollment page (authenticated, not bouncer-gated)
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>/login      → honeypot decoy (traps bots)
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>/signin     → honeypot decoy
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>/signup     → honeypot decoy
 </code></pre></div>
 <hr />
 <h2 id="setup">Setup<a class="headerlink" href="#setup" title="Permanent link">&para;</a></h2>
 <h3 id="1-settings">1. Settings<a class="headerlink" href="#1-settings" title="Permanent link">&para;</a></h3>
-<p>All auth page settings use <code>settings.get()</code> (DB-backed with file fallback).
-Configure in <code>settings.py</code> for defaults, override at runtime via the <code>Setting</code>
-model in the admin portal.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># settings.py</span>
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="c1"># ---- Bouncer gate ----</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="n">BOUNCER_LOGIN_PATH</span> <span class="o">=</span> <span class="s1">&#39;auth&#39;</span>          <span class="c1"># real login page path (default: &#39;auth&#39;)</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="n">BOUNCER_REGISTER_PATH</span> <span class="o">=</span> <span class="s1">&#39;register&#39;</span>   <span class="c1"># real registration page path</span>
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>
-<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="c1"># ---- Auth page branding ----</span>
-<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="n">AUTH_APP_TITLE</span> <span class="o">=</span> <span class="s1">&#39;My App&#39;</span>            <span class="c1"># brand name shown in header</span>
-<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="n">AUTH_LOGO_URL</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span>                   <span class="c1"># logo image URL (header + hero panel)</span>
-<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="n">AUTH_FAVICON_URL</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span>                <span class="c1"># favicon URL (served by nginx, see below)</span>
-<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="n">AUTH_HERO_IMAGE_URL</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span>             <span class="c1"># left panel background image</span>
-<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="n">AUTH_HERO_HEADLINE</span> <span class="o">=</span> <span class="s1">&#39;Welcome back&#39;</span>  <span class="c1"># text over the hero image</span>
-<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="n">AUTH_HERO_SUBHEADLINE</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span>           <span class="c1"># optional supporting text</span>
-<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="n">AUTH_BACK_TO_WEBSITE_URL</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span>        <span class="c1"># &quot;Back to website&quot; pill link in hero panel (overridable via ?back= URL param)</span>
-<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="n">AUTH_TERMS_URL</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span>                  <span class="c1"># Terms &amp; Conditions link on register page</span>
-<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a>
-<a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a><span class="c1"># ---- Auth features ----</span>
-<a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a><span class="n">AUTH_ENABLE_GOOGLE</span> <span class="o">=</span> <span class="kc">False</span>           <span class="c1"># show Google OAuth button</span>
-<a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a><span class="n">AUTH_ENABLE_APPLE</span> <span class="o">=</span> <span class="kc">False</span>            <span class="c1"># show Apple OAuth button</span>
-<a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a><span class="n">AUTH_ENABLE_PASSKEYS</span> <span class="o">=</span> <span class="kc">False</span>         <span class="c1"># show Passkey button (also requires browser support)</span>
-<a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a>
-<a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a><span class="c1"># ---- Routing ----</span>
-<a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a><span class="n">AUTH_API_BASE</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span>                   <span class="c1"># API host (empty = same origin, which is correct for most projects)</span>
-<a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a><span class="n">AUTH_SUCCESS_REDIRECT</span> <span class="o">=</span> <span class="s1">&#39;/&#39;</span>          <span class="c1"># where to redirect after login (relative or absolute; overridable via ?redirect= URL param)</span>
-<a id="__codelineno-1-25" name="__codelineno-1-25" href="#__codelineno-1-25"></a>
-<a id="__codelineno-1-26" name="__codelineno-1-26" href="#__codelineno-1-26"></a><span class="c1"># ---- Layout ----</span>
-<a id="__codelineno-1-27" name="__codelineno-1-27" href="#__codelineno-1-27"></a><span class="n">AUTH_LAYOUT</span> <span class="o">=</span> <span class="s1">&#39;card&#39;</span>                 <span class="c1"># &#39;card&#39; (centered card) or &#39;fullscreen&#39; (edge-to-edge)</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="c1"># ---- Bouncer gate paths (file-backed, no runtime override) ----</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="n">BOUNCER_LOGIN_PATH</span>    <span class="o">=</span> <span class="s1">&#39;auth&#39;</span>      <span class="c1"># real login page path (default: &#39;auth&#39;)</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="n">BOUNCER_REGISTER_PATH</span> <span class="o">=</span> <span class="s1">&#39;register&#39;</span>  <span class="c1"># real registration page path</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="n">BOUNCER_PASSKEY_PATH</span>  <span class="o">=</span> <span class="s1">&#39;passkey&#39;</span>   <span class="c1"># passkey enrollment page path</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="c1"># ---- Deployment-wide auth config default ----</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="n">AUTH_CONFIG</span> <span class="o">=</span> <span class="p">{</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>    <span class="s2">&quot;theme&quot;</span><span class="p">:</span> <span class="p">{</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>        <span class="s2">&quot;app_title&quot;</span><span class="p">:</span> <span class="s2">&quot;My App&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>        <span class="s2">&quot;logo_url&quot;</span><span class="p">:</span> <span class="s2">&quot;https://cdn.example.com/logo.svg&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>        <span class="s2">&quot;layout&quot;</span><span class="p">:</span> <span class="s2">&quot;card&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>        <span class="s2">&quot;success_redirect&quot;</span><span class="p">:</span> <span class="s2">&quot;/&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>    <span class="p">},</span>
+<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a>    <span class="s2">&quot;login&quot;</span><span class="p">:</span> <span class="p">{</span>
+<a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a>        <span class="s2">&quot;methods&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;password&quot;</span><span class="p">,</span> <span class="s2">&quot;google&quot;</span><span class="p">,</span> <span class="s2">&quot;passkey&quot;</span><span class="p">],</span>
+<a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a>    <span class="p">},</span>
+<a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a>    <span class="s2">&quot;registration&quot;</span><span class="p">:</span> <span class="p">{</span>
+<a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a>        <span class="s2">&quot;methods&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;password&quot;</span><span class="p">,</span> <span class="s2">&quot;google&quot;</span><span class="p">],</span>
+<a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a>        <span class="s2">&quot;passkey_prompt&quot;</span><span class="p">:</span> <span class="s2">&quot;optional&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a>    <span class="p">},</span>
+<a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a><span class="p">}</span>
 </code></pre></div>
-<p>All settings can be overridden per-group via <code>Setting.set(key, value, group=group)</code>.</p>
+<p><code>AUTH_CONFIG</code> replaces all retired flat <code>AUTH_*</code> / <code>AUTH_REGISTER_*</code> settings.
+See <a href="../auth_config/">Auth Config</a> for the full schema and migration table.</p>
 <h3 id="2-nginx-static-assets-favicon">2. Nginx — Static Assets &amp; Favicon<a class="headerlink" href="#2-nginx-static-assets-favicon" title="Permanent link">&para;</a></h3>
 <p>The auth pages load CSS and JS from API endpoints (no Django static files):</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>GET /api/account/static/mojo-auth-theme.css   → dark premium theme
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>GET /api/account/static/mojo-auth.js          → MojoAuth library
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>GET /api/account/static/mojo-auth.css          → legacy light theme (if needed)
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>GET /api/account/static/mojo-auth.css         → legacy light theme (if needed)
 </code></pre></div>
 <p>These are served by Django with <code>Cache-Control</code> headers. In production, nginx
 can intercept and serve directly for better performance:</p>
@@ -4097,52 +4055,52 @@ can intercept and serve directly for better performance:</p>
 <a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">    </span><span class="kn">listen</span><span class="w"> </span><span class="mi">443</span><span class="w"> </span><span class="s">ssl</span><span class="p">;</span>
 <a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span><span class="kn">server_name</span><span class="w"> </span><span class="s">app.yourproject.com</span><span class="p">;</span>
 <a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">    </span><span class="c1"># Favicon — served by nginx directly</span>
-<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">    </span><span class="kn">location</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">/favicon.ico</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">        </span><span class="kn">alias</span><span class="w"> </span><span class="s">/var/www/yourproject/static/favicon.ico</span><span class="p">;</span>
-<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">    </span><span class="p">}</span>
-<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">    </span><span class="kn">location</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">/apple-touch-icon.png</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="w">        </span><span class="kn">alias</span><span class="w"> </span><span class="s">/var/www/yourproject/static/apple-touch-icon.png</span><span class="p">;</span>
-<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="w">    </span><span class="p">}</span>
-<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>
-<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="w">    </span><span class="c1"># Auth page static assets — optional nginx cache</span>
-<a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a><span class="w">    </span><span class="kn">location</span><span class="w"> </span><span class="s">/api/account/static/</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a><span class="w">        </span><span class="kn">proxy_pass</span><span class="w"> </span><span class="s">http://127.0.0.1:8000</span><span class="p">;</span>
-<a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a><span class="w">        </span><span class="kn">proxy_cache_valid</span><span class="w"> </span><span class="mi">200</span><span class="w"> </span><span class="s">1d</span><span class="p">;</span>
-<a id="__codelineno-3-17" name="__codelineno-3-17" href="#__codelineno-3-17"></a><span class="w">        </span><span class="kn">add_header</span><span class="w"> </span><span class="s">X-Cache</span><span class="w"> </span><span class="nv">$upstream_cache_status</span><span class="p">;</span>
-<a id="__codelineno-3-18" name="__codelineno-3-18" href="#__codelineno-3-18"></a><span class="w">    </span><span class="p">}</span>
-<a id="__codelineno-3-19" name="__codelineno-3-19" href="#__codelineno-3-19"></a>
-<a id="__codelineno-3-20" name="__codelineno-3-20" href="#__codelineno-3-20"></a><span class="w">    </span><span class="c1"># Everything else to Django</span>
-<a id="__codelineno-3-21" name="__codelineno-3-21" href="#__codelineno-3-21"></a><span class="w">    </span><span class="kn">location</span><span class="w"> </span><span class="s">/</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-3-22" name="__codelineno-3-22" href="#__codelineno-3-22"></a><span class="w">        </span><span class="kn">proxy_pass</span><span class="w"> </span><span class="s">http://127.0.0.1:8000</span><span class="p">;</span>
-<a id="__codelineno-3-23" name="__codelineno-3-23" href="#__codelineno-3-23"></a><span class="w">        </span><span class="kn">proxy_set_header</span><span class="w"> </span><span class="s">Host</span><span class="w"> </span><span class="nv">$host</span><span class="p">;</span>
-<a id="__codelineno-3-24" name="__codelineno-3-24" href="#__codelineno-3-24"></a><span class="w">        </span><span class="kn">proxy_set_header</span><span class="w"> </span><span class="s">X-Real-IP</span><span class="w"> </span><span class="nv">$remote_addr</span><span class="p">;</span>
-<a id="__codelineno-3-25" name="__codelineno-3-25" href="#__codelineno-3-25"></a><span class="w">        </span><span class="kn">proxy_set_header</span><span class="w"> </span><span class="s">X-Forwarded-For</span><span class="w"> </span><span class="nv">$proxy_add_x_forwarded_for</span><span class="p">;</span>
-<a id="__codelineno-3-26" name="__codelineno-3-26" href="#__codelineno-3-26"></a><span class="w">        </span><span class="kn">proxy_set_header</span><span class="w"> </span><span class="s">X-Forwarded-Proto</span><span class="w"> </span><span class="nv">$scheme</span><span class="p">;</span>
-<a id="__codelineno-3-27" name="__codelineno-3-27" href="#__codelineno-3-27"></a><span class="w">    </span><span class="p">}</span>
-<a id="__codelineno-3-28" name="__codelineno-3-28" href="#__codelineno-3-28"></a><span class="p">}</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">    </span><span class="kn">location</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">/favicon.ico</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">        </span><span class="kn">alias</span><span class="w"> </span><span class="s">/var/www/yourproject/static/favicon.ico</span><span class="p">;</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">    </span><span class="kn">location</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">/apple-touch-icon.png</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">        </span><span class="kn">alias</span><span class="w"> </span><span class="s">/var/www/yourproject/static/apple-touch-icon.png</span><span class="p">;</span>
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>
+<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="w">    </span><span class="kn">location</span><span class="w"> </span><span class="s">/api/account/static/</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="w">        </span><span class="kn">proxy_pass</span><span class="w"> </span><span class="s">http://127.0.0.1:8000</span><span class="p">;</span>
+<a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a><span class="w">        </span><span class="kn">proxy_cache_valid</span><span class="w"> </span><span class="mi">200</span><span class="w"> </span><span class="s">1d</span><span class="p">;</span>
+<a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a><span class="w">        </span><span class="kn">add_header</span><span class="w"> </span><span class="s">X-Cache</span><span class="w"> </span><span class="nv">$upstream_cache_status</span><span class="p">;</span>
+<a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-3-17" name="__codelineno-3-17" href="#__codelineno-3-17"></a>
+<a id="__codelineno-3-18" name="__codelineno-3-18" href="#__codelineno-3-18"></a><span class="w">    </span><span class="kn">location</span><span class="w"> </span><span class="s">/</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-3-19" name="__codelineno-3-19" href="#__codelineno-3-19"></a><span class="w">        </span><span class="kn">proxy_pass</span><span class="w"> </span><span class="s">http://127.0.0.1:8000</span><span class="p">;</span>
+<a id="__codelineno-3-20" name="__codelineno-3-20" href="#__codelineno-3-20"></a><span class="w">        </span><span class="kn">proxy_set_header</span><span class="w"> </span><span class="s">Host</span><span class="w"> </span><span class="nv">$host</span><span class="p">;</span>
+<a id="__codelineno-3-21" name="__codelineno-3-21" href="#__codelineno-3-21"></a><span class="w">        </span><span class="kn">proxy_set_header</span><span class="w"> </span><span class="s">X-Real-IP</span><span class="w"> </span><span class="nv">$remote_addr</span><span class="p">;</span>
+<a id="__codelineno-3-22" name="__codelineno-3-22" href="#__codelineno-3-22"></a><span class="w">        </span><span class="kn">proxy_set_header</span><span class="w"> </span><span class="s">X-Forwarded-For</span><span class="w"> </span><span class="nv">$proxy_add_x_forwarded_for</span><span class="p">;</span>
+<a id="__codelineno-3-23" name="__codelineno-3-23" href="#__codelineno-3-23"></a><span class="w">        </span><span class="kn">proxy_set_header</span><span class="w"> </span><span class="s">X-Forwarded-Proto</span><span class="w"> </span><span class="nv">$scheme</span><span class="p">;</span>
+<a id="__codelineno-3-24" name="__codelineno-3-24" href="#__codelineno-3-24"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-3-25" name="__codelineno-3-25" href="#__codelineno-3-25"></a><span class="p">}</span>
 </code></pre></div>
-<p>Set <code>AUTH_FAVICON_URL</code> to your favicon path (e.g., <code>/favicon.ico</code>) — the template
-includes <code>&lt;link rel="icon" href="..."&gt;</code> when this setting is set.</p>
+<p>Set <code>theme.favicon_url</code> in <code>AUTH_CONFIG</code> to your favicon path — the template
+includes <code>&lt;link rel="icon" href="..."&gt;</code> when this key is non-empty.</p>
 <h3 id="3-oauth-setup">3. OAuth Setup<a class="headerlink" href="#3-oauth-setup" title="Permanent link">&para;</a></h3>
-<p>Enable Google/Apple by setting the OAuth provider credentials and the auth page flags:</p>
+<p>Enable Google/Apple by configuring their provider credentials. The login
+methods must also be included in <code>AUTH_CONFIG.login.methods</code> (or the group's
+<code>metadata.auth_config.login.methods</code>):</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># Google OAuth</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="n">GOOGLE_OAUTH_CLIENT_ID</span> <span class="o">=</span> <span class="s1">&#39;your-client-id&#39;</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="n">GOOGLE_OAUTH_CLIENT_ID</span>     <span class="o">=</span> <span class="s1">&#39;your-client-id&#39;</span>
 <a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="n">GOOGLE_OAUTH_CLIENT_SECRET</span> <span class="o">=</span> <span class="s1">&#39;your-client-secret&#39;</span>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="n">AUTH_ENABLE_GOOGLE</span> <span class="o">=</span> <span class="kc">True</span>
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>
-<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="c1"># Apple OAuth</span>
-<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="n">APPLE_OAUTH_CLIENT_ID</span> <span class="o">=</span> <span class="s1">&#39;your-service-id&#39;</span>
-<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="n">APPLE_OAUTH_TEAM_ID</span> <span class="o">=</span> <span class="s1">&#39;your-team-id&#39;</span>
-<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="n">APPLE_OAUTH_KEY_ID</span> <span class="o">=</span> <span class="s1">&#39;your-key-id&#39;</span>
-<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="c1"># Place your .p8 key in var/keys/</span>
-<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="n">AUTH_ENABLE_APPLE</span> <span class="o">=</span> <span class="kc">True</span>
-<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a>
-<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="c1"># Passkeys</span>
-<a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a><span class="n">AUTH_ENABLE_PASSKEYS</span> <span class="o">=</span> <span class="kc">True</span>   <span class="c1"># button shown only when browser supports WebAuthn</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="c1"># Apple OAuth</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="n">APPLE_OAUTH_CLIENT_ID</span> <span class="o">=</span> <span class="s1">&#39;your-service-id&#39;</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="n">APPLE_OAUTH_TEAM_ID</span>   <span class="o">=</span> <span class="s1">&#39;your-team-id&#39;</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="n">APPLE_OAUTH_KEY_ID</span>    <span class="o">=</span> <span class="s1">&#39;your-key-id&#39;</span>
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="c1"># Place your .p8 key in var/keys/</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># AUTH_CONFIG must include the provider in login.methods:</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="n">AUTH_CONFIG</span> <span class="o">=</span> <span class="p">{</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>    <span class="s2">&quot;login&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;methods&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;password&quot;</span><span class="p">,</span> <span class="s2">&quot;google&quot;</span><span class="p">,</span> <span class="s2">&quot;apple&quot;</span><span class="p">]},</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>    <span class="o">...</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="p">}</span>
 </code></pre></div>
 <p>The OAuth callback URL is the auth page itself (<code>/auth?code=xxx&amp;state=yyy</code>).
-The <code>mbp</code> pass cookie uses <code>SameSite=Lax</code> so it's included on the OAuth
+The <code>mbp</code> pass cookie uses <code>SameSite=Lax</code> so it is included on the OAuth
 redirect back from Google/Apple.</p>
 <hr />
 <h2 id="templates">Templates<a class="headerlink" href="#templates" title="Permanent link">&para;</a></h2>
@@ -4166,11 +4124,15 @@ placing a file with the same path in your project's <code>TEMPLATES</code> direc
 </tr>
 <tr>
 <td><code>login.html</code></td>
-<td>Login page — extends base, all 5 views + OAuth</td>
+<td>Login page — extends base; all views + methods from auth config</td>
 </tr>
 <tr>
 <td><code>register.html</code></td>
-<td>Registration page — extends base</td>
+<td>Registration page — extends base; redirects to <code>/passkey</code> when <code>passkey_prompt != off</code></td>
+</tr>
+<tr>
+<td><code>passkey_enroll.html</code></td>
+<td>Standalone passkey enrollment page</td>
 </tr>
 <tr>
 <td><code>bouncer_challenge.html</code></td>
@@ -4223,53 +4185,56 @@ placing a file with the same path in your project's <code>TEMPLATES</code> direc
 </table>
 <h3 id="overriding-the-hero-panel">Overriding the hero panel<a class="headerlink" href="#overriding-the-hero-panel" title="Permanent link">&para;</a></h3>
 <p>Create <code>templates/account/auth_hero.html</code> in your project:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">&lt;</span><span class="nt">div</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;mat-hero&quot;</span> <span class="na">style</span><span class="o">=</span><span class="s">&quot;background-image:url(&#39;/static/hero.jpg&#39;)&quot;</span><span class="p">&gt;</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>    <span class="p">&lt;</span><span class="nt">div</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;mat-hero-top&quot;</span><span class="p">&gt;</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>        <span class="p">&lt;</span><span class="nt">img</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;mat-hero-logo&quot;</span> <span class="na">src</span><span class="o">=</span><span class="s">&quot;/static/logo-white.svg&quot;</span> <span class="na">alt</span><span class="o">=</span><span class="s">&quot;My App&quot;</span> <span class="p">/&gt;</span>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>        <span class="p">&lt;</span><span class="nt">a</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;mat-hero-back&quot;</span> <span class="na">href</span><span class="o">=</span><span class="s">&quot;https://myapp.com&quot;</span><span class="p">&gt;</span>Back to website <span class="ni">&amp;rarr;</span><span class="p">&lt;/</span><span class="nt">a</span><span class="p">&gt;</span>
-<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>    <span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
-<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>    <span class="p">&lt;</span><span class="nt">div</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;mat-hero-bottom&quot;</span><span class="p">&gt;</span>
-<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>        <span class="p">&lt;</span><span class="nt">div</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;mat-hero-headline&quot;</span><span class="p">&gt;</span>Your headline here<span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
-<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>        <span class="p">&lt;</span><span class="nt">div</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;mat-hero-sub&quot;</span><span class="p">&gt;</span>Supporting text<span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
-<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>    <span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
-<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">&lt;</span><span class="nt">div</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;mat-hero&quot;</span> <span class="na">style</span><span class="o">=</span><span class="s">&quot;background-image:url(&#39;/static/hero.jpg&#39;)&quot;</span><span class="p">&gt;</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>    <span class="p">&lt;</span><span class="nt">div</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;mat-hero-top&quot;</span><span class="p">&gt;</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>        <span class="p">&lt;</span><span class="nt">img</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;mat-hero-logo&quot;</span> <span class="na">src</span><span class="o">=</span><span class="s">&quot;/static/logo-white.svg&quot;</span> <span class="na">alt</span><span class="o">=</span><span class="s">&quot;My App&quot;</span> <span class="p">/&gt;</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>        <span class="p">&lt;</span><span class="nt">a</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;mat-hero-back&quot;</span> <span class="na">href</span><span class="o">=</span><span class="s">&quot;https://myapp.com&quot;</span><span class="p">&gt;</span>Back to website <span class="ni">&amp;rarr;</span><span class="p">&lt;/</span><span class="nt">a</span><span class="p">&gt;</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>    <span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>    <span class="p">&lt;</span><span class="nt">div</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;mat-hero-bottom&quot;</span><span class="p">&gt;</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>        <span class="p">&lt;</span><span class="nt">div</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;mat-hero-headline&quot;</span><span class="p">&gt;</span>Your headline here<span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>        <span class="p">&lt;</span><span class="nt">div</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;mat-hero-sub&quot;</span><span class="p">&gt;</span>Supporting text<span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>    <span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
 </code></pre></div>
-<p>Or just set the <code>AUTH_HERO_*</code> settings and the default template handles it.</p>
+<p>Or set the appropriate keys in <code>AUTH_CONFIG.theme</code> and the default template
+handles it.</p>
 <hr />
 <h2 id="css-theme">CSS Theme<a class="headerlink" href="#css-theme" title="Permanent link">&para;</a></h2>
 <p>The dark premium theme is in <code>mojo-auth-theme.css</code> using CSS custom properties:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">:</span><span class="nd">root</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">    </span><span class="nv">--mat-page-bg</span><span class="p">:</span><span class="w"> </span><span class="mh">#686278</span><span class="p">;</span><span class="w">       </span><span class="c">/* page background */</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">    </span><span class="nv">--mat-card-bg</span><span class="p">:</span><span class="w"> </span><span class="mh">#2c2638</span><span class="p">;</span><span class="w">       </span><span class="c">/* card background */</span>
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">    </span><span class="nv">--mat-deep</span><span class="p">:</span><span class="w"> </span><span class="mh">#1e1a28</span><span class="p">;</span><span class="w">          </span><span class="c">/* overlay / deep contrast */</span>
-<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">    </span><span class="nv">--mat-accent</span><span class="p">:</span><span class="w"> </span><span class="mh">#7c5cbf</span><span class="p">;</span><span class="w">        </span><span class="c">/* primary accent (buttons, focus) */</span>
-<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">    </span><span class="nv">--mat-accent-hover</span><span class="p">:</span><span class="w"> </span><span class="mh">#6b4eae</span><span class="p">;</span><span class="w">  </span><span class="c">/* accent hover state */</span>
-<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">    </span><span class="nv">--mat-input-bg</span><span class="p">:</span><span class="w"> </span><span class="mh">#353042</span><span class="p">;</span><span class="w">      </span><span class="c">/* input field background */</span>
-<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">    </span><span class="nv">--mat-border</span><span class="p">:</span><span class="w"> </span><span class="mh">#433d52</span><span class="p">;</span><span class="w">        </span><span class="c">/* subtle borders */</span>
-<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="w">    </span><span class="nv">--mat-text</span><span class="p">:</span><span class="w"> </span><span class="mh">#f2eff7</span><span class="p">;</span><span class="w">          </span><span class="c">/* primary text */</span>
-<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="w">    </span><span class="nv">--mat-muted</span><span class="p">:</span><span class="w"> </span><span class="mh">#9e96ad</span><span class="p">;</span><span class="w">         </span><span class="c">/* secondary/muted text */</span>
-<a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="w">    </span><span class="nv">--mat-radius</span><span class="p">:</span><span class="w"> </span><span class="mi">20</span><span class="kt">px</span><span class="p">;</span><span class="w">           </span><span class="c">/* card border radius */</span>
-<a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a><span class="w">    </span><span class="nv">--mat-field-radius</span><span class="p">:</span><span class="w"> </span><span class="mi">10</span><span class="kt">px</span><span class="p">;</span><span class="w">     </span><span class="c">/* input/button radius */</span>
-<a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">:</span><span class="nd">root</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">    </span><span class="nv">--mat-page-bg</span><span class="p">:</span><span class="w"> </span><span class="mh">#686278</span><span class="p">;</span><span class="w">       </span><span class="c">/* page background */</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">    </span><span class="nv">--mat-card-bg</span><span class="p">:</span><span class="w"> </span><span class="mh">#2c2638</span><span class="p">;</span><span class="w">       </span><span class="c">/* card background */</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">    </span><span class="nv">--mat-deep</span><span class="p">:</span><span class="w"> </span><span class="mh">#1e1a28</span><span class="p">;</span><span class="w">          </span><span class="c">/* overlay / deep contrast */</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">    </span><span class="nv">--mat-accent</span><span class="p">:</span><span class="w"> </span><span class="mh">#7c5cbf</span><span class="p">;</span><span class="w">        </span><span class="c">/* primary accent (buttons, focus) */</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">    </span><span class="nv">--mat-accent-hover</span><span class="p">:</span><span class="w"> </span><span class="mh">#6b4eae</span><span class="p">;</span><span class="w">  </span><span class="c">/* accent hover state */</span>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="w">    </span><span class="nv">--mat-input-bg</span><span class="p">:</span><span class="w"> </span><span class="mh">#353042</span><span class="p">;</span><span class="w">      </span><span class="c">/* input field background */</span>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="w">    </span><span class="nv">--mat-border</span><span class="p">:</span><span class="w"> </span><span class="mh">#433d52</span><span class="p">;</span><span class="w">        </span><span class="c">/* subtle borders */</span>
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="w">    </span><span class="nv">--mat-text</span><span class="p">:</span><span class="w"> </span><span class="mh">#f2eff7</span><span class="p">;</span><span class="w">          </span><span class="c">/* primary text */</span>
+<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="w">    </span><span class="nv">--mat-muted</span><span class="p">:</span><span class="w"> </span><span class="mh">#9e96ad</span><span class="p">;</span><span class="w">         </span><span class="c">/* secondary/muted text */</span>
+<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a><span class="w">    </span><span class="nv">--mat-radius</span><span class="p">:</span><span class="w"> </span><span class="mi">20</span><span class="kt">px</span><span class="p">;</span><span class="w">           </span><span class="c">/* card border radius */</span>
+<a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a><span class="w">    </span><span class="nv">--mat-field-radius</span><span class="p">:</span><span class="w"> </span><span class="mi">10</span><span class="kt">px</span><span class="p">;</span><span class="w">     </span><span class="c">/* input/button radius */</span>
+<a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a><span class="p">}</span>
 </code></pre></div>
 <h3 id="custom-css-runtime-overrides">Custom CSS — runtime overrides<a class="headerlink" href="#custom-css-runtime-overrides" title="Permanent link">&para;</a></h3>
-<p>Two settings for injecting custom styles without touching template files:</p>
-<p><strong><code>AUTH_CUSTOM_CSS</code></strong> — inline CSS block, injected as a <code>&lt;style&gt;</code> tag after the
-theme stylesheet. Set via admin portal for instant runtime changes:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># Via admin portal / Setting model:</span>
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="n">Setting</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="s1">&#39;AUTH_CUSTOM_CSS&#39;</span><span class="p">,</span> <span class="s1">&#39;:root { --mat-accent: #e74c3c; --mat-page-bg: #1a1a2e; }&#39;</span><span class="p">)</span>
+<p>Set via <code>AUTH_CONFIG.theme.custom_css</code> (inline <code>&lt;style&gt;</code> block) or
+<code>AUTH_CONFIG.theme.custom_css_url</code> (external <code>&lt;link&gt;</code>):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="n">AUTH_CONFIG</span> <span class="o">=</span> <span class="p">{</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>    <span class="s2">&quot;theme&quot;</span><span class="p">:</span> <span class="p">{</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>        <span class="s2">&quot;custom_css&quot;</span><span class="p">:</span> <span class="s2">&quot;:root { --mat-accent: #e74c3c; --mat-page-bg: #1a1a2e; }&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>        <span class="c1"># OR:</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>        <span class="s2">&quot;custom_css_url&quot;</span><span class="p">:</span> <span class="s2">&quot;https://cdn.yourapp.com/auth-overrides.css&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>    <span class="p">}</span>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="p">}</span>
 </code></pre></div>
-<p><strong><code>AUTH_CUSTOM_CSS_URL</code></strong> — URL to an external CSS file, loaded as a <code>&lt;link&gt;</code> tag:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="n">Setting</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="s1">&#39;AUTH_CUSTOM_CSS_URL&#39;</span><span class="p">,</span> <span class="s1">&#39;https://cdn.yourapp.com/auth-overrides.css&#39;</span><span class="p">)</span>
-</code></pre></div>
-<p>Both are loaded after <code>mojo-auth-theme.css</code>, so they override any theme values.
-Use <code>AUTH_CUSTOM_CSS</code> for quick variable overrides. Use <code>AUTH_CUSTOM_CSS_URL</code>
-for a full custom stylesheet hosted on your CDN.</p>
+<p><code>custom_css</code> must not contain <code>&lt;</code>, <code>@import</code>, or external URL references
+(<code>://</code>). <code>custom_css_url</code> must be an <code>https://</code> URL. These are enforced at save
+time on Group REST writes and recommended to enforce on <code>AUTH_CONFIG</code> too
+(the validator is public: <code>auth_config.validate_auth_config</code>).</p>
 <h3 id="layouts">Layouts<a class="headerlink" href="#layouts" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
 <tr>
-<th><code>AUTH_LAYOUT</code></th>
+<th><code>theme.layout</code></th>
 <th>Behavior</th>
 </tr>
 </thead>
@@ -4309,6 +4274,12 @@ for a full custom stylesheet hosted on your CDN.</p>
 <td>Bouncer-gated registration page</td>
 </tr>
 <tr>
+<td><code>/{BOUNCER_PASSKEY_PATH}</code></td>
+<td>GET</td>
+<td><code>on_passkey_enroll_page</code></td>
+<td>Passkey enrollment (authenticated)</td>
+</tr>
+<tr>
 <td><code>/{BOUNCER_CONTACT_PATH}</code></td>
 <td>GET</td>
 <td><code>on_contact_page</code></td>
@@ -4337,6 +4308,12 @@ for a full custom stylesheet hosted on your CDN.</p>
 <td>GET/POST</td>
 <td>(same)</td>
 <td>Honeypot decoy</td>
+</tr>
+<tr>
+<td><code>/api/auth/config</code></td>
+<td>GET</td>
+<td><code>on_auth_config</code></td>
+<td>Public auth config for custom front-ends</td>
 </tr>
 <tr>
 <td><code>/api/account/bouncer/assess</code></td>
@@ -4370,183 +4347,70 @@ for a full custom stylesheet hosted on your CDN.</p>
 </tr>
 </tbody>
 </table>
-<p>All root-level paths (<code>/auth</code>, <code>/login</code>, etc.) are registered as absolute URLs
-and bypass the <code>/api/</code> prefix.</p>
+<p>All root-level paths (<code>/auth</code>, <code>/register</code>, <code>/passkey</code>, etc.) are registered
+as absolute URLs and bypass the <code>/api/</code> prefix.</p>
 <hr />
 <h2 id="auth-page-features">Auth Page Features<a class="headerlink" href="#auth-page-features" title="Permanent link">&para;</a></h2>
 <h3 id="login-page-auth">Login page (<code>/auth</code>)<a class="headerlink" href="#login-page-auth" title="Permanent link">&para;</a></h3>
+<p>Methods rendered are those listed in the resolved auth config's
+<code>login.methods</code>. Available tokens: <code>password</code>, <code>sms</code>, <code>passkey</code>, <code>magic</code>,
+<code>google</code>, <code>apple</code>.</p>
 <ul>
-<li>Email/password sign in</li>
-<li>Google OAuth (when <code>AUTH_ENABLE_GOOGLE=True</code>)</li>
-<li>Apple OAuth (when <code>AUTH_ENABLE_APPLE=True</code>)</li>
-<li>Passkey authentication (when <code>AUTH_ENABLE_PASSKEYS=True</code> + browser support)</li>
-<li>Forgot password (code or link method)</li>
-<li>Reset code entry</li>
-<li>Set new password (from emailed <code>pr:</code> token link)</li>
-<li>Magic login link request</li>
+<li><code>password</code> — email/password sign in</li>
+<li><code>sms</code> — phone number + 6-digit SMS code sign in</li>
+<li><code>google</code> — Google OAuth redirect flow</li>
+<li><code>apple</code> — Apple OAuth redirect flow</li>
+<li><code>passkey</code> — WebAuthn discoverable credential flow</li>
+<li><code>magic</code> — send a one-click sign-in email</li>
+<li>Forgot password (code or link method; auto-routes via SMS when identity is phone)</li>
+<li>Reset code entry / set new password (from <code>?token=pr:...</code>)</li>
 <li>Session check on load (auto-redirect if already authenticated)</li>
-<li>OAuth callback handling (Google/Apple redirect back)</li>
+<li>OAuth callback handling (<code>?code=...&amp;state=...</code>)</li>
 <li>Magic link token handling (<code>?token=ml:...</code>)</li>
-<li>Password reset link handling (<code>?token=pr:...</code>)</li>
 </ul>
 <h3 id="registration-page-register">Registration page (<code>/register</code>)<a class="headerlink" href="#registration-page-register" title="Permanent link">&para;</a></h3>
 <ul>
-<li>Fields driven by <code>AUTH_REGISTER_FIELDS</code> (default: first name, last name, email, password)</li>
-<li>Terms &amp; conditions checkbox (when <code>AUTH_TERMS_URL</code> is set)</li>
-<li>Google/Apple OAuth sign-up</li>
-<li>Link to login page</li>
-<li>When <code>phone</code> is in the schema with <code>verify: "sms"</code>: form becomes a three-step state machine (phone → SMS verify → profile) — see Configurable Registration Form below</li>
+<li>Fields and identity field driven by <code>registration.fields</code> / <code>registration.identity_field</code></li>
+<li>Methods rendered from <code>registration.methods</code>: <code>password</code>, <code>google</code>, <code>apple</code></li>
+<li>Terms &amp; conditions checkbox (when <code>theme.terms_url</code> is set)</li>
+<li>When <code>registration.passkey_prompt</code> is <code>"optional"</code> or <code>"required"</code>, redirects
+  to <code>/passkey</code> after signup</li>
+<li>Phone-first flow when <code>phone</code> field has <code>verify: "sms"</code> in the schema
+  (3-step state machine: phone → SMS code → profile)</li>
 </ul>
-<h3 id="when-providers-are-disabled">When providers are disabled<a class="headerlink" href="#when-providers-are-disabled" title="Permanent link">&para;</a></h3>
-<p>When all OAuth providers and passkeys are disabled, the "or continue with"
-divider and button row are excluded from the HTML entirely (server-side,
-not hidden by JS).</p>
+<h3 id="passkey-enrollment-page-passkey">Passkey enrollment page (<code>/passkey</code>)<a class="headerlink" href="#passkey-enrollment-page-passkey" title="Permanent link">&para;</a></h3>
+<p>Not bouncer-gated. Themed by the resolved auth config. Reads the JWT from
+localStorage and runs the WebAuthn registration round-trip client-side. Used
+post-registration (when <code>passkey_prompt != off</code>) and standalone from account
+settings.</p>
+<h3 id="when-methods-are-disabled">When methods are disabled<a class="headerlink" href="#when-methods-are-disabled" title="Permanent link">&para;</a></h3>
+<p>Methods absent from <code>login.methods</code> / <code>registration.methods</code> are excluded from
+the rendered HTML server-side. When all OAuth providers and passkeys are
+absent, the "or continue with" divider is excluded entirely.</p>
 <hr />
-<h2 id="settings-reference">Settings Reference<a class="headerlink" href="#settings-reference" title="Permanent link">&para;</a></h2>
-<h3 id="branding-db-backed-via-settingsget">Branding (DB-backed via <code>settings.get()</code>)<a class="headerlink" href="#branding-db-backed-via-settingsget" title="Permanent link">&para;</a></h3>
-<table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>AUTH_APP_TITLE</code></td>
-<td><code>'DJANGO MOJO'</code></td>
-<td>Brand name in card header</td>
-</tr>
-<tr>
-<td><code>AUTH_LOGO_URL</code></td>
-<td><code>''</code></td>
-<td>Logo image URL (header + hero)</td>
-</tr>
-<tr>
-<td><code>AUTH_FAVICON_URL</code></td>
-<td><code>''</code></td>
-<td>Favicon URL</td>
-</tr>
-<tr>
-<td><code>AUTH_HERO_IMAGE_URL</code></td>
-<td><code>''</code></td>
-<td>Left panel background image</td>
-</tr>
-<tr>
-<td><code>AUTH_HERO_HEADLINE</code></td>
-<td><code>'Welcome back'</code></td>
-<td>Text over hero image</td>
-</tr>
-<tr>
-<td><code>AUTH_HERO_SUBHEADLINE</code></td>
-<td><code>''</code></td>
-<td>Supporting text below headline</td>
-</tr>
-<tr>
-<td><code>AUTH_BACK_TO_WEBSITE_URL</code></td>
-<td><code>''</code></td>
-<td>"Back to website" link in hero (overridable per-request via <code>?back=&lt;url&gt;</code>)</td>
-</tr>
-<tr>
-<td><code>AUTH_TERMS_URL</code></td>
-<td><code>''</code></td>
-<td>Terms link on register page</td>
-</tr>
-<tr>
-<td><code>AUTH_CUSTOM_CSS</code></td>
-<td><code>''</code></td>
-<td>Inline CSS block injected after the theme stylesheet</td>
-</tr>
-<tr>
-<td><code>AUTH_CUSTOM_CSS_URL</code></td>
-<td><code>''</code></td>
-<td>URL to an external CSS file loaded after the theme</td>
-</tr>
-</tbody>
-</table>
-<h3 id="features-db-backed">Features (DB-backed)<a class="headerlink" href="#features-db-backed" title="Permanent link">&para;</a></h3>
-<table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>AUTH_ENABLE_GOOGLE</code></td>
-<td><code>False</code></td>
-<td>Show Google OAuth button</td>
-</tr>
-<tr>
-<td><code>AUTH_ENABLE_APPLE</code></td>
-<td><code>False</code></td>
-<td>Show Apple OAuth button</td>
-</tr>
-<tr>
-<td><code>AUTH_ENABLE_PASSKEYS</code></td>
-<td><code>False</code></td>
-<td>Show Passkey button</td>
-</tr>
-</tbody>
-</table>
-<h3 id="routing-db-backed">Routing (DB-backed)<a class="headerlink" href="#routing-db-backed" title="Permanent link">&para;</a></h3>
-<table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>AUTH_API_BASE</code></td>
-<td><code>''</code></td>
-<td>API host (empty = same origin)</td>
-</tr>
-<tr>
-<td><code>AUTH_SUCCESS_REDIRECT</code></td>
-<td><code>'/'</code></td>
-<td>Redirect target after login</td>
-</tr>
-<tr>
-<td><code>AUTH_LAYOUT</code></td>
-<td><code>'card'</code></td>
-<td><code>'card'</code> or <code>'fullscreen'</code></td>
-</tr>
-</tbody>
-</table>
-<p><strong>Per-request override params</strong> — <code>?redirect=</code>, <code>?next=</code>, <code>?returnTo=</code>, and <code>?back=</code> are read from <code>location.search</code> on the auth/register page (the first three override <code>AUTH_SUCCESS_REDIRECT</code>; <code>?back=</code> overrides <code>AUTH_BACK_TO_WEBSITE_URL</code>). They are also preserved across the login↔register switcher links, so a user who lands at <code>/auth?redirect=/dashboard</code> and clicks "Create one" continues to <code>/register?redirect=/dashboard</code>. Other query params (OAuth <code>code</code>/<code>state</code>, magic-link <code>token</code>, reset tokens) are intentionally NOT forwarded to avoid mis-triggering logic on the receiving page.</p>
-<h3 id="configurable-registration-form">Configurable Registration Form<a class="headerlink" href="#configurable-registration-form" title="Permanent link">&para;</a></h3>
-<p><code>AUTH_REGISTER_FIELDS</code> drives both the bouncer-rendered register form and the server-side validator. Group-scoped — different groups can have different signup shapes.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># settings.py — phone-as-identity project example</span>
-<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="n">AUTH_REGISTER_FIELDS</span> <span class="o">=</span> <span class="p">[</span>
-<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>    <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;first_name&quot;</span><span class="p">,</span> <span class="s2">&quot;required&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
-<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>    <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;last_name&quot;</span><span class="p">,</span>  <span class="s2">&quot;required&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
-<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>    <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;phone&quot;</span><span class="p">,</span>      <span class="s2">&quot;required&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span> <span class="s2">&quot;verify&quot;</span><span class="p">:</span> <span class="s2">&quot;sms&quot;</span><span class="p">},</span>
-<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>    <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;dob&quot;</span><span class="p">,</span>        <span class="s2">&quot;required&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
-<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>    <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;password&quot;</span><span class="p">,</span>   <span class="s2">&quot;required&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
-<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="p">]</span>
-<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="n">AUTH_MIN_AGE_YEARS</span> <span class="o">=</span> <span class="mi">13</span>   <span class="c1"># optional age gate when dob is required</span>
+<h2 id="configurable-registration-form">Configurable Registration Form<a class="headerlink" href="#configurable-registration-form" title="Permanent link">&para;</a></h2>
+<p><code>registration.fields</code> drives both the bouncer-rendered register form and the
+server-side validator. See <a href="../auth_config/">Auth Config — registration</a>
+for the schema and <code>register_schema.py</code> for the field resolution logic.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># Phone-as-identity example via AUTH_CONFIG</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="n">AUTH_CONFIG</span> <span class="o">=</span> <span class="p">{</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>    <span class="s2">&quot;registration&quot;</span><span class="p">:</span> <span class="p">{</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>        <span class="s2">&quot;fields&quot;</span><span class="p">:</span> <span class="p">[</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>            <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;first_name&quot;</span><span class="p">,</span> <span class="s2">&quot;required&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>            <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;last_name&quot;</span><span class="p">,</span>  <span class="s2">&quot;required&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>            <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;phone&quot;</span><span class="p">,</span>      <span class="s2">&quot;required&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span> <span class="s2">&quot;verify&quot;</span><span class="p">:</span> <span class="s2">&quot;sms&quot;</span><span class="p">},</span>
+<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a>            <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;dob&quot;</span><span class="p">,</span>        <span class="s2">&quot;required&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
+<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a>            <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;password&quot;</span><span class="p">,</span>   <span class="s2">&quot;required&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
+<a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a>        <span class="p">],</span>
+<a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a>        <span class="s2">&quot;identity_field&quot;</span><span class="p">:</span> <span class="s2">&quot;phone&quot;</span><span class="p">,</span>
+<a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a>        <span class="s2">&quot;min_age&quot;</span><span class="p">:</span> <span class="mi">13</span><span class="p">,</span>
+<a id="__codelineno-9-13" name="__codelineno-9-13" href="#__codelineno-9-13"></a>    <span class="p">}</span>
+<a id="__codelineno-9-14" name="__codelineno-9-14" href="#__codelineno-9-14"></a><span class="p">}</span>
 </code></pre></div>
-<p>Canonical field set: <code>first_name</code>, <code>last_name</code>, <code>email</code>, <code>phone</code>, <code>dob</code>, <code>password</code>. Unknown names are silently dropped from the config — consumer-specific keys keep using <code>REGISTRATION_EXTRA_FIELDS</code>. Password is always required (passwordless registration is a separate flow and out of scope).</p>
-<p><strong>Identity field</strong> — auto-picked: <code>email</code> if required + present, else <code>phone</code>. <code>AUTH_REGISTER_IDENTITY_FIELD = "phone"</code> or <code>"email"</code> overrides explicitly. <code>User.username</code> is set to the identity value at create time (the existing <code>User.lookup_from_request(phone_as_username=True)</code> path then handles phone-based login transparently).</p>
-<p><strong>Phone verification (verify-then-register)</strong> — when a field has <code>verify: "sms"</code>, the rendered form switches to a <strong>three-step state machine</strong> (phone-first flow):</p>
-<ol>
-<li><strong>Step 1 — Identity</strong>: phone input only. Submit calls <code>POST /api/auth/phone/register/start</code> and advances.</li>
-<li><strong>Step 2 — Verify</strong>: 6-digit code input, "Resend code" (30s client-side cooldown) and "Back" links. Submit calls <code>POST /api/auth/phone/register/verify</code> and stashes the <code>verified_phone_token</code>.</li>
-<li><strong>Step 3 — Profile</strong>: remaining schema fields (first/last name, DOB, password). Final submit POSTs <code>/api/auth/register</code> with the <code>verified_phone_token</code>.</li>
-</ol>
-<p>The Back link on Step 2 clears the session token but keeps the phone value pre-filled. When the schema has no SMS-verify phone, the form falls back to a single-pane layout (single submit, no step UI).</p>
-<p><strong>DOB collection</strong> — when <code>dob</code> is in the schema, the form renders three auto-advancing numeric segments (<code>MM</code> <code>DD</code> <code>YYYY</code>) with <code>inputmode="numeric"</code> for mobile keyboards. Paste of <code>MM/DD/YYYY</code>, <code>MM-DD-YYYY</code>, or ISO <code>YYYY-MM-DD</code> into any segment distributes across the three. Submits as ISO <code>yyyy-mm-dd</code> to the server.</p>
-<p><strong>Dev-mode bypass for SMS-less testing</strong>:</p>
+<p><strong>Dev-mode SMS bypass:</strong></p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="n">AUTH_PHONE_VERIFY_DEV_BYPASS_CODE</span> <span class="o">=</span> <span class="s2">&quot;000000&quot;</span>   <span class="c1"># DO NOT SET IN PROD</span>
 </code></pre></div>
-<p>When set, <code>POST /api/auth/phone/register/verify</code> accepts the fixed bypass code in addition to the real generated code. The verified-phone token still binds to the session's phone — bypass does not let an attacker mint a token for an arbitrary phone. App startup logs a warning when the setting is non-empty so misconfiguration is visible in prod logs.</p>
-<p>Two endpoints back the flow:</p>
+<p>Two endpoints back the phone-verify flow:</p>
 <table>
 <thead>
 <tr>
@@ -4559,18 +4423,27 @@ not hidden by JS).</p>
 <tr>
 <td>POST</td>
 <td><code>/api/auth/phone/register/start</code></td>
-<td>Body <code>{phone}</code> → <code>{session_token, expires_in}</code>. Generates a 6-digit code, sends via <code>phonehub.send_sms</code>.</td>
+<td>Body <code>{phone}</code> → <code>{session_token, expires_in}</code></td>
 </tr>
 <tr>
 <td>POST</td>
 <td><code>/api/auth/phone/register/verify</code></td>
-<td>Body <code>{session_token, code}</code> → <code>{verified_phone_token, expires_in}</code>.</td>
+<td>Body <code>{session_token, code}</code> → <code>{verified_phone_token, expires_in}</code></td>
 </tr>
 </tbody>
 </table>
-<p>Tokens are Redis-backed (<code>phone:register:session:*</code> and <code>phone:register:verified:*</code>), single-use, and TTL-bound (<code>PHONE_REGISTER_SESSION_TTL</code> / <code>PHONE_REGISTER_VERIFIED_TTL</code>, both default 600s). The endpoints are rate-limited per IP. No User row is created until phone ownership is proven — this is intentional spam control on a scarce resource.</p>
-<p><strong>Forgot-password dispatch</strong> — <code>POST /api/auth/forgot</code> now routes the 6-digit reset code via SMS automatically when the matched user has no email on file, or when <code>channel: "sms"</code> is supplied explicitly. The bouncer's login page forgot-password subview switches to a phone-input UI when <code>identity_field == "phone"</code>. Existing email flows are unchanged.</p>
-<h3 id="bouncer-gate-file-based-via-settingsget_static">Bouncer gate (file-based via <code>settings.get_static()</code>)<a class="headerlink" href="#bouncer-gate-file-based-via-settingsget_static" title="Permanent link">&para;</a></h3>
+<hr />
+<h2 id="multi-tenant-group-resolution">Multi-Tenant: Group Resolution<a class="headerlink" href="#multi-tenant-group-resolution" title="Permanent link">&para;</a></h2>
+<p>The hosted pages resolve the operator group from:
+1. The request hostname matching a <code>Group.auth_domain</code>, or
+2. The <code>?group_uuid=&lt;uuid&gt;</code> query parameter.</p>
+<p>The resolved group's <code>uuid</code> is emitted as <code>window._matConfig.groupUuid</code>. Submit
+handlers in <code>register.html</code> and <code>login.html</code> include it in the POST payload
+automatically. See <a href="../auth_config/">auth_config.md</a> for how the config
+resolves down the parent chain.</p>
+<hr />
+<h2 id="bouncer-gate">Bouncer Gate<a class="headerlink" href="#bouncer-gate" title="Permanent link">&para;</a></h2>
+<p>See <a href="../bouncer/">bouncer.md</a> for the full bouncer settings reference.</p>
 <table>
 <thead>
 <tr>
@@ -4591,26 +4464,17 @@ not hidden by JS).</p>
 <td>Real registration page URL path</td>
 </tr>
 <tr>
+<td><code>BOUNCER_PASSKEY_PATH</code></td>
+<td><code>'passkey'</code></td>
+<td>Passkey enrollment page URL path</td>
+</tr>
+<tr>
 <td><code>BOUNCER_CONTACT_PATH</code></td>
 <td><code>'contact'</code></td>
 <td>Bouncer-gated contact/support page URL path</td>
 </tr>
 </tbody>
 </table>
-<p>See <a href="../bouncer/">bouncer.md</a> for the full bouncer settings reference.</p>
-<hr />
-<h2 id="multi-tenant-forwarding-group_uuid-from-the-hosted-forms">Multi-Tenant: Forwarding <code>group_uuid</code> From the Hosted Forms<a class="headerlink" href="#multi-tenant-forwarding-group_uuid-from-the-hosted-forms" title="Permanent link">&para;</a></h2>
-<p>The hosted register and login pages resolve the operator group in <code>on_register_page</code> / <code>on_login_page</code> from either:</p>
-<ol>
-<li>The request hostname matching a <code>Group.auth_domain</code>, or</li>
-<li>The <code>?group_uuid=&lt;uuid&gt;</code> query parameter (the framework dispatcher reserves <code>?group=</code> for integer IDs and rejects UUID values upstream, so the bouncer's public UUID slot is <code>group_uuid</code>).</li>
-</ol>
-<p>The resolved group's <code>uuid</code> is plumbed into <code>_auth_context()</code> and emitted by <code>auth_base.html</code> as <code>window._matConfig.groupUuid</code>. The submit handlers in <code>register.html</code> and <code>login.html</code> then add it to the POST payload automatically:</p>
-<ul>
-<li><code>register.html</code> adds <code>payload.group_uuid = cfg.groupUuid</code> before calling <code>MojoAuth.register(payload)</code>. This means deployments with <code>REQUIRE_GROUP_ON_REGISTRATION = True</code> are satisfied from the hosted page — no custom front-end is required.</li>
-<li><code>login.html</code> calls <code>MojoAuth.login(u, p, { group_uuid: cfg.groupUuid })</code> so <code>request.group</code> middleware and <code>USER_LOGIN_HANDLER</code> receive the operator on password logins.</li>
-</ul>
-<p>When <code>_matConfig.groupUuid</code> is empty (single-tenant deployment), neither form adds the key — payloads are identical to pre-multi-tenant behavior. Hand-crafted invalid <code>group_uuid</code> values reaching the POST follow current middleware behavior: on register the lookup is strict and returns 400; on login <code>request.group</code> falls back to other resolvers.</p>
 
 
 
