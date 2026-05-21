@@ -3755,6 +3755,34 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#ownership-and-scoping" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ownership and Scoping
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Ownership and Scoping">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#system-scoped-creation-is-superuser-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        System-scoped creation is superuser-only
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#getting-the-right-filemanager" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3902,9 +3930,37 @@
 <h2 id="key-concepts">Key Concepts<a class="headerlink" href="#key-concepts" title="Permanent link">&para;</a></h2>
 <ul>
 <li>One or more <code>FileManager</code> instances exist per deployment</li>
-<li>A <code>FileManager</code> can be scoped to a <code>Group</code> (organization-specific storage) or be a system-wide default</li>
+<li>A <code>FileManager</code> can be scoped to a <code>User</code>, a <code>Group</code>, or neither (system-wide default)</li>
 <li>Backends are pluggable: local, S3, and others</li>
 </ul>
+<h2 id="ownership-and-scoping">Ownership and Scoping<a class="headerlink" href="#ownership-and-scoping" title="Permanent link">&para;</a></h2>
+<p><code>FileManager</code> supports three scopes: user-owned, group-scoped, and system-wide. Because of this, <code>FileManager.RestMeta</code> sets <code>CREATED_BY_OWNER_FIELD = None</code> — the framework's create-time auto-stamping of the <code>user</code> field is <strong>disabled</strong>.</p>
+<p>Behavior on REST create (<code>POST /api/fileman/manager</code>):</p>
+<table>
+<thead>
+<tr>
+<th>Request body</th>
+<th><code>user</code> on created record</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>user</code> omitted</td>
+<td><code>None</code> — group- or system-scoped manager</td>
+</tr>
+<tr>
+<td><code>user: null</code></td>
+<td><code>None</code></td>
+</tr>
+<tr>
+<td><code>user: &lt;id&gt;</code></td>
+<td>That user's id — user-scoped manager</td>
+</tr>
+</tbody>
+</table>
+<p><code>group</code> auto-fill from <code>request.group</code> is <strong>not</strong> affected and works normally.</p>
+<h3 id="system-scoped-creation-is-superuser-only">System-scoped creation is superuser-only<a class="headerlink" href="#system-scoped-creation-is-superuser-only" title="Permanent link">&para;</a></h3>
+<p>A manager created with <strong>no <code>user</code> and no <code>group</code></strong> is system-scoped — it is eligible to become the system default that <code>get_for_user</code> / <code>get_for_group</code> derive every other manager from. <code>FileManager.on_rest_pre_save</code> rejects this via REST unless the requester is a superuser, raising <code>PermissionDeniedException</code> (HTTP 403). Direct ORM creation (<code>FileManager.objects.create(...)</code>, bootstrap code, the internal <code>get_for_*</code> provisioning helpers) does not go through <code>on_rest_pre_save</code> and bypasses this guard.</p>
 <h2 id="getting-the-right-filemanager">Getting the Right FileManager<a class="headerlink" href="#getting-the-right-filemanager" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.fileman.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">FileManager</span>
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>
