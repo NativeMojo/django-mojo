@@ -1,6 +1,6 @@
 ## v1.2.21 - (current)
 
-**fileman** — `FileManager` REST create no longer auto-stamps the `user` field with the caller. `FileManager.RestMeta` now sets `CREATED_BY_OWNER_FIELD = None`, so a create request that omits `user` (or sends `user: null`) leaves the owner unset — required for creating group-scoped and system-scoped managers via REST. An explicit `user` in the request body is still honored, and `group` auto-fill from `request.group` is unchanged.
+**fileman** — `FileManager` REST create no longer auto-stamps the `user` field with the caller. `FileManager.RestMeta` now sets `CREATED_BY_OWNER_FIELD = None`, so a create request that omits `user` (or sends `user: null`) leaves the owner unset — required for creating group-scoped managers via REST. An explicit `user` in the request body is still honored, and `group` auto-fill from `request.group` is unchanged. To close the privilege gap this opens, `on_rest_pre_save` now rejects REST creation of a *system-scoped* manager (`user` and `group` both unset) with a 403 unless the requester is a superuser; direct ORM creation is unaffected.
 
 ## v1.2.22 - May 20, 2026
 

@@ -7,8 +7,26 @@
 ## Key Concepts
 
 - One or more `FileManager` instances exist per deployment
-- A `FileManager` can be scoped to a `Group` (organization-specific storage) or be a system-wide default
+- A `FileManager` can be scoped to a `User`, a `Group`, or neither (system-wide default)
 - Backends are pluggable: local, S3, and others
+
+## Ownership and Scoping
+
+`FileManager` supports three scopes: user-owned, group-scoped, and system-wide. Because of this, `FileManager.RestMeta` sets `CREATED_BY_OWNER_FIELD = None` — the framework's create-time auto-stamping of the `user` field is **disabled**.
+
+Behavior on REST create (`POST /api/fileman/manager`):
+
+| Request body | `user` on created record |
+|---|---|
+| `user` omitted | `None` — group- or system-scoped manager |
+| `user: null` | `None` |
+| `user: <id>` | That user's id — user-scoped manager |
+
+`group` auto-fill from `request.group` is **not** affected and works normally.
+
+### System-scoped creation is superuser-only
+
+A manager created with **no `user` and no `group`** is system-scoped — it is eligible to become the system default that `get_for_user` / `get_for_group` derive every other manager from. `FileManager.on_rest_pre_save` rejects this via REST unless the requester is a superuser, raising `PermissionDeniedException` (HTTP 403). Direct ORM creation (`FileManager.objects.create(...)`, bootstrap code, the internal `get_for_*` provisioning helpers) does not go through `on_rest_pre_save` and bypasses this guard.
 
 ## Getting the Right FileManager
 

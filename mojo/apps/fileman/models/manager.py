@@ -5,6 +5,7 @@ from django.db import models
 from mojo.models import MojoModel, MojoSecrets
 from urllib.parse import urlparse
 from mojo.helpers.settings import settings
+from mojo import errors as me
 
 class FileManager(MojoSecrets, MojoModel):
     """
@@ -344,6 +345,19 @@ class FileManager(MojoSecrets, MojoModel):
         self._update_default()
 
     def on_rest_pre_save(self, changed_fields, created):
+        if created and self.user is None and self.group is None:
+            # A manager with no user and no group is system-scoped — it can
+            # become the system default that get_for_user/get_for_group derive
+            # every other manager from. Restrict REST creation to superusers;
+            # direct ORM creation (bootstrap, get_for_*) bypasses this path.
+            actor = self.active_user
+            if actor is None or not getattr(actor, "is_superuser", False):
+                raise me.PermissionDeniedException(
+                    reason="Only superusers can create a system-scoped FileManager (user and group both unset)",
+                    model_name="FileManager",
+                    event_type="user_permission_denied",
+                    branch="fileman_system_scope_create",
+                )
         self._update_default()
         if not self.name:
             self.name = self.generate_name()
