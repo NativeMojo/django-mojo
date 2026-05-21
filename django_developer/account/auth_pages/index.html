@@ -3917,6 +3917,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#sms-code-autofill" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SMS code autofill
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#passkey-enrollment-page-passkey" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4364,10 +4375,16 @@ as absolute URLs and bypass the <code>/api/</code> prefix.</p>
 <li><code>magic</code> — send a one-click sign-in email</li>
 <li>Forgot password (code or link method; auto-routes via SMS when identity is phone)</li>
 <li>Reset code entry / set new password (from <code>?token=pr:...</code>)</li>
-<li>Session check on load (auto-redirect if already authenticated)</li>
-<li>OAuth callback handling (<code>?code=...&amp;state=...</code>)</li>
-<li>Magic link token handling (<code>?token=ml:...</code>)</li>
 </ul>
+<p>The page leads with the <strong>primary credential</strong>: when <code>password</code> is in
+<code>login.methods</code> the sign-in form is the landing view and every other method
+(SMS, passkey, Google, Apple) is a button below an "or continue with" divider.
+When <code>password</code> is <strong>not</strong> a method but <code>sms</code> is (a passwordless config), the
+page opens directly on the SMS phone-entry form, with passkey/OAuth as
+secondary buttons — so SMS login is never buried.
+- Session check on load (auto-redirect if already authenticated)
+- OAuth callback handling (<code>?code=...&amp;state=...</code>)
+- Magic link token handling (<code>?token=ml:...</code>)</p>
 <h3 id="registration-page-register">Registration page (<code>/register</code>)<a class="headerlink" href="#registration-page-register" title="Permanent link">&para;</a></h3>
 <ul>
 <li>Fields and identity field driven by <code>registration.fields</code> / <code>registration.identity_field</code></li>
@@ -4383,6 +4400,22 @@ as absolute URLs and bypass the <code>/api/</code> prefix.</p>
   SMS-code flow. Requires a <code>phone</code> field with <code>verify: "sms"</code> in the same
   schema. See <a href="../auth_config/#passwordless-registration">Auth Config — Passwordless Registration</a>.</li>
 </ul>
+<h3 id="sms-code-autofill">SMS code autofill<a class="headerlink" href="#sms-code-autofill" title="Permanent link">&para;</a></h3>
+<p>Every OTP text — the SMS-code login (<code>_send_otp</code>) and the registration
+phone-verify (<code>/auth/phone/register/start</code>) — is sent with an <strong>origin-bound
+one-time-code line</strong> appended:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>Your verification code is: 123456
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>@auth.example.com #123456
+</code></pre></div>
+<p>The <code>@host</code> is taken from the request's <code>Origin</code> header (falling back to
+<code>Host</code>), so it matches the page the user is on. This line is required by
+Android Chrome's WebOTP API and is used by iOS Security Code AutoFill too.</p>
+<p>The hosted login (SMS view) and registration (stepped verify) pages call the
+WebOTP API via a shared <code>_mat.watchOtp</code> helper — filling the code field, and
+submitting, the moment the SMS arrives. iOS has no WebOTP; it autofills from
+the keyboard suggestion bar via the code input's <code>autocomplete="one-time-code"</code>
+attribute. Both mechanisms require the page to be served over HTTPS.</p>
 <h3 id="passkey-enrollment-page-passkey">Passkey enrollment page (<code>/passkey</code>)<a class="headerlink" href="#passkey-enrollment-page-passkey" title="Permanent link">&para;</a></h3>
 <p>Not bouncer-gated. Themed by the resolved auth config. Reads the JWT from
 localStorage and runs the WebAuthn registration round-trip client-side. Used
@@ -4397,36 +4430,36 @@ absent, the "or continue with" divider is excluded entirely.</p>
 <p><code>registration.fields</code> drives both the bouncer-rendered register form and the
 server-side validator. See <a href="../auth_config/">Auth Config — registration</a>
 for the schema and <code>register_schema.py</code> for the field resolution logic.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># Phone-as-identity example via AUTH_CONFIG</span>
-<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="n">AUTH_CONFIG</span> <span class="o">=</span> <span class="p">{</span>
-<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>    <span class="s2">&quot;registration&quot;</span><span class="p">:</span> <span class="p">{</span>
-<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>        <span class="s2">&quot;fields&quot;</span><span class="p">:</span> <span class="p">[</span>
-<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>            <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;first_name&quot;</span><span class="p">,</span> <span class="s2">&quot;required&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
-<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>            <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;last_name&quot;</span><span class="p">,</span>  <span class="s2">&quot;required&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
-<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>            <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;phone&quot;</span><span class="p">,</span>      <span class="s2">&quot;required&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span> <span class="s2">&quot;verify&quot;</span><span class="p">:</span> <span class="s2">&quot;sms&quot;</span><span class="p">},</span>
-<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a>            <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;dob&quot;</span><span class="p">,</span>        <span class="s2">&quot;required&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
-<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a>            <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;password&quot;</span><span class="p">,</span>   <span class="s2">&quot;required&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
-<a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a>        <span class="p">],</span>
-<a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a>        <span class="s2">&quot;identity_field&quot;</span><span class="p">:</span> <span class="s2">&quot;phone&quot;</span><span class="p">,</span>
-<a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a>        <span class="s2">&quot;min_age&quot;</span><span class="p">:</span> <span class="mi">13</span><span class="p">,</span>
-<a id="__codelineno-9-13" name="__codelineno-9-13" href="#__codelineno-9-13"></a>    <span class="p">}</span>
-<a id="__codelineno-9-14" name="__codelineno-9-14" href="#__codelineno-9-14"></a><span class="p">}</span>
-</code></pre></div>
-<p>Omitting <code>password</code> from the field list makes registration <strong>passwordless</strong> — the account is created with an unusable password and the user signs in via SMS code. The schema must include a <code>phone</code> field with <code>verify: "sms"</code> for a passwordless config to be valid (enforced at config-write time and defensively on every registration request):</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># Passwordless registration — no password field</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># Phone-as-identity example via AUTH_CONFIG</span>
 <a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="n">AUTH_CONFIG</span> <span class="o">=</span> <span class="p">{</span>
 <a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>    <span class="s2">&quot;registration&quot;</span><span class="p">:</span> <span class="p">{</span>
 <a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>        <span class="s2">&quot;fields&quot;</span><span class="p">:</span> <span class="p">[</span>
 <a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>            <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;first_name&quot;</span><span class="p">,</span> <span class="s2">&quot;required&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
 <a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>            <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;last_name&quot;</span><span class="p">,</span>  <span class="s2">&quot;required&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
 <a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a>            <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;phone&quot;</span><span class="p">,</span>      <span class="s2">&quot;required&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span> <span class="s2">&quot;verify&quot;</span><span class="p">:</span> <span class="s2">&quot;sms&quot;</span><span class="p">},</span>
-<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a>        <span class="p">],</span>
-<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a>        <span class="s2">&quot;identity_field&quot;</span><span class="p">:</span> <span class="s2">&quot;phone&quot;</span><span class="p">,</span>
-<a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a>    <span class="p">}</span>
-<a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a><span class="p">}</span>
+<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a>            <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;dob&quot;</span><span class="p">,</span>        <span class="s2">&quot;required&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
+<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a>            <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;password&quot;</span><span class="p">,</span>   <span class="s2">&quot;required&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
+<a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a>        <span class="p">],</span>
+<a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a>        <span class="s2">&quot;identity_field&quot;</span><span class="p">:</span> <span class="s2">&quot;phone&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a>        <span class="s2">&quot;min_age&quot;</span><span class="p">:</span> <span class="mi">13</span><span class="p">,</span>
+<a id="__codelineno-10-13" name="__codelineno-10-13" href="#__codelineno-10-13"></a>    <span class="p">}</span>
+<a id="__codelineno-10-14" name="__codelineno-10-14" href="#__codelineno-10-14"></a><span class="p">}</span>
+</code></pre></div>
+<p>Omitting <code>password</code> from the field list makes registration <strong>passwordless</strong> — the account is created with an unusable password and the user signs in via SMS code. The schema must include a <code>phone</code> field with <code>verify: "sms"</code> for a passwordless config to be valid (enforced at config-write time and defensively on every registration request):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="c1"># Passwordless registration — no password field</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="n">AUTH_CONFIG</span> <span class="o">=</span> <span class="p">{</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>    <span class="s2">&quot;registration&quot;</span><span class="p">:</span> <span class="p">{</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>        <span class="s2">&quot;fields&quot;</span><span class="p">:</span> <span class="p">[</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>            <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;first_name&quot;</span><span class="p">,</span> <span class="s2">&quot;required&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>            <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;last_name&quot;</span><span class="p">,</span>  <span class="s2">&quot;required&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
+<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a>            <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;phone&quot;</span><span class="p">,</span>      <span class="s2">&quot;required&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span> <span class="s2">&quot;verify&quot;</span><span class="p">:</span> <span class="s2">&quot;sms&quot;</span><span class="p">},</span>
+<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a>        <span class="p">],</span>
+<a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a>        <span class="s2">&quot;identity_field&quot;</span><span class="p">:</span> <span class="s2">&quot;phone&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a>    <span class="p">}</span>
+<a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a><span class="p">}</span>
 </code></pre></div>
 <p><strong>Dev-mode SMS bypass:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="n">AUTH_PHONE_VERIFY_DEV_BYPASS_CODE</span> <span class="o">=</span> <span class="s2">&quot;000000&quot;</span>   <span class="c1"># DO NOT SET IN PROD</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="n">AUTH_PHONE_VERIFY_DEV_BYPASS_CODE</span> <span class="o">=</span> <span class="s2">&quot;000000&quot;</span>   <span class="c1"># DO NOT SET IN PROD</span>
 </code></pre></div>
 <p>Two endpoints back the phone-verify flow:</p>
 <table>

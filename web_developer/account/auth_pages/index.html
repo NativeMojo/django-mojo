@@ -3791,6 +3791,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Registration Page (/register)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#sms-code-autofill" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SMS code autofill
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -3949,6 +3966,11 @@ Default set: <code>password</code>, <code>sms</code>, <code>passkey</code>, <cod
 <li>Forgot password (code or link; auto-routes via SMS when identity is phone)</li>
 <li>Session check — auto-redirects if user is already authenticated</li>
 </ul>
+<p>When <code>password</code> is not among <code>login.methods</code> but <code>sms</code> is (a passwordless
+config), the page opens directly on the SMS phone-entry form rather than a
+sign-in form — so SMS sign-in is the first thing the user sees. With
+<code>password</code> present, the sign-in form leads and "Sign in with a code" is a
+button alongside passkey/Google/Apple.</p>
 <h3 id="url-parameters">URL Parameters<a class="headerlink" href="#url-parameters" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
@@ -4012,9 +4034,23 @@ without a usable password. The user signs in afterward using the SMS-code flow:<
 <li><code>POST /api/auth/sms/verify</code> with <code>{"phone_number": "&lt;phone&gt;", "code": "&lt;code&gt;"}</code> — returns JWT tokens on success.</li>
 </ol>
 <p>A passwordless schema always includes a <code>phone</code> field with <code>verify: "sms"</code> — you
-can confirm this by inspecting <code>registration.fields</code> from <code>GET /api/auth/config</code>.
+can confirm this by inspecting <code>registration.fields</code> from <code>GET /api/auth/config</code>.</p>
+<h3 id="sms-code-autofill">SMS code autofill<a class="headerlink" href="#sms-code-autofill" title="Permanent link">&para;</a></h3>
+<p>OTP texts (login and registration) include an origin-bound last line —
+<code>@&lt;your-domain&gt; #&lt;code&gt;</code> — so browsers can autofill the code. The hosted
+<code>/auth</code> and <code>/register</code> pages already handle this. If you build a custom
+code-entry UI:</p>
+<ul>
+<li>Put <code>autocomplete="one-time-code"</code> on the code <code>&lt;input&gt;</code> — iOS Safari
+  autofills from the keyboard suggestion bar.</li>
+<li>For Android Chrome, call the WebOTP API while the code step is visible:
+  <code>navigator.credentials.get({ otp: { transport: ['sms'] } })</code>, then fill the
+  field with the resolved <code>.code</code>.</li>
+<li>Both require an HTTPS page whose domain matches the <code>@host</code> in the SMS — the
+  server derives that host from your request's <code>Origin</code> header.
 Passwordless accounts may also enroll a passkey (if <code>registration.passkey_prompt</code>
-is enabled) as an additional login path.</p>
+is enabled) as an additional login path.</li>
+</ul>
 <p><strong>DOB field</strong> — three segmented numeric inputs (<code>MM</code> / <code>DD</code> / <code>YYYY</code>), mobile
 numeric keyboard, paste-aware (<code>MM/DD/YYYY</code>, <code>MM-DD-YYYY</code>, <code>YYYY-MM-DD</code>),
 submits as ISO <code>yyyy-mm-dd</code>.</p>
