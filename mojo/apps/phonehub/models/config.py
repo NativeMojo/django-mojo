@@ -1,4 +1,3 @@
-import requests
 from django.db import models
 from mojo.models import MojoModel, MojoSecrets
 
@@ -306,10 +305,22 @@ class PhoneConfig(MojoSecrets, MojoModel):
                 'details': str(e)
             }
 
-    def _test_mojo(self):
-        """Test the remote mojo SMS provider by validating the API key."""
-        from mojo.helpers.settings import settings
+    # E.164 test number — the remote's SMS.send() short-circuits any
+    # +1555 number locally (marks it is_test, never contacts a carrier),
+    # so test_connection exercises the real auth + send path with zero
+    # cost and no real message delivered.
+    _MOJO_TEST_NUMBER = '+15551234567'
 
+    def _test_mojo(self):
+        """Test the remote mojo SMS provider end-to-end.
+
+        Posts a send request for a +1555 test number to the remote's
+        /api/phonehub/sms/send endpoint. The remote short-circuits +1555
+        numbers without contacting a carrier, so this validates URL
+        reachability, the API key, and that the key carries the send
+        permission — the exact path a real send would take — without
+        delivering a real SMS.
+        """
         base_url = (self.mojo_remote_url or '').rstrip('/')
         api_key = self.get_mojo_api_key()
 
@@ -320,52 +331,37 @@ class PhoneConfig(MojoSecrets, MojoModel):
                 'error': 'missing_credentials'
             }
 
-        timeout = settings.get_static('SMS_REMOTE_TIMEOUT', 10)
-        url = f"{base_url}/api/account/me"
-        headers = {"Authorization": f"apikey {api_key}"}
+        from mojo.apps.phonehub.services import mojo_provider
+        resp = mojo_provider.send_sms(
+            body='phonehub connection test',
+            to_number=self._MOJO_TEST_NUMBER,
+            base_url=base_url,
+            api_key=api_key,
+        )
 
-        try:
-            response = requests.get(
-                url, headers=headers, timeout=timeout,
-                allow_redirects=False,
-            )
-        except requests.Timeout:
+        if resp.sent:
+            return {
+                'success': True,
+                'message': 'Mojo provider reachable and API key valid',
+                'remote_url': base_url
+            }
+
+        code = resp.code or 'connection_failed'
+        if code == 'timeout':
             return {
                 'success': False,
-                'message': f'Mojo provider test timed out after {timeout}s',
+                'message': 'Mojo provider test timed out',
                 'error': 'timeout'
             }
-        except Exception as e:
-            # Log the raw exception for operators but do NOT echo it back to
-            # the caller — `str(e)` from `requests` can carry the full URL,
-            # internal hostnames, or TLS error details that should not surface
-            # in REST responses.
-            from mojo.helpers import logit
-            logit.warning("[phonehub] mojo provider test_connection error: %s", e)
+        if code in ('http_401', 'http_403'):
             return {
                 'success': False,
-                'message': 'Mojo provider connection failed (see logs)',
-                'error': 'connection_failed'
+                'message': 'Mojo provider rejected the API key '
+                           '(check the key and its send_sms permission)',
+                'error': 'invalid_credentials'
             }
-
-        if response.status_code in (401, 403):
-            return {
-                'success': False,
-                'message': 'Mojo provider rejected the API key',
-                'error': 'invalid_credentials',
-                'status_code': response.status_code
-            }
-
-        if response.status_code >= 400:
-            return {
-                'success': False,
-                'message': f'Mojo provider returned HTTP {response.status_code}',
-                'error': 'connection_failed',
-                'status_code': response.status_code
-            }
-
         return {
-            'success': True,
-            'message': 'Mojo provider reachable and API key valid',
-            'remote_url': base_url
+            'success': False,
+            'message': resp.error or 'Mojo provider connection failed',
+            'error': 'connection_failed'
         }

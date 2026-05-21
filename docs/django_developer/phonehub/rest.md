@@ -228,7 +228,7 @@ Leaving a credential key out of the body = no change. Setting any of these keys 
 
 #### Test the configured provider — `POST /api/phonehub/config/<id>` with `test_connection`
 
-Per-instance action that runs the per-provider connectivity check (`_test_twilio` / `_test_aws` / `_test_mojo`) and returns the result inline. Used by the admin portal's "Test connection" button.
+Per-instance action that runs the per-provider connectivity check (`_test_twilio` / `_test_aws` / `_test_mojo`) and returns the result inline. Used by the admin portal's "Test connection" button. For the `mojo` provider the check POSTs a `+1555` test-number send to the remote's `/api/phonehub/sms/send` — the remote short-circuits `+1555` numbers locally, so no real SMS is delivered, but the full auth + send path is exercised.
 
 ```http
 POST /api/phonehub/config/<id>

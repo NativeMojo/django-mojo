@@ -131,10 +131,27 @@ def send_sms(body, to_number, from_number=None, base_url=None, api_key=None, tim
         data = {}
 
     remote_id = data.get('provider_message_id') or data.get('id')
+    remote_status = data.get('status')
+
+    # The outer `status: true` only means the HTTP request was accepted —
+    # the remote still creates an SMS row and may mark it failed (e.g. its
+    # own provider rejected the number). Treat a failed/undelivered SMS as
+    # a send failure so the local row is not misrecorded as sent.
+    if remote_status in ('failed', 'undelivered'):
+        return objict({
+            'sent': False,
+            'id': str(remote_id) if remote_id is not None else None,
+            'status': remote_status,
+            'code': 'remote_failed',
+            'error': data.get('error_message') or 'Remote marked the SMS failed',
+            'remote': data,
+            'from_number': data.get('from_number'),
+        })
+
     return objict({
         'sent': True,
         'id': str(remote_id) if remote_id is not None else None,
-        'status': data.get('status'),
+        'status': remote_status,
         'code': None,
         'error': None,
         'remote': data,

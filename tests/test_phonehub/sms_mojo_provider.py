@@ -151,6 +151,46 @@ def test_send_mojo_provider_http_401(opts):
 
 
 @th.django_unit_test()
+def test_send_mojo_provider_remote_marks_sms_failed(opts):
+    """
+    Remote returns HTTP 200 with outer status=true but the SMS row it
+    created is status='failed' (its own carrier rejected the number).
+    The local row must be marked failed too — NOT recorded as sent just
+    because the HTTP request succeeded.
+    """
+    from mojo.apps.account.models import Group
+    from mojo.apps.phonehub import send_sms
+
+    group = Group.objects.get(pk=opts.group.pk)
+
+    fake_resp = _mock_post_response(
+        status_code=200,
+        body={
+            "status": True,
+            "data": {
+                "id": 555,
+                "status": "failed",
+                "error_message": "Carrier rejected destination number",
+            },
+        },
+    )
+    with mock.patch(
+        "mojo.apps.phonehub.services.mojo_provider.requests.post",
+        return_value=fake_resp,
+    ):
+        sms = send_sms("+14155551240", "test_sms_mojo:remote_failed", group=group)
+
+    assert sms.status == "failed", (
+        f"local row must be failed when the remote SMS is failed, "
+        f"got {sms.status!r}"
+    )
+    assert sms.error_code == "remote_failed", (
+        f"expected error_code='remote_failed', got {sms.error_code!r}"
+    )
+    assert sms.error_message, "error_message must carry the remote failure reason"
+
+
+@th.django_unit_test()
 def test_send_mojo_provider_timeout(opts):
     """requests.Timeout → row marked failed with error_code='timeout'."""
     from mojo.apps.account.models import Group
@@ -317,29 +357,41 @@ def test_mojo_api_key_secret_roundtrip(opts):
 
 @th.django_unit_test()
 def test_phone_config_test_connection_mojo(opts):
-    """PhoneConfig.test_connection() mojo branch — success on 200, invalid_credentials on 401."""
+    """PhoneConfig.test_connection() mojo branch.
+
+    test_connection probes the remote by POSTing a +1555 test-number send
+    to /api/phonehub/sms/send (the remote short-circuits +1555 locally, so
+    no real SMS goes out). Success when the remote accepts the probe;
+    invalid_credentials on 401/403; missing_credentials short-circuits
+    with no HTTP call.
+    """
     from mojo.apps.phonehub.models import PhoneConfig
 
     cfg = PhoneConfig.objects.get(pk=opts.config_id)
 
-    # Success path
-    fake_ok = mock.MagicMock()
-    fake_ok.status_code = 200
+    # Success path — remote short-circuits the +1555 probe and echoes a sent SMS
+    ok_resp = _mock_post_response(
+        status_code=200,
+        body={"status": True, "data": {
+            "id": 1, "provider_message_id": "test+15551234567", "status": "sent",
+        }},
+    )
     with mock.patch(
-        "mojo.apps.phonehub.models.config.requests.get",
-        return_value=fake_ok,
+        "mojo.apps.phonehub.services.mojo_provider.requests.post",
+        return_value=ok_resp,
     ):
         result = cfg.test_connection()
     assert result["success"] is True, (
-        f"test_connection should succeed on 200, got {result!r}"
+        f"test_connection should succeed when the remote accepts the probe, "
+        f"got {result!r}"
     )
 
-    # 401 / invalid credentials
-    fake_unauthed = mock.MagicMock()
-    fake_unauthed.status_code = 401
+    # 401 → invalid credentials
+    unauth_resp = _mock_post_response(status_code=401)
+    unauth_resp.text = '{"error": "invalid api key"}'
     with mock.patch(
-        "mojo.apps.phonehub.models.config.requests.get",
-        return_value=fake_unauthed,
+        "mojo.apps.phonehub.services.mojo_provider.requests.post",
+        return_value=unauth_resp,
     ):
         result = cfg.test_connection()
     assert result["success"] is False, (
@@ -356,8 +408,8 @@ def test_phone_config_test_connection_mojo(opts):
     )
     # Note: not saving — we only need test_connection() to read instance state.
     with mock.patch(
-        "mojo.apps.phonehub.models.config.requests.get",
-    ) as m_get:
+        "mojo.apps.phonehub.services.mojo_provider.requests.post",
+    ) as m_post:
         result = cfg2.test_connection()
     assert result["success"] is False, (
         f"test_connection must fail when api key missing, got {result!r}"
@@ -365,8 +417,8 @@ def test_phone_config_test_connection_mojo(opts):
     assert result["error"] == "missing_credentials", (
         f"expected error='missing_credentials', got {result.get('error')!r}"
     )
-    assert not m_get.called, (
-        "test_connection must NOT call requests.get when credentials are missing"
+    assert not m_post.called, (
+        "test_connection must NOT make an HTTP call when credentials are missing"
     )
 
 
@@ -417,11 +469,15 @@ def test_on_action_test_connection_returns_test_dict(opts):
 
     cfg = PhoneConfig.objects.get(pk=opts.config_id)
 
-    fake_ok = mock.MagicMock()
-    fake_ok.status_code = 200
+    ok_resp = _mock_post_response(
+        status_code=200,
+        body={"status": True, "data": {
+            "id": 1, "provider_message_id": "test+15551234567", "status": "sent",
+        }},
+    )
     with mock.patch(
-        "mojo.apps.phonehub.models.config.requests.get",
-        return_value=fake_ok,
+        "mojo.apps.phonehub.services.mojo_provider.requests.post",
+        return_value=ok_resp,
     ):
         result = cfg.on_action_test_connection(1)
 
@@ -438,8 +494,8 @@ def test_on_action_test_connection_returns_test_dict(opts):
     from testit.helpers import get_mock_request
     request = get_mock_request()
     with mock.patch(
-        "mojo.apps.phonehub.models.config.requests.get",
-        return_value=fake_ok,
+        "mojo.apps.phonehub.services.mojo_provider.requests.post",
+        return_value=ok_resp,
     ):
         save_result = cfg.on_rest_save(request, {"test_connection": 1})
     assert isinstance(save_result, dict) and save_result.get("success") is True, (
