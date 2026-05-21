@@ -1,5 +1,10 @@
 ## v1.2.21 - (current)
 
+## v1.2.23 - May 21, 2026
+
+fix in cors for s3
+
+
 **fileman** — `FileManager` REST create no longer auto-stamps the `user` field with the caller. `FileManager.RestMeta` now sets `CREATED_BY_OWNER_FIELD = None`, so a create request that omits `user` (or sends `user: null`) leaves the owner unset — required for creating group-scoped managers via REST. An explicit `user` in the request body is still honored, and `group` auto-fill from `request.group` is unchanged. To close the privilege gap this opens, `on_rest_pre_save` now rejects REST creation of a *system-scoped* manager (`user` and `group` both unset) with a 403 unless the requester is a superuser; direct ORM creation is unaffected.
 
 **fileman** — `fix_cors` now resolves allowed origins from the manager's own `allowed_origins` field. Previously `_resolve_allowed_origins_from_value_or_settings` only checked the action payload and global Django settings (`CORS_ALLOWED_ORIGINS`, `ALLOWED_ORIGINS`, `FRONTEND_*`), so a manager configured via `set_allowed_origins` would fail `fix_cors` with "No allowed origins provided" while passing `check_cors` (which already consulted that field). The resolver still raises when no origins are configured anywhere — it does not silently fall back to a wildcard.
