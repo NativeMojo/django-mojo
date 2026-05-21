@@ -1,5 +1,10 @@
 ## v1.2.21 - (current)
 
+## v1.2.22 - May 20, 2026
+
+apikey test api
+
+
 ## v1.2.21 - May 20, 2026
 
 improved auth config
