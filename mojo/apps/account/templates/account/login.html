@@ -4,7 +4,7 @@
 
 {% block content %}
 <!-- VIEW: Sign In -->
-<div id="view-signin" class="mat-view is-active">
+<div id="view-signin" class="mat-view{% if login_primary == 'signin' %} is-active{% endif %}">
     {% if 'password' in login_methods %}
     <form id="form-signin" novalidate>
         <div class="mat-field">
@@ -27,36 +27,26 @@
     </form>
     {% endif %}
 
-    {% if 'google' in login_methods or 'apple' in login_methods or 'passkey' in login_methods %}
+    {% if login_primary == 'signin' %}
+    {% if 'sms' in login_methods or 'passkey' in login_methods or 'google' in login_methods or 'apple' in login_methods %}
     {% if 'password' in login_methods %}<div class="mat-divider">or continue with</div>{% endif %}
 
     <div class="mat-oauth-row">
-        {% if 'google' in login_methods %}
-        <button class="mat-btn mat-btn-outline" type="button" id="btn-google">
-            <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true"><path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v8.5h12.7c-.6 3-2.3 5.5-4.8 7.2v6h7.8c4.5-4.2 7.1-10.3 7.1-17.2z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.8-6c-2.1 1.4-4.8 2.3-8.1 2.3-6.2 0-11.5-4.2-13.4-9.9H2.6v6.2C6.5 42.7 14.7 48 24 48z"/><path fill="#FBBC05" d="M10.6 28.6c-.5-1.4-.7-2.9-.7-4.6s.3-3.2.7-4.6v-6.2H2.6C1 16.5 0 20.1 0 24s1 7.5 2.6 10.8l8-6.2z"/><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.5l6.8-6.8C35.9 2.1 30.5 0 24 0 14.7 0 6.5 5.3 2.6 13.2l8 6.2C12.5 13.7 17.8 9.5 24 9.5z"/></svg>
-            <span class="mat-btn-text">Google</span><span class="mat-spinner"></span>
+        {% if 'sms' in login_methods %}
+        <button class="mat-btn mat-btn-outline" type="button" id="btn-go-sms">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            <span class="mat-btn-text">Sign in with a code</span>
         </button>
         {% endif %}
-        {% if 'apple' in login_methods %}
-        <button class="mat-btn mat-btn-outline" type="button" id="btn-apple">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17.05 20.28c-.98.95-2.05.88-3.08.4-1.09-.5-2.08-.53-3.23 0-1.44.62-2.2.44-3.06-.4C3.79 16.17 4.36 9.04 8.93 8.78c1.27.07 2.16.72 2.91.77.99-.2 1.94-.78 3-.84 1.28-.08 2.24.38 2.87 1.14-2.63 1.56-2.01 4.98.45 5.94-.52 1.4-1.21 2.78-2.11 4.49zM12.03 8.7c-.13-2.28 1.73-4.2 3.93-4.4.31 2.56-2.31 4.5-3.93 4.4z"/></svg>
-            <span class="mat-btn-text">Apple</span><span class="mat-spinner"></span>
-        </button>
-        {% endif %}
-        {% if 'passkey' in login_methods %}
-        <button class="mat-btn mat-btn-outline" type="button" id="btn-passkey" style="display:none">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12C2 6.5 6.5 2 12 2a10 10 0 0 1 8 4"/><path d="M5 19.5C5.5 14 8 10 12 10c2.5 0 4.5 1.5 5 4"/><path d="M8 21c.5-3.5 2-6 4-6 1.5 0 2.5 1 2.5 3v4"/><path d="M17.5 15c1.5 1 2.5 3 2.5 6"/><path d="M22 12c0 3-1 5.5-2.5 7.5"/></svg>
-            <span class="mat-btn-text">Passkey</span><span class="mat-spinner"></span>
-        </button>
-        {% endif %}
+        {% include "account/_login_method_buttons.html" %}
     </div>
     {% endif %}
 
     <div class="mat-footer-links">
         {% if 'password' in login_methods %}<span class="mat-footer-link"><button type="button" id="link-forgot">Forgot password?</button></span>{% endif %}
-        {% if 'sms' in login_methods %}<span class="mat-footer-link"><button type="button" id="link-sms">Sign in with a code</button></span>{% endif %}
         {% if 'magic' in login_methods %}<span class="mat-footer-link"><button type="button" id="link-magic">Email me a link</button></span>{% endif %}
     </div>
+    {% endif %}
 </div>
 
 {% if 'password' in login_methods %}
@@ -147,11 +137,13 @@
 {% endif %}
 
 {% if 'sms' in login_methods %}
-<!-- VIEW: SMS Code Login (passwordless) -->
-<div id="view-sms" class="mat-view">
+<!-- VIEW: SMS Code Login — primary view when there is no password method -->
+<div id="view-sms" class="mat-view{% if login_primary == 'sms' %} is-active{% endif %}">
+    {% if login_primary != 'sms' %}
     <button class="mat-back" type="button" id="btn-back-signin-sms"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg> Back</button>
+    {% endif %}
     <p class="mat-view-title">Sign in with a code</p>
-    <p class="mat-view-sub" id="sms-help">We'll text a 6-digit code to your phone.</p>
+    <p class="mat-view-sub" id="sms-help">Enter your phone number and we'll text you a 6-digit code.</p>
     <form id="form-sms" novalidate>
         <div class="mat-field">
             <label class="mat-label" for="sms-phone">Phone Number</label>
@@ -165,6 +157,19 @@
         </div>
         <button class="mat-btn mat-btn-primary" type="submit" id="btn-sms"><span class="mat-btn-text">Send Code</span><span class="mat-spinner"></span></button>
     </form>
+    {% if login_primary == 'sms' %}
+    {% if 'passkey' in login_methods or 'google' in login_methods or 'apple' in login_methods %}
+    <div class="mat-divider">or</div>
+    <div class="mat-oauth-row">
+        {% include "account/_login_method_buttons.html" %}
+    </div>
+    {% endif %}
+    {% if 'magic' in login_methods %}
+    <div class="mat-footer-links">
+        <span class="mat-footer-link"><button type="button" id="link-magic">Email me a link</button></span>
+    </div>
+    {% endif %}
+    {% endif %}
 </div>
 {% endif %}
 
@@ -197,6 +202,10 @@
     var m = window._mat;
     var $ = m.$;
     var cfg = window._matConfig;
+
+    // The primary (landing) view — "sms" for passwordless configs, else
+    // "signin". Set server-side from login_methods; "Back" returns here.
+    var PRIMARY = "{{ login_primary|default:'signin'|escapejs }}";
 
     // Views are conditionally rendered server-side based on the group's
     // login_methods, so any of these may be absent — keep all access guarded.
@@ -287,11 +296,11 @@
 
     on("link-forgot", "click", function () { showView("forgot"); });
     on("link-magic", "click", function () { showView("magic"); });
-    on("link-sms", "click", function () { showView("sms"); });
-    on("btn-back-signin", "click", function () { showView("signin"); });
+    on("btn-go-sms", "click", function () { showView("sms"); });
+    on("btn-back-signin", "click", function () { showView(PRIMARY); });
     on("btn-back-forgot", "click", function () { showView("forgot"); });
-    on("btn-back-signin-magic", "click", function () { showView("signin"); });
-    on("btn-back-signin-sms", "click", function () { showView("signin"); });
+    on("btn-back-signin-magic", "click", function () { showView(PRIMARY); });
+    on("btn-back-signin-sms", "click", function () { showView(PRIMARY); });
 
     // ---- SMS-code login (passwordless) -----------------------------------
     var smsForm = $("form-sms");

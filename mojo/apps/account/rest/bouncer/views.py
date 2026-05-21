@@ -318,6 +318,11 @@ def _auth_context(request, group=None):
         'hero_subheadline': theme.hero_subheadline or 'Admin Portal',
         'back_to_website_url': theme.back_to_website_url or '',
         'login_methods': login_methods,
+        # Which view the login page opens on: the SMS phone-entry form when
+        # there is no password method (passwordless), else the sign-in form.
+        'login_primary': (
+            'sms' if ('password' not in login_methods and 'sms' in login_methods)
+            else 'signin'),
         'registration_methods': registration_methods,
         'registration_enabled': bool(cfg.registration.enabled),
         'passkey_prompt': cfg.registration.passkey_prompt or 'off',

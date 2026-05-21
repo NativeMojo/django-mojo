@@ -144,20 +144,33 @@ def _render_login(group=None):
     return render(request, 'account/login.html', ctx).content.decode('utf-8')
 
 
-@th.django_unit_test("login.html omits the password form for a password-disabled group")
-def test_login_html_no_password_field(opts):
+@th.django_unit_test("login.html opens on the SMS view for a passwordless (no-password) group")
+def test_login_html_passwordless_lands_on_sms(opts):
     html = _render_login(group=opts.group_a)
     assert_true('id="signin-password"' not in html,
                 "password input must NOT render when password is disabled for the group")
     assert_true('id="view-sms"' in html,
                 "the SMS-code login view must render when sms is an enabled method")
+    # With no password method, the SMS phone-entry view is the active landing.
+    assert_true('id="view-sms" class="mat-view is-active"' in html,
+                "with no password method the login page must open directly on "
+                "the SMS phone-entry view (is-active)")
+    assert_true('id="view-signin" class="mat-view is-active"' not in html,
+                "the sign-in form must NOT be the active view for a passwordless config")
 
 
-@th.django_unit_test("login.html renders the password form for the default config (regression)")
-def test_login_html_default_has_password(opts):
+@th.django_unit_test("login.html opens on the sign-in form and offers SMS as a button (default config)")
+def test_login_html_default_signin_primary(opts):
     html = _render_login(group=None)
     assert_true('id="signin-password"' in html,
                 "default config must still render the password input (regression guard)")
+    assert_true('id="view-signin" class="mat-view is-active"' in html,
+                "default config must open on the sign-in form")
+    assert_true('id="btn-go-sms"' in html,
+                "SMS login must be offered as a proper button (btn-go-sms), not a "
+                "footer link, when sms is among the login methods")
+    assert_true('id="link-sms"' not in html,
+                "the old footer 'link-sms' must be gone — SMS is now a real button")
 
 
 # ---------------------------------------------------------------------------
