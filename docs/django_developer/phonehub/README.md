@@ -155,14 +155,14 @@ Configure a deployment to send SMS via another django-mojo instance:
 
 **On the remote (provider) mojo:**
 1. Configure Twilio (or AWS) normally — this mojo does the actual sending.
-2. Create an `account.ApiKey` for the caller group with at least `send_sms` and `comms` permissions:
+2. Create an `account.ApiKey` for the caller group. `POST /api/phonehub/sms/send` checks its permissions with OR logic, so the key needs **either `send_sms` or `comms`** — grant just `send_sms` for least privilege:
 
    ```python
    from mojo.apps.account.models import ApiKey
    api_key, raw_token = ApiKey.create_for_group(
        group=caller_group,
        name="downstream-mojo",
-       permissions={"send_sms": True, "comms": True},
+       permissions={"send_sms": True},
    )
    # Hand `raw_token` to the caller — it cannot be retrieved later.
    ```
