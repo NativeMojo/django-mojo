@@ -4090,7 +4090,7 @@
 </code></pre></div></p>
 <p>On failure: <code>status</code> will be <code>"failed"</code> and <code>error_message</code> will contain the provider error.</p>
 <blockquote>
-<p><strong>Provider-to-provider use:</strong> This same endpoint doubles as the integration surface for the <code>mojo</code> SMS provider. A downstream django-mojo instance configured with <code>PhoneConfig.provider="mojo"</code> authenticates here using an <code>account.ApiKey</code> (<code>Authorization: apikey &lt;token&gt;</code>) and forwards the user's send request. The api key must grant <code>send_sms</code> and <code>comms</code>. See <a href="../#mojo-remote-sms-provider">README — Mojo Remote SMS Provider</a> for the full setup.</p>
+<p><strong>Provider-to-provider use:</strong> This same endpoint doubles as the integration surface for the <code>mojo</code> SMS provider. A downstream django-mojo instance configured with <code>PhoneConfig.provider="mojo"</code> authenticates here using an <code>account.ApiKey</code> (<code>Authorization: apikey &lt;token&gt;</code>) and forwards the user's send request. <code>requires_perms</code> uses OR logic, so the api key needs <strong>either <code>send_sms</code> or <code>comms</code></strong> — granting just <code>send_sms</code> is the least-privilege choice. See <a href="../#mojo-remote-sms-provider">README — Mojo Remote SMS Provider</a> for the full setup.</p>
 </blockquote>
 <hr />
 <h3 id="twilio-inbound-webhook-post-apiphonehubsmswebhooktwilio">Twilio Inbound Webhook — <code>POST /api/phonehub/sms/webhook/twilio</code><a class="headerlink" href="#twilio-inbound-webhook-post-apiphonehubsmswebhooktwilio" title="Permanent link">&para;</a></h3>
@@ -4194,7 +4194,7 @@
 </table>
 <p>Leaving a credential key out of the body = no change. Setting any of these keys requires the same <code>SAVE_PERMS</code> as scalar updates. The response is the standard PhoneConfig payload (without secrets).</p>
 <h4 id="test-the-configured-provider-post-apiphonehubconfigid-with-test_connection">Test the configured provider — <code>POST /api/phonehub/config/&lt;id&gt;</code> with <code>test_connection</code><a class="headerlink" href="#test-the-configured-provider-post-apiphonehubconfigid-with-test_connection" title="Permanent link">&para;</a></h4>
-<p>Per-instance action that runs the per-provider connectivity check (<code>_test_twilio</code> / <code>_test_aws</code> / <code>_test_mojo</code>) and returns the result inline. Used by the admin portal's "Test connection" button.</p>
+<p>Per-instance action that runs the per-provider connectivity check (<code>_test_twilio</code> / <code>_test_aws</code> / <code>_test_mojo</code>) and returns the result inline. Used by the admin portal's "Test connection" button. For the <code>mojo</code> provider the check GETs the remote's <code>/api/group/apikey/me</code> whoami endpoint — it validates the URL and api key and confirms the key carries a send permission, with no SMS row created on the remote.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="err">POST /api/phonehub/config/&lt;id&gt;</span>
 <a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="err">Content-Type: application/json</span>
 <a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>
@@ -4209,7 +4209,7 @@
 <a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="w">  </span><span class="nt">&quot;remote_url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://sms-hub.example.com&quot;</span>
 <a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="p">}</span>
 </code></pre></div>
-<p>On failure, <code>success</code> is <code>false</code> and <code>error</code> is one of <code>missing_credentials</code>, <code>invalid_credentials</code>, <code>timeout</code>, <code>connection_failed</code>, <code>missing_library</code>, or <code>invalid_provider</code>. Operators get a non-throwing dict either way; the underlying exception (if any) is logged via <code>mojo.helpers.logit</code> and not echoed back.</p>
+<p>On failure, <code>success</code> is <code>false</code> and <code>error</code> is one of <code>missing_credentials</code>, <code>invalid_credentials</code>, <code>insufficient_permission</code> (mojo provider — the key is valid but lacks <code>send_sms</code>/<code>comms</code>), <code>timeout</code>, <code>connection_failed</code>, <code>missing_library</code>, or <code>invalid_provider</code>. Operators get a non-throwing dict either way; the underlying exception (if any) is logged via <code>mojo.helpers.logit</code> and not echoed back.</p>
 
 
 

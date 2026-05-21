@@ -4541,9 +4541,12 @@
 <p>Each individual secret also has an auto-setter (<code>set_twilio_account_sid</code>, <code>set_twilio_auth_token</code>, <code>set_aws_access_key_id</code>, <code>set_aws_secret_access_key</code>, <code>set_mojo_api_key</code>) so the REST layer can route a write straight through a POST body field — see <a href="../rest/#writing-encrypted-credentials-via-rest">rest.md — Writing encrypted credentials via REST</a>.</p>
 <h4 id="configtest_connection"><code>config.test_connection()</code><a class="headerlink" href="#configtest_connection" title="Permanent link">&para;</a></h4>
 <p>Test that the configured credentials are valid. Dispatches to the per-provider
-test method (<code>_test_twilio</code> / <code>_test_aws</code> / <code>_test_mojo</code>). The mojo branch
-performs a lightweight <code>GET &lt;mojo_remote_url&gt;/api/account/me</code> with the
-configured api key.</p>
+test method (<code>_test_twilio</code> / <code>_test_aws</code> / <code>_test_mojo</code>). The mojo branch GETs
+the remote's <code>/api/group/apikey/me</code> whoami endpoint to validate URL reachability
+and the api key, then checks the returned permissions include <code>send_sms</code> (or
+<code>comms</code>) so the key can actually send. No SMS row is created on the remote — the
+check has zero side effects. A valid key without a send permission returns
+<code>error="insufficient_permission"</code>.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="n">result</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">test_connection</span><span class="p">()</span>
 <a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="n">result</span><span class="p">[</span><span class="s2">&quot;success&quot;</span><span class="p">]</span>  <span class="c1"># True or False</span>
 <a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="n">result</span><span class="p">[</span><span class="s2">&quot;message&quot;</span><span class="p">]</span>  <span class="c1"># Human-readable result</span>

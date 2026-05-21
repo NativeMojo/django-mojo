@@ -4317,12 +4317,12 @@
 <p>Configure a deployment to send SMS via another django-mojo instance:</p>
 <p><strong>On the remote (provider) mojo:</strong>
 1. Configure Twilio (or AWS) normally — this mojo does the actual sending.
-2. Create an <code>account.ApiKey</code> for the caller group with at least <code>send_sms</code> and <code>comms</code> permissions:</p>
+2. Create an <code>account.ApiKey</code> for the caller group. <code>POST /api/phonehub/sms/send</code> checks its permissions with OR logic, so the key needs <strong>either <code>send_sms</code> or <code>comms</code></strong> — grant just <code>send_sms</code> for least privilege:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">ApiKey</span>
 <a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="n">api_key</span><span class="p">,</span> <span class="n">raw_token</span> <span class="o">=</span> <span class="n">ApiKey</span><span class="o">.</span><span class="n">create_for_group</span><span class="p">(</span>
 <a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>    <span class="n">group</span><span class="o">=</span><span class="n">caller_group</span><span class="p">,</span>
 <a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;downstream-mojo&quot;</span><span class="p">,</span>
-<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>    <span class="n">permissions</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;send_sms&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span> <span class="s2">&quot;comms&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>    <span class="n">permissions</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;send_sms&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
 <a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="p">)</span>
 <a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="c1"># Hand `raw_token` to the caller — it cannot be retrieved later.</span>
 </code></pre></div>
@@ -4339,7 +4339,7 @@
 <a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="n">cfg</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
 </code></pre></div>
 <ol>
-<li>Validate end-to-end with <code>cfg.test_connection()</code> — issues a single authenticated <code>GET /api/account/me</code> to the remote.</li>
+<li>Validate with <code>cfg.test_connection()</code> — GETs the remote's <code>/api/group/apikey/me</code> whoami endpoint to confirm URL reachability and the api key, then checks the key's permissions include <code>send_sms</code> (or <code>comms</code>). Zero side effects: no SMS row is created on the remote.</li>
 </ol>
 <p><code>phonehub.send_sms(...)</code> and <code>POST /api/phonehub/sms/send</code> are unchanged from the caller's perspective; dispatch happens inside <code>SMS.send()</code>. A successful remote call stores the remote SMS id in <code>provider_message_id</code> and the full remote payload in <code>metadata["remote"]</code>. Failures are surfaced as <code>error_code</code> values: <code>timeout</code>, <code>http_&lt;status&gt;</code>, <code>remote_error</code>, <code>remote_failed</code>, or <code>config_error</code>.</p>
 <p>Test numbers (<code>+1555…</code>) continue to short-circuit locally without hitting the remote.</p>
