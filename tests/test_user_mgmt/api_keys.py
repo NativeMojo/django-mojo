@@ -261,6 +261,50 @@ def test_apikey_child_group_blocked(opts):
     opts.client.logout()
 
 
+@th.unit_test("apikey_whoami_me")
+def test_apikey_whoami_me(opts):
+    """GET /api/group/apikey/me returns the key's identity + permissions, never the token."""
+    opts.client.logout()
+    opts.client.bearer = "apikey"
+    opts.client.access_token = opts.rest_raw_token
+    opts.client.is_authenticated = True
+
+    resp = opts.client.get("/api/group/apikey/me")
+    assert resp.status_code == 200, f"whoami failed: {resp.status_code} {resp.response}"
+
+    data = resp.response.data
+    assert data.id == opts.rest_key_id, f"wrong id: {data.id} != {opts.rest_key_id}"
+    assert data.name == "test_rest_key", f"wrong name: {data.name}"
+    assert isinstance(data.permissions, dict), (
+        f"permissions must be a dict, got {type(data.permissions).__name__}: {data.permissions!r}"
+    )
+    assert data.permissions.get("view_data") is True, (
+        f"granted permissions must be reported by whoami: {data.permissions!r}"
+    )
+    # The token must never be echoed back — the caller already holds it.
+    assert data.get("token") is None, "whoami must NOT return the raw token"
+    assert "token_hash" not in data, "whoami must NOT expose token_hash"
+    assert "mojo_secrets" not in data, "whoami must NOT expose mojo_secrets"
+
+    opts.client.logout()
+
+
+@th.unit_test("apikey_whoami_me_rejects_user")
+def test_apikey_whoami_me_rejects_user(opts):
+    """A user/JWT-authenticated request (no API key) gets 401 from /api/group/apikey/me."""
+    opts.client.logout()
+    resp = opts.client.login(ADMIN_USER, ADMIN_PWORD)
+    assert opts.client.is_authenticated, "admin login failed"
+
+    resp = opts.client.get("/api/group/apikey/me")
+    assert resp.status_code == 401, (
+        f"a non-API-key request must be rejected with 401, got {resp.status_code}: "
+        f"{resp.response}"
+    )
+
+    opts.client.logout()
+
+
 @th.unit_test("apikey_rest_delete")
 def test_apikey_rest_delete(opts):
     """REST DELETE removes the api key."""

@@ -65,6 +65,28 @@ Authorization: apikey <token>
 
 The key's group is automatically set on the request. Only permissions in the key's `permissions` dict are allowed. System-level permissions (`sys.*`) are always denied.
 
+### Check a Key — `GET /api/group/apikey/me`
+
+Whoami for the **calling** API key. Authenticate with `Authorization: apikey <token>` and it returns that key's own identity and granted permissions — useful for confirming a token works and seeing what it can do. Requires no management permission. A normal user/JWT session has no API key and gets `401` (use `GET /api/user/me` instead). The raw token is never returned.
+
+```json
+GET /api/group/apikey/me
+Authorization: apikey <token>
+
+{
+  "status": true,
+  "data": {
+    "id": 7,
+    "name": "sms-bridge",
+    "is_active": true,
+    "permissions": {"send_sms": true},
+    "group": {"id": 12, "name": "Acme Co"},
+    "last_used": "2026-05-20T17:04:00Z",
+    "expires_at": null
+  }
+}
+```
+
 ### Managing API Keys
 
 | Method | Path | Description |

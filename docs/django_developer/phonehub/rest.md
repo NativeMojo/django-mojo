@@ -228,7 +228,7 @@ Leaving a credential key out of the body = no change. Setting any of these keys 
 
 #### Test the configured provider — `POST /api/phonehub/config/<id>` with `test_connection`
 
-Per-instance action that runs the per-provider connectivity check (`_test_twilio` / `_test_aws` / `_test_mojo`) and returns the result inline. Used by the admin portal's "Test connection" button. For the `mojo` provider the check POSTs a `+1555` test-number send to the remote's `/api/phonehub/sms/send` — the remote short-circuits `+1555` numbers locally, so no real SMS is delivered, but the full auth + send path is exercised.
+Per-instance action that runs the per-provider connectivity check (`_test_twilio` / `_test_aws` / `_test_mojo`) and returns the result inline. Used by the admin portal's "Test connection" button. For the `mojo` provider the check GETs the remote's `/api/group/apikey/me` whoami endpoint — it validates the URL and api key and confirms the key carries a send permission, with no SMS row created on the remote.
 
 ```http
 POST /api/phonehub/config/<id>
@@ -249,4 +249,4 @@ Content-Type: application/json
 }
 ```
 
-On failure, `success` is `false` and `error` is one of `missing_credentials`, `invalid_credentials`, `timeout`, `connection_failed`, `missing_library`, or `invalid_provider`. Operators get a non-throwing dict either way; the underlying exception (if any) is logged via `mojo.helpers.logit` and not echoed back.
+On failure, `success` is `false` and `error` is one of `missing_credentials`, `invalid_credentials`, `insufficient_permission` (mojo provider — the key is valid but lacks `send_sms`/`comms`), `timeout`, `connection_failed`, `missing_library`, or `invalid_provider`. Operators get a non-throwing dict either way; the underlying exception (if any) is logged via `mojo.helpers.logit` and not echoed back.

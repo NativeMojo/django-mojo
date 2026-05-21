@@ -359,38 +359,56 @@ def test_mojo_api_key_secret_roundtrip(opts):
 def test_phone_config_test_connection_mojo(opts):
     """PhoneConfig.test_connection() mojo branch.
 
-    test_connection probes the remote by POSTing a +1555 test-number send
-    to /api/phonehub/sms/send (the remote short-circuits +1555 locally, so
-    no real SMS goes out). Success when the remote accepts the probe;
-    invalid_credentials on 401/403; missing_credentials short-circuits
-    with no HTTP call.
+    test_connection GETs the remote's /api/group/apikey/me whoami endpoint
+    (zero side effects — no SMS row created), then inspects the returned
+    permissions. Success when the key is valid AND can send; on a valid key
+    without send permission -> insufficient_permission; 401/403 ->
+    invalid_credentials; missing credentials short-circuits with no HTTP.
     """
     from mojo.apps.phonehub.models import PhoneConfig
 
     cfg = PhoneConfig.objects.get(pk=opts.config_id)
 
-    # Success path — remote short-circuits the +1555 probe and echoes a sent SMS
+    # Success — key valid and carries send_sms
     ok_resp = _mock_post_response(
         status_code=200,
         body={"status": True, "data": {
-            "id": 1, "provider_message_id": "test+15551234567", "status": "sent",
+            "id": 7, "name": "bridge", "permissions": {"send_sms": True},
         }},
     )
     with mock.patch(
-        "mojo.apps.phonehub.services.mojo_provider.requests.post",
+        "mojo.apps.phonehub.services.mojo_provider.requests.get",
         return_value=ok_resp,
     ):
         result = cfg.test_connection()
     assert result["success"] is True, (
-        f"test_connection should succeed when the remote accepts the probe, "
+        f"test_connection should succeed when the key is valid and can send, "
         f"got {result!r}"
+    )
+
+    # Key valid but missing the send permission
+    noperm_resp = _mock_post_response(
+        status_code=200,
+        body={"status": True, "data": {
+            "id": 7, "name": "bridge", "permissions": {"view_data": True},
+        }},
+    )
+    with mock.patch(
+        "mojo.apps.phonehub.services.mojo_provider.requests.get",
+        return_value=noperm_resp,
+    ):
+        result = cfg.test_connection()
+    assert result["success"] is False, (
+        f"test_connection must fail when the key cannot send SMS, got {result!r}"
+    )
+    assert result["error"] == "insufficient_permission", (
+        f"expected error='insufficient_permission', got {result.get('error')!r}"
     )
 
     # 401 → invalid credentials
     unauth_resp = _mock_post_response(status_code=401)
-    unauth_resp.text = '{"error": "invalid api key"}'
     with mock.patch(
-        "mojo.apps.phonehub.services.mojo_provider.requests.post",
+        "mojo.apps.phonehub.services.mojo_provider.requests.get",
         return_value=unauth_resp,
     ):
         result = cfg.test_connection()
@@ -408,8 +426,8 @@ def test_phone_config_test_connection_mojo(opts):
     )
     # Note: not saving — we only need test_connection() to read instance state.
     with mock.patch(
-        "mojo.apps.phonehub.services.mojo_provider.requests.post",
-    ) as m_post:
+        "mojo.apps.phonehub.services.mojo_provider.requests.get",
+    ) as m_get:
         result = cfg2.test_connection()
     assert result["success"] is False, (
         f"test_connection must fail when api key missing, got {result!r}"
@@ -417,7 +435,7 @@ def test_phone_config_test_connection_mojo(opts):
     assert result["error"] == "missing_credentials", (
         f"expected error='missing_credentials', got {result.get('error')!r}"
     )
-    assert not m_post.called, (
+    assert not m_get.called, (
         "test_connection must NOT make an HTTP call when credentials are missing"
     )
 
@@ -472,11 +490,11 @@ def test_on_action_test_connection_returns_test_dict(opts):
     ok_resp = _mock_post_response(
         status_code=200,
         body={"status": True, "data": {
-            "id": 1, "provider_message_id": "test+15551234567", "status": "sent",
+            "id": 7, "name": "bridge", "permissions": {"send_sms": True},
         }},
     )
     with mock.patch(
-        "mojo.apps.phonehub.services.mojo_provider.requests.post",
+        "mojo.apps.phonehub.services.mojo_provider.requests.get",
         return_value=ok_resp,
     ):
         result = cfg.on_action_test_connection(1)
@@ -494,7 +512,7 @@ def test_on_action_test_connection_returns_test_dict(opts):
     from testit.helpers import get_mock_request
     request = get_mock_request()
     with mock.patch(
-        "mojo.apps.phonehub.services.mojo_provider.requests.post",
+        "mojo.apps.phonehub.services.mojo_provider.requests.get",
         return_value=ok_resp,
     ):
         save_result = cfg.on_rest_save(request, {"test_connection": 1})

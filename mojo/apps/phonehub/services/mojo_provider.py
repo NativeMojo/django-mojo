@@ -157,3 +157,91 @@ def send_sms(body, to_number, from_number=None, base_url=None, api_key=None, tim
         'remote': data,
         'from_number': data.get('from_number'),
     })
+
+
+def verify_credentials(base_url, api_key, timeout=None):
+    """Validate the api key against a remote django-mojo without sending SMS.
+
+    GETs the remote's `/api/group/apikey/me` whoami endpoint and reads back
+    the key's granted permissions. Used by PhoneConfig.test_connection() so
+    operators can check a mojo provider config with zero side effects (no
+    SMS row created on the remote).
+
+    Returns objict({
+        ok:          bool,        # HTTP reachable + 2xx + status:true
+        permissions: dict,        # the key's granted permissions ({} on failure)
+        code:        str or None, # error code on failure
+        error:       str or None, # error message on failure
+    })
+    """
+    if not base_url or not api_key:
+        return objict({
+            'ok': False, 'permissions': {},
+            'code': 'config_error',
+            'error': 'mojo provider requires base_url and api_key',
+        })
+
+    if timeout is None:
+        timeout = settings.get_static('SMS_REMOTE_TIMEOUT', 10)
+
+    url = f"{base_url.rstrip('/')}/api/group/apikey/me"
+    headers = {"Authorization": f"apikey {api_key}"}
+
+    try:
+        response = requests.get(
+            url, headers=headers, timeout=timeout, allow_redirects=False,
+        )
+    except requests.Timeout:
+        logit.warning("[phonehub] mojo provider verify timed out after %ss to %s", timeout, url)
+        return objict({
+            'ok': False, 'permissions': {},
+            'code': 'timeout',
+            'error': f'Remote timed out after {timeout}s',
+        })
+    except Exception as e:
+        logit.warning("[phonehub] mojo provider verify failed: %s", e)
+        return objict({
+            'ok': False, 'permissions': {},
+            'code': 'remote_error',
+            'error': str(e),
+        })
+
+    if response.status_code >= 400:
+        logit.warning(
+            "[phonehub] mojo provider verify HTTP %s from %s",
+            response.status_code, url,
+        )
+        return objict({
+            'ok': False, 'permissions': {},
+            'code': f'http_{response.status_code}',
+            'error': f'HTTP {response.status_code}',
+        })
+
+    try:
+        body = response.json()
+    except Exception as e:
+        logit.warning("[phonehub] mojo provider verify returned non-JSON body: %s", e)
+        return objict({
+            'ok': False, 'permissions': {},
+            'code': 'remote_error',
+            'error': f'Non-JSON response from remote: {e}',
+        })
+
+    if not isinstance(body, dict) or not body.get('status'):
+        return objict({
+            'ok': False, 'permissions': {},
+            'code': 'remote_failed',
+            'error': 'Remote rejected the request',
+        })
+
+    data = body.get('data') or {}
+    perms = data.get('permissions') if isinstance(data, dict) else None
+    if not isinstance(perms, dict):
+        perms = {}
+
+    return objict({
+        'ok': True,
+        'permissions': perms,
+        'code': None,
+        'error': None,
+    })

@@ -244,11 +244,12 @@ Each individual secret also has an auto-setter (`set_twilio_account_sid`, `set_t
 
 #### `config.test_connection()`
 Test that the configured credentials are valid. Dispatches to the per-provider
-test method (`_test_twilio` / `_test_aws` / `_test_mojo`). The mojo branch
-POSTs a send for a `+1555` test number to `<mojo_remote_url>/api/phonehub/sms/send`
-— the remote short-circuits `+1555` numbers locally (no carrier contact, no real
-SMS), so this exercises the full auth + send path (URL reachable, api key valid,
-key carries the send permission) at zero cost.
+test method (`_test_twilio` / `_test_aws` / `_test_mojo`). The mojo branch GETs
+the remote's `/api/group/apikey/me` whoami endpoint to validate URL reachability
+and the api key, then checks the returned permissions include `send_sms` (or
+`comms`) so the key can actually send. No SMS row is created on the remote — the
+check has zero side effects. A valid key without a send permission returns
+`error="insufficient_permission"`.
 
 ```python
 result = config.test_connection()

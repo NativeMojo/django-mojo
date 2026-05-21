@@ -114,8 +114,44 @@ See [Rate Limiting](../core/rate_limiting.md) for full details.
 | `GET` | `/api/group/apikey/<id>` | Get key details |
 | `POST` | `/api/group/apikey/<id>` | Update name, permissions, limits, is_active |
 | `DELETE` | `/api/group/apikey/<id>` | Delete key |
+| `GET` | `/api/group/apikey/me` | Whoami — the **calling** key's own identity + permissions |
 
-All endpoints require `manage_group` or `manage_groups` permission.
+The CRUD endpoints require `manage_group` or `manage_groups` permission. The
+`me` endpoint requires only that the request is authenticated **with an API
+key** (`@requires_auth`) — no management permission.
+
+### `GET /api/group/apikey/me` — whoami
+
+A self-introspection endpoint for service principals, analogous to
+`GET /api/user/me` for human users. It lets a key holder confirm the token
+is valid and inspect what the key is allowed to do, without holding any
+management permission.
+
+- Authenticate with `Authorization: apikey <token>`.
+- A user/JWT-authenticated request has no API key and gets **401** — those
+  callers should use `GET /api/user/me` instead.
+- Serialized with the `me` graph: `id`, `created`, `name`, `is_active`,
+  `permissions`, `limits`, `last_used`, `expires_at`, plus the nested
+  `group` (basic). The graph is forced server-side — a `?graph=` override
+  is ignored — so the raw `token` is **never** returned.
+
+```json
+{
+  "status": true,
+  "data": {
+    "id": 7,
+    "name": "sms-bridge",
+    "is_active": true,
+    "permissions": {"send_sms": true},
+    "group": {"id": 12, "name": "Acme Co"},
+    "last_used": "2026-05-20T17:04:00Z",
+    "expires_at": null
+  }
+}
+```
+
+This is what `PhoneConfig.test_connection()` calls to validate a `mojo`
+SMS-provider configuration without sending a real message.
 
 ## Lifecycle
 

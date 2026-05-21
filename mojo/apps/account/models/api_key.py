@@ -58,6 +58,18 @@ class ApiKey(MojoSecrets, MojoModel):
                 "graphs": {
                     "group": "basic",
                 }
+            },
+            # Safe self-introspection graph for the `group/apikey/me` whoami
+            # endpoint. Deliberately omits the `token` extra — the caller
+            # already holds the token; echoing it back is a needless exposure.
+            "me": {
+                "fields": [
+                    "id", "created", "name", "is_active",
+                    "permissions", "limits", "last_used", "expires_at"
+                ],
+                "graphs": {
+                    "group": "basic",
+                }
             }
         }
 

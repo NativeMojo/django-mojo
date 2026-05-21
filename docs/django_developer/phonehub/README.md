@@ -182,7 +182,7 @@ Configure a deployment to send SMS via another django-mojo instance:
    cfg.save()
    ```
 
-2. Validate end-to-end with `cfg.test_connection()` — POSTs a `+1555` test-number send to the remote's `/api/phonehub/sms/send`. The remote short-circuits `+1555` numbers locally, so this confirms URL reachability, the api key, and the key's send permission without delivering a real SMS.
+2. Validate with `cfg.test_connection()` — GETs the remote's `/api/group/apikey/me` whoami endpoint to confirm URL reachability and the api key, then checks the key's permissions include `send_sms` (or `comms`). Zero side effects: no SMS row is created on the remote.
 
 `phonehub.send_sms(...)` and `POST /api/phonehub/sms/send` are unchanged from the caller's perspective; dispatch happens inside `SMS.send()`. A successful remote call stores the remote SMS id in `provider_message_id` and the full remote payload in `metadata["remote"]`. Failures are surfaced as `error_code` values: `timeout`, `http_<status>`, `remote_error`, `remote_failed`, or `config_error`.
 
