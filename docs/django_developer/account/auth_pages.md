@@ -285,6 +285,11 @@ Methods rendered are those listed in the resolved auth config's
   to `/passkey` after signup
 - Phone-first flow when `phone` field has `verify: "sms"` in the schema
   (3-step state machine: phone → SMS code → profile)
+- **Passwordless registration** — when `password` is absent from
+  `registration.fields`, the form renders no password input and the account is
+  created with `set_unusable_password()`. The user logs in afterward via the
+  SMS-code flow. Requires a `phone` field with `verify: "sms"` in the same
+  schema. See [Auth Config — Passwordless Registration](auth_config.md#passwordless-registration).
 
 ### Passkey enrollment page (`/passkey`)
 
@@ -320,6 +325,22 @@ AUTH_CONFIG = {
         ],
         "identity_field": "phone",
         "min_age": 13,
+    }
+}
+```
+
+Omitting `password` from the field list makes registration **passwordless** — the account is created with an unusable password and the user signs in via SMS code. The schema must include a `phone` field with `verify: "sms"` for a passwordless config to be valid (enforced at config-write time and defensively on every registration request):
+
+```python
+# Passwordless registration — no password field
+AUTH_CONFIG = {
+    "registration": {
+        "fields": [
+            {"name": "first_name", "required": True},
+            {"name": "last_name",  "required": True},
+            {"name": "phone",      "required": True, "verify": "sms"},
+        ],
+        "identity_field": "phone",
     }
 }
 ```

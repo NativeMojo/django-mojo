@@ -1,5 +1,7 @@
 ## v1.2.21 - (current)
 
+**account** — Passwordless registration. A `registration.fields` schema may now omit `password`. When it does, `POST /api/auth/register` no longer requires a `password` body param; the account is created with `set_unusable_password()` and the user logs in via the SMS-code flow (`POST /api/auth/sms/login` → `POST /api/auth/sms/verify`). A no-password schema must include a `phone` field with `verify: "sms"` — `validate_fields_config` rejects the config at write time, and `on_register` re-checks defensively. The default email + password schema is unchanged.
+
 ## v1.2.23 - May 21, 2026
 
 fix in cors for s3

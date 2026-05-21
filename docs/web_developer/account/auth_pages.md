@@ -72,6 +72,18 @@ form is a three-step state machine:
 2. **Step 2 — Verify**: 6-digit SMS code with "Resend code" and "Back" links
 3. **Step 3 — Profile**: remaining fields (name, DOB, password) and final submit
 
+**Passwordless registration** — when `password` is absent from
+`registration.fields`, the form has no password input. The account is created
+without a usable password. The user signs in afterward using the SMS-code flow:
+
+1. `POST /api/auth/sms/login` with `{"phone_number": "<phone>"}` — sends a 6-digit code and returns `{"status": true}`.
+2. `POST /api/auth/sms/verify` with `{"phone_number": "<phone>", "code": "<code>"}` — returns JWT tokens on success.
+
+A passwordless schema always includes a `phone` field with `verify: "sms"` — you
+can confirm this by inspecting `registration.fields` from `GET /api/auth/config`.
+Passwordless accounts may also enroll a passkey (if `registration.passkey_prompt`
+is enabled) as an additional login path.
+
 **DOB field** — three segmented numeric inputs (`MM` / `DD` / `YYYY`), mobile
 numeric keyboard, paste-aware (`MM/DD/YYYY`, `MM-DD-YYYY`, `YYYY-MM-DD`),
 submits as ISO `yyyy-mm-dd`.

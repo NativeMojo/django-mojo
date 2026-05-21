@@ -136,7 +136,7 @@ time. Validated constraints:
 - `login.methods` must be a non-empty list of valid tokens
 - `registration.methods` must be a list of valid tokens
 - `registration.passkey_prompt` must be `"off"`, `"optional"`, or `"required"`
-- `registration.fields` is validated via `register_schema.validate_fields_config`
+- `registration.fields` is validated via `register_schema.validate_fields_config` — a schema that omits `password` is accepted only when it also includes a `phone` field with `verify: "sms"` (see Passwordless Registration below)
 
 ---
 
@@ -167,6 +167,36 @@ auth_config.validate_auth_config(raw_dict)   # raises ValueException on bad conf
 The `request` parameter on `resolve_auth_config` enables the
 `X-Mojo-Test-Auth-Config` header override in test mode (loopback + test flag
 only — not honoured in production).
+
+---
+
+## Passwordless Registration
+
+A `registration.fields` schema may omit `password`. When it does:
+
+- `POST /api/auth/register` no longer requires a `password` body param.
+- The account is created with Django's `set_unusable_password()` — password-based login is impossible for that account.
+- The user logs in afterward via the SMS-code flow (`POST /api/auth/sms/login` → `POST /api/auth/sms/verify`) or an enrolled passkey.
+
+**Mandatory guard:** a schema that omits `password` MUST include a `phone` field with `verify: "sms"`. `validate_fields_config` rejects a no-password schema without an SMS-verified phone at config-write time. `on_register` also re-checks this defensively (the deployment-wide `AUTH_CONFIG` setting and the `X-Mojo-Test-Register-Fields` test header bypass `validate_auth_config`).
+
+```python
+# Passwordless registration via AUTH_CONFIG
+AUTH_CONFIG = {
+    "registration": {
+        "fields": [
+            {"name": "first_name", "required": True},
+            {"name": "last_name",  "required": True},
+            {"name": "phone",      "required": True, "verify": "sms"},
+        ],
+        "identity_field": "phone",
+    }
+}
+```
+
+The hosted `/register` page renders no password input when `password` is absent from the schema — the form is schema-driven. After registration the user signs in via SMS code (or a passkey if enrolled).
+
+The default schema (email + password) and all existing password-based registration are unchanged. `password`, when present in the schema, is always required — there is no "optional password" state.
 
 ---
 

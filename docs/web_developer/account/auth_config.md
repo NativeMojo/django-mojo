@@ -72,6 +72,15 @@ methods.
 Use `login.methods` and `registration.methods` to decide which buttons to
 render. Use `theme` to apply branding.
 
+`registration.fields: null` means the deployment default (email + password) is
+in effect. A non-null `fields` list may omit `password` — when it does,
+registration is **passwordless**: the account is created without a usable
+password and the user signs in afterward via SMS code. In that case the
+`fields` list always contains a `phone` entry with `verify: "sms"` (the server
+rejects a passwordless config without it). Custom front-ends building a
+registration form should check whether `password` appears in `fields` and
+render (or omit) the password input accordingly.
+
 ---
 
 ## Login Method Soft-Gating
