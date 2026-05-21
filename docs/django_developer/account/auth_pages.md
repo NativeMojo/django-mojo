@@ -272,6 +272,13 @@ Methods rendered are those listed in the resolved auth config's
 - `magic` — send a one-click sign-in email
 - Forgot password (code or link method; auto-routes via SMS when identity is phone)
 - Reset code entry / set new password (from `?token=pr:...`)
+
+The page leads with the **primary credential**: when `password` is in
+`login.methods` the sign-in form is the landing view and every other method
+(SMS, passkey, Google, Apple) is a button below an "or continue with" divider.
+When `password` is **not** a method but `sms` is (a passwordless config), the
+page opens directly on the SMS phone-entry form, with passkey/OAuth as
+secondary buttons — so SMS login is never buried.
 - Session check on load (auto-redirect if already authenticated)
 - OAuth callback handling (`?code=...&state=...`)
 - Magic link token handling (`?token=ml:...`)

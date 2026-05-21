@@ -38,6 +38,12 @@ Default set: `password`, `sms`, `passkey`, `magic`, `google`, `apple`.
 - Forgot password (code or link; auto-routes via SMS when identity is phone)
 - Session check — auto-redirects if user is already authenticated
 
+When `password` is not among `login.methods` but `sms` is (a passwordless
+config), the page opens directly on the SMS phone-entry form rather than a
+sign-in form — so SMS sign-in is the first thing the user sees. With
+`password` present, the sign-in form leads and "Sign in with a code" is a
+button alongside passkey/Google/Apple.
+
 ### URL Parameters
 
 | Param | Purpose |
