@@ -1,5 +1,10 @@
 ## v1.2.25 - (current)
 
+## v1.2.25 - May 21, 2026
+
+fix for sms proxy
+
+
 **phonehub** — `POST /api/phonehub/sms/send` no longer 500s when the caller authenticates with an API key. Under API-key auth `request.user` is the `ApiKey` instance, not a `User`; the handler forwarded it into `SMS.send(user=...)`, which assigns the `SMS.user` ForeignKey and raised `ValueError: ... must be a "User" instance`. The handler now attaches a real `User` only — `SMS.user` is left null for API-key callers, who are still identified by `SMS.group`. This unblocks the `mojo` SMS provider relay, which posts to a remote instance with `Authorization: apikey`.
 
 **phonehub** — `POST /api/phonehub/sms/send` now honors a caller-supplied `from_number`. The handler previously read only `to_number`, `body`, and `metadata`, silently dropping the documented `from_number` field so `SMS.send` always fell back to `twilio.get_from_number()`. `from_number` is now passed through to `SMS.send` (both the twilio and `mojo` provider branches), letting a caller that owns multiple sender numbers pick which one to send from.
