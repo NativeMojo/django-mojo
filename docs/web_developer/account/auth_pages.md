@@ -87,6 +87,21 @@ without a usable password. The user signs in afterward using the SMS-code flow:
 
 A passwordless schema always includes a `phone` field with `verify: "sms"` — you
 can confirm this by inspecting `registration.fields` from `GET /api/auth/config`.
+
+### SMS code autofill
+
+OTP texts (login and registration) include an origin-bound last line —
+`@<your-domain> #<code>` — so browsers can autofill the code. The hosted
+`/auth` and `/register` pages already handle this. If you build a custom
+code-entry UI:
+
+- Put `autocomplete="one-time-code"` on the code `<input>` — iOS Safari
+  autofills from the keyboard suggestion bar.
+- For Android Chrome, call the WebOTP API while the code step is visible:
+  `navigator.credentials.get({ otp: { transport: ['sms'] } })`, then fill the
+  field with the resolved `.code`.
+- Both require an HTTPS page whose domain matches the `@host` in the SMS — the
+  server derives that host from your request's `Origin` header.
 Passwordless accounts may also enroll a passkey (if `registration.passkey_prompt`
 is enabled) as an additional login path.
 

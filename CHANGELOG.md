@@ -1,5 +1,9 @@
 ## v1.2.25 - (current)
 
+**account** — The hosted login page now leads with the primary credential. For a passwordless config (no `password` in `login.methods`) it opens directly on the SMS phone-entry form instead of burying it behind a footer link; "Sign in with a code" is now a proper button alongside Passkey/Google/Apple.
+
+**account** — SMS verification codes autofill on the hosted login and registration pages. OTP texts now carry an origin-bound `@host #code` line (required by Android Chrome's WebOTP API, used by iOS Security Code AutoFill), and the pages call the WebOTP API to fill — and submit — the code field the moment the SMS arrives.
+
 ## v1.2.25 - May 21, 2026
 
 fix for sms proxy

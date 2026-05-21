@@ -298,6 +298,28 @@ secondary buttons — so SMS login is never buried.
   SMS-code flow. Requires a `phone` field with `verify: "sms"` in the same
   schema. See [Auth Config — Passwordless Registration](auth_config.md#passwordless-registration).
 
+### SMS code autofill
+
+Every OTP text — the SMS-code login (`_send_otp`) and the registration
+phone-verify (`/auth/phone/register/start`) — is sent with an **origin-bound
+one-time-code line** appended:
+
+```
+Your verification code is: 123456
+
+@auth.example.com #123456
+```
+
+The `@host` is taken from the request's `Origin` header (falling back to
+`Host`), so it matches the page the user is on. This line is required by
+Android Chrome's WebOTP API and is used by iOS Security Code AutoFill too.
+
+The hosted login (SMS view) and registration (stepped verify) pages call the
+WebOTP API via a shared `_mat.watchOtp` helper — filling the code field, and
+submitting, the moment the SMS arrives. iOS has no WebOTP; it autofills from
+the keyboard suggestion bar via the code input's `autocomplete="one-time-code"`
+attribute. Both mechanisms require the page to be served over HTTPS.
+
 ### Passkey enrollment page (`/passkey`)
 
 Not bouncer-gated. Themed by the resolved auth config. Reads the JWT from
