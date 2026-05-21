@@ -12,6 +12,8 @@ Standalone login flow (no password):
   POST /api/auth/sms/login   -> send SMS code to username's phone
   POST /api/auth/sms/verify  -> verify code + username, issue JWT
 """
+from urllib.parse import urlparse
+
 from django.db.models import Q
 
 from mojo import decorators as md
@@ -27,8 +29,46 @@ from mojo.helpers.response import JsonResponse
 from mojo.helpers.settings import settings
 
 
-def _send_otp(user):
-    """Generate a 6-digit code, store it on the user, and send via SMS."""
+def _otp_host(request):
+    """Bare hostname for the origin-bound one-time-code SMS line.
+
+    Taken from the request's Origin header (preferred) or Host header so the
+    `@host` token matches the page the user is on. Returns "" when no host
+    can be determined (the SMS then omits the line — autofill degrades, no
+    breakage).
+    """
+    if request is None:
+        return ""
+    origin = request.META.get("HTTP_ORIGIN", "") or ""
+    if origin:
+        host = urlparse(origin).hostname or ""
+        if host:
+            return host.lower()
+    host = request.META.get("HTTP_HOST", "") or ""
+    return host.split(":")[0].strip().lower()
+
+
+def _otp_sms_body(code, request=None):
+    """Build the OTP SMS text.
+
+    Appends the origin-bound one-time-code line (`@host #code`) so browsers
+    can offer/auto-fill the code: Android Chrome's WebOTP API *requires* this
+    line, and iOS Security Code AutoFill uses it too. Falls back to the plain
+    message when the request host is unknown.
+    """
+    body = f"Your verification code is: {code}"
+    host = _otp_host(request)
+    if host:
+        body += f"\n\n@{host} #{code}"
+    return body
+
+
+def _send_otp(user, request=None):
+    """Generate a 6-digit code, store it on the user, and send via SMS.
+
+    `request` (when supplied) lets the SMS carry the origin-bound autofill
+    line — see `_otp_sms_body`.
+    """
     if not user.phone_number:
         raise merrors.ValueException("No phone number on file for this account")
 
@@ -38,7 +78,7 @@ def _send_otp(user):
     user.save()
 
     try:
-        sms = phonehub.send_sms(user.phone_number, f"Your verification code is: {code}")
+        sms = phonehub.send_sms(user.phone_number, _otp_sms_body(code, request))
         if sms.status == "failed":
             logit.error("account.sms", f"Failed to send SMS OTP to {user.phone_number}")
             user.report_incident("SMS OTP send failed", "sms:send_failed", level=6)
@@ -85,7 +125,7 @@ def on_sms_send(request):
 
     # Re-issue a fresh mfa_token so the user can still verify after this send
     new_token = mfa_service.create_mfa_token(user, token_data.get("methods", ["sms"]))
-    _send_otp(user)
+    _send_otp(user, request)
 
     return JsonResponse({
         "status": True,
@@ -168,7 +208,7 @@ def on_sms_login(request):
         # Return success to avoid user enumeration
         return JsonResponse({"status": True, "message": "If the account exists, a code was sent."})
 
-    _send_otp(user)
+    _send_otp(user, request)
     return JsonResponse({"status": True, "message": "If the account exists, a code was sent."})
 
 
@@ -205,7 +245,7 @@ def on_phone_register_start(request):
     session_token, code, ttl = phone_register.start(phone, ip=getattr(request, "ip", None))
 
     try:
-        sms = phonehub.send_sms(phone, f"Your verification code is: {code}")
+        sms = phonehub.send_sms(phone, _otp_sms_body(code, request))
         if sms is not None and getattr(sms, "status", None) == "failed":
             logit.error("account.sms", f"phone_register: failed to send code to {phone}")
     except Exception as e:

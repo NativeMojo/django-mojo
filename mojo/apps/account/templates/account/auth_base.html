@@ -156,6 +156,23 @@
                 window._mat.showOverlay("Signed in!", "Taking you there now\u2026");
                 setTimeout(function () { window._mat.redirect(); }, 800);
             },
+            watchOtp: function (inputEl, onCode) {
+                // Android Chrome WebOTP \u2014 fill `inputEl` from an incoming SMS
+                // verification code. iOS has no OTPCredential; it autofills via
+                // the input's autocomplete="one-time-code" attribute instead.
+                // Returns an AbortController (or null) so the caller can cancel.
+                if (!inputEl || typeof window.OTPCredential === "undefined") return null;
+                var ac = new AbortController();
+                navigator.credentials.get({ otp: { transport: ["sms"] }, signal: ac.signal })
+                    .then(function (otp) {
+                        if (otp && otp.code) {
+                            inputEl.value = otp.code;
+                            if (onCode) onCode(otp.code);
+                        }
+                    })
+                    .catch(function () { /* aborted or unavailable \u2014 silent */ });
+                return ac;
+            },
         };
 
         // Override "Back to website" link when ?back= param is present
