@@ -75,25 +75,45 @@ def test_resolve_fields_drops_unknown(opts):
         f"Remaining names must keep order, got {names}"
 
 
-@th.django_unit_test("resolve_fields forces password required and adds it if missing")
-def test_resolve_fields_forces_password(opts):
+@th.django_unit_test("resolve_fields does not auto-add password, but forces it required when present")
+def test_resolve_fields_password_handling(opts):
     from mojo.apps.account.services import register_schema as rs
     from mojo.helpers.settings import settings
     original_get = settings.get
-    def patched(key, default=None, **kwargs):
+
+    # Case 1: a schema that omits password stays passwordless — resolve_fields
+    # must NOT auto-append a password field.
+    def patched_nopass(key, default=None, **kwargs):
         if key == "AUTH_CONFIG":
             return {"registration": {"fields": [{"name": "email", "required": True}]}}
         return original_get(key, default=default, **kwargs)
-    settings.get = patched
+    settings.get = patched_nopass
     try:
         out = rs.resolve_fields(group=None)
     finally:
         settings.get = original_get
-    by_name = {f["name"]: f for f in out}
+    assert [f["name"] for f in out] == ["email"], \
+        f"resolve_fields must NOT auto-append password — a schema may omit it " \
+        f"for passwordless registration, got {[f['name'] for f in out]}"
+
+    # Case 2: when password IS present there is no optional-password state —
+    # it is forced required even if the config marks it optional.
+    def patched_optpass(key, default=None, **kwargs):
+        if key == "AUTH_CONFIG":
+            return {"registration": {"fields": [
+                {"name": "email", "required": True},
+                {"name": "password", "required": False}]}}
+        return original_get(key, default=default, **kwargs)
+    settings.get = patched_optpass
+    try:
+        out2 = rs.resolve_fields(group=None)
+    finally:
+        settings.get = original_get
+    by_name = {f["name"]: f for f in out2}
     assert "password" in by_name, \
-        "password must be appended even when operator omits it from the config"
+        f"a configured password field must be kept, got {[f['name'] for f in out2]}"
     assert by_name["password"]["required"] is True, \
-        "password must be required even if config marks it optional"
+        "a password field, when present, must always be required (no optional-password state)"
 
 
 @th.django_unit_test("resolve_identity_field auto-picks email when both are required")

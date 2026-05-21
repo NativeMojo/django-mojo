@@ -12,7 +12,8 @@ Public surface:
         Canonical list of `{"name", "required", "verify"}` dicts. Pulls
         `registration.fields` from the group's resolved auth config
         (see auth_config), falls back to DEFAULT_FIELDS, filters unknown
-        names, forces password to required.
+        names. `password`, when present, is always required; a schema may
+        omit it entirely for passwordless registration.
 
     resolve_identity_field(fields, group=None) -> str
         "email" or "phone". Honors `AUTH_REGISTER_IDENTITY_FIELD` if set,
@@ -66,9 +67,10 @@ def _normalize_entry(entry):
         return None
     required = bool(entry.get("required", False))
     verify = entry.get("verify") or None
-    # Password is always required — passwordless register is a separate flow
-    # and out of scope; treating "password optional" as a config bug avoids
-    # creating User rows with no usable credential.
+    # Password, when present in the schema, is always required — there is no
+    # "optional password" state. A schema may omit `password` entirely for
+    # passwordless registration (see validate_fields_config). Password has no
+    # verify channel.
     if name == "password":
         required = True
         verify = None
@@ -103,9 +105,8 @@ def _normalize_field_list(raw):
         normalized.append(norm)
     if not normalized:
         return [dict(f) for f in DEFAULT_FIELDS]
-    # Always ensure password is in the schema, even if the operator forgot.
-    if "password" not in seen:
-        normalized.append({"name": "password", "required": True, "verify": None})
+    # `password` is NOT auto-added — a schema may legitimately omit it for
+    # passwordless registration (see validate_fields_config).
     return normalized
 
 
@@ -139,14 +140,24 @@ def resolve_fields(group=None, request=None):
 def validate_fields_config(raw):
     """Validate an auth-config `registration.fields` list. Raises ValueException on
     bad config. Unknown field names are dropped (existing lenient contract);
-    the result must still resolve a usable identity field."""
+    the result must still resolve a usable identity field.
+
+    A schema may omit `password` for passwordless registration — but only when
+    it includes an SMS-verified phone, so the account always has a working
+    login path (the SMS code)."""
     if not isinstance(raw, (list, tuple)):
         raise merrors.ValueException("registration.fields must be a list")
     fields = _normalize_field_list(raw)
-    names = {f["name"] for f in fields}
-    if "email" not in names and "phone" not in names:
+    by_name = {f["name"]: f for f in fields}
+    if "email" not in by_name and "phone" not in by_name:
         raise merrors.ValueException(
             "registration.fields must include 'email' or 'phone'")
+    if "password" not in by_name:
+        phone = by_name.get("phone")
+        if not phone or phone.get("verify") != "sms":
+            raise merrors.ValueException(
+                "registration.fields without 'password' must include 'phone' "
+                "with verify='sms' — passwordless accounts log in by SMS code")
     return fields
 
 
@@ -225,11 +236,13 @@ def validate_payload(fields, payload, identity_field, min_age=None):
         raise merrors.ValueException(
             f"Identity field '{identity_field}' is not configured in AUTH_REGISTER_FIELDS")
 
-    # password is always required and always validated
-    password = payload.get("password")
-    if not password:
-        raise merrors.ValueException("password is required")
-    out["password"] = password
+    # password — required only when it is part of the configured schema.
+    # A schema without `password` is a passwordless registration.
+    if "password" in by_name:
+        password = payload.get("password")
+        if not password:
+            raise merrors.ValueException("password is required")
+        out["password"] = password
 
     for f in fields:
         name = f["name"]

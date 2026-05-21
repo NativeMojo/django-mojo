@@ -246,7 +246,6 @@ def on_auth_exchange(request):
 @md.strict_rate_limit("register", ip_limit=5, ip_window=300)
 @md.requires_bouncer_token('registration')
 @md.requires_geofence(scope="auth")
-@md.requires_params("password")
 def on_register(request):
     """
     Create a new user account.
@@ -258,9 +257,11 @@ def on_register(request):
     setting is unset) preserves the legacy email-based form: required email
     + password, optional first_name + last_name.
 
-    Required body params: password + every field marked required in the
-    configured schema. The identity field (email or phone, auto-picked) is
-    always required.
+    Required body params: every field marked required in the configured
+    schema. `password` is required only when it is part of the schema — a
+    schema that omits `password` creates a passwordless account (the schema
+    must then include an SMS-verified phone, and the user logs in by SMS
+    code). The identity field (email or phone, auto-picked) is always required.
 
     Optional body params: anything not required in the schema, plus any
     keys listed in REGISTRATION_EXTRA_FIELDS, plus `group_uuid`.
@@ -310,6 +311,19 @@ def on_register(request):
     min_age = register_schema.resolve_min_age(group=group, request=request)
     by_name = {f["name"]: f for f in fields}
 
+    # ---- Passwordless registration guard -----------------------------------
+    # A schema that omits `password` creates an account with no usable
+    # password — it must provide an SMS-verified phone so the account still
+    # has a working login path. validate_fields_config enforces this when a
+    # group's auth config is saved, but the deployment-wide AUTH_CONFIG setting
+    # and the X-Mojo-Test-Register-Fields header bypass that — re-check here.
+    has_password = "password" in by_name
+    if not has_password:
+        phone_field = by_name.get("phone")
+        if not phone_field or phone_field.get("verify") != "sms":
+            raise merrors.ValueException(
+                "Passwordless registration requires a phone with SMS verification")
+
     # ---- Build payload dict from request.DATA (only canonical fields) ------
     raw_payload = {}
     for name in register_schema.CANONICAL_FIELDS:
@@ -320,7 +334,7 @@ def on_register(request):
 
     email = sanitized.get("email", "")
     phone = sanitized.get("phone", "")
-    password = sanitized["password"]
+    password = sanitized.get("password")
     first_name = sanitized.get("first_name", "")
     last_name = sanitized.get("last_name", "")
     dob = sanitized.get("dob")
@@ -352,8 +366,10 @@ def on_register(request):
         if _password_pop is not None:
             request.DATA["password"] = _password_pop
 
-    # Strength check (still framework-side; outside atomic for clarity)
-    User(email=email or None).check_password_strength(password)
+    # Strength check (still framework-side; outside atomic for clarity).
+    # Skipped for passwordless registration — there is no password.
+    if has_password:
+        User(email=email or None).check_password_strength(password)
 
     # ---- Phone-verify consumption (BEFORE atomic block) --------------------
     # If the schema marks phone with verify="sms", a valid verified-phone
@@ -392,7 +408,12 @@ def on_register(request):
             # Falls back to the normalized phone when no names are supplied
             # or every candidate collides.
             user.username = user.generate_username_from_names(fallback=phone)
-        user.set_password(password)
+        if has_password:
+            user.set_password(password)
+        else:
+            # Passwordless account — no usable password; the user logs in by
+            # SMS code (or an enrolled passkey).
+            user.set_unusable_password()
         # on_rest_pre_save / on_rest_created don't fire on direct .save(),
         # so mirror their profile setup explicitly: infer first/last from a
         # business email, backfill display_name, then run the same content
