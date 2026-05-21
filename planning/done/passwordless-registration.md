@@ -1,7 +1,7 @@
 # Passwordless Registration (Phone + SMS Code)
 
 **Type**: request
-**Status**: planned
+**Status**: resolved
 **Date**: 2026-05-21
 **Priority**: medium
 
@@ -304,3 +304,64 @@ No new endpoints, no model/schema change, no migration.
 - Follow-up (not this build): web-mojo `GroupAuthConfigSection.js` locks the
   password row in its registration-fields grid — needs a change to allow
   excluding `password` (only when phone+`verify:sms` is configured).
+
+## Resolution
+
+**Status**: resolved
+**Date**: 2026-05-21
+
+### What Was Built
+A registration field schema may now omit `password`. When it does, signup is
+passwordless: the account is created with `User.set_unusable_password()` and
+the user logs in by SMS code. Permitted only when the schema includes a
+`phone` field with `verify: "sms"`, so a passwordless account always has a
+working login path. The default email + password schema is unchanged.
+
+### Files Changed
+- `mojo/apps/account/services/register_schema.py` — `_normalize_field_list`
+  no longer auto-appends a `password` field; `_normalize_entry` still forces a
+  *present* `password` to required (no optional-password state);
+  `validate_payload` requires `password` only when it is in the schema;
+  `validate_fields_config` rejects a no-password schema lacking a phone with
+  `verify="sms"`.
+- `mojo/apps/account/rest/user.py` — `on_register`: dropped
+  `@md.requires_params("password")`; added a defensive passwordless guard
+  after schema resolution; skips the strength check and calls
+  `set_unusable_password()` when no password is supplied.
+- `tests/test_register/passwordless.py` *(new)* — passwordless test coverage.
+- `tests/test_register/schema.py` — updated the outdated
+  `resolve_fields`-auto-appends-password test to the new contract.
+
+### Tests
+- `tests/test_register/passwordless.py` — `validate_fields_config` accept/reject
+  cases, `_normalize_field_list` no auto-append, `validate_payload` no-password
+  path, `on_register` passwordless creation (unusable password + verified
+  phone), missing-token rejection, the defensive guard, the full passwordless
+  register → SMS-code login round-trip, and a default-schema regression.
+- Run: `bin/run_tests -t test_register` — 80/80 pass.
+- Full suite: 2140 passed, 2 failed (pre-existing, unrelated `test_jobs`
+  scheduled-task tests), 56 skipped.
+
+### Docs Updated
+- `docs/django_developer/account/auth_config.md` — new "Passwordless
+  Registration" section (guard, `set_unusable_password`, SMS login path).
+- `docs/django_developer/account/auth_pages.md` — registration section +
+  passwordless `AUTH_CONFIG` example.
+- `docs/web_developer/account/auth_config.md`,
+  `docs/web_developer/account/auth_pages.md` — consumer-facing passwordless
+  registration + SMS-code login flow.
+- `CHANGELOG.md` — v1.2.21 bullet.
+
+### Security Review
+No concerns. Phone ownership is still proven by the single-use, constant-time
+`verified_phone_token` (a token for phone A cannot register phone B); the
+`on_register` defensive guard fires before any user row is created;
+`set_unusable_password()` genuinely blocks password login (no blank-password
+bypass); default password registration is unweakened; the
+`X-Mojo-Test-Register-Fields` header remains test-mode gated.
+
+### Follow-up
+- web-mojo `GroupAuthConfigSection.js` locks the password row in its
+  registration-fields grid — a follow-up there should allow excluding
+  `password` (only when phone + `verify:"sms"` is configured) so the new
+  capability is reachable from the admin UI.
