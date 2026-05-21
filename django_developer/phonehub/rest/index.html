@@ -4091,6 +4091,7 @@
 <p>On failure: <code>status</code> will be <code>"failed"</code> and <code>error_message</code> will contain the provider error.</p>
 <blockquote>
 <p><strong>Provider-to-provider use:</strong> This same endpoint doubles as the integration surface for the <code>mojo</code> SMS provider. A downstream django-mojo instance configured with <code>PhoneConfig.provider="mojo"</code> authenticates here using an <code>account.ApiKey</code> (<code>Authorization: apikey &lt;token&gt;</code>) and forwards the user's send request. <code>requires_perms</code> uses OR logic, so the api key needs <strong>either <code>send_sms</code> or <code>comms</code></strong> — granting just <code>send_sms</code> is the least-privilege choice. See <a href="../#mojo-remote-sms-provider">README — Mojo Remote SMS Provider</a> for the full setup.</p>
+<p>When the caller authenticates with an API key, the resulting <code>SMS</code> row has a null <code>user</code> (an API key is not a <code>User</code>); the caller is identified by <code>SMS.group</code>, which is set from the API key's group. Session/JWT callers still populate <code>SMS.user</code> as before.</p>
 </blockquote>
 <hr />
 <h3 id="twilio-inbound-webhook-post-apiphonehubsmswebhooktwilio">Twilio Inbound Webhook — <code>POST /api/phonehub/sms/webhook/twilio</code><a class="headerlink" href="#twilio-inbound-webhook-post-apiphonehubsmswebhooktwilio" title="Permanent link">&para;</a></h3>
