@@ -159,6 +159,8 @@ Send an SMS message.
 On failure: `status` will be `"failed"` and `error_message` will contain the provider error.
 
 > **Provider-to-provider use:** This same endpoint doubles as the integration surface for the `mojo` SMS provider. A downstream django-mojo instance configured with `PhoneConfig.provider="mojo"` authenticates here using an `account.ApiKey` (`Authorization: apikey <token>`) and forwards the user's send request. `requires_perms` uses OR logic, so the api key needs **either `send_sms` or `comms`** — granting just `send_sms` is the least-privilege choice. See [README — Mojo Remote SMS Provider](README.md#mojo-remote-sms-provider) for the full setup.
+>
+> When the caller authenticates with an API key, the resulting `SMS` row has a null `user` (an API key is not a `User`); the caller is identified by `SMS.group`, which is set from the API key's group. Session/JWT callers still populate `SMS.user` as before.
 
 ---
 

@@ -33,14 +33,21 @@ def on_sms_send(request):
     """
     to_number = request.DATA.get('to_number')
     body = request.DATA.get('body')
+    from_number = request.DATA.get('from_number')
     metadata = request.DATA.get('metadata')
+
+    # request.user is an ApiKey (not a User) when the caller authenticated
+    # with an API key. SMS.user is a User ForeignKey, so only attach a real
+    # User — the API-key path is identified by its group instead.
+    user = request.user if hasattr(request.user, "is_request_user") else None
 
     # Send SMS
     sms = SMS.send(
         to_number=to_number,
         body=body,
+        from_number=from_number,
         group=request.group,
-        user=request.user,
+        user=user,
         metadata=metadata
     )
 
