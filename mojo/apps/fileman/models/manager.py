@@ -510,9 +510,11 @@ class FileManager(MojoSecrets, MojoModel):
 
     def _resolve_allowed_origins_from_value_or_settings(self, value):
         """
-        Resolve a list of allowed origins from action value or global settings.
+        Resolve a list of allowed origins from the action value, this manager's
+        own ``allowed_origins`` setting, or global settings.
         Accepts 'origins', 'allowed_origins', 'domains', or 'list_of_domains' keys.
-        Falls back to settings such as CORS_ALLOWED_ORIGINS, ALLOWED_ORIGINS, FRONTEND_ORIGIN/URL.
+        Falls back to the manager's ``allowed_origins`` and then settings such as
+        CORS_ALLOWED_ORIGINS, ALLOWED_ORIGINS, FRONTEND_ORIGIN/URL.
         """
         origins = []
 
@@ -525,6 +527,17 @@ class FileManager(MojoSecrets, MojoModel):
                     elif isinstance(v, (list, tuple)):
                         origins.extend([str(s).strip() for s in v if str(s).strip()])
                     break
+
+        # The manager's own configured allowed_origins (set via
+        # set_allowed_origins). on_action_check_cors already consults this, so
+        # the fix path must read the same source — otherwise fix_cors errors on
+        # a manager that check_cors happily validates.
+        mgr_origins = self.allowed_origins
+        if mgr_origins:
+            if isinstance(mgr_origins, str):
+                origins.extend([s.strip() for s in mgr_origins.split(",") if s.strip()])
+            elif isinstance(mgr_origins, (list, tuple)):
+                origins.extend([str(s).strip() for s in mgr_origins if str(s).strip()])
 
         for key in ("CORS_ALLOWED_ORIGINS", "ALLOWED_ORIGINS"):
             v = settings.get(key)
