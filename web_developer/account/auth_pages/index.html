@@ -4004,6 +4004,17 @@ form is a three-step state machine:</p>
 <li><strong>Step 2 — Verify</strong>: 6-digit SMS code with "Resend code" and "Back" links</li>
 <li><strong>Step 3 — Profile</strong>: remaining fields (name, DOB, password) and final submit</li>
 </ol>
+<p><strong>Passwordless registration</strong> — when <code>password</code> is absent from
+<code>registration.fields</code>, the form has no password input. The account is created
+without a usable password. The user signs in afterward using the SMS-code flow:</p>
+<ol>
+<li><code>POST /api/auth/sms/login</code> with <code>{"phone_number": "&lt;phone&gt;"}</code> — sends a 6-digit code and returns <code>{"status": true}</code>.</li>
+<li><code>POST /api/auth/sms/verify</code> with <code>{"phone_number": "&lt;phone&gt;", "code": "&lt;code&gt;"}</code> — returns JWT tokens on success.</li>
+</ol>
+<p>A passwordless schema always includes a <code>phone</code> field with <code>verify: "sms"</code> — you
+can confirm this by inspecting <code>registration.fields</code> from <code>GET /api/auth/config</code>.
+Passwordless accounts may also enroll a passkey (if <code>registration.passkey_prompt</code>
+is enabled) as an additional login path.</p>
 <p><strong>DOB field</strong> — three segmented numeric inputs (<code>MM</code> / <code>DD</code> / <code>YYYY</code>), mobile
 numeric keyboard, paste-aware (<code>MM/DD/YYYY</code>, <code>MM-DD-YYYY</code>, <code>YYYY-MM-DD</code>),
 submits as ISO <code>yyyy-mm-dd</code>.</p>

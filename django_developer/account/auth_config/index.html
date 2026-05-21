@@ -3827,6 +3827,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#passwordless-registration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Passwordless Registration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#login-method-soft-gating" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4127,7 +4138,7 @@ time. Validated constraints:</p>
 <li><code>login.methods</code> must be a non-empty list of valid tokens</li>
 <li><code>registration.methods</code> must be a list of valid tokens</li>
 <li><code>registration.passkey_prompt</code> must be <code>"off"</code>, <code>"optional"</code>, or <code>"required"</code></li>
-<li><code>registration.fields</code> is validated via <code>register_schema.validate_fields_config</code></li>
+<li><code>registration.fields</code> is validated via <code>register_schema.validate_fields_config</code> — a schema that omits <code>password</code> is accepted only when it also includes a <code>phone</code> field with <code>verify: "sms"</code> (see Passwordless Registration below)</li>
 </ul>
 <hr />
 <h2 id="service-api">Service API<a class="headerlink" href="#service-api" title="Permanent link">&para;</a></h2>
@@ -4155,6 +4166,29 @@ time. Validated constraints:</p>
 <code>X-Mojo-Test-Auth-Config</code> header override in test mode (loopback + test flag
 only — not honoured in production).</p>
 <hr />
+<h2 id="passwordless-registration">Passwordless Registration<a class="headerlink" href="#passwordless-registration" title="Permanent link">&para;</a></h2>
+<p>A <code>registration.fields</code> schema may omit <code>password</code>. When it does:</p>
+<ul>
+<li><code>POST /api/auth/register</code> no longer requires a <code>password</code> body param.</li>
+<li>The account is created with Django's <code>set_unusable_password()</code> — password-based login is impossible for that account.</li>
+<li>The user logs in afterward via the SMS-code flow (<code>POST /api/auth/sms/login</code> → <code>POST /api/auth/sms/verify</code>) or an enrolled passkey.</li>
+</ul>
+<p><strong>Mandatory guard:</strong> a schema that omits <code>password</code> MUST include a <code>phone</code> field with <code>verify: "sms"</code>. <code>validate_fields_config</code> rejects a no-password schema without an SMS-verified phone at config-write time. <code>on_register</code> also re-checks this defensively (the deployment-wide <code>AUTH_CONFIG</code> setting and the <code>X-Mojo-Test-Register-Fields</code> test header bypass <code>validate_auth_config</code>).</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># Passwordless registration via AUTH_CONFIG</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="n">AUTH_CONFIG</span> <span class="o">=</span> <span class="p">{</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>    <span class="s2">&quot;registration&quot;</span><span class="p">:</span> <span class="p">{</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>        <span class="s2">&quot;fields&quot;</span><span class="p">:</span> <span class="p">[</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>            <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;first_name&quot;</span><span class="p">,</span> <span class="s2">&quot;required&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>            <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;last_name&quot;</span><span class="p">,</span>  <span class="s2">&quot;required&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>            <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;phone&quot;</span><span class="p">,</span>      <span class="s2">&quot;required&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span> <span class="s2">&quot;verify&quot;</span><span class="p">:</span> <span class="s2">&quot;sms&quot;</span><span class="p">},</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>        <span class="p">],</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>        <span class="s2">&quot;identity_field&quot;</span><span class="p">:</span> <span class="s2">&quot;phone&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>    <span class="p">}</span>
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="p">}</span>
+</code></pre></div>
+<p>The hosted <code>/register</code> page renders no password input when <code>password</code> is absent from the schema — the form is schema-driven. After registration the user signs in via SMS code (or a passkey if enrolled).</p>
+<p>The default schema (email + password) and all existing password-based registration are unchanged. <code>password</code>, when present in the schema, is always required — there is no "optional password" state.</p>
+<hr />
 <h2 id="login-method-soft-gating">Login Method Soft-Gating<a class="headerlink" href="#login-method-soft-gating" title="Permanent link">&para;</a></h2>
 <p>When a <code>group_uuid</code> resolves a group on a login or registration request, the
 auth config's <code>login.methods</code> / <code>registration.methods</code> lists are consulted.
@@ -4168,7 +4202,7 @@ that omit <code>group_uuid</code> are not restricted.</p>
 <h2 id="passkey-enrollment-page">Passkey Enrollment Page<a class="headerlink" href="#passkey-enrollment-page" title="Permanent link">&para;</a></h2>
 <p>A reusable passkey enrollment page is served at <code>/{BOUNCER_PASSKEY_PATH}</code>
 (default <code>/passkey</code>). It is themed by the resolved auth config.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>BOUNCER_PASSKEY_PATH = &#39;passkey&#39;   # file-backed setting (default)
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>BOUNCER_PASSKEY_PATH = &#39;passkey&#39;   # file-backed setting (default)
 </code></pre></div>
 <p>The page is not bouncer-gated — the visitor must already be authenticated
 (the page reads the JWT from localStorage and runs the WebAuthn registration

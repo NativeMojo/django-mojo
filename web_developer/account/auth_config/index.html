@@ -3888,6 +3888,14 @@ methods.</p>
 </code></pre></div>
 <p>Use <code>login.methods</code> and <code>registration.methods</code> to decide which buttons to
 render. Use <code>theme</code> to apply branding.</p>
+<p><code>registration.fields: null</code> means the deployment default (email + password) is
+in effect. A non-null <code>fields</code> list may omit <code>password</code> — when it does,
+registration is <strong>passwordless</strong>: the account is created without a usable
+password and the user signs in afterward via SMS code. In that case the
+<code>fields</code> list always contains a <code>phone</code> entry with <code>verify: "sms"</code> (the server
+rejects a passwordless config without it). Custom front-ends building a
+registration form should check whether <code>password</code> appears in <code>fields</code> and
+render (or omit) the password input accordingly.</p>
 <hr />
 <h2 id="login-method-soft-gating">Login Method Soft-Gating<a class="headerlink" href="#login-method-soft-gating" title="Permanent link">&para;</a></h2>
 <p>When you call a login or registration endpoint with a <code>group_uuid</code> and the

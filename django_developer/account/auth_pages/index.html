@@ -4377,6 +4377,11 @@ as absolute URLs and bypass the <code>/api/</code> prefix.</p>
   to <code>/passkey</code> after signup</li>
 <li>Phone-first flow when <code>phone</code> field has <code>verify: "sms"</code> in the schema
   (3-step state machine: phone → SMS code → profile)</li>
+<li><strong>Passwordless registration</strong> — when <code>password</code> is absent from
+  <code>registration.fields</code>, the form renders no password input and the account is
+  created with <code>set_unusable_password()</code>. The user logs in afterward via the
+  SMS-code flow. Requires a <code>phone</code> field with <code>verify: "sms"</code> in the same
+  schema. See <a href="../auth_config/#passwordless-registration">Auth Config — Passwordless Registration</a>.</li>
 </ul>
 <h3 id="passkey-enrollment-page-passkey">Passkey enrollment page (<code>/passkey</code>)<a class="headerlink" href="#passkey-enrollment-page-passkey" title="Permanent link">&para;</a></h3>
 <p>Not bouncer-gated. Themed by the resolved auth config. Reads the JWT from
@@ -4407,8 +4412,21 @@ for the schema and <code>register_schema.py</code> for the field resolution logi
 <a id="__codelineno-9-13" name="__codelineno-9-13" href="#__codelineno-9-13"></a>    <span class="p">}</span>
 <a id="__codelineno-9-14" name="__codelineno-9-14" href="#__codelineno-9-14"></a><span class="p">}</span>
 </code></pre></div>
+<p>Omitting <code>password</code> from the field list makes registration <strong>passwordless</strong> — the account is created with an unusable password and the user signs in via SMS code. The schema must include a <code>phone</code> field with <code>verify: "sms"</code> for a passwordless config to be valid (enforced at config-write time and defensively on every registration request):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># Passwordless registration — no password field</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="n">AUTH_CONFIG</span> <span class="o">=</span> <span class="p">{</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>    <span class="s2">&quot;registration&quot;</span><span class="p">:</span> <span class="p">{</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>        <span class="s2">&quot;fields&quot;</span><span class="p">:</span> <span class="p">[</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>            <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;first_name&quot;</span><span class="p">,</span> <span class="s2">&quot;required&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>            <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;last_name&quot;</span><span class="p">,</span>  <span class="s2">&quot;required&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a>            <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;phone&quot;</span><span class="p">,</span>      <span class="s2">&quot;required&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span> <span class="s2">&quot;verify&quot;</span><span class="p">:</span> <span class="s2">&quot;sms&quot;</span><span class="p">},</span>
+<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a>        <span class="p">],</span>
+<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a>        <span class="s2">&quot;identity_field&quot;</span><span class="p">:</span> <span class="s2">&quot;phone&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a>    <span class="p">}</span>
+<a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a><span class="p">}</span>
+</code></pre></div>
 <p><strong>Dev-mode SMS bypass:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="n">AUTH_PHONE_VERIFY_DEV_BYPASS_CODE</span> <span class="o">=</span> <span class="s2">&quot;000000&quot;</span>   <span class="c1"># DO NOT SET IN PROD</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="n">AUTH_PHONE_VERIFY_DEV_BYPASS_CODE</span> <span class="o">=</span> <span class="s2">&quot;000000&quot;</span>   <span class="c1"># DO NOT SET IN PROD</span>
 </code></pre></div>
 <p>Two endpoints back the phone-verify flow:</p>
 <table>
