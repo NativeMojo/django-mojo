@@ -12,6 +12,9 @@ class FileManager(MojoSecrets, MojoModel):
     """
 
     class RestMeta:
+        # FileManager supports user-, group-, and system-scoped managers, so the
+        # owner must never be auto-stamped to the caller — an omitted user stays None.
+        CREATED_BY_OWNER_FIELD = None
         CAN_CREATE = True
         CAN_DELETE = True
         DEFAULT_SORT = "-id"
