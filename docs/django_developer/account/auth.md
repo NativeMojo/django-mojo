@@ -252,6 +252,22 @@ Fields and which identity channel is required depend on the server's `AUTH_REGIS
 
 The registration page is served by the bouncer at `/auth/register` and uses `MojoAuth.register()` on the frontend.
 
+**Phone-identity existing-account behavior:**
+
+When `identity_field` is `phone` and the schema marks the phone field with
+`verify: "sms"`, a submitted phone that already belongs to an account is treated
+as a login rather than a duplicate error. The `verified_phone_token` proves
+phone ownership (the same proof SMS login uses), so the existing account is
+returned. Profile fields in the request body are ignored. Without
+`verify: "sms"` on the phone field, an existing phone is still a hard
+duplicate error (ownership unproven).
+
+If `group_uuid` is supplied and the existing account is not yet a member of
+that group, a `GroupMember` is created and `USER_REGISTERED_HANDLER` fires for
+that group. If the account is already a member, `USER_REGISTERED_HANDLER` does
+not fire. Email-identity registration is unchanged — an existing email is always
+a duplicate error.
+
 **Protections:**
 
 - Rate limited: 5 requests per IP per 5 minutes
@@ -259,6 +275,7 @@ The registration page is served by the bouncer at `/auth/register` and uses `Moj
 - Password strength validated via `check_password_strength()`
 - Content guard validates username and name fields on save
 - Duplicate email returns a clear error
+- Duplicate phone without `verify: "sms"` returns a clear error
 
 ### Pattern A — Invite-only
 
@@ -341,7 +358,9 @@ USER_REGISTERED_HANDLER = "myapp.handlers.on_user_registered"
 ```python
 # myapp/handlers.py
 def on_user_registered(*, user, request, group, source, extra):
-    # source ∈ {"password", "oauth"} in v1
+    # source ∈ {"password", "oauth", "sms"}
+    # "sms" fires for: new phone-identity accounts AND existing accounts
+    #   joining a new group via the phone register flow.
     # Avoid slow I/O here — this is inside a DB transaction
     user.metadata["registration_source"] = source
     user.save(update_fields=["metadata"])

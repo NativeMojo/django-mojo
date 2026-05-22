@@ -78,6 +78,20 @@ form is a three-step state machine:
 2. **Step 2 — Verify**: 6-digit SMS code with "Resend code" and "Back" links
 3. **Step 3 — Profile**: remaining fields (name, DOB, password) and final submit
 
+When `/auth/phone/register/verify` returns `account_exists: true`, the hosted
+form **skips step 3** and immediately submits the register call with only
+`phone` + `verified_phone_token`. The server signs the user into the existing
+account and returns JWT tokens — the same response shape as a new registration.
+Profile fields submitted alongside the token are ignored for an existing account.
+
+**Existing-phone behavior summary:**
+
+| Schema `phone.verify` | Phone already registered | Result |
+|---|---|---|
+| `"sms"` | Yes | Signed into existing account (JWT tokens returned) |
+| `"sms"` | No | New account created (JWT tokens or `requires_verification`) |
+| absent | Yes | 400 — duplicate account error |
+
 **Passwordless registration** — when `password` is absent from
 `registration.fields`, the form has no password input. The account is created
 without a usable password. The user signs in afterward using the SMS-code flow:

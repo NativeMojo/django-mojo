@@ -297,6 +297,21 @@ secondary buttons — so SMS login is never buried.
   created with `set_unusable_password()`. The user logs in afterward via the
   SMS-code flow. Requires a `phone` field with `verify: "sms"` in the same
   schema. See [Auth Config — Passwordless Registration](auth_config.md#passwordless-registration).
+- **Existing-phone login via register** — when the schema marks `phone` with
+  `verify: "sms"` and the submitted phone already belongs to an account, the
+  SMS-verified token proves phone ownership and the requester is signed into
+  the existing account instead of receiving a duplicate error. The submitted
+  profile fields are ignored; the existing account is unmodified. Without
+  `verify: "sms"` on the phone field, an existing phone is still a hard
+  duplicate error.
+  - If `group_uuid` is supplied and the existing account is not yet a member
+    of that group, a `GroupMember` is created and `USER_REGISTERED_HANDLER`
+    fires for that group (per-group setup runs). If the account is already a
+    member, it is a pure login and `USER_REGISTERED_HANDLER` does not fire.
+  - The hosted form reads the `account_exists` flag from
+    `/auth/phone/register/verify` and skips the profile step (step 3)
+    entirely, submitting the register call immediately with only
+    `phone` + `verified_phone_token`.
 
 ### SMS code autofill
 
@@ -384,8 +399,8 @@ Two endpoints back the phone-verify flow:
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| POST | `/api/auth/phone/register/start` | Body `{phone}` → `{session_token, expires_in}` |
-| POST | `/api/auth/phone/register/verify` | Body `{session_token, code}` → `{verified_phone_token, expires_in}` |
+| POST | `/api/auth/phone/register/start` | Body `{phone}` → `{session_token, expires_in}`. Accepts phones that already have accounts (the register flow handles the login). |
+| POST | `/api/auth/phone/register/verify` | Body `{session_token, code}` → `{verified_phone_token, expires_in, account_exists}`. `account_exists` is `true` when the verified phone already belongs to an account — the hosted form uses this to skip the profile step. |
 
 ---
 
