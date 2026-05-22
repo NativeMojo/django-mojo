@@ -45,7 +45,7 @@ class UserLoginEvent(models.Model, MojoModel):
         CAN_CREATE = False
         CAN_UPDATE = False
         CAN_DELETE = False
-        VIEW_PERMS = ['manage_users', 'security', 'users']
+        VIEW_PERMS = ['manage_users', 'security', 'users', 'owner']
         SEARCH_FIELDS = ['ip_address', 'country_code', 'region', 'city']
         GRAPHS = {
             'list': {
