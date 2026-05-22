@@ -189,30 +189,215 @@ def test_phone_only_token_phone_mismatch(opts):
         "no user must be created when the verified token is bound to a different phone"
 
 
-@th.django_unit_test("phone-only register: existing phone → 400 duplicate")
-def test_phone_only_duplicate(opts):
+@th.django_unit_test("phone register: an SMS-verified existing phone signs into that account")
+def test_phone_existing_logs_in(opts):
     from mojo.apps.account.models import User
     _clear_register_limits()
     phone = _fresh_phone()
 
-    # Create a user that already owns this phone
-    u = User.objects.create_user(
+    existing = User.objects.create_user(
         username=f"existing_{_uuid.uuid4().hex[:6]}",
-        email=f"existing_{_uuid.uuid4().hex[:6]}@dup.test",
+        email=f"existing_{_uuid.uuid4().hex[:8]}@dup.test",
         password="Abcd1234!")
-    u.phone_number = phone
-    u.save()
-
+    existing.first_name = "Original"
+    existing.phone_number = phone
+    existing.save()
+    existing_id = existing.pk
     try:
-        # The phone-register start endpoint itself rejects existing phones
-        # before the SMS is even sent.
-        start = opts.client.post(
-            "/api/auth/phone/register/start",
-            {"phone": phone})
-        assert start.status_code in (400, 422), \
-            f"start must reject existing phone, got {start.status_code}: {opts.client.last_response.body}"
+        token = _start_and_verify_phone(opts, phone)
+        # Phone-only payload — no profile fields (the form skips its step 3).
+        resp = opts.client.post(
+            "/api/auth/register",
+            {"phone": phone, "verified_phone_token": token},
+            headers=_register_headers())
+        assert resp.status_code == 200, \
+            f"an SMS-verified existing phone must sign in with no profile " \
+            f"fields, got {resp.status_code}: {opts.client.last_response.body}"
+        users = list(User.objects.filter(phone_number=phone))
+        assert len(users) == 1, \
+            f"no duplicate account may be created, found {len(users)}"
+        assert users[0].pk == existing_id, \
+            "the response must sign into the pre-existing account"
+        assert users[0].first_name == "Original", \
+            "the existing account profile must not be altered"
+        assert bool(resp.response.data.access_token), \
+            "an access token must be issued for the existing account"
     finally:
         User.objects.filter(phone_number=phone).delete()
+
+
+@th.django_unit_test("phone register: existing user joins a new group + USER_REGISTERED_HANDLER fires")
+def test_phone_existing_joins_new_group(opts):
+    from mojo.apps.account.models import User, Group
+    from mojo.apps.account.models.member import GroupMember
+    from tests.test_register import _capture
+    _clear_register_limits()
+    phone = _fresh_phone()
+    group_uuid = _uuid.uuid4().hex
+
+    existing = User.objects.create_user(
+        username=f"existing_{_uuid.uuid4().hex[:6]}",
+        email=f"existing_{_uuid.uuid4().hex[:8]}@grp.test",
+        password="Abcd1234!")
+    existing.phone_number = phone
+    existing.save()
+    group = Group.objects.create(
+        name=f"grp-{group_uuid[:8]}", uuid=group_uuid, is_active=True)
+    capture_id = _capture.new_capture_id()
+    _capture.clear_capture(capture_id)
+    try:
+        token = _start_and_verify_phone(opts, phone)
+        headers = _register_headers(capture_id=capture_id)
+        headers["X-Mojo-Test-User-Registered-Handler"] = \
+            "tests.test_register._capture.capture_register"
+        resp = opts.client.post(
+            "/api/auth/register",
+            {"phone": phone, "verified_phone_token": token, "group_uuid": group_uuid},
+            headers=headers)
+        assert resp.status_code == 200, \
+            f"existing user joining a new group must succeed, got " \
+            f"{resp.status_code}: {opts.client.last_response.body}"
+        assert GroupMember.objects.filter(user=existing, group=group).exists(), \
+            "the existing user must be added to the new group"
+        reg_calls = _capture.read_capture(capture_id).get("register", [])
+        assert len(reg_calls) == 1, \
+            f"USER_REGISTERED_HANDLER must fire once for the new group, got {reg_calls}"
+        assert reg_calls[0]["group_uuid"] == group_uuid, \
+            f"the handler must receive the new group, got {reg_calls[0].get('group_uuid')}"
+    finally:
+        _capture.clear_capture(capture_id)
+        User.objects.filter(phone_number=phone).delete()
+        Group.objects.filter(uuid=group_uuid).delete()
+
+
+@th.django_unit_test("phone register: existing user already in the group → login only, no handler")
+def test_phone_existing_already_member(opts):
+    from mojo.apps.account.models import User, Group
+    from mojo.apps.account.models.member import GroupMember
+    from tests.test_register import _capture
+    _clear_register_limits()
+    phone = _fresh_phone()
+    group_uuid = _uuid.uuid4().hex
+
+    existing = User.objects.create_user(
+        username=f"existing_{_uuid.uuid4().hex[:6]}",
+        email=f"existing_{_uuid.uuid4().hex[:8]}@mem.test",
+        password="Abcd1234!")
+    existing.phone_number = phone
+    existing.save()
+    group = Group.objects.create(
+        name=f"grp-{group_uuid[:8]}", uuid=group_uuid, is_active=True)
+    GroupMember.objects.create(user=existing, group=group)
+    capture_id = _capture.new_capture_id()
+    _capture.clear_capture(capture_id)
+    try:
+        token = _start_and_verify_phone(opts, phone)
+        headers = _register_headers(capture_id=capture_id)
+        headers["X-Mojo-Test-User-Registered-Handler"] = \
+            "tests.test_register._capture.capture_register"
+        resp = opts.client.post(
+            "/api/auth/register",
+            {"phone": phone, "verified_phone_token": token, "group_uuid": group_uuid},
+            headers=headers)
+        assert resp.status_code == 200, \
+            f"an existing member must still sign in, got {resp.status_code}: " \
+            f"{opts.client.last_response.body}"
+        assert not _capture.read_capture(capture_id).get("register"), \
+            "USER_REGISTERED_HANDLER must NOT fire when the user is already a member"
+    finally:
+        _capture.clear_capture(capture_id)
+        User.objects.filter(phone_number=phone).delete()
+        Group.objects.filter(uuid=group_uuid).delete()
+
+
+@th.django_unit_test("phone/register/verify reports account_exists")
+def test_phone_register_verify_account_exists(opts):
+    from mojo.apps.account.models import User
+    from mojo.helpers.redis import get_connection
+    _clear_register_limits()
+
+    # A new phone — no account.
+    new_phone = _fresh_phone()
+    start = opts.client.post("/api/auth/phone/register/start", {"phone": new_phone})
+    assert start.status_code == 200, \
+        f"start must succeed for a new phone: {opts.client.last_response.body}"
+    st = start.response.data.session_token
+    code = json.loads(get_connection().get(f"phone:register:session:{st}"))["code"]
+    verify = opts.client.post(
+        "/api/auth/phone/register/verify", {"session_token": st, "code": code})
+    assert verify.status_code == 200, \
+        f"verify must succeed: {opts.client.last_response.body}"
+    assert verify.response.data.account_exists is False, \
+        "account_exists must be False for a phone with no account"
+
+    # An existing phone — has an account; start must now accept it.
+    _clear_register_limits()
+    ex_phone = _fresh_phone()
+    u = User.objects.create_user(
+        username=f"ex_{_uuid.uuid4().hex[:6]}",
+        email=f"ex_{_uuid.uuid4().hex[:8]}@ae.test", password="Abcd1234!")
+    u.phone_number = ex_phone
+    u.save()
+    try:
+        start2 = opts.client.post("/api/auth/phone/register/start", {"phone": ex_phone})
+        assert start2.status_code == 200, \
+            f"start must accept an already-registered phone now, got " \
+            f"{start2.status_code}: {opts.client.last_response.body}"
+        st2 = start2.response.data.session_token
+        code2 = json.loads(get_connection().get(f"phone:register:session:{st2}"))["code"]
+        verify2 = opts.client.post(
+            "/api/auth/phone/register/verify", {"session_token": st2, "code": code2})
+        assert verify2.status_code == 200, \
+            f"verify must succeed: {opts.client.last_response.body}"
+        assert verify2.response.data.account_exists is True, \
+            "account_exists must be True for a phone that already has an account"
+    finally:
+        User.objects.filter(phone_number=ex_phone).delete()
+
+
+@th.django_unit_test("phone register: existing phone with no SMS-verify schema is still rejected")
+def test_phone_existing_no_verify_rejects(opts):
+    from mojo.apps.account.models import User
+    _clear_register_limits()
+    phone = _fresh_phone()
+    u = User.objects.create_user(
+        username=f"nv_{_uuid.uuid4().hex[:6]}",
+        email=f"nv_{_uuid.uuid4().hex[:8]}@nv.test", password="Abcd1234!")
+    u.phone_number = phone
+    u.save()
+    # Phone identity but the schema does NOT SMS-verify the phone — ownership
+    # cannot be proven, so an existing phone must still be a hard duplicate.
+    no_verify_fields = [
+        {"name": "first_name", "required": True},
+        {"name": "phone", "required": True},
+        {"name": "password", "required": True},
+    ]
+    try:
+        resp = opts.client.post(
+            "/api/auth/register",
+            {"phone": phone},
+            headers=_register_headers(fields=no_verify_fields))
+        assert resp.status_code in (400, 422), \
+            f"an existing phone without SMS verification must be rejected, " \
+            f"got {resp.status_code}: {opts.client.last_response.body}"
+        assert "already exists" in str(opts.client.last_response.body).lower(), \
+            "the rejection must be the duplicate-account error"
+    finally:
+        User.objects.filter(phone_number=phone).delete()
+
+
+@th.django_unit_test("register.html skips the profile step when the phone already has an account")
+def test_register_html_skips_step_for_existing_account(opts):
+    import os
+    import mojo.apps.account as account_pkg
+    tpl = os.path.join(os.path.dirname(account_pkg.__file__),
+                       "templates", "account", "register.html")
+    with open(tpl) as fh:
+        src = fh.read()
+    assert "data.account_exists" in src, \
+        "register.html must branch on data.account_exists from phone-verify"
+    assert "function finishRegister" in src, \
+        "register.html must route post-register handling through finishRegister"
 
 
 @th.django_unit_test("AUTH_MIN_AGE_YEARS gate: DOB below threshold → 400")

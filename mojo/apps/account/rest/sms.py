@@ -236,11 +236,10 @@ def on_phone_register_start(request):
     if not phone:
         raise merrors.ValueException("Invalid phone number")
 
-    # Reject early when a user already owns this number — same error family
-    # the email path uses for duplicates. Without this guard, a bot can
-    # silently burn SMS spend trying to "verify" someone else's number.
-    if User.objects.filter(phone_number=phone).exists():
-        raise merrors.ValueException("An account with this phone number already exists")
+    # An already-registered phone is NOT rejected here: registering with an
+    # existing phone is a valid flow — `on_register` turns it into a login for
+    # the proven owner. SMS spend abuse is bounded by the per-IP rate limit
+    # above, the same way `/auth/sms/login` is.
 
     session_token, code, ttl = phone_register.start(phone, ip=getattr(request, "ip", None))
 
@@ -266,8 +265,11 @@ def on_phone_register_verify(request):
     """Verify the SMS code and mint a verified-phone token.
 
     Body: { session_token, code }
-    Returns { verified_phone_token, expires_in }. The token is then
-    submitted as `verified_phone_token` in the `/auth/register` POST body.
+    Returns { verified_phone_token, expires_in, account_exists }. The token is
+    then submitted as `verified_phone_token` in the `/auth/register` POST body.
+    `account_exists` is True when the verified phone already belongs to an
+    account — the register flow then signs that account in (no profile fields
+    needed), so the hosted form skips its profile step.
     """
     from mojo.apps.account.services import phone_register
 
@@ -277,5 +279,9 @@ def on_phone_register_verify(request):
         session_token, code, request=request)
     return JsonResponse({
         "status": True,
-        "data": {"verified_phone_token": verified_token, "expires_in": ttl},
+        "data": {
+            "verified_phone_token": verified_token,
+            "expires_in": ttl,
+            "account_exists": User.objects.filter(phone_number=phone).exists(),
+        },
     })

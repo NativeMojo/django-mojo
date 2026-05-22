@@ -36,11 +36,13 @@ def test_start_happy_path(opts):
     assert data.expires_in > 0, "expires_in must be positive"
 
 
-@th.django_unit_test("phone register start: 400 when phone already belongs to a user")
-def test_start_rejects_existing_phone(opts):
+@th.django_unit_test("phone register start: accepts a phone that already belongs to a user")
+def test_start_accepts_existing_phone(opts):
     from mojo.apps.account.models import User
     _clear_register_limits()
-    # Pre-create a user with this phone
+    # Pre-create a user with this phone. Registering with an already-registered
+    # phone is now a valid flow — `on_register` turns it into a login for the
+    # proven owner — so `start` must NOT reject it up front.
     phone = "+14155557002"
     User.objects.filter(phone_number=phone).delete()
     u = User.objects.create_user(username="phone_existing", email="phone_existing@test.com", password="Abcd1234!")
@@ -51,8 +53,10 @@ def test_start_rejects_existing_phone(opts):
         resp = opts.client.post(
             "/api/auth/phone/register/start",
             {"phone": phone})
-        assert resp.status_code in (400, 422), \
-            f"existing phone must return 4xx, got {resp.status_code}: {opts.client.last_response.body}"
+        assert resp.status_code == 200, \
+            f"start must accept an already-registered phone, got {resp.status_code}: {opts.client.last_response.body}"
+        assert bool(resp.response.data.session_token), \
+            "start must still mint a session_token for an existing phone"
     finally:
         User.objects.filter(phone_number=phone).delete()
 

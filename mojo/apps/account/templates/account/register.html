@@ -307,8 +307,22 @@ Already have an account? <a href="{{ auth_url|default:'/auth' }}">Log in</a>
                 MojoAuth.verifyPhoneRegister(sessionToken, code)
                     .then(function (data) {
                         $("reg-phone-token").value = data.verified_phone_token;
-                        m.setLoading(verifyBtn, false);
                         if (resendTimer) { clearInterval(resendTimer); resendTimer = null; }
+                        if (data.account_exists) {
+                            // The phone already has an account — skip the
+                            // profile step; registering signs them straight in.
+                            var p = { phone: valueFor("phone"),
+                                      verified_phone_token: data.verified_phone_token };
+                            if (cfg.groupUuid) p.group_uuid = cfg.groupUuid;
+                            MojoAuth.register(p)
+                                .then(function (result) { finishRegister(result, verifyBtn); })
+                                .catch(function (err) {
+                                    m.setLoading(verifyBtn, false);
+                                    m.showMessage(MojoAuth.getError(err) || "Sign-in failed.", "error");
+                                });
+                            return;
+                        }
+                        m.setLoading(verifyBtn, false);
                         showStep(3);
                     })
                     .catch(function (err) {
@@ -345,6 +359,23 @@ Already have an account? <a href="{{ auth_url|default:'/auth' }}">Log in</a>
         }
     }
 
+    // Post-register handling — shared by the single-pane submit, the stepped
+    // submit, and the existing-account fast path (skip the profile step).
+    function finishRegister(result, btn) {
+        if (result && result.requires_verification) {
+            if (btn) m.setLoading(btn, false);
+            m.showMessage(result.message || "Account created. Please check your email to verify your account.", "success");
+            return;
+        }
+        // Tokens are stored. When the group asks for a passkey at signup, send
+        // the user to the enrollment page; otherwise finish.
+        if (cfg.passkeyPrompt && cfg.passkeyPrompt !== "off" && cfg.passkeyUrl) {
+            window.location.href = cfg.passkeyUrl;
+            return;
+        }
+        m.onAuthSuccess(result);
+    }
+
     // ---- Submit (final) ---------------------------------------------------
     $("form-register").addEventListener("submit", function (e) {
         e.preventDefault();
@@ -372,23 +403,7 @@ Already have an account? <a href="{{ auth_url|default:'/auth' }}">Log in</a>
 
         var btn = $("btn-register"); m.setLoading(btn, true); m.hideMessage();
         MojoAuth.register(payload)
-            .then(function (result) {
-                if (result && result.requires_verification) {
-                    m.setLoading(btn, false);
-                    m.showMessage(result.message || "Account created. Please check your email to verify your account.", "success");
-                    return;
-                }
-                // Registration succeeded and tokens are stored. When the group
-                // config asks for a passkey at signup, send the user to the
-                // enrollment page (it reads the JWT from localStorage). The
-                // passkey_url already carries group_uuid + any forwarded
-                // redirect, so the post-enrollment landing stays consistent.
-                if (cfg.passkeyPrompt && cfg.passkeyPrompt !== "off" && cfg.passkeyUrl) {
-                    window.location.href = cfg.passkeyUrl;
-                    return;
-                }
-                m.onAuthSuccess(result);
-            })
+            .then(function (result) { finishRegister(result, btn); })
             .catch(function (err) { m.setLoading(btn, false); m.showMessage(MojoAuth.getError(err) || "Registration failed.", "error"); });
     });
 

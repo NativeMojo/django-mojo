@@ -269,6 +269,13 @@ def on_register(request):
     When the schema requires phone with verify="sms", the request must
     include `verified_phone_token` minted by /auth/phone/register/verify.
 
+    Phone identity: when the SMS-verified phone already belongs to an
+    account, the requester has proven phone ownership, so they are signed
+    into that existing account instead of creating a duplicate — the
+    submitted profile fields are ignored. If a `group_uuid` is supplied and
+    the account is not yet a member of that group, it is added and
+    USER_REGISTERED_HANDLER fires for the group (per-group setup still runs).
+
     Extension points (unchanged):
       PRE_REGISTER_VALIDATOR, USER_REGISTERED_HANDLER, USER_LOGIN_HANDLER.
     """
@@ -329,6 +336,64 @@ def on_register(request):
     for name in register_schema.CANONICAL_FIELDS:
         if name in request.DATA:
             raw_payload[name] = request.DATA.get(name)
+
+    # Allowlisted extras — silent-drop unknown keys (existing contract).
+    # Resolved up-front so both the new-user path and the existing-account
+    # path below hand the same `extra` dict to USER_REGISTERED_HANDLER.
+    extras_allow = account_extensions.list_setting_with_header(
+        request, "X-Mojo-Test-Registration-Extra-Fields",
+        "REGISTRATION_EXTRA_FIELDS", [])
+    extra = {key: request.DATA.get(key) for key in extras_allow if key in request.DATA}
+
+    # ---- Existing-account short-circuit (phone identity) -------------------
+    # Detect an account that already owns this phone BEFORE full payload
+    # validation, so a returning user can finish with just phone + verified
+    # token — no profile fields. The SMS-verified token proves they control
+    # the number (same proof as SMS login), so they are signed in. Without
+    # SMS verification ownership is unproven → reject as a duplicate.
+    if identity_field == "phone":
+        raw_phone = raw_payload.get("phone")
+        norm_phone = User.normalize_phone(str(raw_phone)) if raw_phone else None
+        existing = (User.objects.filter(phone_number=norm_phone).first()
+                    if norm_phone else None)
+        if existing is not None:
+            phone_sms_verified = (
+                "phone" in by_name and by_name["phone"].get("verify") == "sms")
+            if not phone_sms_verified:
+                raise merrors.ValueException(
+                    "An account with this phone number already exists")
+            verified_token = request.DATA.get("verified_phone_token", "")
+            if not verified_token:
+                raise merrors.ValueException("Phone verification required")
+            if not phone_register.consume(verified_token, norm_phone):
+                raise merrors.ValueException("Invalid or expired phone verification")
+            if not existing.is_active:
+                raise merrors.PermissionDeniedException("Account is disabled", 403, 403)
+            if not existing.is_phone_verified:
+                existing.is_phone_verified = True
+                existing.save(update_fields=["is_phone_verified", "modified"])
+            # Joining a group the user is not yet a member of is a
+            # registration *into that group*: create the GroupMember and fire
+            # USER_REGISTERED_HANDLER so per-group setup runs. Already a member
+            # (or no group_uuid) → pure login, no handler. Atomic so a raising
+            # handler does not leave a dangling membership.
+            from mojo.apps.account.models.member import GroupMember
+            if group is not None and not GroupMember.objects.filter(
+                    user=existing, group=group).exists():
+                with transaction.atomic():
+                    GroupMember.objects.get_or_create(user=existing, group=group)
+                    account_extensions.fire_user_registered(
+                        user=existing, request=request, group=group,
+                        source="sms", extra=extra)
+            existing.report_incident(
+                f"{existing.username} signed in via the register flow "
+                f"(phone already registered)",
+                "register:existing_account_login")
+            # Looks like a registration to the caller; it is really a login
+            # into the existing account — submitted profile fields are ignored.
+            return jwt_login(request, existing, source="sms", is_new_user=False)
+
+    # ---- Validate the payload for a NEW registration ----------------------
     sanitized = register_schema.validate_payload(
         fields, raw_payload, identity_field=identity_field, min_age=min_age)
 
@@ -339,19 +404,10 @@ def on_register(request):
     last_name = sanitized.get("last_name", "")
     dob = sanitized.get("dob")
 
-    # ---- Identity-keyed duplicate check ------------------------------------
-    if identity_field == "email":
-        if email and User.objects.filter(email=email).exists():
-            raise merrors.ValueException("An account with this email already exists")
-    else:  # identity_field == "phone"
-        if phone and User.objects.filter(phone_number=phone).exists():
-            raise merrors.ValueException("An account with this phone number already exists")
-
-    # Allowlisted extras — silent-drop unknown keys (existing contract)
-    extras_allow = account_extensions.list_setting_with_header(
-        request, "X-Mojo-Test-Registration-Extra-Fields",
-        "REGISTRATION_EXTRA_FIELDS", [])
-    extra = {key: request.DATA.get(key) for key in extras_allow if key in request.DATA}
+    # An existing email is a hard duplicate — email ownership is not proven at
+    # registration time, so we cannot sign them in (unlike the phone path).
+    if identity_field == "email" and email and User.objects.filter(email=email).exists():
+        raise merrors.ValueException("An account with this email already exists")
 
     # PRE_REGISTER_VALIDATOR — may raise ValueException → 400.
     # Strip plaintext password from request.DATA before calling the validator
