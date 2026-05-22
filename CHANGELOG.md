@@ -1,5 +1,10 @@
 ## v1.2.25 - (current)
 
+## v1.2.28 - May 21, 2026
+
+allow existing users to register again with auto signup to group
+
+
 **account** — Registering with a phone that already has an account now signs the user in instead of returning a duplicate error, provided the schema marks the phone field with `verify: "sms"` (the SMS-verified token proves ownership). Profile fields in the request body are ignored for the existing account. Without `verify: "sms"`, an existing phone is still a hard duplicate error. If `group_uuid` is supplied and the account is not yet a member of that group, a `GroupMember` is created and `USER_REGISTERED_HANDLER` fires for the group; if they are already a member it is a pure login with no handler. `POST /api/auth/phone/register/start` no longer rejects already-registered phones. `POST /api/auth/phone/register/verify` now returns `account_exists` (boolean) alongside `verified_phone_token` and `expires_in` — the hosted register form uses it to skip the profile step for returning users.
 
 ## v1.2.27 - May 21, 2026
