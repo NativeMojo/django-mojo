@@ -1,5 +1,10 @@
 ## v1.2.25 - (current)
 
+## v1.2.27 - May 21, 2026
+
+fix for login history permissions
+
+
 ## v1.2.26 - May 21, 2026
 
 fixing autofill sms code
