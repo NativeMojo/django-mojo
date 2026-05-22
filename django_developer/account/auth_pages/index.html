@@ -4399,6 +4399,21 @@ secondary buttons — so SMS login is never buried.
   created with <code>set_unusable_password()</code>. The user logs in afterward via the
   SMS-code flow. Requires a <code>phone</code> field with <code>verify: "sms"</code> in the same
   schema. See <a href="../auth_config/#passwordless-registration">Auth Config — Passwordless Registration</a>.</li>
+<li><strong>Existing-phone login via register</strong> — when the schema marks <code>phone</code> with
+  <code>verify: "sms"</code> and the submitted phone already belongs to an account, the
+  SMS-verified token proves phone ownership and the requester is signed into
+  the existing account instead of receiving a duplicate error. The submitted
+  profile fields are ignored; the existing account is unmodified. Without
+  <code>verify: "sms"</code> on the phone field, an existing phone is still a hard
+  duplicate error.</li>
+<li>If <code>group_uuid</code> is supplied and the existing account is not yet a member
+    of that group, a <code>GroupMember</code> is created and <code>USER_REGISTERED_HANDLER</code>
+    fires for that group (per-group setup runs). If the account is already a
+    member, it is a pure login and <code>USER_REGISTERED_HANDLER</code> does not fire.</li>
+<li>The hosted form reads the <code>account_exists</code> flag from
+    <code>/auth/phone/register/verify</code> and skips the profile step (step 3)
+    entirely, submitting the register call immediately with only
+    <code>phone</code> + <code>verified_phone_token</code>.</li>
 </ul>
 <h3 id="sms-code-autofill">SMS code autofill<a class="headerlink" href="#sms-code-autofill" title="Permanent link">&para;</a></h3>
 <p>Every OTP text — the SMS-code login (<code>_send_otp</code>) and the registration
@@ -4474,12 +4489,12 @@ for the schema and <code>register_schema.py</code> for the field resolution logi
 <tr>
 <td>POST</td>
 <td><code>/api/auth/phone/register/start</code></td>
-<td>Body <code>{phone}</code> → <code>{session_token, expires_in}</code></td>
+<td>Body <code>{phone}</code> → <code>{session_token, expires_in}</code>. Accepts phones that already have accounts (the register flow handles the login).</td>
 </tr>
 <tr>
 <td>POST</td>
 <td><code>/api/auth/phone/register/verify</code></td>
-<td>Body <code>{session_token, code}</code> → <code>{verified_phone_token, expires_in}</code></td>
+<td>Body <code>{session_token, code}</code> → <code>{verified_phone_token, expires_in, account_exists}</code>. <code>account_exists</code> is <code>true</code> when the verified phone already belongs to an account — the hosted form uses this to skip the profile step.</td>
 </tr>
 </tbody>
 </table>

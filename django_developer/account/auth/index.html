@@ -4830,6 +4830,19 @@ for the end-to-end client-side flow.</p>
 <li><strong><code>REQUIRE_VERIFIED_EMAIL = False</code></strong> (default) — User is logged in immediately with a JWT. A verification email is sent as a nudge when the user has an email on file.</li>
 </ul>
 <p>The registration page is served by the bouncer at <code>/auth/register</code> and uses <code>MojoAuth.register()</code> on the frontend.</p>
+<p><strong>Phone-identity existing-account behavior:</strong></p>
+<p>When <code>identity_field</code> is <code>phone</code> and the schema marks the phone field with
+<code>verify: "sms"</code>, a submitted phone that already belongs to an account is treated
+as a login rather than a duplicate error. The <code>verified_phone_token</code> proves
+phone ownership (the same proof SMS login uses), so the existing account is
+returned. Profile fields in the request body are ignored. Without
+<code>verify: "sms"</code> on the phone field, an existing phone is still a hard
+duplicate error (ownership unproven).</p>
+<p>If <code>group_uuid</code> is supplied and the existing account is not yet a member of
+that group, a <code>GroupMember</code> is created and <code>USER_REGISTERED_HANDLER</code> fires for
+that group. If the account is already a member, <code>USER_REGISTERED_HANDLER</code> does
+not fire. Email-identity registration is unchanged — an existing email is always
+a duplicate error.</p>
 <p><strong>Protections:</strong></p>
 <ul>
 <li>Rate limited: 5 requests per IP per 5 minutes</li>
@@ -4837,6 +4850,7 @@ for the end-to-end client-side flow.</p>
 <li>Password strength validated via <code>check_password_strength()</code></li>
 <li>Content guard validates username and name fields on save</li>
 <li>Duplicate email returns a clear error</li>
+<li>Duplicate phone without <code>verify: "sms"</code> returns a clear error</li>
 </ul>
 <h3 id="pattern-a-invite-only">Pattern A — Invite-only<a class="headerlink" href="#pattern-a-invite-only" title="Permanent link">&para;</a></h3>
 <p>For projects that need tighter control, create accounts server-side and send invite links. The user sets their password on first visit.</p>
@@ -4895,10 +4909,12 @@ for the end-to-end client-side flow.</p>
 </code></pre></div>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="c1"># myapp/handlers.py</span>
 <a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_user_registered</span><span class="p">(</span><span class="o">*</span><span class="p">,</span> <span class="n">user</span><span class="p">,</span> <span class="n">request</span><span class="p">,</span> <span class="n">group</span><span class="p">,</span> <span class="n">source</span><span class="p">,</span> <span class="n">extra</span><span class="p">):</span>
-<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>    <span class="c1"># source ∈ {&quot;password&quot;, &quot;oauth&quot;} in v1</span>
-<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>    <span class="c1"># Avoid slow I/O here — this is inside a DB transaction</span>
-<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a>    <span class="n">user</span><span class="o">.</span><span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;registration_source&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">source</span>
-<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a>    <span class="n">user</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="n">update_fields</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;metadata&quot;</span><span class="p">])</span>
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>    <span class="c1"># source ∈ {&quot;password&quot;, &quot;oauth&quot;, &quot;sms&quot;}</span>
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>    <span class="c1"># &quot;sms&quot; fires for: new phone-identity accounts AND existing accounts</span>
+<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a>    <span class="c1">#   joining a new group via the phone register flow.</span>
+<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a>    <span class="c1"># Avoid slow I/O here — this is inside a DB transaction</span>
+<a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a>    <span class="n">user</span><span class="o">.</span><span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;registration_source&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">source</span>
+<a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a>    <span class="n">user</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="n">update_fields</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;metadata&quot;</span><span class="p">])</span>
 </code></pre></div>
 <h4 id="user_login_handler"><code>USER_LOGIN_HANDLER</code><a class="headerlink" href="#user_login_handler" title="Permanent link">&para;</a></h4>
 <p>Fires from every successful <code>jwt_login()</code> call, across all login paths. Errors are caught, logged, and swallowed — they never affect the login response.</p>
