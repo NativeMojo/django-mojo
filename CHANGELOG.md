@@ -1,5 +1,10 @@
 ## v1.2.29 - (current)
 
+## v1.2.29 - May 25, 2026
+
+new ai caching
+
+
 enable prompt caching for assistant LLM calls
 
 
