@@ -124,6 +124,7 @@ Add `"mojo.apps.assistant"` to `INSTALLED_APPS` and run migrations.
 | `LLM_ADMIN_MAX_HISTORY` | `50` | Max messages loaded as conversation context |
 | `LLM_ADMIN_MAX_PARALLEL_TOOLS` | `4` | Max concurrent threads for parallel tool execution |
 | `LLM_ADMIN_SYSTEM_PROMPT` | (built-in) | Override the default system prompt |
+| `LLM_ADMIN_PROMPT_CACHE_ENABLED` | `True` | Enable Anthropic prompt caching on assistant LLM calls (see [Prompt Caching](#prompt-caching)) |
 | `LLM_BROWSE_MAX_LENGTH` | `20000` | Max character length of content returned by `browse_url` and `read_docs` |
 | `LLM_BROWSE_TIMEOUT` | `10` | HTTP request timeout in seconds for `browse_url` |
 | `LLM_DOCS_BASE_URL` | `https://raw.githubusercontent.com/NativeMojo/django-mojo/refs/heads/main/docs/` | Base URL for fetching framework docs via `read_docs` |
@@ -1176,6 +1177,71 @@ Each parallel tool call has a 30-second `future.result(timeout=30)` timeout. A t
 ### Key Implementation Files
 
 - `mojo/apps/assistant/services/agent.py` — `_execute_tool()`, `_execute_tools()`, `_execute_parallel_plan_steps()`
+
+## Prompt Caching
+
+The assistant uses Anthropic's automatic prompt caching to cut the cost and latency of multi-turn agent loops. Cache hits cost ~10% of base input tokens; cache writes cost 25% more. Across a typical 25-turn loop the reads dominate by a wide margin.
+
+### How It Works
+
+`mojo.helpers.llm.call()` adds `cache_control={"type": "ephemeral"}` at the top level of every Anthropic request. Anthropic walks back from the last cacheable block looking for a previously written cache entry; on hit it reuses the cached prefix (system + tools + prior messages), on miss it writes a new entry. The cache breakpoint advances automatically as the conversation grows — no manual breakpoint management.
+
+Enable / disable via the `LLM_ADMIN_PROMPT_CACHE_ENABLED` setting (default `True`).
+
+### What Invalidates the Cache
+
+Anthropic's cache hierarchy is `tools → system → messages`. A change at any level invalidates that level and everything below.
+
+| Change | Tools | System | Messages | When it happens |
+|---|---|---|---|---|
+| `load_tools` fires mid-conversation | invalid | invalid | invalid | Domain tools added → new tool definitions array |
+| `save_skill` / `update_skill` / `delete_skill` | valid | invalid | invalid | Skill catalog re-injected into system prompt next turn |
+| `write_memory` / `update_memory` / `delete_memory` | valid | invalid | invalid | Memory section re-injected into system prompt next turn |
+| New user message in same conversation | valid | valid | (extends) | Normal turn — previous prefix reads from cache |
+
+The cache TTL is 5 minutes; idle conversations resumed after that miss the cache and re-write on the first new turn.
+
+### Minimum Cacheable Prefix
+
+Anthropic silently ignores `cache_control` below a per-model threshold:
+
+- Sonnet: 1024 tokens
+- Opus: 4096 tokens
+
+If the first call after process start returns both `cache_creation_input_tokens == 0` and `cache_read_input_tokens == 0`, `llm.call()` logs a one-time WARN to `llm.log` so operators know their prompt is too small to cache.
+
+### Observing Cache Effectiveness
+
+`mojo.apps.assistant.models.Message.usage` (new JSONField) carries the summed token counts for each user-message exchange:
+
+```json
+{
+  "cache_read_input_tokens": 8200,
+  "cache_creation_input_tokens": 350,
+  "input_tokens": 42,
+  "output_tokens": 510
+}
+```
+
+Stored only on the final assistant `Message` of each user-message exchange, mirroring how `duration_ms` is recorded. Sum across turns. Exposed in the `default` REST graph for the frontend.
+
+Per-turn detail (one line per `llm.call()`) is written to `assistant.log` at INFO:
+
+```
+llm turn conv=42 turn=3 cache_read=8200 cache_write=0 input=42 output=180
+```
+
+### Total Input Tokens
+
+`usage.input_tokens` represents only the tokens **after the last cache breakpoint**, not the total input. Compute the total via:
+
+```text
+total = cache_read_input_tokens + cache_creation_input_tokens + input_tokens
+```
+
+### Data Retention
+
+Prompt caching is ZDR-eligible per Anthropic. Cache entries are key-value representations held in memory, isolated per organization (and per workspace on the Claude API as of 2026-02-05), and expire after the TTL. No additional data exposure surface.
 
 ## Tests
 

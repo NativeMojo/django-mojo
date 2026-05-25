@@ -277,6 +277,7 @@ Get a conversation. Use `?graph=detail` to include the full message history. Wit
 | `content` | Text content. For assistant messages, block fences are already stripped. |
 | `tool_calls` | Raw tool_use/tool_result data. `null` for non-tool messages. |
 | `blocks` | Pre-parsed structured data blocks (table/chart/stat/file/context/etc.). `null` when not present. Stored at write time — never re-parsed on read. |
+| `usage` | Summed token counts across the agent loop turns for this user-message exchange: `{cache_read_input_tokens, cache_creation_input_tokens, input_tokens, output_tokens}`. Present only on the final assistant message of each exchange; `null` otherwise. Useful for diagnostic displays — note `input_tokens` is the post-cache-breakpoint count, not total input. |
 | `created` | ISO timestamp |
 
 **Response** (not found or not owner — HTTP 404):

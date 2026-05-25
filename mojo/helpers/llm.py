@@ -37,6 +37,10 @@ logger = logit.get_logger(__name__, "llm.log")
 # In-memory fallback cache when Redis is unavailable
 _mem_cache = {"models": None, "fetched_at": 0}
 
+# Process-level guard so the "caching enabled but prefix too short" warning
+# fires once per worker instead of on every call.
+_zero_cache_warned = False
+
 CACHE_KEY = "mojo:llm:models"
 CACHE_TTL = 86400  # 24 hours
 
@@ -246,9 +250,14 @@ def call(messages, system=None, tools=None, model=None, max_tokens=4096):
     """
     Call the Anthropic messages API.
 
-    Returns the response as a dict (via model_dump()).
+    Returns the response as a dict (via model_dump()) including ``usage``.
     Raises on API errors — callers handle their own error logic.
+
+    Prompt caching is enabled by default — adds ``cache_control`` at the
+    top level so Anthropic caches the prefix automatically. Disable via
+    ``LLM_ADMIN_PROMPT_CACHE_ENABLED=False``.
     """
+    global _zero_cache_warned
     import anthropic
 
     key = get_api_key()
@@ -268,8 +277,28 @@ def call(messages, system=None, tools=None, model=None, max_tokens=4096):
     if tools:
         kwargs["tools"] = tools
 
+    cache_enabled = settings.get("LLM_ADMIN_PROMPT_CACHE_ENABLED", True, kind="bool")
+    if cache_enabled:
+        kwargs["cache_control"] = {"type": "ephemeral"}
+
     response = client.messages.create(**kwargs)
-    return response.model_dump()
+    result = response.model_dump()
+
+    # Warn once per worker if caching is enabled but produced no cache activity.
+    # Typically means the prefix is below the model's minimum cacheable size
+    # (1024 tokens for Sonnet, 4096 for Opus).
+    if cache_enabled and not _zero_cache_warned:
+        usage = result.get("usage") or {}
+        if usage.get("cache_creation_input_tokens", 0) == 0 and \
+                usage.get("cache_read_input_tokens", 0) == 0:
+            _zero_cache_warned = True
+            logger.warning(
+                f"Prompt caching enabled but no cache activity on first call "
+                f"(model={resolved_model}). Prefix likely below the model minimum "
+                f"(1024 tokens for Sonnet, 4096 for Opus)."
+            )
+
+    return result
 
 
 def ask(prompt, system=None, model=None, max_tokens=4096):

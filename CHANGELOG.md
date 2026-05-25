@@ -1,5 +1,10 @@
 ## v1.2.25 - (current)
 
+enable prompt caching for assistant LLM calls
+
+
+**assistant** — Anthropic prompt caching is now on by default for every `llm.call()` from the assistant agent loop. The full prefix (system prompt + tool definitions + prior conversation history) is cached automatically; reads cost ~10% of base input tokens, writes cost 25% more. Across a typical multi-turn agent loop the reads dominate and net cost / latency drop substantially. Disable with `LLM_ADMIN_PROMPT_CACHE_ENABLED = False`. Each user-message exchange now records summed token counts on the final assistant `Message.usage` JSONField (`cache_read_input_tokens`, `cache_creation_input_tokens`, `input_tokens`, `output_tokens`) and emits one INFO line per turn to `assistant.log`. Cache invalidates when `load_tools`, skill mutations, or memory mutations change the cacheable prefix — the next turn re-writes and subsequent turns hit again. A one-time WARN to `llm.log` fires if caching is enabled but the prefix is below the model's minimum (1024 tokens for Sonnet, 4096 for Opus). Adds Message migration 0006.
+
 ## v1.2.28 - May 21, 2026
 
 allow existing users to register again with auto signup to group

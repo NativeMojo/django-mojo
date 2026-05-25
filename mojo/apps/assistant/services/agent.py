@@ -122,6 +122,26 @@ def _json_default(obj):
     return str(obj)
 
 
+_USAGE_KEYS = (
+    "cache_read_input_tokens",
+    "cache_creation_input_tokens",
+    "input_tokens",
+    "output_tokens",
+)
+
+
+def _accumulate_usage(totals, response_usage):
+    """Sum the known token-count fields from an Anthropic response into totals.
+
+    Tolerates missing fields and a missing/None ``response_usage`` — the agent
+    loop should never crash because the API skipped a counter.
+    """
+    if not response_usage:
+        return
+    for key in _USAGE_KEYS:
+        totals[key] = totals.get(key, 0) + (response_usage.get(key, 0) or 0)
+
+
 def _dumps_tool_result(obj, user=None, conversation=None, tool_name=None):
     """Safely serialize a tool result to a JSON string.
 
@@ -1182,13 +1202,24 @@ def run_assistant(user, message, conversation_id=None, on_event=None, request=No
     registry = get_registry()
     tool_calls_made = []
     context_refs = []
+    usage_totals = {}
     request_meta = _build_request_meta(request)
     t_start = time.time()
 
     try:
-        for _ in range(max_turns):
+        for turn_idx in range(max_turns):
             result = llm.call(messages, system=system_prompt, tools=tools)
             stop_reason = result.get("stop_reason")
+
+            turn_usage = result.get("usage") or {}
+            _accumulate_usage(usage_totals, turn_usage)
+            logger.info(
+                f"llm turn conv={conversation.pk} turn={turn_idx + 1} "
+                f"cache_read={turn_usage.get('cache_read_input_tokens', 0) or 0} "
+                f"cache_write={turn_usage.get('cache_creation_input_tokens', 0) or 0} "
+                f"input={turn_usage.get('input_tokens', 0) or 0} "
+                f"output={turn_usage.get('output_tokens', 0) or 0}"
+            )
 
             # Add assistant response to messages
             messages.append({"role": "assistant", "content": result["content"]})
@@ -1214,6 +1245,7 @@ def run_assistant(user, message, conversation_id=None, on_event=None, request=No
                     content=response_text,
                     blocks=blocks or None,
                     duration_ms=duration_ms,
+                    usage=usage_totals or None,
                     tool_calls=result["content"] if any(
                         b.get("type") == "tool_use" for b in result["content"]
                     ) else None,
@@ -1225,6 +1257,7 @@ def run_assistant(user, message, conversation_id=None, on_event=None, request=No
                     "conversation_id": conversation.pk,
                     "tool_calls_made": tool_calls_made,
                     "duration_ms": duration_ms,
+                    "usage": usage_totals or None,
                 }
 
             # Split content into text vs tool_use; persist text on the
@@ -1311,12 +1344,14 @@ def run_assistant(user, message, conversation_id=None, on_event=None, request=No
             role="assistant",
             content=response_text,
             duration_ms=duration_ms,
+            usage=usage_totals or None,
         )
         return {
             "response": response_text,
             "conversation_id": conversation.pk,
             "tool_calls_made": tool_calls_made,
             "duration_ms": duration_ms,
+            "usage": usage_totals or None,
         }
 
     except Exception as e:
@@ -1395,12 +1430,24 @@ def run_assistant_ws(user, message, conversation_id, on_event=None):
     registry = get_registry()
     tool_calls_made = []
     context_refs = []
+    usage_totals = {}
     t_start = time.time()
 
     try:
-        for _ in range(max_turns):
+        for turn_idx in range(max_turns):
             result = llm.call(messages, system=system_prompt, tools=tools)
             stop_reason = result.get("stop_reason")
+
+            turn_usage = result.get("usage") or {}
+            _accumulate_usage(usage_totals, turn_usage)
+            logger.info(
+                f"llm turn conv={conversation.pk} turn={turn_idx + 1} "
+                f"cache_read={turn_usage.get('cache_read_input_tokens', 0) or 0} "
+                f"cache_write={turn_usage.get('cache_creation_input_tokens', 0) or 0} "
+                f"input={turn_usage.get('input_tokens', 0) or 0} "
+                f"output={turn_usage.get('output_tokens', 0) or 0}"
+            )
+
             messages.append({"role": "assistant", "content": result["content"]})
 
             if stop_reason != "tool_use":
@@ -1417,6 +1464,7 @@ def run_assistant_ws(user, message, conversation_id, on_event=None):
                     conversation=conversation, role="assistant",
                     content=response_text, blocks=blocks or None,
                     duration_ms=duration_ms,
+                    usage=usage_totals or None,
                 )
                 return {
                     "response": response_text,
@@ -1426,6 +1474,7 @@ def run_assistant_ws(user, message, conversation_id, on_event=None):
                     "conversation_id": conversation.pk,
                     "tool_calls_made": tool_calls_made,
                     "duration_ms": duration_ms,
+                    "usage": usage_totals or None,
                 }
 
             # Split content into text vs tool_use; emit intermediate text
@@ -1487,8 +1536,15 @@ def run_assistant_ws(user, message, conversation_id, on_event=None):
         )
         response_text = "I've reached the maximum number of tool calls for this request. Please try a more specific query."
         duration_ms = int((time.time() - t_start) * 1000)
-        Message.objects.create(conversation=conversation, role="assistant", content=response_text, duration_ms=duration_ms)
-        return {"response": response_text, "conversation_id": conversation.pk, "tool_calls_made": tool_calls_made, "duration_ms": duration_ms}
+        Message.objects.create(
+            conversation=conversation, role="assistant", content=response_text,
+            duration_ms=duration_ms, usage=usage_totals or None,
+        )
+        return {
+            "response": response_text, "conversation_id": conversation.pk,
+            "tool_calls_made": tool_calls_made, "duration_ms": duration_ms,
+            "usage": usage_totals or None,
+        }
 
     except Exception as e:
         logger.exception("Assistant WS agent failed for user %s", user.pk)
