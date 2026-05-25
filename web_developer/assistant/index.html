@@ -4555,6 +4555,10 @@
 <td>Pre-parsed structured data blocks (table/chart/stat/file/context/etc.). <code>null</code> when not present. Stored at write time — never re-parsed on read.</td>
 </tr>
 <tr>
+<td><code>usage</code></td>
+<td>Summed token counts across the agent loop turns for this user-message exchange: <code>{cache_read_input_tokens, cache_creation_input_tokens, input_tokens, output_tokens}</code>. Present only on the final assistant message of each exchange; <code>null</code> otherwise. Useful for diagnostic displays — note <code>input_tokens</code> is the post-cache-breakpoint count, not total input.</td>
+</tr>
+<tr>
 <td><code>created</code></td>
 <td>ISO timestamp</td>
 </tr>

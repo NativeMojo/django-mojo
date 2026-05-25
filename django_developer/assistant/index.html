@@ -4813,6 +4813,89 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#prompt-caching" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prompt Caching
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Prompt Caching">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#how-it-works_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How It Works
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-invalidates-the-cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What Invalidates the Cache
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#minimum-cacheable-prefix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Minimum Cacheable Prefix
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#observing-cache-effectiveness" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Observing Cache Effectiveness
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#total-input-tokens" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Total Input Tokens
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#data-retention" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Data Retention
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#tests" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -5055,6 +5138,11 @@
 <td><code>LLM_ADMIN_SYSTEM_PROMPT</code></td>
 <td>(built-in)</td>
 <td>Override the default system prompt</td>
+</tr>
+<tr>
+<td><code>LLM_ADMIN_PROMPT_CACHE_ENABLED</code></td>
+<td><code>True</code></td>
+<td>Enable Anthropic prompt caching on assistant LLM calls (see <a href="#prompt-caching">Prompt Caching</a>)</td>
 </tr>
 <tr>
 <td><code>LLM_BROWSE_MAX_LENGTH</code></td>
@@ -7052,6 +7140,16 @@
 <td>Pre-parsed structured data blocks extracted at write time. <code>null</code> when none present.</td>
 </tr>
 <tr>
+<td><code>duration_ms</code></td>
+<td>IntegerField</td>
+<td>Wall-clock time for the full agent loop in milliseconds. <code>null</code> for non-assistant messages.</td>
+</tr>
+<tr>
+<td><code>usage</code></td>
+<td>JSONField</td>
+<td>Summed token counts across all <code>llm.call()</code> turns for this exchange: <code>{cache_read_input_tokens, cache_creation_input_tokens, input_tokens, output_tokens}</code>. Only on the final assistant <code>Message</code> per exchange; <code>null</code> otherwise. See <a href="#prompt-caching">Prompt Caching</a>.</td>
+</tr>
+<tr>
 <td><code>created</code></td>
 <td>DateTimeField</td>
 <td>When the message was created</td>
@@ -7288,8 +7386,83 @@
 <ul>
 <li><code>mojo/apps/assistant/services/agent.py</code> — <code>_execute_tool()</code>, <code>_execute_tools()</code>, <code>_execute_parallel_plan_steps()</code></li>
 </ul>
+<h2 id="prompt-caching">Prompt Caching<a class="headerlink" href="#prompt-caching" title="Permanent link">&para;</a></h2>
+<p>The assistant uses Anthropic's automatic prompt caching to cut the cost and latency of multi-turn agent loops. Cache hits cost ~10% of base input tokens; cache writes cost 25% more. Across a typical 25-turn loop the reads dominate by a wide margin.</p>
+<h3 id="how-it-works_3">How It Works<a class="headerlink" href="#how-it-works_3" title="Permanent link">&para;</a></h3>
+<p><code>mojo.helpers.llm.call()</code> adds <code>cache_control={"type": "ephemeral"}</code> at the top level of every Anthropic request. Anthropic walks back from the last cacheable block looking for a previously written cache entry; on hit it reuses the cached prefix (system + tools + prior messages), on miss it writes a new entry. The cache breakpoint advances automatically as the conversation grows — no manual breakpoint management.</p>
+<p>Enable / disable via the <code>LLM_ADMIN_PROMPT_CACHE_ENABLED</code> setting (default <code>True</code>).</p>
+<h3 id="what-invalidates-the-cache">What Invalidates the Cache<a class="headerlink" href="#what-invalidates-the-cache" title="Permanent link">&para;</a></h3>
+<p>Anthropic's cache hierarchy is <code>tools → system → messages</code>. A change at any level invalidates that level and everything below.</p>
+<table>
+<thead>
+<tr>
+<th>Change</th>
+<th>Tools</th>
+<th>System</th>
+<th>Messages</th>
+<th>When it happens</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>load_tools</code> fires mid-conversation</td>
+<td>invalid</td>
+<td>invalid</td>
+<td>invalid</td>
+<td>Domain tools added → new tool definitions array</td>
+</tr>
+<tr>
+<td><code>save_skill</code> / <code>update_skill</code> / <code>delete_skill</code></td>
+<td>valid</td>
+<td>invalid</td>
+<td>invalid</td>
+<td>Skill catalog re-injected into system prompt next turn</td>
+</tr>
+<tr>
+<td><code>write_memory</code> / <code>update_memory</code> / <code>delete_memory</code></td>
+<td>valid</td>
+<td>invalid</td>
+<td>invalid</td>
+<td>Memory section re-injected into system prompt next turn</td>
+</tr>
+<tr>
+<td>New user message in same conversation</td>
+<td>valid</td>
+<td>valid</td>
+<td>(extends)</td>
+<td>Normal turn — previous prefix reads from cache</td>
+</tr>
+</tbody>
+</table>
+<p>The cache TTL is 5 minutes; idle conversations resumed after that miss the cache and re-write on the first new turn.</p>
+<h3 id="minimum-cacheable-prefix">Minimum Cacheable Prefix<a class="headerlink" href="#minimum-cacheable-prefix" title="Permanent link">&para;</a></h3>
+<p>Anthropic silently ignores <code>cache_control</code> below a per-model threshold:</p>
+<ul>
+<li>Sonnet: 1024 tokens</li>
+<li>Opus: 4096 tokens</li>
+</ul>
+<p>If the first call after process start returns both <code>cache_creation_input_tokens == 0</code> and <code>cache_read_input_tokens == 0</code>, <code>llm.call()</code> logs a one-time WARN to <code>llm.log</code> so operators know their prompt is too small to cache.</p>
+<h3 id="observing-cache-effectiveness">Observing Cache Effectiveness<a class="headerlink" href="#observing-cache-effectiveness" title="Permanent link">&para;</a></h3>
+<p><code>mojo.apps.assistant.models.Message.usage</code> (new JSONField) carries the summed token counts for each user-message exchange:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a><span class="p">{</span>
+<a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a><span class="w">  </span><span class="nt">&quot;cache_read_input_tokens&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">8200</span><span class="p">,</span>
+<a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a><span class="w">  </span><span class="nt">&quot;cache_creation_input_tokens&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">350</span><span class="p">,</span>
+<a id="__codelineno-23-4" name="__codelineno-23-4" href="#__codelineno-23-4"></a><span class="w">  </span><span class="nt">&quot;input_tokens&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">42</span><span class="p">,</span>
+<a id="__codelineno-23-5" name="__codelineno-23-5" href="#__codelineno-23-5"></a><span class="w">  </span><span class="nt">&quot;output_tokens&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">510</span>
+<a id="__codelineno-23-6" name="__codelineno-23-6" href="#__codelineno-23-6"></a><span class="p">}</span>
+</code></pre></div>
+<p>Stored only on the final assistant <code>Message</code> of each user-message exchange, mirroring how <code>duration_ms</code> is recorded. Sum across turns. Exposed in the <code>default</code> REST graph for the frontend.</p>
+<p>Per-turn detail (one line per <code>llm.call()</code>) is written to <code>assistant.log</code> at INFO:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>llm turn conv=42 turn=3 cache_read=8200 cache_write=0 input=42 output=180
+</code></pre></div>
+<h3 id="total-input-tokens">Total Input Tokens<a class="headerlink" href="#total-input-tokens" title="Permanent link">&para;</a></h3>
+<p><code>usage.input_tokens</code> represents only the tokens <strong>after the last cache breakpoint</strong>, not the total input. Compute the total via:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>total = cache_read_input_tokens + cache_creation_input_tokens + input_tokens
+</code></pre></div>
+<h3 id="data-retention">Data Retention<a class="headerlink" href="#data-retention" title="Permanent link">&para;</a></h3>
+<p>Prompt caching is ZDR-eligible per Anthropic. Cache entries are key-value representations held in memory, isolated per organization (and per workspace on the Claude API as of 2026-02-05), and expire after the TTL. No additional data exposure surface.</p>
 <h2 id="tests">Tests<a class="headerlink" href="#tests" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>./bin/run_tests<span class="w"> </span>-t<span class="w"> </span>test_assistant
+<div class="highlight"><pre><span></span><code><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a>./bin/run_tests<span class="w"> </span>-t<span class="w"> </span>test_assistant
 </code></pre></div>
 <p>Test files:
 - <code>tests/test_assistant/1_test_permissions.py</code> — Registry, permission gate, feature flag, sensitive field exclusion
@@ -7305,7 +7478,8 @@
 - <code>tests/test_assistant/12_test_incident_reporting.py</code> — Incident event reporting: permission denied events, mutating tool events, error events, category conventions
 - <code>tests/test_assistant/13_test_memory.py</code> — Memory service: read/write/delete, tier permissions, key validation, secret detection, size limits, build_memory_prompt, onboarding flag
 - <code>tests/test_assistant/14_test_memory_cleanup.py</code> — Nightly cleanup: mechanical phase (orphans, size prune, suspicious scan), dreaming phase (should_dream, dream_tier, apply_dream_actions)
-- <code>tests/test_assistant/32_test_context_refs.py</code> — <code>add_context</code> tool: valid refs, invalid model/app/pk filtering, DENY_AI_VIEW filtering, mixed refs, empty input, <code>_validate_block</code> for context type, <code>_extract_context_refs</code> helper</p>
+- <code>tests/test_assistant/32_test_context_refs.py</code> — <code>add_context</code> tool: valid refs, invalid model/app/pk filtering, DENY_AI_VIEW filtering, mixed refs, empty input, <code>_validate_block</code> for context type, <code>_extract_context_refs</code> helper
+- <code>tests/test_assistant/33_test_prompt_caching.py</code> — Prompt caching: <code>cache_control</code> injection/omission, usage round-trip, <code>_accumulate_usage</code> summation and null tolerance, <code>run_assistant()</code> usage persistence and per-turn logging, <code>Message.usage</code> graph exposure and nullability, zero-cache one-time warning</p>
 
 
 
