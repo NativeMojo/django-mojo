@@ -930,6 +930,8 @@ A single message in a conversation.
 | `content` | TextField | Message text content (block fences stripped for assistant messages) |
 | `tool_calls` | JSONField | For `assistant` role: only `tool_use` blocks (`null` when none). For `tool_result` role: tool result payloads. `null` for user messages. |
 | `blocks` | JSONField | Pre-parsed structured data blocks extracted at write time. `null` when none present. |
+| `duration_ms` | IntegerField | Wall-clock time for the full agent loop in milliseconds. `null` for non-assistant messages. |
+| `usage` | JSONField | Summed token counts across all `llm.call()` turns for this exchange: `{cache_read_input_tokens, cache_creation_input_tokens, input_tokens, output_tokens}`. Only on the final assistant `Message` per exchange; `null` otherwise. See [Prompt Caching](#prompt-caching). |
 | `created` | DateTimeField | When the message was created |
 
 `blocks` is populated when the agent saves an assistant message — `_parse_blocks()` runs once at write time and the result is stored. Reading the conversation detail never re-parses content.
@@ -1264,3 +1266,4 @@ Test files:
 - `tests/test_assistant/13_test_memory.py` — Memory service: read/write/delete, tier permissions, key validation, secret detection, size limits, build_memory_prompt, onboarding flag
 - `tests/test_assistant/14_test_memory_cleanup.py` — Nightly cleanup: mechanical phase (orphans, size prune, suspicious scan), dreaming phase (should_dream, dream_tier, apply_dream_actions)
 - `tests/test_assistant/32_test_context_refs.py` — `add_context` tool: valid refs, invalid model/app/pk filtering, DENY_AI_VIEW filtering, mixed refs, empty input, `_validate_block` for context type, `_extract_context_refs` helper
+- `tests/test_assistant/33_test_prompt_caching.py` — Prompt caching: `cache_control` injection/omission, usage round-trip, `_accumulate_usage` summation and null tolerance, `run_assistant()` usage persistence and per-turn logging, `Message.usage` graph exposure and nullability, zero-cache one-time warning

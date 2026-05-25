@@ -1,4 +1,4 @@
-## v1.2.25 - (current)
+## v1.2.29 - (current)
 
 enable prompt caching for assistant LLM calls
 
