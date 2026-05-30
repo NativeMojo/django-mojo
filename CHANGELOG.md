@@ -1,5 +1,10 @@
 ## v1.2.29 - (current)
 
+## v1.2.30 - May 30, 2026
+
+critical ip fix
+
+
 fix whitelist not removing permanent blocks from ipset
 
 
