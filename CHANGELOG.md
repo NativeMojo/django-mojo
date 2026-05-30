@@ -1,5 +1,10 @@
 ## v1.2.29 - (current)
 
+fix whitelist not removing permanent blocks from ipset
+
+
+**account** — `GeoLocatedIP.whitelist()` now removes permanently blocked IPs from the `mojo_blocked` ipset. Previously it always broadcast `broadcast_unblock_ip` (an iptables-only removal), so whitelisting an IP that had been permanently blocked left it in the ipset and the IP stayed blocked fleet-wide. The method now mirrors `unblock()`: it reads DB truth to detect whether the block was permanent (no `blocked_until`) or TTL-based, and broadcasts `broadcast_ipset_del_blocked` for permanent blocks or `broadcast_unblock_ip` for TTL blocks.
+
 ## v1.2.29 - May 25, 2026
 
 new ai caching

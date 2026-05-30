@@ -577,7 +577,11 @@ class GeoLocatedIP(models.Model, MojoModel):
         Whitelist this IP. Unblocks fleet-wide if currently blocked
         and prevents future auto-blocks.
         """
-        was_blocked = self.is_blocked
+        # Read DB truth to avoid stale in-memory state from concurrent updates
+        db_state = GeoLocatedIP.objects.filter(pk=self.pk).values("is_blocked", "blocked_until").first()
+        was_blocked = bool(db_state and db_state["is_blocked"])
+        was_permanent = was_blocked and db_state["blocked_until"] is None
+
         self.is_whitelisted = True
         self.whitelisted_reason = reason
         if self.is_blocked:
@@ -601,10 +605,18 @@ class GeoLocatedIP(models.Model, MojoModel):
 
         if was_blocked:
             try:
-                jobs.broadcast_execute(
-                    "mojo.apps.incident.asyncjobs.broadcast_unblock_ip",
-                    {"ips": [self.ip_address]},
-                )
+                if was_permanent:
+                    # Remove from ipset (permanent blocks live in mojo_blocked)
+                    jobs.broadcast_execute(
+                        "mojo.apps.incident.asyncjobs.broadcast_ipset_del_blocked",
+                        {"ip": self.ip_address},
+                    )
+                else:
+                    # Remove individual iptables rule (TTL blocks)
+                    jobs.broadcast_execute(
+                        "mojo.apps.incident.asyncjobs.broadcast_unblock_ip",
+                        {"ips": [self.ip_address]},
+                    )
             except Exception:
                 logit.exception("Failed to broadcast unblock for %s", self.ip_address)
                 metrics.record("firewall:broadcast_errors", category="firewall")
