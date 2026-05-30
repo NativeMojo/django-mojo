@@ -127,6 +127,59 @@ def test_unblock_ttl_broadcasts_iptables(opts):
 
 
 @th.django_unit_test()
+def test_whitelist_permanent_broadcasts_ipset_del(opts):
+    """whitelist() of a permanently blocked IP should broadcast ipset_del."""
+    from mojo.apps.account.models import GeoLocatedIP
+
+    geo = GeoLocatedIP.objects.get(ip_address=TEST_IP)
+    # Set up as permanently blocked (no TTL -> lives in ipset)
+    geo.is_blocked = True
+    geo.blocked_until = None
+    geo.blocked_reason = "test"
+    geo.is_whitelisted = False
+    geo.save(update_fields=["is_blocked", "blocked_until", "blocked_reason", "is_whitelisted"])
+
+    with mock.patch("mojo.apps.account.models.geolocated_ip.jobs") as mock_jobs:
+        geo.whitelist(reason="test_whitelist_permanent")
+
+    calls = mock_jobs.broadcast_execute.call_args_list
+    assert len(calls) >= 1, f"Expected at least 1 broadcast call, got {len(calls)}"
+
+    func_path = calls[0][0][0]
+    payload = calls[0][0][1]
+    assert "broadcast_ipset_del_blocked" in func_path, \
+        f"Whitelist of permanent block should broadcast ipset_del, got: {func_path}"
+    assert payload.get("ip") == TEST_IP, \
+        f"Payload should contain ip={TEST_IP}, got: {payload}"
+
+
+@th.django_unit_test()
+def test_whitelist_ttl_broadcasts_iptables(opts):
+    """whitelist() of a TTL-blocked IP should broadcast iptables unblock."""
+    from mojo.apps.account.models import GeoLocatedIP
+    from django.utils import timezone
+    from datetime import timedelta
+
+    geo = GeoLocatedIP.objects.get(ip_address=TEST_IP)
+    # Set up as TTL blocked (has blocked_until -> lives in iptables)
+    geo.is_blocked = True
+    geo.blocked_until = timezone.now() + timedelta(hours=1)
+    geo.blocked_reason = "test"
+    geo.is_whitelisted = False
+    geo.save(update_fields=["is_blocked", "blocked_until", "blocked_reason", "is_whitelisted"])
+
+    with mock.patch("mojo.apps.account.models.geolocated_ip.jobs") as mock_jobs:
+        geo.whitelist(reason="test_whitelist_ttl")
+
+    calls = mock_jobs.broadcast_execute.call_args_list
+    assert len(calls) >= 1, f"Expected at least 1 broadcast call, got {len(calls)}"
+
+    func_path = calls[0][0][0]
+    assert "broadcast_unblock_ip" in func_path, \
+        f"Whitelist of TTL block should broadcast iptables unblock, got: {func_path}"
+
+
+@th.django_unit_test()
 def test_block_no_broadcast_when_disabled(opts):
     """block(broadcast=False) should not broadcast anything."""
     from mojo.apps.account.models import GeoLocatedIP
