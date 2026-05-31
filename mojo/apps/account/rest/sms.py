@@ -12,8 +12,6 @@ Standalone login flow (no password):
   POST /api/auth/sms/login   -> send SMS code to username's phone
   POST /api/auth/sms/verify  -> verify code + username, issue JWT
 """
-from urllib.parse import urlparse
-
 from django.db.models import Q
 
 from mojo import decorators as md
@@ -29,46 +27,18 @@ from mojo.helpers.response import JsonResponse
 from mojo.helpers.settings import settings
 
 
-def _otp_host(request):
-    """Bare hostname for the origin-bound one-time-code SMS line.
-
-    Taken from the request's Origin header (preferred) or Host header so the
-    `@host` token matches the page the user is on. Returns "" when no host
-    can be determined (the SMS then omits the line — autofill degrades, no
-    breakage).
-    """
-    if request is None:
-        return ""
-    origin = request.META.get("HTTP_ORIGIN", "") or ""
-    if origin:
-        host = urlparse(origin).hostname or ""
-        if host:
-            return host.lower()
-    host = request.META.get("HTTP_HOST", "") or ""
-    return host.split(":")[0].strip().lower()
-
-
 def _otp_sms_body(code, request=None):
     """Build the OTP SMS text.
 
-    Appends the origin-bound one-time-code line (`@host #code`) so browsers
-    can offer/auto-fill the code: Android Chrome's WebOTP API *requires* this
-    line, and iOS Security Code AutoFill uses it too. Falls back to the plain
-    message when the request host is unknown.
+    Plain single-line message. Chrome (Android) and iOS both auto-fill a
+    field marked `autocomplete="one-time-code"` from a message like this —
+    no special `@host #code` binding line needed.
     """
-    body = f"Your verification code is: {code}"
-    host = _otp_host(request)
-    if host:
-        body += f"\n\n@{host} #{code}"
-    return body
+    return f"Your verification code is: {code}"
 
 
 def _send_otp(user, request=None):
-    """Generate a 6-digit code, store it on the user, and send via SMS.
-
-    `request` (when supplied) lets the SMS carry the origin-bound autofill
-    line — see `_otp_sms_body`.
-    """
+    """Generate a 6-digit code, store it on the user, and send via SMS."""
     if not user.phone_number:
         raise merrors.ValueException("No phone number on file for this account")
 

@@ -305,7 +305,6 @@
     // ---- SMS-code login (passwordless) -----------------------------------
     var smsForm = $("form-sms");
     if (smsForm) {
-        var smsOtpAc = null;
         smsForm.addEventListener("submit", function (e) {
             e.preventDefault();
             var phone = $("sms-phone").value.trim();
@@ -322,15 +321,12 @@
                         $("sms-help").textContent = "Enter the 6-digit code we sent to " + phone + ".";
                         var label = btn.querySelector(".mat-btn-text");
                         if (label) label.textContent = "Verify & Sign In";
+                        // Focus the code field so Chrome/iOS offer the SMS code
+                        // for autofill (autocomplete="one-time-code").
                         $("sms-code").focus();
-                        // Auto-fill the code from the incoming SMS (Android WebOTP).
-                        smsOtpAc = m.watchOtp($("sms-code"), function () {
-                            if (smsForm.requestSubmit) smsForm.requestSubmit();
-                        });
                     })
                     .catch(function (err) { m.setLoading(btn, false); m.showMessage(MojoAuth.getError(err) || "Could not send code.", "error"); });
             } else {
-                if (smsOtpAc) { smsOtpAc.abort(); smsOtpAc = null; }
                 var code = $("sms-code").value.trim();
                 if (!code) { m.showMessage("Enter the 6-digit code.", "error"); return; }
                 m.setLoading(btn, true); m.hideMessage();

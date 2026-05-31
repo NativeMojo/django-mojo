@@ -215,17 +215,6 @@ Already have an account? <a href="{{ auth_url|default:'/auth' }}">Log in</a>
     // ---- Stepped state machine -------------------------------------------
     var RESEND_COOLDOWN_SECONDS = 30;
     var resendTimer = null;
-    var regOtpAc = null;
-
-    // WebOTP — auto-fill the SMS code field from an incoming text (Android
-    // Chrome). iOS autofills via the input's autocomplete="one-time-code".
-    function watchRegOtp() {
-        if (regOtpAc) { regOtpAc.abort(); regOtpAc = null; }
-        regOtpAc = m.watchOtp($("reg-phone-code"), function () {
-            var vb = $("btn-reg-verify");
-            if (vb) vb.click();
-        });
-    }
 
     function showStep(n) {
         ["view-reg-step1", "view-reg-step2", "view-reg-step3"].forEach(function (id, i) {
@@ -281,7 +270,6 @@ Already have an account? <a href="{{ auth_url|default:'/auth' }}">Log in</a>
                 m.setLoading(btn, false);
                 showStep(2);
                 startResendCooldown();
-                watchRegOtp();
             })
             .catch(function (err) {
                 m.setLoading(btn, false);
@@ -298,7 +286,6 @@ Already have an account? <a href="{{ auth_url|default:'/auth' }}">Log in</a>
         var verifyBtn = $("btn-reg-verify");
         if (verifyBtn) {
             verifyBtn.addEventListener("click", function () {
-                if (regOtpAc) { regOtpAc.abort(); regOtpAc = null; }
                 var sessionToken = $("reg-phone-session-token").value;
                 var code = ($("reg-phone-code").value || "").trim();
                 if (!sessionToken) { m.showMessage("Session expired. Please go back and try again.", "error"); return; }
@@ -334,7 +321,6 @@ Already have an account? <a href="{{ auth_url|default:'/auth' }}">Log in</a>
         var backBtn = $("btn-reg-back");
         if (backBtn) {
             backBtn.addEventListener("click", function () {
-                if (regOtpAc) { regOtpAc.abort(); regOtpAc = null; }
                 // Clear the server-side session token but keep the phone value
                 // pre-filled so the user can edit or just re-Continue.
                 $("reg-phone-session-token").value = "";
