@@ -48,6 +48,13 @@ class UserLoginEvent(models.Model, MojoModel):
         VIEW_PERMS = ['manage_users', 'security', 'users', 'owner']
         SEARCH_FIELDS = ['ip_address', 'country_code', 'region', 'city']
         GRAPHS = {
+            'basic': {
+                'fields': [
+                    'id', 'ip_address', 'country_code', 'region', 'city',
+                    'latitude', 'longitude', 'source',
+                    'is_new_country', 'is_new_region', 'created',
+                ]
+            },
             'list': {
                 'fields': [
                     'id', 'ip_address', 'country_code', 'region', 'city',
