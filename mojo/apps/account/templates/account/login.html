@@ -321,9 +321,14 @@
                         $("sms-help").textContent = "Enter the 6-digit code we sent to " + phone + ".";
                         var label = btn.querySelector(".mat-btn-text");
                         if (label) label.textContent = "Verify & Sign In";
-                        // Focus the code field so Chrome/iOS offer the SMS code
-                        // for autofill (autocomplete="one-time-code").
-                        $("sms-code").focus();
+                        // Do NOT programmatically focus the code field. SMS
+                        // autofill (autocomplete="one-time-code") only surfaces
+                        // on a genuine focus event that happens while a code is
+                        // available. Pre-focusing here (before the SMS arrives)
+                        // leaves the field stale-focused, so no suggestion pops
+                        // when the code lands and tapping the already-focused
+                        // field does nothing. Letting the user tap the field
+                        // fires the focus event at the right time → autofill.
                     })
                     .catch(function (err) { m.setLoading(btn, false); m.showMessage(MojoAuth.getError(err) || "Could not send code.", "error"); });
             } else {

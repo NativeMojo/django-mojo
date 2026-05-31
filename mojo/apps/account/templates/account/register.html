@@ -229,11 +229,18 @@ Already have an account? <a href="{{ auth_url|default:'/auth' }}">Log in</a>
         if (label) label.textContent = "Step " + n + " of 3";
         m.hideMessage();
         // Focus the first input in the now-active step for accessibility.
+        // Exception: never pre-focus an SMS code field. The autofill
+        // suggestion (autocomplete="one-time-code") only surfaces on a
+        // genuine focus event that happens while a code is available;
+        // pre-focusing here (before the SMS arrives) leaves the field
+        // stale-focused so the suggestion never pops. Let the user tap it.
         setTimeout(function () {
             var view = $("view-reg-step" + n);
             if (!view) return;
             var firstInput = view.querySelector("input:not([type=hidden]), button");
-            if (firstInput) firstInput.focus();
+            if (firstInput && firstInput.getAttribute("autocomplete") !== "one-time-code") {
+                firstInput.focus();
+            }
         }, 30);
     }
 
