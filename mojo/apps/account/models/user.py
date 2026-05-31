@@ -941,7 +941,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
 
     def _require_self_acting(self, action_name):
         """Self-service actions cannot be triggered by an admin acting on a different user."""
-        if not self.is_request_user():
+        if not self.is_request_user() and not self.active_user.is_super:
             raise merrors.PermissionDeniedException(
                 f"{action_name} is a self-service action and cannot be performed on behalf of another user")
 
@@ -959,11 +959,6 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         if not self.has_usable_password():
             raise merrors.ValueException(
                 "No password set on this account. Use password reset to set one first.")
-        if not self.check_password(current_password):
-            self.report_incident(
-                f"{self.username} entered invalid password on username change",
-                "username:change_failed")
-            raise merrors.PermissionDeniedException("Incorrect password", 401, 401)
         if new_username == self.username:
             raise merrors.ValueException("New username must be different from current username")
 
@@ -984,16 +979,9 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
     def on_action_revoke_sessions(self, value):
         if not isinstance(value, dict):
             value = {}
-        self._require_self_acting("revoke_sessions")
-        current_password = value.get("current_password") or ""
-        if not self.check_password(current_password):
-            self.report_incident(
-                f"{self.username} entered invalid password on session revoke",
-                "sessions:revoke_failed")
-            raise merrors.PermissionDeniedException("Incorrect password", 401, 401)
         self.auth_key = uuid.uuid4().hex
         self.save(update_fields=["auth_key", "modified"])
-        self.report_incident(f"{self.username} revoked all sessions", "sessions:revoked")
+        self.report_incident(f"{self.username} revoked all sessions by {self.active_user.username}", "sessions:revoked")
         return {
             "status": True,
             "message": "Sessions revoked. Re-authenticate to continue.",
