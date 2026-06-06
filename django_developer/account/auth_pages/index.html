@@ -3963,6 +3963,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Configurable Registration Form">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#extra-non-canonical-fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Extra (non-canonical) fields
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4498,6 +4515,35 @@ for the schema and <code>register_schema.py</code> for the field resolution logi
 </tr>
 </tbody>
 </table>
+<h3 id="extra-non-canonical-fields">Extra (non-canonical) fields<a class="headerlink" href="#extra-non-canonical-fields" title="Permanent link">&para;</a></h3>
+<p><code>registration.fields</code> is a <strong>closed</strong> set of canonical <code>User</code> columns
+(<code>first_name</code>, <code>last_name</code>, <code>email</code>, <code>phone</code>, <code>dob</code>, <code>password</code>). For
+consumer-specific data — promo codes, referral/tracking tokens — declare
+<code>registration.extra_fields</code> instead. Default is empty (no extra fields, no
+behavior change for other tenants):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="n">AUTH_CONFIG</span> <span class="o">=</span> <span class="p">{</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>    <span class="s2">&quot;registration&quot;</span><span class="p">:</span> <span class="p">{</span>
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>        <span class="s2">&quot;extra_fields&quot;</span><span class="p">:</span> <span class="p">[</span>
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>            <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;promo&quot;</span><span class="p">,</span> <span class="s2">&quot;label&quot;</span><span class="p">:</span> <span class="s2">&quot;Promo code&quot;</span><span class="p">},</span>        <span class="c1"># required defaults False</span>
+<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a>            <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;ref&quot;</span><span class="p">,</span>   <span class="s2">&quot;label&quot;</span><span class="p">:</span> <span class="s2">&quot;Referral&quot;</span><span class="p">,</span>  <span class="s2">&quot;required&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
+<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a>        <span class="p">],</span>
+<a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a>    <span class="p">}</span>
+<a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a><span class="p">}</span>
+</code></pre></div>
+<p>Each entry is <code>{"name", "label"?, "required"?}</code>. Names that collide with a
+canonical field are rejected at config-write time. Like <code>registration.fields</code>,
+this resolves per-group down the parent chain.</p>
+<p><strong>Render behavior</strong> (hosted register page): for each declared extra field, if a
+matching URL query param is present (e.g. <code>/register?promo=WELCOME100</code>) the value
+is captured <strong>silently</strong> (no visible input); otherwise the page renders a plain
+text input asking for it. <code>required</code> is a client-side UX hint only.</p>
+<p><strong>Capture + storage</strong> (<code>on_register</code>): the capture allowlist is the union of the
+group's declared <code>extra_fields</code> names and the legacy global
+<code>REGISTRATION_EXTRA_FIELDS</code> setting (so existing deployments are unaffected).
+Captured values are persisted to <code>user.metadata["registration"]</code> (a
+<code>name → value</code> dict) <strong>and</strong> passed in the <code>extra=</code> kwarg to the
+<code>USER_REGISTERED_HANDLER</code>, so a consumer handler can act on them
+(e.g. validate/grant a promo).</p>
 <hr />
 <h2 id="multi-tenant-group-resolution">Multi-Tenant: Group Resolution<a class="headerlink" href="#multi-tenant-group-resolution" title="Permanent link">&para;</a></h2>
 <p>The hosted pages resolve the operator group from:

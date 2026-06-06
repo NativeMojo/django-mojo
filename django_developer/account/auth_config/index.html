@@ -4036,6 +4036,12 @@ rather than appending to it.</p>
 <td>Field schema (null → default email form) — see register_schema</td>
 </tr>
 <tr>
+<td><code>extra_fields</code></td>
+<td>list</td>
+<td><code>[]</code></td>
+<td>Per-group non-canonical fields (promo/ref/tracking). Each entry: <code>{"name", "label"?, "required"?}</code>. Names colliding with canonical fields are rejected. Default empty — no extra inputs, no behavior change for other tenants.</td>
+</tr>
+<tr>
 <td><code>identity_field</code></td>
 <td>string</td>
 <td><code>""</code></td>
@@ -4139,6 +4145,7 @@ time. Validated constraints:</p>
 <li><code>registration.methods</code> must be a list of valid tokens</li>
 <li><code>registration.passkey_prompt</code> must be <code>"off"</code>, <code>"optional"</code>, or <code>"required"</code></li>
 <li><code>registration.fields</code> is validated via <code>register_schema.validate_fields_config</code> — a schema that omits <code>password</code> is accepted only when it also includes a <code>phone</code> field with <code>verify: "sms"</code> (see Passwordless Registration below)</li>
+<li><code>registration.extra_fields</code> is validated via <code>register_schema.validate_extra_fields_config</code> — each entry must have a non-empty <code>name</code> string; <code>label</code> (if present) must be a string; <code>required</code> (if present) must be a boolean; names colliding with canonical fields are rejected</li>
 </ul>
 <hr />
 <h2 id="service-api">Service API<a class="headerlink" href="#service-api" title="Permanent link">&para;</a></h2>
