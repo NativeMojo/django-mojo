@@ -8,7 +8,8 @@ owner: backend
 opened: 2026-06-06
 depends_on: []
 related: []
-links: [/Users/ians/Projects/wmwx/docs/orchestrate/confirmed/REQ-029.md]
+source_reqs: [REQ-029]
+links: [/Users/ians/Projects/wmwx/docs/orchestrate/done/REQ-029.md]
 ---
 
 # Render allowlisted extra registration fields (promo) per-group
