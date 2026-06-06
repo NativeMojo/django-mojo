@@ -25,8 +25,41 @@ links: []              # external URLs
 - Expected:
 - Actual:
 
+## Plan
+<!-- PLAN PENDING — /scope fills this section. While this marker is present the item
+is UNPLANNED and /build MUST refuse it. Delete this comment when the plan is complete. -->
+
+_Write a complete, self-contained design here — enough that a fresh session can
+`/build` it cold, without re-deriving anything. Fill every subsection._
+
+### Goal
+[One sentence.]
+
+### Context — what exists
+[The recon a builder would otherwise redo: relevant files with paths and
+`file:line` refs, current behavior, key snippets, helpers/patterns to reuse.]
+
+### Changes — what to do
+1. `path` — [exact change and why]
+2. `path` — [...]
+
+### Design decisions
+- [decision] — [rationale; alternatives rejected]
+
+### Edge cases & risks
+- [case] — [how it's handled]
+
+### Tests
+- [scenario] -> `test file`   (for a bug: the regression test to add)
+
+### Docs
+- `doc` — [what changes]
+
+### Open questions
+- [blocking unknowns, or "none"]
+
 ## Notes
-[Constraints, prior decisions, open questions — filled during /scope]
+[Scratch space — anything not part of the plan.]
 
 ## Resolution
 - closed: YYYY-MM-DD

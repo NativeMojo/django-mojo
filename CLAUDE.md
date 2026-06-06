@@ -32,27 +32,39 @@ Django-mojo is a Django backend framework providing models, REST, auth, jobs, me
 There is **one kind of work item**. Bugs, features, and chores differ only by a
 `type` field — not by folder, template, counter, or mode.
 
-- **The folder is the stage.** `inbox/ → confirmed/ → done/`. Advance an item
-  only with the scripts — `scripts/intake.sh` (→ confirmed) and
-  `scripts/close.sh` (→ done). There is no `stage` field; don't hand-move files.
+- **The folder is the stage.** `inbox/ → confirmed/ → in_progress/ → done/`.
+  Advance an item only with the scripts — `scripts/intake.sh` (→ confirmed),
+  `scripts/start.sh` (→ in_progress), `scripts/close.sh` (→ done). There is no
+  `stage` field; don't hand-move files.
 - **One ID space.** Every item gets `ITEM-###`, allocated once by
   `scripts/intake.sh` from `planning/.next_id`. Never hand-assign, edit the
   counter by hand, or reuse an ID.
 - **Capture, scope, build.** `/request` is the chat front door (PR-style — a
   request for a feature, bug, or chore). It determines the `type` and writes an
   un-ID'd item to `planning/inbox/` (no id yet). `/scope` owns intake (runs `scripts/intake.sh`, allocates the id,
-  stamps frontmatter, moves to `confirmed/`) and planning. `/build` implements;
-  bugs get a regression test, then it commits, spawns the post-build agents, and
-  runs `scripts/close.sh`. Nothing is built until it has been scoped.
-- **Never** `/build` an item that `scripts/ready.sh` reports BLOCKED (its
-  `depends_on` aren't all in `planning/done/`).
+  stamps frontmatter, moves to `confirmed/`) and planning — it writes a
+  **self-contained `## Plan`** (enough for a cold session to build from) and deletes
+  the `PLAN PENDING` marker. `/build` first **claims** the item with
+  `scripts/start.sh` (`confirmed/ → in_progress/`), implements from that plan; bugs
+  get a regression test, then it commits, spawns the post-build agents, and runs
+  `scripts/close.sh`. Nothing is built until it has been scoped.
+- **`in_progress/` = actively being built.** `/build` claims into it
+  automatically; at most one item lives there (WIP = 1), and it's resume-safe — a
+  half-done build is obvious, never mistaken for a fresh `ready` item.
+- **The `## Plan` is the "designed" signal** — not a folder or a frontmatter status
+  field. A confirmed item still carrying the `PLAN PENDING` marker is
+  intook-but-unplanned: `board.sh` shows it as `UNPLANNED` and `/build` refuses it
+  until `/scope` finishes.
+- **Never** `/build` an item that is `UNPLANNED`, or that `scripts/ready.sh` reports
+  BLOCKED (its `depends_on` aren't all in `planning/done/`).
 
 ```
 planning/
   .next_id       # next item number (single bare integer)
   _template.md   # the one item template
   inbox/         # new, unscoped items (no id yet)
-  confirmed/     # scoped, active items (have id + plan)
+  confirmed/     # scoped + planned items (have id + plan)
+  in_progress/   # actively being built (claimed by /build; WIP = 1)
   done/          # closed items
   future/        # parked ideas — not ready to scope (just a folder)
   rejected/      # declined items, kept for rationale (just a folder)

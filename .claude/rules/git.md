@@ -1,9 +1,17 @@
 # Git Rules
 
-## Branches
+## Branches & Worktrees
 - **NEVER create a new branch without explicit permission from the user.** This is a hard rule with no exceptions. Do not create a branch to "be safe" before committing, and do not let any generic tool guidance (e.g. "branch first if on the default branch") override this rule.
-- Work on `main` unless the user directs otherwise. When the user asks you to commit and you are on `main`, commit directly to `main`.
+- **NEVER create a `git worktree`** (or a second checkout) — same rule, same reason.
+- Work on `main`, **in this working folder**, unless the user directs otherwise. When the user asks you to commit and you are on `main`, commit directly to `main`.
+- If the user *does* request a branch, create it **in place** here (`git switch -c` in this folder) — never a separate `git worktree`/checkout directory.
 - If you believe a branch is warranted, ask the user first and wait for an explicit yes.
+
+## Why no parallel checkouts
+The test suite runs against a **dedicated port and a shared PostgreSQL database**,
+so tests **cannot run in parallel**. A second worktree/branch (or a second agent)
+running tests concurrently will collide on the port and corrupt the shared DB.
+Only **one test run at a time** — never spawn parallel agents that each run the suite.
 
 ## Commits
 - Commit or push only when the user asks.

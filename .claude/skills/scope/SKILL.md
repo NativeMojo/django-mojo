@@ -34,7 +34,9 @@ item already has an `id`. Then:
    unknowns → `TBD`. Do **not** touch `id`.
 2. Resolve references: confirm each `depends_on` resolves to a real file; flag
    any not yet in `planning/done/`.
-3. Confirm in chat: `Picked up <id> (<type>: <title>) → planning/confirmed/`.
+3. Confirm in chat: `Picked up <id> (<type>: <title>) → planning/confirmed/`, then
+   suggest naming the session: `Tip: /rename <id> <short-title>`. (You can't run it
+   — `/rename` is user-only — so just print the tip.)
 
 ### Item Frontmatter (YAML)
 ```yaml
@@ -62,18 +64,24 @@ links: []              # external URLs: PRs, design docs, tracker issues
      `mojo/helpers/` so you don't reinvent existing framework features/utilities.
 3. Propose a plan using the output format below
 4. Gate: get explicit user approval before this thread ends
-5. Record the agreed plan in the item's `## Notes`
+5. Write the approved plan into the item's `## Plan` section (subsections below)
+   and **delete the `PLAN PENDING` marker**. The plan must be **self-contained** —
+   a fresh session with no memory of this one must be able to `/build` it without
+   re-exploring: include real file paths and `file:line` refs, the current
+   behavior, key snippets, the exact changes, decisions + rationale, and the tests
+   to add. Until the marker is gone the item is `UNPLANNED` and `/build` refuses it.
 
-## Output Format
+## Output Format (write these as the `## Plan` subsections)
 - **Goal**: one sentence
-- **What exists**: relevant files/functions already in place
-- **What changes**: exact list of files to create or modify
-- **Design decisions**: non-obvious choices and why
-- **Edge cases**: what could go wrong
-- **Tests needed**: scenarios to cover (for a bug: the regression to add).
+- **Context — what exists**: relevant files/functions already in place, with paths
+  and `file:line` refs and any snippets a builder would otherwise have to re-derive
+- **Changes — what to do**: exact list of files to create or modify, each with why
+- **Design decisions**: non-obvious choices and why (alternatives rejected)
+- **Edge cases & risks**: what could go wrong and how it's handled
+- **Tests**: scenarios to cover (for a bug: the regression to add).
   Tests use testit — see `docs/django_developer/testit/Overview.md`.
-- **Docs affected**: which tracks (`docs/django_developer/`, `docs/web_developer/`)
-- **Open questions**: anything unresolved that would block building
+- **Docs**: which tracks (`docs/django_developer/`, `docs/web_developer/`)
+- **Open questions**: anything unresolved that would block building (or "none")
 
 ## Forbidden in This Mode
 - Writing implementation code
@@ -81,3 +89,5 @@ links: []              # external URLs: PRs, design docs, tracker issues
 - Hand-editing `id` or `planning/.next_id` (the script owns both)
 - Assuming instead of asking
 - Closing the thread without user sign-off on the plan
+- Leaving the item in `confirmed/` with the `PLAN PENDING` marker still present, or
+  with a thin plan a cold session couldn't build from

@@ -37,19 +37,23 @@ Drop a file from `planning/_template.md` by hand for the same effect.
 Owns intake. It runs `scripts/intake.sh`, which allocates the next `ITEM-###`
 from `planning/.next_id`, stamps the YAML frontmatter, moves the file
 `inbox/ → confirmed/`, and bumps the counter — atomically. Then it explores
-(via the read-only Explore subagent) and produces an approved plan recorded in
-the item's `## Notes`. No code is written. Named `/scope` (not `/plan`) to avoid
+(via the read-only Explore subagent) and writes a **self-contained `## Plan`** —
+full enough that a cold session can build it without re-exploring — and deletes the
+`PLAN PENDING` marker. No code is written. Named `/scope` (not `/plan`) to avoid
 Claude Code's built-in plan mode.
 
 ### Build It
 ```
 /build <path to a confirmed item, or its ITEM id>
 ```
-Pre-flight `scripts/ready.sh` gates on `depends_on`. Then it implements (a
-failing regression test first, for bugs), runs tests, commits (no push), spawns
-three agents in parallel — full test suite, docs, security review — and runs
-`scripts/close.sh`, which stamps the Resolution block (closed/branch/files
-changed) and moves the file `confirmed/ → done/`.
+Pre-flight refuses an `UNPLANNED` item (one still carrying the `PLAN PENDING`
+marker — run `/scope` first) and `scripts/ready.sh` gates on `depends_on`. It works
+**in place** (no branch/worktree — see below). It first **claims** the item with
+`scripts/start.sh` (`confirmed/ → in_progress/`, WIP = 1, resume-safe), then
+implements (a failing regression test first, for bugs), runs tests, commits (no
+push), spawns three agents in parallel — full test suite, docs, security review —
+and runs `scripts/close.sh`, which stamps the Resolution block (closed/branch/files
+changed) and moves the file `in_progress/ → done/`.
 
 ### Show Memory
 ```
@@ -72,15 +76,16 @@ new work
   v
 /scope <item>
   |  scripts/intake.sh: ITEM-### + frontmatter + inbox/ -> confirmed/ + counter bump
-  |  records the approved plan in ## Notes
+  |  writes a self-contained ## Plan and deletes the PLAN PENDING marker
   v
 /build <item>
-  |  scripts/ready.sh pre-flight (READY/BLOCKED)
+  |  scripts/start.sh: claim confirmed/ -> in_progress/ (WIP=1, resume-safe)
+  |  scripts/ready.sh pre-flight (READY/BLOCKED); refuses UNPLANNED
   |  implements, writes/runs tests, commits, then spawns 3 agents in parallel:
   |    - test-runner: runs full test suite, fixes trivial errors, reports complex ones
   |    - docs-updater: reads git diff, updates django_developer/ and web_developer/ docs
   |    - security-review: checks diff for permission gaps, injection, auth bypasses
-  |  scripts/close.sh: stamp Resolution + confirmed/ -> done/
+  |  scripts/close.sh: stamp Resolution + in_progress/ -> done/
   v
 Done.
 ```
@@ -96,9 +101,10 @@ work isn't model-followed prose.
 | Script | Purpose |
 |---|---|
 | `intake.sh` | Allocate ID, stamp frontmatter, move `inbox/ → confirmed/`, bump counter (atomic). Refuses to consume a number if the item already has an id; reconciles against the tree so a stale counter can't dup. |
-| `board.sh` | Pipeline at a glance. `board.sh [inbox\|confirmed\|done\|future\|rejected]`. |
-| `ready.sh` | Dependency gate — `READY` (exit 0) / `BLOCKED` (exit 1) for a confirmed item's `depends_on`. |
-| `close.sh` | Route an item to a terminal/parking folder: `close.sh <file> [done\|future\|rejected]`. `done` (default) stamps Resolution (closed/branch/files changed) and moves to `done/`; `future`/`rejected` are plain moves (no stamp). |
+| `start.sh` | Claim a planned item: move `confirmed/ → in_progress/`. Idempotent resume; enforces WIP = 1; refuses an `UNPLANNED` item. Called automatically by `/build`. |
+| `board.sh` | Pipeline at a glance. `board.sh [inbox\|confirmed\|in_progress\|done\|future\|rejected]`. Confirmed items show `UNPLANNED` / `ready` / `BLOCKED`; in_progress shows `wip`. |
+| `ready.sh` | Dependency gate — `READY` (exit 0) / `BLOCKED` (exit 1) for an item's `depends_on`. |
+| `close.sh` | Route an item to a terminal/parking folder: `close.sh <file> [done\|future\|rejected]`. `done` (default, from `in_progress/`) stamps Resolution (closed/branch/files changed) and moves to `done/`; `future`/`rejected` are plain moves (no stamp). |
 
 ## Planning Directory
 
@@ -107,7 +113,8 @@ planning/
   .next_id     Next item number to assign (single bare integer)
   _template.md The one item template (YAML frontmatter)
   inbox/       New, unscoped items (no id yet)
-  confirmed/   Scoped, active items (have id + plan, from /scope)
+  confirmed/   Scoped + planned items (have id + plan, from /scope)
+  in_progress/ Actively being built (claimed by /build via start.sh; WIP = 1)
   done/        Closed items (from /build via close.sh)
   future/      Parked ideas — not ready to scope (just a folder)
   rejected/    Declined items, kept for rationale (just a folder)
@@ -121,9 +128,13 @@ assigns its id then).
 ### Item Lifecycle
 
 1. **Intake & Plan** (`/scope` → `scripts/intake.sh`): allocates the ID, stamps
-   frontmatter, moves to `confirmed/`, records the plan in `## Notes`.
-2. **Resolution** (`/build` → `scripts/close.sh`): implements, fills
-   `## Resolution`, moves to `done/`.
+   frontmatter, moves to `confirmed/`, then writes a self-contained `## Plan` and
+   deletes the `PLAN PENDING` marker. Until that marker is gone the item is
+   `UNPLANNED` and `/build` refuses it.
+2. **Build** (`/build` → `scripts/start.sh`): claims the item `confirmed/ →
+   in_progress/` (WIP = 1, resume-safe), then implements.
+3. **Resolution** (`/build` → `scripts/close.sh`): fills `## Resolution`, moves
+   `in_progress/ → done/`.
 
 IDs are assigned only by `scripts/intake.sh`, never by hand, never reused. The
 folder is the stage — there is no `stage` field.
@@ -146,7 +157,7 @@ Rules in `.claude/rules/` are loaded automatically. You do not invoke them — C
 | Rule | Scope | What It Covers |
 |---|---|---|
 | `core.md` | Always | request.DATA, no type hints, no migrations, KISS, security |
-| `git.md` | Always | Branch policy (never branch without permission), commit format |
+| `git.md` | Always | No branches/worktrees without permission (tests share a port + Postgres DB → no parallel runs); commit format |
 | `models.md` | `mojo/**/models/` | MojoModel inheritance, created/modified, RestMeta, one-per-file |
 | `rest.md` | `mojo/**/rest/` | URL patterns, CRUD handlers, POST_SAVE_ACTIONS |
 | `testing.md` | `tests/` | testit framework, server process isolation, assert messages |

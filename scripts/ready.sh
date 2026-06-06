@@ -9,7 +9,7 @@ src="${1:?usage: scripts/ready.sh <item-file>}"
 
 locate() {  # echo the stage folder holding id $1 (done first), else nothing
   local d
-  for d in done confirmed inbox future rejected; do
+  for d in done in_progress confirmed inbox future rejected; do
     if grep -rlqE "^id:[[:space:]]*$1[[:space:]]*$" "planning/$d" 2>/dev/null; then
       echo "$d"; return
     fi

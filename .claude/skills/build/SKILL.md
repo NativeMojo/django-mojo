@@ -16,13 +16,26 @@ minimal, correct, tested code that matches existing patterns.
 Read `CLAUDE.md` for conventions. Read the item file in `planning/confirmed/`.
 
 ## Pre-Flight
-- The item must be in `planning/confirmed/` (scoped). If it's still in `inbox/`,
+- The item must be in `planning/confirmed/` (scoped) or already in
+  `planning/in_progress/` (resuming a half-done build). If it's still in `inbox/`,
   stop and run `/scope` first.
-- Run `scripts/ready.sh planning/confirmed/<file>.md`. If it reports `BLOCKED`,
-  stop and say so; only proceed on `READY`.
+- The item must be **planned**: its `## Plan` must NOT contain the `PLAN PENDING`
+  marker (`grep -q 'PLAN PENDING' <file>` must fail). If present, it was intook but
+  never designed — stop and run `/scope`. Build from the `## Plan`; it's meant to be
+  self-contained, so you shouldn't need to re-explore from scratch.
+- Run `scripts/ready.sh <file>`. If it reports `BLOCKED`, stop and say so; only
+  proceed on `READY`.
+- Work **in place** on the current branch. Do **not** create a branch or git
+  worktree unless the user explicitly asked — the suite uses a dedicated port and a
+  shared PostgreSQL DB, so parallel checkouts collide (see `.claude/rules/git.md`).
 
 ## Workflow
-1. State what you're about to build (one sentence; include the ITEM id).
+1. **Claim it:** `scripts/start.sh <file>` — moves it `confirmed/ → in_progress/`
+   (no-op if you're resuming one already there; refuses if another item is already
+   in progress — finish or close that first). State what you're about to build
+   (one sentence; include the ITEM id) and suggest naming the session:
+   `Tip: /rename <id> <short-title>` (user-only; just print the tip). From here,
+   operate on the `planning/in_progress/<file>.md` path.
 2. Show your implementation plan — get confirmation before writing code. Read
    every file you'll touch first; no blind edits.
 3. **If `type: bug`:** write a regression test (testit — see
@@ -41,8 +54,8 @@ Read `CLAUDE.md` for conventions. Read the item file in `planning/confirmed/`.
    - **docs-updater** — read the diff, update both doc tracks
    - **security-review** — review the diff for permission/injection/auth issues
 9. Fill `tests added:` in the item's Resolution block, then run
-   `scripts/close.sh planning/confirmed/<file>.md` (stamps closed/branch/files
-   changed and moves it to `planning/done/`).
+   `scripts/close.sh planning/in_progress/<file>.md` (stamps closed/branch/files
+   changed and moves it `in_progress/ → done/`).
 10. Update `memory.md` if any decision was made.
 11. State what's next.
 
@@ -56,7 +69,11 @@ Read `CLAUDE.md` for conventions. Read the item file in `planning/confirmed/`.
 - **Next**: next task or "complete"
 
 ## Forbidden in This Mode
-- Building an item not in `confirmed/`, or that `scripts/ready.sh` reports BLOCKED
+- Building an item not in `confirmed/` or `in_progress/`, still carrying the
+  `PLAN PENDING` marker (unplanned), or that `scripts/ready.sh` reports BLOCKED
+- Starting a new item while another sits in `in_progress/` (WIP = 1; finish or
+  close it first)
+- Creating a branch or git worktree (work in place) unless the user explicitly asked
 - Expanding scope beyond the current item
 - Writing code before confirming the plan
 - Skipping tests ("I'll add them later")

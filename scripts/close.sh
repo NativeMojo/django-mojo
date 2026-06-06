@@ -21,7 +21,7 @@ esac
 
 # Only `done` stamps a Resolution block — future/rejected are plain moves.
 if [ "$stage" = done ]; then
-  case "$src" in planning/confirmed/*) ;; *) echo "warning: $src is not in planning/confirmed/" >&2 ;; esac
+  case "$src" in planning/in_progress/*|planning/confirmed/*) ;; *) echo "warning: $src is not in planning/in_progress/ or confirmed/" >&2 ;; esac
   today="$(date +%F)"
   branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '')"
   changed="$(git diff --name-only "$base"...HEAD 2>/dev/null | paste -sd, - 2>/dev/null || true)"
@@ -32,10 +32,16 @@ if [ "$stage" = done ]; then
   set_kv() {
     K="$1" V="$2" perl -i -pe 'BEGIN{($k,$v)=@ENV{qw/K V/}} s/^- \Q$k\E:.*/- $k: $v/' "$src"
   }
-  grep -q '^- closed:' "$src" || echo "warning: no Resolution block in $src (nothing stamped)" >&2
-  set_kv "closed" "$today"
-  [ -z "$branch" ]  || set_kv "branch" "$branch"
-  [ -z "$changed" ] || set_kv "files changed" "$changed"
+  if grep -q '^- closed:' "$src"; then
+    set_kv "closed" "$today"
+    [ -z "$branch" ]  || set_kv "branch" "$branch"
+    [ -z "$changed" ] || set_kv "files changed" "$changed"
+  else
+    # No Resolution block (e.g. a non-template item) — append one so every done/
+    # item is self-describing (when closed, on what branch, which files).
+    printf '\n## Resolution\n- closed: %s\n- branch: %s\n- files changed: %s\n- tests added:\n' \
+      "$today" "$branch" "$changed" >> "$src"
+  fi
 fi
 
 dest="planning/$stage/$(basename "$src")"

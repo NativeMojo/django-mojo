@@ -17,15 +17,19 @@ row() {  # file, stage
   type="$(fm "$f" type)"; pri="$(fm "$f" priority)"; title="$(fm "$f" title)"
   title="${title%\"}"; title="${title#\"}"   # strip surrounding quotes if present
   if [ "$stage" = confirmed ]; then
-    if scripts/ready.sh "$f" >/dev/null 2>&1; then flag=ready; else flag=BLOCKED; fi
+    if grep -q 'PLAN PENDING' "$f"; then flag=UNPLANNED          # intook, not yet designed
+    elif scripts/ready.sh "$f" >/dev/null 2>&1; then flag=ready
+    else flag=BLOCKED; fi
+  elif [ "$stage" = in_progress ]; then
+    flag=wip                                                     # claimed by /build
   fi
   printf '%-10s %-9s %-8s %-4s %-8s %s\n' "$id" "$stage" "${type:--}" "${pri:--}" "$flag" "${title:--}"
 }
 
 printf '%-10s %-9s %-8s %-4s %-8s %s\n' ID STAGE TYPE PRI STATE TITLE
-# Active pipeline: inbox confirmed done. Parking folders future/rejected are
-# shown only when named explicitly (board.sh future / board.sh rejected).
-for stage in inbox confirmed done future rejected; do
+# Active pipeline: inbox confirmed in_progress done. Parking folders future/rejected
+# are shown only when named explicitly (board.sh future / board.sh rejected).
+for stage in inbox confirmed in_progress done future rejected; do
   if [ -z "$filter" ]; then
     case "$stage" in future|rejected) continue;; esac
   else
