@@ -340,10 +340,16 @@ def on_register(request):
     # Allowlisted extras — silent-drop unknown keys (existing contract).
     # Resolved up-front so both the new-user path and the existing-account
     # path below hand the same `extra` dict to USER_REGISTERED_HANDLER.
+    # Allowlist = legacy global REGISTRATION_EXTRA_FIELDS ∪ the names this group
+    # declares in auth_config.registration.extra_fields. The group config both
+    # renders the input and authorizes its capture; the global setting keeps
+    # existing deployments working with no migration.
     extras_allow = account_extensions.list_setting_with_header(
         request, "X-Mojo-Test-Registration-Extra-Fields",
         "REGISTRATION_EXTRA_FIELDS", [])
-    extra = {key: request.DATA.get(key) for key in extras_allow if key in request.DATA}
+    group_extra_fields = register_schema.resolve_extra_fields(group=group, request=request)
+    allow = set(extras_allow) | set(register_schema.extra_field_names(group_extra_fields))
+    extra = {key: request.DATA.get(key) for key in allow if key in request.DATA}
 
     # ---- Existing-account short-circuit (phone identity) -------------------
     # Detect an account that already owns this phone BEFORE full payload
@@ -478,6 +484,15 @@ def on_register(request):
         if not user.display_name:
             user.display_name = user.generate_display_name()
         user.validate_name_fields({}, created=True)
+        # Persist captured extras (promo/ref/tracking/etc.) under a dedicated
+        # metadata namespace. Merged so other metadata keys are untouched.
+        # USER_REGISTERED_HANDLER still receives `extra` below as well.
+        if extra:
+            meta = user.metadata or {}
+            reg = meta.get("registration") or {}
+            reg.update(extra)
+            meta["registration"] = reg
+            user.metadata = meta
         user.save()
 
         if group is not None:

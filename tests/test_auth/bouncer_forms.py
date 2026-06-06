@@ -314,6 +314,61 @@ def test_mojo_auth_forgot_channel(opts):
 
 
 # ---------------------------------------------------------------------------
+# Extra (non-canonical) registration fields — auth_config.registration.extra_fields
+# ---------------------------------------------------------------------------
+
+def _render_with_extra_fields(template_name, extra_fields_raw, group=None):
+    """Render with an explicit register_extra_fields context.
+
+    Drives the template render directly (gate-independent): _auth_context builds
+    the base context, then we override register_extra_fields with the normalized
+    list so this test exercises the template, not the test-mode header gate
+    (resolve_extra_fields' header path is covered by the schema unit tests).
+    """
+    from django.test import RequestFactory
+    from django.shortcuts import render
+    from mojo.apps.account.rest.bouncer.views import _auth_context
+    from mojo.apps.account.services import register_schema
+
+    factory = RequestFactory(REMOTE_ADDR='127.0.0.1')
+    request = factory.get('/register')
+    ctx = _auth_context(request, group=group)
+    ctx['page_mode'] = 'register'
+    ctx['page_title'] = 'Create Account'
+    ctx['register_extra_fields'] = register_schema._normalize_extra_field_list(extra_fields_raw)
+    response = render(request, template_name, ctx)
+    return response.content.decode('utf-8')
+
+
+@th.django_unit_test("register.html renders a configured extra field (promo) + wires collectExtras")
+def test_register_html_extra_field_renders(opts):
+    html = _render_with_extra_fields(
+        'account/register.html',
+        [{"name": "promo", "label": "Promo code"}],
+        group=opts.group)
+    assert_true('id="reg-extra-promo"' in html,
+                "a configured extra field must render its text input #reg-extra-promo")
+    assert_true('id="reg-extra-row-promo"' in html,
+                "the extra field must render inside its hideable row #reg-extra-row-promo")
+    assert_true('Promo code' in html,
+                "the extra field's label must render (as the input placeholder)")
+    assert_true('id="reg-extra-fields-data"' in html,
+                "register.html must emit reg-extra-fields-data JSON for the JS loop")
+    assert_true('if (!collectExtras(payload)) return;' in html,
+                "the single-pane submit handler must call collectExtras(payload)")
+
+
+@th.django_unit_test("register.html renders NO extra-field inputs when none configured (gating regression)")
+def test_register_html_no_extra_fields_default(opts):
+    html = _render('account/register.html', group=opts.group)
+    assert_true('id="reg-extra-row-' not in html,
+                "with no extra_fields configured, no extra field row may render — "
+                "other brands must see no behavior change")
+    assert_true('id="reg-extra-promo"' not in html,
+                "default config must not render a promo input")
+
+
+# ---------------------------------------------------------------------------
 # Phone-first stepped flow (register page UX redesign)
 # ---------------------------------------------------------------------------
 

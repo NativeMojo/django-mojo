@@ -405,7 +405,9 @@ Creates a new user account. No authentication required. Rate-limited to 5 reques
 | `bouncer_token` | conditional | Required when bouncer is active. Must be a token issued with `page_type: "registration"` — a login-scoped token will be rejected |
 | `duid` | conditional | Device UUID, required when bouncer is active |
 
-Additional keys may be included in the payload. The server silently drops any key not present in its `REGISTRATION_EXTRA_FIELDS` allowlist, so safe to forward extra fields without causing errors. `MojoAuth.register()` forwards the full payload as-is.
+Additional keys may be included in the payload. The server silently drops any key not allowlisted (the global `REGISTRATION_EXTRA_FIELDS` setting, plus any names the group declares in `registration.extra_fields`), so it's safe to forward extra fields without causing errors. `MojoAuth.register()` forwards the full payload as-is.
+
+**Extra registration fields (promo / referral / tracking).** A group can configure extra fields via `registration.extra_fields` (see the backend Auth Pages doc). On the bouncer-hosted register page these are captured automatically: a matching URL query param (e.g. `/register?promo=WELCOME100`) is captured silently; otherwise the page asks for the value as a plain text input. SPAs implementing their own form just include the key in the register payload. Captured values are stored on the new user under `metadata.registration` (a `name → value` map) and passed to the server's registration handler.
 
 ### Phone-Based Registration (verify-then-register)
 

@@ -59,6 +59,7 @@ Already have an account? <a href="{{ auth_url|default:'/auth' }}">Log in</a>
             {% endif %}
         {% endfor %}
 
+        {% for ef in register_extra_fields %}{% include "account/_register_extra_field.html" %}{% endfor %}
         {% block extra_fields_stepped %}{% endblock %}
 
         <div class="mat-checkbox-row">
@@ -86,6 +87,7 @@ Already have an account? <a href="{{ auth_url|default:'/auth' }}">Log in</a>
             {% endif %}
         {% endfor %}
 
+        {% for ef in register_extra_fields %}{% include "account/_register_extra_field.html" %}{% endfor %}
         {% block extra_fields %}{% endblock %}
 
         <div class="mat-checkbox-row">
@@ -125,6 +127,7 @@ Already have an account? <a href="{{ auth_url|default:'/auth' }}">Log in</a>
 
 {% block page_script %}
 {{ register_fields|json_script:"reg-fields-data" }}
+{{ register_extra_fields|json_script:"reg-extra-fields-data" }}
 <script>
 (function () {
     var m = window._mat;
@@ -136,6 +139,44 @@ Already have an account? <a href="{{ auth_url|default:'/auth' }}">Log in</a>
     // the API contract come from the same source.
     var REG_FIELDS = JSON.parse(document.getElementById("reg-fields-data").textContent || "[]");
     var STEPPED = {% if register_step2_active %}true{% else %}false{% endif %};
+
+    // Extra (non-canonical) fields: {name, label, required}. Each renders a
+    // hidden text input (#reg-extra-{name}). When a matching URL query param is
+    // present we capture it silently (input stays hidden, value pre-set);
+    // otherwise we reveal the input and ask for the value.
+    var REG_EXTRA_FIELDS = JSON.parse(document.getElementById("reg-extra-fields-data").textContent || "[]");
+    var URL_PARAMS = new URLSearchParams(window.location.search);
+    for (var _x = 0; _x < REG_EXTRA_FIELDS.length; _x++) {
+        var _ef = REG_EXTRA_FIELDS[_x];
+        var _fromUrl = URL_PARAMS.get(_ef.name);
+        var _el = $("reg-extra-" + _ef.name);
+        var _row = $("reg-extra-row-" + _ef.name);
+        if (_fromUrl !== null && _fromUrl !== "") {
+            if (_el) _el.value = _fromUrl;   // captured silently; row stays hidden
+        } else if (_row) {
+            _row.style.display = "";          // no URL value -> ask for it
+        }
+    }
+
+    // Add extra-field values to a register payload. URL param wins over the
+    // (hidden) input. Returns false (after a message) if a required extra is
+    // missing — required is a client-side UX hint; the server stays lenient.
+    function collectExtras(payload) {
+        for (var i = 0; i < REG_EXTRA_FIELDS.length; i++) {
+            var ef = REG_EXTRA_FIELDS[i];
+            var fromUrl = URL_PARAMS.get(ef.name);
+            var el = $("reg-extra-" + ef.name);
+            var v = (fromUrl !== null && fromUrl !== "")
+                ? fromUrl
+                : (el ? (el.value || "").trim() : "");
+            if (ef.required && !v) {
+                m.showMessage("Please fill in all required fields.", "error");
+                return false;
+            }
+            if (v) payload[ef.name] = v;
+        }
+        return true;
+    }
 
     var FIELD_INPUT_ID = {
         first_name: "reg-first-name",
@@ -307,6 +348,7 @@ Already have an account? <a href="{{ auth_url|default:'/auth' }}">Log in</a>
                             // profile step; registering signs them straight in.
                             var p = { phone: valueFor("phone"),
                                       verified_phone_token: data.verified_phone_token };
+                            collectExtras(p);
                             if (cfg.groupUuid) p.group_uuid = cfg.groupUuid;
                             MojoAuth.register(p)
                                 .then(function (result) { finishRegister(result, verifyBtn); })
@@ -387,6 +429,8 @@ Already have an account? <a href="{{ auth_url|default:'/auth' }}">Log in</a>
             }
             if (v !== "" && v !== undefined) payload[f.name] = v;
         }
+
+        if (!collectExtras(payload)) return;
 
         var phoneTokenEl = $("reg-phone-token");
         if (phoneTokenEl && phoneTokenEl.value) {

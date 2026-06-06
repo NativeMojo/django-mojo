@@ -35,8 +35,15 @@ Public surface:
 """
 import datetime
 import json
+import re
 
 from mojo import errors as merrors
+
+
+# Extra-field names become DOM ids (reg-extra-<name>), getElementById args, and
+# register-payload / metadata keys — restrict to a simple identifier so a
+# group-configured name can never carry HTML/selector-special characters.
+_EXTRA_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 from mojo.helpers import test_mode as _tm
 
 
@@ -159,6 +166,123 @@ def validate_fields_config(raw):
                 "registration.fields without 'password' must include 'phone' "
                 "with verify='sms' — passwordless accounts log in by SMS code")
     return fields
+
+
+# ---------------------------------------------------------------------------
+# Extra (non-canonical) registration fields.
+#
+# Consumer-specific fields — promo codes, referral/tracking tokens — that are
+# NOT canonical User columns. They are declared per-group in
+# `auth_config.registration.extra_fields`, rendered on the hosted register page
+# (silently captured from a matching URL query param when present, asked for as
+# a plain text input otherwise), and captured server-side into the `extra` dict
+# passed to USER_REGISTERED_HANDLER and persisted at `user.metadata["registration"]`.
+# Default is an empty list — no extra fields, no behavior change.
+# ---------------------------------------------------------------------------
+
+def _normalize_extra_entry(entry):
+    """Coerce one extra-field config entry into `{name, label, required}`, or
+    None to drop it. Names that collide with a canonical field are dropped —
+    canonical fields belong in `registration.fields`."""
+    if isinstance(entry, str):
+        entry = {"name": entry}
+    if not isinstance(entry, dict):
+        return None
+    name = entry.get("name")
+    if not isinstance(name, str):
+        return None
+    name = name.strip()
+    if not name or name in CANONICAL_FIELDS or not _EXTRA_NAME_RE.match(name):
+        return None
+    label = entry.get("label")
+    if not isinstance(label, str) or not label.strip():
+        label = name.replace("_", " ").title()
+    else:
+        label = label.strip()
+    return {"name": name, "label": label, "required": bool(entry.get("required", False))}
+
+
+def _normalize_extra_field_list(raw):
+    """Normalize a raw extra-fields config list into `{name, label, required}`
+    dicts. Drops unknown/duplicate/canonical-colliding entries. Returns `[]`
+    when `raw` is empty or unusable (the default — no extra fields)."""
+    if not raw or not isinstance(raw, (list, tuple)):
+        return []
+    out = []
+    seen = set()
+    for entry in raw:
+        norm = _normalize_extra_entry(entry)
+        if norm is None:
+            continue
+        if norm["name"] in seen:
+            continue
+        seen.add(norm["name"])
+        out.append(norm)
+    return out
+
+
+def resolve_extra_fields(group=None, request=None):
+    """Resolve the per-group extra (non-canonical) register fields.
+
+    Reads `registration.extra_fields` from the group's resolved auth config;
+    defaults to an empty list. `request` enables the test-mode header override
+    (`X-Mojo-Test-Register-Extra-Fields`, a JSON list), honored only when the
+    test-mode gate passes (loopback + flag + no proxy chain).
+    """
+    raw = None
+    header_value = _read_test_header(request, "X-Mojo-Test-Register-Extra-Fields")
+    if header_value is not None:
+        try:
+            parsed = json.loads(header_value)
+            if isinstance(parsed, list):
+                raw = parsed
+        except (json.JSONDecodeError, TypeError):
+            raw = None
+    if raw is None:
+        from mojo.apps.account.services import auth_config
+        cfg = auth_config.resolve_auth_config(group=group, request=request)
+        raw = cfg.registration.extra_fields
+    return _normalize_extra_field_list(raw)
+
+
+def extra_field_names(extra_fields):
+    """The list of declared extra-field names — used by on_register to extend
+    the capture allowlist with what a group has declared."""
+    return [ef["name"] for ef in extra_fields]
+
+
+def validate_extra_fields_config(raw):
+    """Validate an auth-config `registration.extra_fields` list. Raises
+    ValueException on bad config. Returns the normalized list."""
+    if not isinstance(raw, (list, tuple)):
+        raise merrors.ValueException("registration.extra_fields must be a list")
+    for entry in raw:
+        if isinstance(entry, str):
+            name = entry
+        elif isinstance(entry, dict):
+            name = entry.get("name")
+        else:
+            raise merrors.ValueException(
+                "registration.extra_fields entries must be objects with a 'name'")
+        if not isinstance(name, str) or not name.strip():
+            raise merrors.ValueException(
+                "each registration.extra_fields entry needs a non-empty 'name'")
+        if name.strip() in CANONICAL_FIELDS:
+            raise merrors.ValueException(
+                f"registration.extra_fields name '{name}' collides with a canonical "
+                f"field — declare canonical fields in registration.fields instead")
+        if not _EXTRA_NAME_RE.match(name.strip()):
+            raise merrors.ValueException(
+                f"registration.extra_fields name '{name}' must be a simple identifier "
+                f"(a letter followed by letters, digits, or underscores)")
+        if isinstance(entry, dict):
+            if "label" in entry and not isinstance(entry.get("label"), str):
+                raise merrors.ValueException(
+                    "registration.extra_fields 'label' must be a string")
+            if "required" in entry and not isinstance(entry.get("required"), bool):
+                raise merrors.ValueException(
+                    "registration.extra_fields 'required' must be a boolean")
+    return _normalize_extra_field_list(raw)
 
 
 def resolve_identity_field(fields, group=None):

@@ -292,6 +292,11 @@ def _auth_context(request, group=None):
     # validator, so what the form collects matches what the API will accept.
     register_fields = register_schema.resolve_fields(group=group, request=request)
     register_field_rows = register_schema.field_rows(register_fields)
+    # Per-group extra (non-canonical) fields — promo/ref/tracking/etc. Default
+    # empty: no extra inputs, no behavior change. Rendered after the canonical
+    # fields; the template's JS captures a matching URL query param silently or
+    # asks for the value as a plain text input.
+    register_extra_fields = register_schema.resolve_extra_fields(group=group, request=request)
     try:
         identity_field = register_schema.resolve_identity_field(register_fields, group=group)
     except Exception:
@@ -336,6 +341,7 @@ def _auth_context(request, group=None):
         'group_uuid': group_uuid,
         'register_fields': register_fields,
         'register_field_rows': register_field_rows,
+        'register_extra_fields': register_extra_fields,
         'register_step1_fields': step1_fields,
         'register_step2_active': step2_active,
         'register_step3_field_rows': step3_field_rows,

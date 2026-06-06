@@ -271,6 +271,100 @@ def test_partition_phone_no_verify(opts):
         f"phone must still appear in the single-pane field list, got {step3_names}"
 
 
+@th.django_unit_test("resolve_extra_fields returns [] when no extra_fields configured")
+def test_resolve_extra_fields_default(opts):
+    from mojo.apps.account.services import register_schema as rs
+    out = rs.resolve_extra_fields(group=None)
+    assert out == [], \
+        f"Default (no config) must yield no extra fields — keeps every existing " \
+        f"deployment unchanged, got {out}"
+
+
+@th.django_unit_test("resolve_extra_fields normalizes name/label/required")
+def test_resolve_extra_fields_normalizes(opts):
+    from mojo.apps.account.services import register_schema as rs
+    from mojo.helpers.settings import settings
+    raw = [
+        {"name": "promo", "label": "Promo code", "required": True},
+        "ref",                                   # string shorthand
+        {"name": "tracking"},                    # label defaults from name
+    ]
+    original_get = settings.get
+    def patched(key, default=None, **kwargs):
+        if key == "AUTH_CONFIG":
+            return {"registration": {"extra_fields": raw}}
+        return original_get(key, default=default, **kwargs)
+    settings.get = patched
+    try:
+        out = rs.resolve_extra_fields(group=None)
+    finally:
+        settings.get = original_get
+    by_name = {ef["name"]: ef for ef in out}
+    assert [ef["name"] for ef in out] == ["promo", "ref", "tracking"], \
+        f"extra fields must keep configured order, got {[ef['name'] for ef in out]}"
+    assert by_name["promo"]["label"] == "Promo code", \
+        f"explicit label must be preserved, got {by_name['promo']['label']!r}"
+    assert by_name["promo"]["required"] is True, \
+        "required flag must be coerced and preserved"
+    assert by_name["ref"]["label"] == "Ref", \
+        f"string-shorthand entry must get a humanized default label, got {by_name['ref']['label']!r}"
+    assert by_name["tracking"]["label"] == "Tracking" and by_name["tracking"]["required"] is False, \
+        f"missing label must humanize the name and required must default False, got {by_name['tracking']}"
+
+
+@th.django_unit_test("resolve_extra_fields drops canonical-colliding, blank, and duplicate names")
+def test_resolve_extra_fields_drops_bad(opts):
+    from mojo.apps.account.services import register_schema as rs
+    from mojo.helpers.settings import settings
+    raw = [
+        {"name": "email"},        # collides with a canonical field -> dropped
+        {"name": ""},             # blank -> dropped
+        {"name": "bad name!"},    # non-identifier chars -> dropped
+        {"name": "promo"},
+        {"name": "promo"},        # duplicate -> dropped
+        {"label": "no name"},     # missing name -> dropped
+    ]
+    original_get = settings.get
+    def patched(key, default=None, **kwargs):
+        if key == "AUTH_CONFIG":
+            return {"registration": {"extra_fields": raw}}
+        return original_get(key, default=default, **kwargs)
+    settings.get = patched
+    try:
+        out = rs.resolve_extra_fields(group=None)
+    finally:
+        settings.get = original_get
+    assert [ef["name"] for ef in out] == ["promo"], \
+        f"canonical-colliding, blank, nameless, and duplicate entries must all be " \
+        f"dropped, leaving only ['promo'], got {[ef['name'] for ef in out]}"
+
+
+@th.django_unit_test("validate_extra_fields_config accepts a good list and rejects bad shapes")
+def test_validate_extra_fields_config(opts):
+    from mojo.apps.account.services import register_schema as rs
+    from mojo import errors as merrors
+
+    out = rs.validate_extra_fields_config([{"name": "promo", "label": "Promo code"}])
+    assert [ef["name"] for ef in out] == ["promo"], \
+        f"a valid extra_fields config must normalize and return, got {out}"
+
+    bad_cases = [
+        ("not a list", "must be a list"),
+        ([{"label": "x"}], "name"),                         # missing name
+        ([{"name": "email"}], "collides"),                  # canonical collision
+        ([{"name": "pro mo"}], "identifier"),               # non-identifier chars
+        ([{"name": "promo", "label": 5}], "label"),         # non-string label
+        ([{"name": "promo", "required": "yes"}], "required"),  # non-bool required
+    ]
+    for raw, expect in bad_cases:
+        try:
+            rs.validate_extra_fields_config(raw)
+            assert False, f"validate_extra_fields_config must reject {raw!r}"
+        except merrors.ValueException as e:
+            assert expect in str(e).lower() or expect in str(e), \
+                f"error for {raw!r} must mention {expect!r}, got {e}"
+
+
 @th.django_unit_test("field_rows groups adjacent first/last into a single row")
 def test_field_rows_groups_names(opts):
     from mojo.apps.account.services import register_schema as rs

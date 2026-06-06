@@ -1,0 +1,18 @@
+{% comment %}
+Renders a single EXTRA (non-canonical) register field — promo/ref/tracking/etc.
+Driven by auth_config.registration.extra_fields via
+register_schema.resolve_extra_fields(); see register_schema.py.
+
+Hidden by default: the page_script reveals the input when there is no matching
+URL query param, or pre-sets its value (still hidden) when there is — so a
+?promo=CODE deep-link captures silently while a bare visit asks for the value.
+
+Input context:
+    ef.name      — the extra field name (e.g. "promo")
+    ef.label     — display label / placeholder
+    ef.required  — bool (client-side UX hint only; server keeps the
+                   silent-drop contract for extras)
+{% endcomment %}
+<div class="mat-field" id="reg-extra-row-{{ ef.name }}" style="display:none">
+    <input class="mat-input" type="text" id="reg-extra-{{ ef.name }}" autocomplete="off" placeholder="{{ ef.label }}"{% if ef.required %} data-required="1"{% endif %} />
+</div>

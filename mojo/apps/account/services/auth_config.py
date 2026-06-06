@@ -66,6 +66,9 @@ DEFAULT_AUTH_CONFIG = {
         "enabled": True,
         # None -> register_schema falls back to its DEFAULT_FIELDS.
         "fields": None,
+        # [] -> no extra (non-canonical) fields rendered/captured.
+        # Each entry: {"name", "label"?, "required"?}. See register_schema.
+        "extra_fields": [],
         # "" -> register_schema auto-picks (email > phone).
         "identity_field": "",
         "min_age": None,
@@ -171,6 +174,7 @@ def public_auth_config(cfg):
         "registration": {
             "enabled": registration.get("enabled", True),
             "fields": registration.get("fields"),
+            "extra_fields": list(registration.get("extra_fields") or []),
             "identity_field": registration.get("identity_field", ""),
             "min_age": registration.get("min_age"),
             "methods": list(registration.get("methods") or []),
@@ -268,6 +272,10 @@ def validate_auth_config(cfg):
         if fields:
             from mojo.apps.account.services import register_schema
             register_schema.validate_fields_config(fields)
+        extra_fields = registration.get("extra_fields")
+        if extra_fields:
+            from mojo.apps.account.services import register_schema
+            register_schema.validate_extra_fields_config(extra_fields)
 
 
 def resolve_group_from_request(request):

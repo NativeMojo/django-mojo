@@ -402,6 +402,42 @@ Two endpoints back the phone-verify flow:
 | POST | `/api/auth/phone/register/start` | Body `{phone}` → `{session_token, expires_in}`. Accepts phones that already have accounts (the register flow handles the login). |
 | POST | `/api/auth/phone/register/verify` | Body `{session_token, code}` → `{verified_phone_token, expires_in, account_exists}`. `account_exists` is `true` when the verified phone already belongs to an account — the hosted form uses this to skip the profile step. |
 
+### Extra (non-canonical) fields
+
+`registration.fields` is a **closed** set of canonical `User` columns
+(`first_name`, `last_name`, `email`, `phone`, `dob`, `password`). For
+consumer-specific data — promo codes, referral/tracking tokens — declare
+`registration.extra_fields` instead. Default is empty (no extra fields, no
+behavior change for other tenants):
+
+```python
+AUTH_CONFIG = {
+    "registration": {
+        "extra_fields": [
+            {"name": "promo", "label": "Promo code"},        # required defaults False
+            {"name": "ref",   "label": "Referral",  "required": True},
+        ],
+    }
+}
+```
+
+Each entry is `{"name", "label"?, "required"?}`. Names that collide with a
+canonical field are rejected at config-write time. Like `registration.fields`,
+this resolves per-group down the parent chain.
+
+**Render behavior** (hosted register page): for each declared extra field, if a
+matching URL query param is present (e.g. `/register?promo=WELCOME100`) the value
+is captured **silently** (no visible input); otherwise the page renders a plain
+text input asking for it. `required` is a client-side UX hint only.
+
+**Capture + storage** (`on_register`): the capture allowlist is the union of the
+group's declared `extra_fields` names and the legacy global
+`REGISTRATION_EXTRA_FIELDS` setting (so existing deployments are unaffected).
+Captured values are persisted to `user.metadata["registration"]` (a
+`name → value` dict) **and** passed in the `extra=` kwarg to the
+`USER_REGISTERED_HANDLER`, so a consumer handler can act on them
+(e.g. validate/grant a promo).
+
 ---
 
 ## Multi-Tenant: Group Resolution

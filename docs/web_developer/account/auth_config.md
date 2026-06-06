@@ -57,6 +57,7 @@ methods.
     "registration": {
       "enabled": true,
       "fields": null,
+      "extra_fields": [],
       "identity_field": "",
       "min_age": null,
       "methods": ["password", "google"],
@@ -71,6 +72,12 @@ methods.
 
 Use `login.methods` and `registration.methods` to decide which buttons to
 render. Use `theme` to apply branding.
+
+`registration.extra_fields` is the list of non-canonical fields the group has
+configured (promo codes, referral tokens, etc.). An empty list means no extra
+fields. SPAs building a custom registration form should include any declared
+extra-field names in their register payload — the server captures values for
+allowlisted names and silently drops the rest.
 
 `registration.fields: null` means the deployment default (email + password) is
 in effect. A non-null `fields` list may omit `password` — when it does,
