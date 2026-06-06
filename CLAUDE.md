@@ -6,20 +6,64 @@ This file is loaded automatically by Claude Code.
 
 Django-mojo is a Django backend framework providing models, REST, auth, jobs, metrics, realtime, chat, security, and more. It is a library/framework, not a standalone runnable project.
 
+## Start Every Thread Here
+
+1. Read this file in full.
+2. Read `memory.md`.
+3. Run `scripts/board.sh` — the pipeline at a glance (inbox/confirmed/done).
+4. Choose your mode:
+   - Filing new work (bug/feature/chore) → `/request` (writes an un-ID'd item to `planning/inbox/`)
+   - Triaging / planning an item → `/scope` (`.claude/skills/scope/SKILL.md`)
+   - Implementing a scoped item  → `/build` (`.claude/skills/build/SKILL.md`)
+5. Read the item:
+   - New, unscoped → `planning/inbox/`
+   - Scoped, active → `planning/confirmed/`
+6. Read `docs/django_developer/README.md` before building — do not reinvent existing features.
+
 ## How to Work Here
 
 - **Rules** are in `.claude/rules/` and load automatically. Follow them.
-- **Skills** are in `.claude/skills/` — invoked with `/<name>` (e.g., `/issue`, `/request`, `/design`, `/build`, `/memory`).
-- **Agents** are in `.claude/agents/` — spawned automatically by the build skill.
+- **Skills** are in `.claude/skills/` — invoked with `/<name>` (`/request`, `/scope`, `/build`, `/memory`).
+- **Agents** are in `.claude/agents/` — spawned automatically by `/build`.
 - See `AI_DEV.md` for the full developer workflow.
-- Read `docs/django_developer/README.md` before building — do not reinvent existing features.
 
 ## Planning
 
-Active work is tracked as files in `planning/`:
-- `planning/issues/` — open bugs
-- `planning/requests/` — open feature requests
-- `planning/done/` — resolved items
+There is **one kind of work item**. Bugs, features, and chores differ only by a
+`type` field — not by folder, template, counter, or mode.
+
+- **The folder is the stage.** `inbox/ → confirmed/ → done/`. Advance an item
+  only with the scripts — `scripts/intake.sh` (→ confirmed) and
+  `scripts/close.sh` (→ done). There is no `stage` field; don't hand-move files.
+- **One ID space.** Every item gets `ITEM-###`, allocated once by
+  `scripts/intake.sh` from `planning/.next_id`. Never hand-assign, edit the
+  counter by hand, or reuse an ID.
+- **Capture, scope, build.** `/request` is the chat front door (PR-style — a
+  request for a feature, bug, or chore). It determines the `type` and writes an
+  un-ID'd item to `planning/inbox/` (no id yet). `/scope` owns intake (runs `scripts/intake.sh`, allocates the id,
+  stamps frontmatter, moves to `confirmed/`) and planning. `/build` implements;
+  bugs get a regression test, then it commits, spawns the post-build agents, and
+  runs `scripts/close.sh`. Nothing is built until it has been scoped.
+- **Never** `/build` an item that `scripts/ready.sh` reports BLOCKED (its
+  `depends_on` aren't all in `planning/done/`).
+
+```
+planning/
+  .next_id       # next item number (single bare integer)
+  _template.md   # the one item template
+  inbox/         # new, unscoped items (no id yet)
+  confirmed/     # scoped, active items (have id + plan)
+  done/          # closed items
+  future/        # parked ideas — not ready to scope (just a folder)
+  rejected/      # declined items, kept for rationale (just a folder)
+```
+
+`future/` and `rejected/` are plain parking folders — no id is allocated. Park or
+decline an item with `scripts/close.sh <file> future` / `... rejected` (a plain
+move, no Resolution stamp); move it back to `inbox/` by hand to revive it.
+`scripts/board.sh future` / `scripts/board.sh rejected` list them.
+
+Helper scripts (`scripts/`): `intake.sh`, `board.sh`, `ready.sh`, `close.sh`.
 
 ## Trust Order
 

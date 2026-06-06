@@ -1,89 +1,70 @@
 ---
 name: request
-description: Explore codebase, clarify scope, write a structured feature request file to planning/requests/
-user-invocable: true
-argument-hint: <description of what you want>
+description: >-
+  File a request for new work from chat — a feature, bug, or chore. Determines the
+  type itself, explores/clarifies (for a bug: best-effort confirms the root
+  cause), and writes a structured, un-ID'd item to planning/inbox/. Does not
+  implement or allocate an id; /scope picks it up next.
+allowed-tools: Read, Grep, Glob, Write, Task
 ---
 
-The user is requesting a new feature or enhancement. Your job is to explore the codebase, clarify scope, and write a structured request file. Do NOT implement anything.
+# Request — File New Work
+
+## Role
+Turn a natural-language ask into one structured **inbox** item — a request for new
+work, whether that's a feature, a bug fix, or a chore. You decide the type, then
+capture it. Do **not** implement, allocate an id, or move folders — `/scope` runs
+intake next. Read `CLAUDE.md` for conventions first.
 
 ## Arguments
+$ARGUMENTS — what to file. If empty, ask the user what they want to request.
 
-$ARGUMENTS — The user's feature description. If empty, ask the user what they want to build.
+## 1. Determine the type
+Classify from the description; only ask the user if it's genuinely ambiguous:
+- **bug** — something is broken or behaves wrong (errors, regressions, wrong output)
+- **feature** — a new capability or enhancement ("add", "support", "allow")
+- **chore** — refactor, cleanup, deps, tooling; no user-facing behavior change
 
-## Workflow
+State the type you chose (one line) before continuing.
 
-### 1. Understand the Goal
-Parse $ARGUMENTS. Identify what is being asked for and who it affects (backend developers, API consumers, or both).
+## 2. Explore (read-only, via the Explore subagent)
+Keep wide recon out of your main context; work from Explore's summary.
+- **bug**: trace the code path; narrow to a root cause or 2–3 candidates;
+  best-effort confirm by analysis and state confidence
+  (`confirmed | high | medium | speculative`). Don't write or run a test —
+  `/build` writes the failing regression test first.
+- **feature / chore**: what exists to reuse, what would change (file-level),
+  constraints (security, permissions, backwards compatibility).
 
-### 2. Explore the Codebase
-Read relevant models, REST handlers, services, tests, and docs. Identify:
-- What already exists that can be reused
-- What needs to be created or modified
-- Constraints: security, permissions, backwards compatibility
-- Read `docs/django_developer/README.md` to check for existing framework features
+Point Explore at `docs/django_developer/README.md` and `mojo/helpers/` so the item
+doesn't propose reinventing existing features/utilities.
 
-### 3. Ask Clarifying Questions
-If scope is ambiguous, ask focused questions. Resolve:
-- Exact API contract (endpoints, fields, responses) if applicable
-- Permission model (who can do what)
-- Edge cases the user cares about
-- What is explicitly out of scope
+## 3. Clarify
+Resolve real ambiguity with the user before writing — the API contract,
+permissions, edge cases, and what's out of scope (features); the repro and
+expected-vs-actual (bugs). Don't write a vague item; a good inbox item is
+unambiguous enough to scope against.
 
-Do not proceed with a vague request. A good request file is unambiguous enough to plan against.
+## 4. Write the item
+Create `planning/inbox/<slug>.md` from `planning/_template.md` (slug = short,
+lowercased, hyphenated title). Fill:
+- frontmatter: `id:` **blank**, `type: <chosen>`, `title`, `priority` (P0–P3),
+  `opened: <today>`, `depends_on/related/links` as known
+- `## What & Why`, `## Acceptance Criteria`
+- `## Repro` — bugs only (steps, Expected, Actual)
+- `## Investigation` — bug: root cause / confidence / code path (file:line) /
+  regression-test feasibility; feature/chore: what exists / what changes /
+  constraints / related files
 
-### 4. Write the Request File
-Create `planning/requests/<slug>.md`:
+## 5. Hand off
+Print the file path, the chosen type, and
+`To scope it: /scope planning/inbox/<slug>.md (a fresh session is ideal).`
 
-```markdown
-# <Title>
-
-**Type**: request
-**Status**: open
-**Date**: <YYYY-MM-DD>
-**Priority**: high | medium | low
-
-## Description
-<What needs to be built — clear, specific>
-
-## Context
-<Why this matters, relevant background, who asked for it>
-
-## Acceptance Criteria
-- <Specific, testable criteria — when are we done?>
-
-## Investigation
-**What exists**: <relevant code/patterns already in place>
-**What changes**: <file-level breakdown of what gets added/modified>
-**Constraints**: <security, compat, or other concerns identified>
-**Related files**: <list of files in scope>
-
-## Endpoints (if applicable)
-| Method | Path | Description | Permission |
-|---|---|---|---|
-| ... | ... | ... | ... |
-
-## Settings (if applicable)
-| Setting | Default | Purpose |
-|---|---|---|
-| ... | ... | ... |
-
-## Tests Required
-- <List of test scenarios that should be written>
-
-## Out of Scope
-- <Explicitly excluded items>
-```
-
-### 5. Stop and Hand Off
-Print:
-- The request file path
-- A one-line summary of the feature
-- `To design the implementation, start a new session and run: /design planning/requests/<slug>.md, or just say 'continue here' to load the 'design skill' and continue in this session.`
-
-## Rules
-
-- Do NOT write implementation code. Exploration and documentation only.
-- Do NOT move files between planning folders.
-- Resolve ambiguities before writing the file.
-- Keep the slug short and descriptive (e.g., `webhook-retry`, `group-permissions-ui`).
+## Forbidden
+- Writing implementation code (a bug fix included).
+- Allocating an `id`, editing `planning/.next_id`, or running `scripts/intake.sh`
+  — leave `id:` blank (that's `/scope`'s job).
+- Moving the file out of `planning/inbox/`.
+- Writing a vague item instead of resolving ambiguity with the user.
+- For a bug you can't confirm: say so and set confidence to `speculative` — don't
+  force it.

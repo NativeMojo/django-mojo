@@ -1,98 +1,66 @@
 ---
 name: build
-description: Implement a planned issue or request — code, tests, commit, then spawn test/docs/security agents
-user-invocable: true
-argument-hint: <path to planned file>
+description: >-
+  Implement a scoped work item from planning/confirmed/ one task at a time, with
+  tests. For bugs (type: bug), write a failing regression test before the fix.
+  After committing, spawn the post-build agents (test-runner, docs-updater,
+  security-review). Use when executing an item that has already been scoped.
+allowed-tools: Read, Grep, Glob, Edit, Write, Task, Bash
 ---
 
-Takes a planned issue or request file and implements it end-to-end: code, tests, commit, then spawns agents for full test suite, docs, and security review.
+# Build Mode
 
-## Arguments
+## Role
+You are a senior engineer executing a scoped item one task at a time. You write
+minimal, correct, tested code that matches existing patterns.
+Read `CLAUDE.md` for conventions. Read the item file in `planning/confirmed/`.
 
-$ARGUMENTS — Path to a planned file (e.g., `planning/requests/webhook-retry.md`). Must have a `## Plan` section. If empty, list planned files and ask which one to build.
+## Pre-Flight
+- The item must be in `planning/confirmed/` (scoped). If it's still in `inbox/`,
+  stop and run `/scope` first.
+- Run `scripts/ready.sh planning/confirmed/<file>.md`. If it reports `BLOCKED`,
+  stop and say so; only proceed on `READY`.
 
 ## Workflow
+1. State what you're about to build (one sentence; include the ITEM id).
+2. Show your implementation plan — get confirmation before writing code. Read
+   every file you'll touch first; no blind edits.
+3. **If `type: bug`:** write a regression test (testit — see
+   `docs/django_developer/testit/Overview.md`) that reproduces the bug and
+   confirm it FAILS before touching the fix.
+4. Implement — one logical unit at a time. The `.claude/rules/` files load
+   automatically; follow them.
+5. Write/finish tests immediately after implementation, not at the end.
+   - Run with `bin/run_tests --agent -t <target>`; read `var/test_failures.json`
+     for diagnostics. Fix failures in your code, not the tests.
+   - For a bug, confirm the regression test now passes and others still do.
+6. Update relevant docs (`docs/django_developer/`, `docs/web_developer/`).
+7. Git commit (NO push). Stage specific files by name — never `git add -A`.
+8. Spawn the post-build agents in parallel and report their results:
+   - **test-runner** — full test suite, beyond your targeted tests
+   - **docs-updater** — read the diff, update both doc tracks
+   - **security-review** — review the diff for permission/injection/auth issues
+9. Fill `tests added:` in the item's Resolution block, then run
+   `scripts/close.sh planning/confirmed/<file>.md` (stamps closed/branch/files
+   changed and moves it to `planning/done/`).
+10. Update `memory.md` if any decision was made.
+11. State what's next.
 
-### 1. Read the Planned File
-Read the file at $ARGUMENTS. It must have `Status: planned` and a `## Plan` section. If not, stop and tell the user to run `/design` first.
+## Output Format Per Task
+- **Item**: id + what you're doing
+- **Plan**: confirmed approach
+- **Implementation**: the code
+- **Tests**: covering the new behavior (regression test first, for bugs)
+- **Docs**: what changed
+- **Done**: checklist from `CLAUDE.md`
+- **Next**: next task or "complete"
 
-### 2. Read All Files in Scope
-- Read every file listed in the plan's Steps section
-- Read `docs/django_developer/testit/Overview.md` (testit guide)
-- Read `docs/django_developer/README.md`
-- No blind edits
-
-### 3. Confirm Before Building
-Briefly summarize what you are about to build. Ask the user for a quick yes/no before writing code. If the plan is large, break it into phases and confirm each.
-
-### 4. Implement
-Make the changes described in the plan. The rules files (`.claude/rules/`) are loaded automatically — follow them.
-
-### 5. Write and Run Tests
-- Write testit tests covering the scenarios in the plan
-- Run with `bin/run_tests --agent -t <target>`
-- Read `var/test_failures.json` for structured diagnostics
-- Fix any failures in your code (not in the tests)
-- Do not proceed until targeted tests pass
-
-### 6. Git Commit (No Push)
-- Stage specific files by name (never `git add -A` or `git add .`)
-- Write a descriptive commit message summarizing what was built and why
-- Do NOT push to remote
-
-### 7. Spawn Post-Build Agents
-After committing, spawn all three agents in parallel:
-
-1. **test-runner** — Run the full test suite to catch regressions beyond your targeted tests
-2. **docs-updater** — Read the git diff and update `docs/django_developer/` and `docs/web_developer/` as needed
-3. **security-review** — Review the git diff for security concerns
-
-Report their results to the user.
-
-### 8. Resolve the File
-Update the issue/request file:
-
-```markdown
-## Resolution
-
-**Status**: resolved
-**Date**: <YYYY-MM-DD>
-
-### What Was Built
-<concise summary>
-
-### Files Changed
-- `<file>` — <what changed>
-
-### Tests
-- `<test file>` — <what is tested>
-- Run: `bin/run_tests -t <target>`
-
-### Docs Updated
-- `<doc file>` — <what changed>
-
-### Security Review
-<summary of findings or "No concerns">
-
-### Follow-up
-- <any remaining items, or "None">
-```
-
-Move the file to `planning/done/`.
-
-### 9. Report
-Print a concise summary:
-- What was built
-- Files changed
-- Test results
-- Doc updates
-- Security findings (if any)
-- What the user should run in their Django project to validate (migrations, etc.)
-
-## Rules
-
-- Always confirm the plan with the user before implementing.
-- Tests come after implementation, not before.
-- Run tests yourself with `bin/run_tests` — do not ask the user to run them.
-- Commit but NEVER push.
-- Stage specific files, never `git add -A`.
+## Forbidden in This Mode
+- Building an item not in `confirmed/`, or that `scripts/ready.sh` reports BLOCKED
+- Expanding scope beyond the current item
+- Writing code before confirming the plan
+- Skipping tests ("I'll add them later")
+- For a bug: writing the fix before the failing regression test, or refactoring
+  while fixing (open a separate `chore` item instead)
+- Touching files not in the plan without flagging it first
+- Pushing to remote, or staging with `git add -A` / `git add .`
