@@ -1,5 +1,9 @@
 ## v1.2.29 - (current)
 
+## v1.2.33 - June 06, 2026
+
+
+
 **account** — Registration forms can now collect per-group **extra (non-canonical) fields** (promo / referral / tracking codes). Declare them in the group's `auth_config.registration.extra_fields` (a list of `{name, label?, required?}`, default empty — other tenants are unaffected). On the bouncer-hosted register page each declared field is captured silently from a matching URL query param (`/register?promo=WELCOME100`) or asked for as a plain text input when absent, then wired into the register payload. Server-side, `on_register` captures any key allowlisted by the union of the group's declared `extra_fields` names and the global `REGISTRATION_EXTRA_FIELDS` setting, persists them to `user.metadata["registration"]`, and still passes them to `USER_REGISTERED_HANDLER` via the `extra=` kwarg. Defaults preserve current behavior.
 
 ## v1.2.32 - May 30, 2026
