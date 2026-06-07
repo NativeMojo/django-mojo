@@ -1371,15 +1371,23 @@ class MojoModel:
             field.related_model.on_rest_related_save(self, field.name, field_value, related_instance)
         elif isinstance(field_value, int) or (isinstance(field_value, str)):
             # self.debug(f"Related Model: {field.related_model.__name__}, Field Value: {field_value}")
-            field_value = int(field_value)
-            if not bool(field_value):
-                # None, "", 0 will set it to None
-                # logger.info(f"Setting field {field.name} to None")
+            # A blank string FK ("" or whitespace) means "not provided" — coerce
+            # it to None instead of letting int("") raise ValueError. The falsy
+            # check below was always meant to map "" → None (see its comment),
+            # but the int() ran first and crashed before it could fire.
+            if isinstance(field_value, str) and not field_value.strip():
                 old_value = getattr(self, field.name, None)
                 self._set_field_change(field.name, old_value, None)
                 setattr(self, field.name, None)
                 return
             field_value = int(field_value)
+            if not bool(field_value):
+                # None, 0 will set it to None
+                # logger.info(f"Setting field {field.name} to None")
+                old_value = getattr(self, field.name, None)
+                self._set_field_change(field.name, old_value, None)
+                setattr(self, field.name, None)
+                return
             if field.related_model == type(self) and self.pk == field_value:
                 self.debug("Skipping self-reference")
                 return
