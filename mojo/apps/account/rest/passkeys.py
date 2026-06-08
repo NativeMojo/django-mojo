@@ -59,6 +59,7 @@ def on_account_passkey(request, pk=None):
 
 @md.POST("account/passkeys/register/begin")
 @md.requires_auth()
+@md.requires_fresh_auth()
 def on_passkeys_register_begin(request):
     """Begin passkey registration for authenticated user."""
     origin = get_origin_from_request(request)
@@ -81,6 +82,7 @@ def on_passkeys_register_begin(request):
 
 @md.POST("account/passkeys/register/complete")
 @md.requires_auth()
+@md.requires_fresh_auth()
 @md.requires_params("challenge_id", "credential")
 def on_passkeys_register_complete(request):
     """Complete passkey registration."""

@@ -827,12 +827,10 @@ POST /api/auth/sessions/revoke
 Authorization: Bearer <access_token>
 ```
 
-```json
-{ "current_password": "mysecretpassword" }
-```
-
-`current_password` is **required** — this prevents an attacker with a stolen
-JWT from locking the real user out of all their sessions.
+No request body required. Ownership is proven by the authenticated session.
+No `current_password` — passwordless accounts (passkey / SMS-OTP) can revoke
+sessions too. When `FRESH_AUTH_WINDOW` is enabled server-side, a recent login
+is required (see [Step-Up Auth](step_up_auth.md)).
 
 **Response (success):**
 
@@ -859,8 +857,7 @@ from this response. The old ones are dead.
 
 | Condition | Status |
 |---|---|
-| Wrong password | 401 — no state changed, incident `sessions:revoke_failed` logged |
-| Missing `current_password` | 400 |
+| Step-up auth required (stale session, `FRESH_AUTH_WINDOW` enabled) | 440 `reauth_required` |
 | Unauthenticated | 401/403 |
 
 Rate-limited: 5 requests per IP per 5 minutes.
@@ -1060,8 +1057,11 @@ suppressed** by preferences.
 
 ## 12. Username Change
 
-Change the authenticated user's username. Requires `current_password` as
-proof of ownership.
+Change the authenticated user's username. Ownership is proven by the
+authenticated session. No `current_password` is accepted or required —
+passwordless accounts (passkey / SMS-OTP) can change their username too.
+When `FRESH_AUTH_WINDOW` is enabled server-side, a recent login is required
+(see [Step-Up Auth](step_up_auth.md)).
 
 ```
 POST /api/auth/username/change
@@ -1070,8 +1070,7 @@ Authorization: Bearer <access_token>
 
 ```json
 {
-  "username": "new_username",
-  "current_password": "currentpassword"
+  "username": "new_username"
 }
 ```
 
@@ -1093,8 +1092,7 @@ Authorization: Bearer <access_token>
 
 | Condition | Status |
 |---|---|
-| Wrong password | 401 |
-| OAuth-only account (no usable password) | 400 |
+| Step-up auth required (stale session, `FRESH_AUTH_WINDOW` enabled) | 440 `reauth_required` |
 | Username taken | 400 |
 | Same as current | 400 |
 | Invalid content (content guard) | 400 |
@@ -1341,14 +1339,13 @@ build icons, colours, or groupings in your UI.
 | `account:deactivated` | Account deactivated |
 | `account:deactivate_requested` | Account deactivation requested |
 | `sessions:revoked` | All sessions revoked |
-| `sessions:revoke_failed` | Session revoke — incorrect password |
 
 Unknown `kind` values fall back to the `kind` string itself as the summary
 (forward-compatible — new event types work without a client update).
 
 ### UI tips
 
-- **Red / warning** — `invalid_password`, `totp:login_failed`, `passkey:login_failed`, `sessions:revoke_failed`
+- **Red / warning** — `invalid_password`, `totp:login_failed`, `passkey:login_failed`
 - **Green / success** — `login`, `oauth`, `email_verify:confirmed`, `phone_verify:confirmed`
 - **Neutral / info** — everything else (changes, requests, resets)
 - Show `ip` with a "not you?" prompt linking to the session revoke flow

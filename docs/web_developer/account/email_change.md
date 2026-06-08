@@ -4,11 +4,11 @@
 
 Self-service email change is a two-step flow: **request → confirm.**
 
-1. The authenticated user submits their desired new address and current password.
+1. The authenticated user submits their desired new address.
 2. Either a **confirmation link** or a **6-digit OTP code** is sent to the **new** address (your choice). The current email is not changed yet.
 3. The user confirms — by clicking the link or submitting the code — and the new address is committed.
 
-`current_password` is always required in the request body. A valid Bearer token alone is not sufficient — this prevents an attacker who has stolen a session token from silently redirecting account communications.
+`current_password` is **optional**. If provided and correct it is validated; if omitted the request proceeds without a password check — this supports OAuth-only and passkey-only users who have no usable password. When `FRESH_AUTH_WINDOW` is enabled server-side, a recent login is required instead (see [Step-Up Auth](step_up_auth.md)).
 
 The feature is controlled by the `ALLOW_EMAIL_CHANGE` setting (default `True`). When set to `False`, all requests to `POST /api/auth/email/change/request` return 403.
 
@@ -24,8 +24,7 @@ Requires authentication (Bearer token). Rate limited.
 
 ```json
 {
-  "email": "newemail@example.com",
-  "current_password": "mysecretpassword"
+  "email": "newemail@example.com"
 }
 ```
 
@@ -34,19 +33,18 @@ Requires authentication (Bearer token). Rate limited.
 ```json
 {
   "email": "newemail@example.com",
-  "current_password": "mysecretpassword",
   "method": "code"
 }
 ```
 
-The `method` field is optional and defaults to `"link"`. Pass `"code"` to receive a 6-digit OTP at the new address instead of a confirmation link — this is the recommended approach when the user is already in an authenticated portal context and should not have to leave to click a link.
+`current_password` is accepted in the body but is optional — omit it for OAuth/passkey-only users. The `method` field is optional and defaults to `"link"`. Pass `"code"` to receive a 6-digit OTP at the new address instead of a confirmation link — this is the recommended approach when the user is already in an authenticated portal context and should not have to leave to click a link.
 
 **Error cases (both methods):**
 
 | Condition | Status | Response |
 |---|---|---|
-| `current_password` missing | 400 | `"error": "current_password is required to change your email"` |
-| `current_password` incorrect | 401 | `"error": "Incorrect password"` |
+| Step-up auth required (stale session, `FRESH_AUTH_WINDOW` enabled) | 440 | `"error": "reauth_required"` |
+| `current_password` provided but incorrect | 401 | `"error": "Incorrect password"` |
 | `email` has an invalid format | 400 | `"error": "Invalid email address"` |
 | `email` is the same as the current address | 400 | `"error": "New email must be different from current email"` |
 | `email` is already in use by another account | 400 | `"error": "Email already in use"` |
@@ -235,7 +233,7 @@ Because `auth_key` is rotated on confirm, any open sessions will find their JWTs
 
 ### Portal / in-context (code flow)
 
-1. Show the user a form with fields for `email` (new address) and `current_password`.
+1. Show the user a form with a field for `email` (new address).
 2. Call `POST /api/auth/email/change/request` with `method: "code"`. On success, display an OTP entry prompt: *"A 6-digit code has been sent to newemail@example.com. Enter it below to confirm."*
 3. Optionally show a **Cancel** button that calls `POST /api/auth/email/change/cancel`.
 4. When the user submits the code, call `POST /api/auth/email/change/confirm` with `{ "code": "..." }` and a valid Bearer token.
@@ -243,7 +241,7 @@ Because `auth_key` is rotated on confirm, any open sessions will find their JWTs
 
 ### Simple setup (link → API page)
 
-1. Show the user a form with fields for `email` and `current_password`.
+1. Show the user a form with a field for `email`.
 2. Call `POST /api/auth/email/change/request` (no `method` param). On success, display: *"A confirmation link has been sent to newemail@example.com. Check your inbox and click the link to confirm."*
 3. Optionally show a **Cancel pending change** button that calls `POST /api/auth/email/change/cancel`.
 4. The link in the email points directly to `GET /api/auth/email/change/confirm?token=ec:...&redirect=https://yourapp.com/login`. The server renders the result page; no frontend route needed.
@@ -258,7 +256,7 @@ Because `auth_key` is rotated on confirm, any open sessions will find their JWTs
 
 ## Security Notes
 
-- **`current_password` is always required.** A stolen JWT alone is not enough to redirect account communications to an attacker-controlled address.
+- **`current_password` is optional.** If provided and non-empty it is validated; if omitted the request proceeds. The primary ownership proof is the authenticated session; when `FRESH_AUTH_WINDOW` is enabled, a recent login is required as the step-up gate instead. See [Step-Up Auth](step_up_auth.md).
 - **The old address always receives a notification.** If the real owner did not request the change, they should call `POST /api/auth/email/change/cancel` immediately and change their password.
 - **All existing sessions are invalidated on confirm.** `auth_key` is rotated regardless of whether the link or code path was used.
 - **Cancellation covers both paths.** `POST /api/auth/email/change/cancel` clears the `pending_email`, the outstanding `ec:` JTI, and any OTP code simultaneously — no matter which method was used to initiate the change.

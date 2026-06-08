@@ -3,6 +3,7 @@
 - [User Model](user.md) — User model, permissions, JWT auth
 - [Group Model](group.md) — Group/organization model, membership, hierarchy
 - [Authentication Flow](auth.md) — JWT tokens, login, password reset
+- [Step-Up Auth](step_up_auth.md) — Optional recent-auth gate for sensitive ops: `auth_time` claim, `FRESH_AUTH_WINDOW`, `@md.requires_fresh_auth()`, `fresh_auth` service, HTTP 440 `reauth_required`
 - [Auth Pages](auth_pages.md) — Hosted `/auth`, `/register`, and `/passkey` pages; bouncer integration, OAuth, SMS login, multi-tenant group forwarding
 - [Auth Config](auth_config.md) — Per-group auth-page configuration (theme / login / registration); resolution order, schema, validation, migration from flat `AUTH_*` settings
 - [OAuth / Social Login](oauth.md) — Provider setup, auto-link logic, email verification, MFA behaviour, adding new providers

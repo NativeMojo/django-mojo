@@ -1,5 +1,22 @@
 ## v1.2.29 - (current)
 
+**account** — Optional **step-up ("recent authentication") gate** for sensitive
+operations (off by default). Logins now stamp an `auth_time` claim into the JWT
+(unconditional; carried forward unchanged across token refresh). When
+`FRESH_AUTH_WINDOW` (seconds, default `0` = disabled) is set, sensitive endpoints
+and `User` actions require the caller's token to have authenticated within that
+window, else they return **HTTP 440** `{error: "reauth_required", code: 440}` — a
+distinct state from `403` (no permission) and `401` (token invalid/expired) so
+clients can drive a step-up re-auth (reuse any existing login/verify flow; there
+is no separate step-up endpoint). New `@md.requires_fresh_auth()` decorator,
+`mojo.apps.account.services.fresh_auth` helper, and `ReauthRequiredException`.
+Applies to admins acting on other users (the admin's own token must be fresh) and
+to passwordless accounts. **Breaking-ish:** `POST /api/auth/username/change` and
+`POST /api/auth/sessions/revoke` no longer require `current_password` (it locked
+out passwordless passkey/SMS accounts); ownership is the authenticated session,
+freshness is the new gate. See `docs/django_developer/account/step_up_auth.md` and
+`docs/web_developer/account/step_up_auth.md`.
+
 ## v1.2.34 - June 06, 2026
 
 

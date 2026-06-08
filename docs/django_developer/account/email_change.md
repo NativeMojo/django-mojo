@@ -229,9 +229,9 @@ When `False`, `POST /api/auth/email/change/request` returns a 403 immediately. T
 
 ## Security Design Notes
 
-**Why `current_password` is required**
+**Why `current_password` is optional (not required)**
 
-A Bearer token alone does not prove the legitimate user is present — it could be a stolen or leaked JWT. Requiring the current password ensures only someone who knows the credential can initiate a change.
+`current_password` is accepted for users who have one but is no longer required. Passwordless accounts (passkey / SMS-OTP) have no usable password and would otherwise be locked out. The authenticated session is the primary ownership proof; for deployments that need a stronger freshness gate, set `FRESH_AUTH_WINDOW` (the `@md.requires_fresh_auth()` decorator enforces it). See [step_up_auth.md](step_up_auth.md).
 
 **Why confirm rotates `auth_key`**
 

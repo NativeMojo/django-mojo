@@ -937,28 +937,32 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             request=self.active_request,
         )
 
-    # -- Self-service actions (require self-acting; current_password proves ownership) --
+    # -- Account actions (authorized by model save security: the record owner
+    #    acting on self, or an admin with users/manage_users). No password gate
+    #    — passwordless (passkey / SMS-OTP) accounts must be able to use these.
+    #    Sensitive ones additionally require recent ("step-up") authentication
+    #    via _require_fresh_auth (no-op unless FRESH_AUTH_WINDOW is enabled). --
 
-    def _require_self_acting(self, action_name):
-        """Self-service actions cannot be triggered by an admin acting on a different user."""
-        if not self.is_request_user() and not self.active_user.is_super:
-            raise merrors.PermissionDeniedException(
-                f"{action_name} is a self-service action and cannot be performed on behalf of another user")
+    def _require_fresh_auth(self):
+        """Step-up gate: raise 440 reauth_required when the caller's auth is too
+        stale. Inert unless FRESH_AUTH_WINDOW is set. See services.fresh_auth.
+
+        Gates on `self.active_request` — the REST save flow sets it for HTTP
+        callers. A None active_request (internal/non-HTTP invocation) bypasses by
+        design."""
+        from mojo.apps.account.services import fresh_auth
+        fresh_auth.require_fresh(self.active_request)
 
     def on_action_change_username(self, value):
         if not isinstance(value, dict):
-            raise merrors.ValueException("change_username requires a body with username and current_password")
-        self._require_self_acting("change_username")
+            raise merrors.ValueException("change_username requires a body with a username")
+        self._require_fresh_auth()
         if not settings.get("ALLOW_USERNAME_CHANGE", True):
             raise merrors.PermissionDeniedException("Username change is not allowed")
 
         new_username = (value.get("username") or "").lower().strip()
-        current_password = value.get("current_password") or ""
         if not new_username:
             raise merrors.ValueException("username is required")
-        if not self.has_usable_password():
-            raise merrors.ValueException(
-                "No password set on this account. Use password reset to set one first.")
         if new_username == self.username:
             raise merrors.ValueException("New username must be different from current username")
 
@@ -979,6 +983,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
     def on_action_revoke_sessions(self, value):
         if not isinstance(value, dict):
             value = {}
+        self._require_fresh_auth()
         self.auth_key = uuid.uuid4().hex
         self.save(update_fields=["auth_key", "modified"])
         self.report_incident(f"{self.username} revoked all sessions by {self.active_user.username}", "sessions:revoked")
@@ -992,7 +997,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         from mojo.apps.account.services import totp as totp_service
         if not isinstance(value, dict):
             value = {}
-        self._require_self_acting("confirm_totp")
+        self._require_fresh_auth()
         totp = UserTOTP.objects.filter(user=self).first()
         if not totp:
             raise merrors.ValueException(
@@ -1017,7 +1022,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         from mojo.apps.account.services import totp as totp_service
         if not isinstance(value, dict):
             value = {}
-        self._require_self_acting("regenerate_totp_codes")
+        self._require_fresh_auth()
         totp = UserTOTP.objects.filter(user=self, is_enabled=True).first()
         if not totp:
             raise merrors.ValueException("TOTP is not enabled for this account")
@@ -1030,7 +1035,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
 
     def on_action_disable_totp(self, value):
         from mojo.apps.account.models.totp import UserTOTP
-        self._require_self_acting("disable_totp")
+        self._require_fresh_auth()
         UserTOTP.objects.filter(user=self).update(is_enabled=False)
         return {"status": True}
 

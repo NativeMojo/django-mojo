@@ -21,6 +21,7 @@
 ## API Reference
 
 - [Authentication](authentication.md) — Login, registration, token refresh, password reset
+- [Step-Up Auth (HTTP 440)](step_up_auth.md) — Handling `reauth_required`: when a sensitive op needs a recent login, re-auth and retry; the `440` vs `401`/`403` distinction
 - [Auth Config](auth_config.md) — `GET /api/auth/config`; per-group branding and enabled auth methods for custom front-ends
 - [Passkeys](passkeys.md) — Passwordless login with WebAuthn/FIDO2
 - [TOTP / Authenticator App](mfa_totp.md) — 2FA and standalone login with Google Authenticator etc.

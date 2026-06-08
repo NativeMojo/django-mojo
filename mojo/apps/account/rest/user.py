@@ -1,3 +1,4 @@
+import time
 from django.db import transaction
 from mojo import decorators as md
 from mojo.apps.account.utils.jwtoken import JWToken
@@ -128,7 +129,14 @@ def on_refresh_token(request):
     # future look at keeping the refresh token the same but updating the access_token
     # TODO add device id to the token as well
     # user.touch()
-    token_package = JWToken(user.get_auth_key()).create(uid=user.id)
+    keys = dict(uid=user.id)
+    # Carry the ORIGINAL auth_time forward unchanged — a refresh is NOT a fresh
+    # authentication. Resetting it would defeat the step-up freshness gate; dropping
+    # it would force a needless re-auth. Absent on legacy refresh tokens => omit.
+    prior = JWToken().decode(request.DATA.refresh_token, validate=False)
+    if prior.get("auth_time") is not None:
+        keys["auth_time"] = prior.get("auth_time")
+    token_package = JWToken(user.get_auth_key()).create(**keys)
     return JsonResponse(dict(status=True, data=token_package))
 
 
@@ -614,7 +622,11 @@ def jwt_login(request, user, legacy=False, source=None, extra=None, is_new_user=
     except Exception:
         from mojo.helpers import logit
         logit.error("Failed to record login event", exc_info=True)
-    keys = dict(uid=user.id, ip=request.ip)
+    # auth_time stamps WHEN the user genuinely authenticated (this login). It is
+    # carried forward unchanged across silent refreshes (see on_refresh_token) and
+    # read by the step-up freshness gate (services.fresh_auth). Stamped always —
+    # enforcement is gated separately by FRESH_AUTH_WINDOW.
+    keys = dict(uid=user.id, ip=request.ip, auth_time=int(time.time()))
     if request.device:
         keys['device'] = request.device.id
     access_token_expiry = settings.get("JWT_TOKEN_EXPIRY", 21600, kind="int")
@@ -918,6 +930,7 @@ def on_invite_accept(request):
 
 @md.POST("auth/email/change/request")
 @md.requires_auth()
+@md.requires_fresh_auth()
 @md.strict_rate_limit("email_change_request", ip_limit=5, ip_window=3600)
 @md.requires_params("email")
 def on_email_change_request(request):
@@ -1272,6 +1285,7 @@ def on_email_change_cancel(request):
 
 @md.POST("auth/phone/change/request")
 @md.requires_auth()
+@md.requires_fresh_auth()
 @md.strict_rate_limit("phone_change_request", ip_limit=5, ip_window=3600)
 @md.requires_params("phone_number")
 def on_phone_change_request(request):
@@ -1416,26 +1430,19 @@ def on_phone_change_cancel(request):
 
 @md.POST("auth/username/change")
 @md.requires_auth()
-@md.requires_params("username", "current_password")
+@md.requires_fresh_auth()
+@md.requires_params("username")
 def on_username_change(request):
-    """Self-service username change. Requires current_password as proof of ownership."""
+    """Self-service username change.
+
+    Ownership is proven by the authenticated session; freshness is enforced by
+    the step-up gate (no current_password — passwordless passkey/SMS accounts
+    must be able to change their username too).
+    """
     if not settings.get("ALLOW_USERNAME_CHANGE", True):
         raise merrors.PermissionDeniedException("Username change is not allowed")
 
     user = request.user
-    current_password = request.DATA.get("current_password", "")
-
-    if not user.has_usable_password():
-        raise merrors.ValueException(
-            "No password set on this account. Use password reset to set one first."
-        )
-
-    if not user.check_password(current_password):
-        user.report_incident(
-            f"{user.username} entered invalid password on username change",
-            "username:change_failed",
-        )
-        raise merrors.PermissionDeniedException("Incorrect password", 401, 401)
 
     new_username = request.DATA.get("username", "").lower().strip()
     if not new_username:
@@ -1473,24 +1480,19 @@ def on_username_change(request):
 
 @md.POST("auth/sessions/revoke")
 @md.requires_auth()
-@md.requires_params("current_password")
+@md.requires_fresh_auth()
 @md.rate_limit("sessions_revoke", ip_limit=5, ip_window=300)
 def on_sessions_revoke(request):
     """
     Rotate auth_key to invalidate all active sessions. Returns a fresh JWT
     for the calling session so the user stays logged in.
+
+    Ownership is proven by the authenticated session; freshness is enforced by
+    the step-up gate (no current_password — passwordless accounts must work too).
     """
     import uuid
 
     user = request.user
-    current_password = request.DATA.get("current_password", "")
-
-    if not user.check_password(current_password):
-        user.report_incident(
-            f"{user.username} entered invalid password on session revoke",
-            "sessions:revoke_failed",
-        )
-        raise merrors.PermissionDeniedException("Incorrect password", 401, 401)
 
     # Rotate auth_key — immediately invalidates every other JWT
     user.auth_key = uuid.uuid4().hex
@@ -1508,6 +1510,7 @@ def on_sessions_revoke(request):
 
 @md.POST("account/deactivate")
 @md.requires_auth()
+@md.requires_fresh_auth()
 @md.rate_limit("account_deactivate", ip_limit=5, ip_window=300)
 def on_account_deactivate(request):
     """

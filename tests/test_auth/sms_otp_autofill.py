@@ -1,27 +1,28 @@
 """
 Tests for SMS OTP autofill.
 
-The OTP texts (login + registration) carry an origin-bound one-time-code
-line (`@host #code`) so browsers can offer/auto-fill the code, and the hosted
-login/register pages wire up the WebOTP API.
+The OTP code autofill relies on the platform's native one-time-code support:
+the SMS body is a plain single line, and the hosted login/register pages mark
+their code inputs with autocomplete="one-time-code". Chrome (Android) and iOS
+both surface/auto-fill from that combination — no WebOTP API wiring needed
+(the WebOTP path was dropped because it suppressed Chrome's native chip).
 
 Contracts enforced:
-  - _otp_sms_body appends `@host #code` when the request host is known
-  - _otp_sms_body falls back to the plain message with no request
-  - _otp_host derives the host from Origin, then the Host header
-  - auth_base exposes the _mat.watchOtp WebOTP helper
-  - login.html and register.html call watchOtp on their SMS code inputs
+  - _otp_sms_body returns a plain single line carrying the code (with or
+    without a request) and never injects an `@host` binding line
+  - login.html keeps autocomplete="one-time-code" on the SMS code input
+  - register.html keeps autocomplete="one-time-code" on the verify-code input
 """
 from testit import helpers as th
-from testit.helpers import assert_true, assert_eq
+from testit.helpers import assert_true
 
 
 # ---------------------------------------------------------------------------
-# Server — origin-bound OTP SMS body
+# Server — plain OTP SMS body
 # ---------------------------------------------------------------------------
 
-@th.django_unit_test("_otp_sms_body appends the origin-bound @host #code line")
-def test_otp_body_with_origin(opts):
+@th.django_unit_test("_otp_sms_body returns a plain single line with the code")
+def test_otp_body_with_request(opts):
     from django.test import RequestFactory
     from mojo.apps.account.rest.sms import _otp_sms_body
     req = RequestFactory().post("/api/auth/sms/login",
@@ -29,37 +30,23 @@ def test_otp_body_with_origin(opts):
     body = _otp_sms_body("123456", req)
     assert_true("123456" in body,
                 f"OTP body must contain the code, got {body!r}")
-    assert_true("@auth.example.com #123456" in body,
-                f"OTP body must carry the origin-bound autofill line, got {body!r}")
+    assert_true("@" not in body,
+                f"OTP body must not inject an @host binding line, got {body!r}")
+    assert_true("\n" not in body.strip(),
+                f"OTP body must be a single line, got {body!r}")
 
 
-@th.django_unit_test("_otp_sms_body falls back to a plain message with no request")
+@th.django_unit_test("_otp_sms_body returns the same plain message with no request")
 def test_otp_body_no_request(opts):
     from mojo.apps.account.rest.sms import _otp_sms_body
     body = _otp_sms_body("654321", None)
     assert_true("654321" in body, "plain OTP body must still contain the code")
     assert_true("@" not in body,
-                f"with no request host the body must omit the @host line, got {body!r}")
-
-
-@th.django_unit_test("_otp_host derives the host from Origin, then the Host header")
-def test_otp_host(opts):
-    from django.test import RequestFactory
-    from mojo.apps.account.rest.sms import _otp_host
-    rf = RequestFactory()
-    assert_eq(_otp_host(rf.post("/x", HTTP_ORIGIN="https://Auth.Example.COM:8443")),
-              "auth.example.com",
-              "host must come from Origin — lowercased, port stripped")
-    req = rf.post("/x")
-    req.META["HTTP_ORIGIN"] = ""
-    req.META["HTTP_HOST"] = "portal.example.com:443"
-    assert_eq(_otp_host(req), "portal.example.com",
-              "host must fall back to the Host header when Origin is absent")
-    assert_eq(_otp_host(None), "", "no request must yield an empty host")
+                f"with no request the body must omit any @host line, got {body!r}")
 
 
 # ---------------------------------------------------------------------------
-# Client — WebOTP wiring in the hosted pages
+# Client — native one-time-code autofill in the hosted pages
 # ---------------------------------------------------------------------------
 
 def _render(template_name):
@@ -71,31 +58,27 @@ def _render(template_name):
     ctx = _auth_context(request, group=None)
     ctx["page_mode"] = "login" if is_login else "register"
     ctx["page_title"] = "Sign In" if is_login else "Create Account"
+    if not is_login:
+        # Exercise the phone-first stepped flow so the SMS verify-code step
+        # (reg-phone-code) renders — it is gated behind register_step2_active,
+        # which is only on when the register schema uses phone+SMS identity.
+        ctx["register_step2_active"] = True
     return render(request, template_name, ctx).content.decode("utf-8")
 
 
-@th.django_unit_test("auth_base exposes the watchOtp WebOTP helper")
-def test_auth_base_has_watchotp(opts):
+@th.django_unit_test("login.html marks the SMS code input for native autofill")
+def test_login_sms_code_autocomplete(opts):
     html = _render("account/login.html")
-    assert_true("watchOtp: function" in html,
-                "auth_base.html must expose _mat.watchOtp for SMS-code autofill")
-    assert_true("OTPCredential" in html,
-                "watchOtp must feature-detect window.OTPCredential (WebOTP)")
-
-
-@th.django_unit_test("login.html wires WebOTP autofill into the SMS code step")
-def test_login_sms_webotp_wired(opts):
-    html = _render("account/login.html")
-    assert_true('m.watchOtp($("sms-code")' in html,
-                "login.html must call m.watchOtp on the sms-code input")
+    assert_true('id="sms-code"' in html,
+                "login.html must render the sms-code input")
     assert_true('autocomplete="one-time-code"' in html,
-                "the SMS code input must keep autocomplete=one-time-code for iOS")
+                "the SMS code input must keep autocomplete=one-time-code for native autofill")
 
 
-@th.django_unit_test("register.html wires WebOTP autofill into the stepped SMS verify")
-def test_register_sms_webotp_wired(opts):
+@th.django_unit_test("register.html marks the verify-code input for native autofill")
+def test_register_sms_code_autocomplete(opts):
     html = _render("account/register.html")
-    assert_true("function watchRegOtp" in html,
-                "register.html must define watchRegOtp for SMS-code autofill")
-    assert_true('m.watchOtp($("reg-phone-code")' in html,
-                "register.html must call m.watchOtp on the reg-phone-code input")
+    assert_true('id="reg-phone-code"' in html,
+                "register.html must render the reg-phone-code input")
+    assert_true('autocomplete="one-time-code"' in html,
+                "the register verify-code input must keep autocomplete=one-time-code for native autofill")

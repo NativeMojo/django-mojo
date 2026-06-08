@@ -141,10 +141,15 @@ def dispatch_error_handler(func):
             return resp
         except mojo.errors.MojoException as err:
             is_perm_denied = isinstance(err, mojo.errors.PermissionDeniedException)
-            metric_key = "api_denied" if is_perm_denied else "api_errors"
+            # A step-up (440) is an expected access gate, not a server error: count
+            # it like a denial, and never fire an error incident — doing so would
+            # log the request body (which may carry a new email/username/TOTP code)
+            # and pollute mojo_rest_error alerting on a routine re-auth prompt.
+            is_reauth = isinstance(err, mojo.errors.ReauthRequiredException)
+            metric_key = "api_denied" if (is_perm_denied or is_reauth) else "api_errors"
             if _api_metrics_enabled():
                 metrics.record(metric_key, category="mojo_api", min_granularity=_api_metrics_granularity())
-            if _events_on_errors():
+            if _events_on_errors() and not is_reauth:
                 if is_perm_denied:
                     _emit_permission_denied_event(err, request)
                 else:

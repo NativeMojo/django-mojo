@@ -40,6 +40,7 @@ from mojo.helpers.response import JsonResponse
 
 @md.POST("account/totp/setup")
 @md.requires_auth()
+@md.requires_fresh_auth()
 def on_totp_setup(request):
     """Generate a new TOTP secret and return setup data."""
     secret = totp_service.generate_secret()
@@ -65,6 +66,7 @@ def on_totp_setup(request):
 
 @md.POST("account/totp/confirm")
 @md.requires_auth()
+@md.requires_fresh_auth()
 @md.requires_params("code")
 def on_totp_confirm(request):
     """Verify the first TOTP code to activate TOTP for the account."""
@@ -92,6 +94,7 @@ def on_totp_confirm(request):
 
 @md.DELETE("account/totp")
 @md.requires_auth()
+@md.requires_fresh_auth()
 def on_totp_disable(request):
     """Disable TOTP for the authenticated user."""
     UserTOTP.objects.filter(user=request.user).update(is_enabled=False)
@@ -116,6 +119,7 @@ def on_totp_recovery_codes_get(request):
 
 @md.POST("account/totp/recovery-codes/regenerate")
 @md.requires_auth()
+@md.requires_fresh_auth()
 @md.requires_params("code")
 def on_totp_recovery_codes_regenerate(request):
     """Regenerate recovery codes. Requires a valid TOTP code to authorize."""

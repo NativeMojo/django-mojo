@@ -429,6 +429,7 @@ Several framework hooks (geofence engine, account extension handlers, bouncer de
 | `X-Mojo-Test-Require-Group-On-Registration` (`0`/`1`) | `REQUIRE_GROUP_ON_REGISTRATION` | same |
 | `X-Mojo-Test-Allow-User-Registration` (`0`/`1`) | `ALLOW_USER_REGISTRATION` | same |
 | `X-Mojo-Test-Bouncer-Require-Token` (`0`/`1`) | `BOUNCER_REQUIRE_TOKEN` | `mojo.decorators.bouncer` |
+| `X-Mojo-Test-Fresh-Auth-Window` (int seconds) | `FRESH_AUTH_WINDOW` | `mojo.apps.account.services.fresh_auth` |
 | `X-Mojo-Test-Capture-Id` | per-test capture key for handler fixtures | `tests/test_register/_capture.py` |
 
 ### Security gate (mandatory)

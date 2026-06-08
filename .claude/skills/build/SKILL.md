@@ -25,6 +25,13 @@ Read `CLAUDE.md` for conventions. Read the item file in `planning/confirmed/`.
   self-contained, so you shouldn't need to re-explore from scratch.
 - Run `scripts/ready.sh <file>`. If it reports `BLOCKED`, stop and say so; only
   proceed on `READY`.
+- **Establish a green baseline BEFORE the first edit** (see
+  `.claude/rules/build-baseline.md`): run `bin/run_tests --agent` (the default
+  suite — NOT `--full`, which runs only on explicit user request), read
+  `var/test_failures.json`, and record total/passed/failed + any pre-existing
+  failures in the item's `## Notes`. If the baseline is not all-green, STOP and tell
+  the user — do not build on red unless they say to. A green baseline means every
+  failure after your change is yours to fix.
 - Work **in place** on the current branch. Do **not** create a branch or git
   worktree unless the user explicitly asked — the suite uses a dedicated port and a
   shared PostgreSQL DB, so parallel checkouts collide (see `.claude/rules/git.md`).

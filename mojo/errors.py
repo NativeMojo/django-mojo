@@ -85,6 +85,27 @@ class PermissionDeniedException(MojoException):
         self.instance = instance
         self.event_type = event_type
 
+class ReauthRequiredException(MojoException):
+    """
+    Raised when the caller is authenticated and authorized, but their token's
+    authentication is not recent enough for a sensitive ("step-up") operation.
+
+    Distinct from PermissionDeniedException (403 = not allowed) and from the
+    401 "token invalid/expired" path: this is a third state telling the client
+    to re-authenticate (step-up) and retry. The UI keys on code 440 /
+    reason "reauth_required". HTTP 440 deliberately avoids the common 401->token
+    refresh path — a refresh preserves the stale auth_time and cannot fix it.
+
+    Attributes:
+        reason (str): Machine-readable token. Defaults to 'reauth_required'.
+        code (int): Mirrored into the response body. Defaults to 440.
+        status (int): HTTP status code. Defaults to 440.
+    """
+
+    def __init__(self, reason='reauth_required', code=440, status=440):
+        super().__init__(reason, code, status)
+
+
 class RestErrorException(MojoException):
     """
     Exception raised for REST API errors.

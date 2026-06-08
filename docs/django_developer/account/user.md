@@ -327,8 +327,8 @@ Code TTL is configurable via `PHONE_VERIFY_CODE_TTL` (default 600 seconds). Code
 | `send_invite` | `{"send_invite": true}` | Sends an invite email | `manage_users` |
 | `disable` | `{"disable": {"reason": "admin\|abuse", "note": "..."}}` | Flips `is_active=False`, writes `metadata.protected.disable.*`, emits incident event | `manage_users` |
 | `reactivate` | `{"reactivate": {"note": "..."}}` | Flips `is_active=True`, appends to `disable.history` (FIFO cap 20) | `manage_users` |
-| `change_username` | `{"change_username": {"username": "new", "current_password": "..."}}` | Self-service username change. Mirrors `POST /api/auth/username/change` | self only |
-| `revoke_sessions` | `{"revoke_sessions": {"current_password": "..."}}` | Self-service global logout — rotates `auth_key`. Mirrors `POST /api/auth/sessions/revoke`. NOTE: returns a status only, not a fresh JWT — caller must re-authenticate. | self only |
+| `change_username` | `{"change_username": {"username": "new"}}` | Self-service username change. Mirrors `POST /api/auth/username/change`. No `current_password` — see step-up auth. | self only |
+| `revoke_sessions` | `{"revoke_sessions": {}}` | Self-service global logout — rotates `auth_key`. Mirrors `POST /api/auth/sessions/revoke`. No `current_password` — see step-up auth. NOTE: returns a status only, not a fresh JWT — caller must re-authenticate. | self only |
 | `confirm_totp` | `{"confirm_totp": {"code": "123456"}}` | Self-service TOTP enrolment confirm. Mirrors `POST /api/account/totp/confirm`. Sets `requires_mfa=True` and returns recovery codes. | self only |
 | `regenerate_totp_codes` | `{"regenerate_totp_codes": {"code": "123456"}}` | Self-service regenerate of recovery codes (requires valid TOTP code). Mirrors `POST /api/account/totp/recovery-codes/regenerate`. | self only |
 | `disable_totp` | `{"disable_totp": true}` | Self-service TOTP disable. Mirrors `DELETE /api/account/totp`. | self only |
@@ -337,7 +337,7 @@ The full disable-lifecycle schema and service API are in [disable_lifecycle.md](
 
 `pii_anonymize()` records `reason="anonymized"` in the namespace before flipping the flag, preserving any prior cycle in `history`.
 
-**"Self only"** means `self.is_request_user()` must be true — admins acting on another user record cannot trigger these actions even with `manage_users`. The dedicated `/api/auth/*` and `/api/account/totp/*` endpoints remain available for back-compat; new code should prefer the POST_SAVE_ACTIONS form.
+**"Self only"** — these actions are gated by standard model-save security (the record owner acting on self, or an admin with `manage_users`). No password is required — passwordless accounts must work too. Sensitive actions additionally call `_require_fresh_auth()` which raises HTTP 440 `reauth_required` when `FRESH_AUTH_WINDOW` is set and the caller's session is stale. See [step_up_auth.md](step_up_auth.md) for details. The dedicated `/api/auth/*` and `/api/account/totp/*` endpoints remain available for back-compat; new code should prefer the POST_SAVE_ACTIONS form.
 
 ## Settings
 
@@ -360,3 +360,4 @@ The full disable-lifecycle schema and service API are in [disable_lifecycle.md](
 | `PRE_REGISTER_VALIDATOR` | `None` | Dotted-path callable invoked before user creation; raise `ValueException` to reject |
 | `USER_REGISTERED_HANDLER` | `None` | Dotted-path callable fired inside the registration transaction (and on OAuth new-user); raising rolls back |
 | `USER_LOGIN_HANDLER` | `None` | Dotted-path callable fired on every successful `jwt_login()`; errors are swallowed |
+| `FRESH_AUTH_WINDOW` | `0` | Step-up auth window in seconds. `0` (default) disables the gate entirely. When set, endpoints decorated with `@md.requires_fresh_auth()` require the caller's JWT `auth_time` to be within this many seconds of the request. See [step_up_auth.md](step_up_auth.md). |

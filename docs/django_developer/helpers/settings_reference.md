@@ -103,6 +103,10 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 
 - `EVENTS_ON_ERRORS`
 
+### FRESH
+
+- `FRESH_AUTH_WINDOW`
+
 ### GEOIP
 
 - `GEOIP_ADDITIONAL_PROVIDERS`

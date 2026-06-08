@@ -4,11 +4,11 @@
 
 Self-service phone number change is a two-step flow: **request → confirm.**
 
-1. The authenticated user submits their desired new number and current password.
+1. The authenticated user submits their desired new number.
 2. A 6-digit OTP is sent via SMS to the **new** number. The current number is not changed yet.
 3. The user submits the OTP (along with the session token returned in step 1) to commit the change.
 
-`current_password` is always required. A valid Bearer token alone is not sufficient — this prevents an attacker who has stolen a session token from silently redirecting SMS communications to an attacker-controlled number.
+`current_password` is **optional**. If provided and correct it is validated; if omitted the request proceeds — this supports OAuth-only and passkey-only users who have no usable password. When `FRESH_AUTH_WINDOW` is enabled server-side, a recent login is required instead (see [Step-Up Auth](step_up_auth.md)).
 
 The feature is controlled by the `ALLOW_PHONE_CHANGE` setting (default `True`). When set to `False`, all requests to `POST /api/auth/phone/change/request` return 403.
 
@@ -27,19 +27,18 @@ Requires authentication (Bearer token). Rate limited.
 
 ```json
 {
-  "phone_number": "+14155550123",
-  "current_password": "mysecretpassword"
+  "phone_number": "+14155550123"
 }
 ```
 
-Phone numbers are accepted in any common format (E.164, national with country code, etc.) and are normalized server-side. Use E.164 (`+` followed by country code and number) for maximum reliability.
+`current_password` is accepted in the body but is optional — omit it for OAuth/passkey-only users. Phone numbers are accepted in any common format (E.164, national with country code, etc.) and are normalized server-side. Use E.164 (`+` followed by country code and number) for maximum reliability.
 
 **Error cases:**
 
 | Condition | Status | Response |
 |---|---|---|
-| `current_password` missing | 400 | `"error": "current_password is required to change your phone number"` |
-| `current_password` incorrect | 401 | `"error": "Incorrect password"` |
+| Step-up auth required (stale session, `FRESH_AUTH_WINDOW` enabled) | 440 | `"error": "reauth_required"` |
+| `current_password` provided but incorrect | 401 | `"error": "Incorrect password"` |
 | `phone_number` has an invalid format | 400 | `"error": "Invalid phone number format"` |
 | `phone_number` is the same as the current number | 400 | `"error": "New phone number must be different from current phone number"` |
 | `phone_number` is already registered to another account | 400 | `"error": "Phone number already in use"` |
@@ -147,7 +146,7 @@ This endpoint is **idempotent**: if there is no pending change, it still returns
 
 ## Recommended UI Flow
 
-1. Show the user a form with fields for `phone_number` (new number) and `current_password`.
+1. Show the user a form with a field for `phone_number` (new number).
 2. Call `POST /api/auth/phone/change/request`. On success, store the `session_token` and display a prompt: *"A 6-digit code has been sent to +14155550123. Enter it below to confirm."*
 3. Optionally show a **Cancel** button that calls `POST /api/auth/phone/change/cancel`.
 4. When the user submits the code, call `POST /api/auth/phone/change/confirm` with the `session_token` and `code`.
@@ -192,7 +191,7 @@ After a successful confirm, `is_phone_verified` is `true` for the new number. Yo
 
 ## Security Notes
 
-- **`current_password` is always required.** A stolen JWT alone is not enough to redirect SMS messages to an attacker-controlled number.
+- **`current_password` is optional.** If provided and non-empty it is validated; if omitted the request proceeds. The primary ownership proof is the authenticated session; when `FRESH_AUTH_WINDOW` is enabled, a recent login is required as the step-up gate instead. See [Step-Up Auth](step_up_auth.md).
 - **The OTP is sent only to the new number.** The old number receives no notification. If you want to alert users of changes to their account, send a notification to the old number or email address in your application layer.
 - **The session token proves identity; the OTP proves number ownership.** Both must be correct for the change to commit.
 - **The `session_token` (pc:) is single-use and bound to the user's `auth_key`.** It cannot be replayed, transferred to another user, or used after it has been consumed or cancelled.

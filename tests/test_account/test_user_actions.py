@@ -8,6 +8,11 @@ remain for back-compat):
   confirm_totp           — mirrors POST /api/account/totp/confirm
   regenerate_totp_codes  — mirrors POST /api/account/totp/recovery-codes/regenerate
   disable_totp           — mirrors DELETE /api/account/totp
+
+Authorization is the model's normal SAVE security — the record owner acting on
+self, or an admin with `users`/`manage_users`. There is no `current_password`
+gate: passwordless accounts (passkey / SMS-OTP) have no password to verify, and
+the authenticated request already proves identity.
 """
 from unittest import mock
 from testit import helpers as th
@@ -53,7 +58,7 @@ def test_change_username_via_action(opts):
     assert opts.client.login(USERNAME, PASSWORD), "self login failed"
     resp = opts.client.post(
         f"/api/user/{opts.user_id}",
-        {"change_username": {"username": RENAMED_USERNAME, "current_password": PASSWORD}},
+        {"change_username": {"username": RENAMED_USERNAME}},
     )
     opts.client.logout()
 
@@ -68,34 +73,28 @@ def test_change_username_via_action(opts):
 
 
 @th.django_unit_test()
-def test_change_username_wrong_password_rejected(opts):
-    assert opts.client.login(USERNAME, PASSWORD), "self login failed"
-    resp = opts.client.post(
-        f"/api/user/{opts.user_id}",
-        {"change_username": {"username": "rejected_x@test.com", "current_password": "wrong_pw"}},
-    )
-    opts.client.logout()
-
-    assert resp.status_code != 200, \
-        f"wrong current_password should be rejected, got {resp.status_code}: {opts.client.last_response.body}"
-
-
-@th.django_unit_test()
-def test_change_username_admin_cannot_act_on_other(opts):
-    """An admin acting on someone else's user record cannot trigger change_username."""
+def test_change_username_admin_can_act_on_other(opts):
+    """An admin (manage_users) may change another user's username via the action."""
     from mojo.apps.account.models import User
+
+    admin_set_username = "user_actions_byother"  # no @ — validate_username rejects @ that isn't the email
+    User.objects.filter(username=admin_set_username).delete()
 
     assert opts.client.login(OTHER_USERNAME, "other_pw_99"), "admin login failed"
     resp = opts.client.post(
         f"/api/user/{opts.user_id}",
-        {"change_username": {"username": "admin_attempted@test.com", "current_password": "other_pw_99"}},
+        {"change_username": {"username": admin_set_username}},
     )
     opts.client.logout()
 
-    assert resp.status_code != 200, \
-        f"admin acting on another user should be rejected, got {resp.status_code}"
+    assert resp.status_code == 200, \
+        f"admin should be able to change another user's username, got {resp.status_code}: {opts.client.last_response.body}"
     user = User.objects.get(pk=opts.user_id)
-    assert user.username == USERNAME, "target username should be unchanged"
+    assert user.username == admin_set_username, \
+        f"target username should be updated by admin, got {user.username}"
+
+    # Restore for later tests
+    User.objects.filter(pk=opts.user_id).update(username=USERNAME)
 
 
 @th.django_unit_test()
@@ -107,7 +106,7 @@ def test_revoke_sessions_via_action(opts):
     assert opts.client.login(USERNAME, PASSWORD), "self login failed"
     resp = opts.client.post(
         f"/api/user/{opts.user_id}",
-        {"revoke_sessions": {"current_password": PASSWORD}},
+        {"revoke_sessions": True},
     )
     opts.client.logout()
 
@@ -119,23 +118,24 @@ def test_revoke_sessions_via_action(opts):
 
 
 @th.django_unit_test()
-def test_revoke_sessions_wrong_password_rejected(opts):
+def test_revoke_sessions_admin_can_act_on_other(opts):
+    """An admin (manage_users) may force-revoke another user's sessions."""
     from mojo.apps.account.models import User
 
     pre_auth_key = User.objects.get(pk=opts.user_id).get_auth_key()
 
-    assert opts.client.login(USERNAME, PASSWORD), "self login failed"
+    assert opts.client.login(OTHER_USERNAME, "other_pw_99"), "admin login failed"
     resp = opts.client.post(
         f"/api/user/{opts.user_id}",
-        {"revoke_sessions": {"current_password": "wrong_pw"}},
+        {"revoke_sessions": True},
     )
     opts.client.logout()
 
-    assert resp.status_code != 200, \
-        f"wrong current_password should reject revoke_sessions, got {resp.status_code}"
+    assert resp.status_code == 200, \
+        f"admin should be able to revoke another user's sessions, got {resp.status_code}: {opts.client.last_response.body}"
     post_auth_key = User.objects.get(pk=opts.user_id).get_auth_key()
-    assert post_auth_key == pre_auth_key, \
-        "auth_key should NOT be rotated when password is wrong"
+    assert post_auth_key != pre_auth_key, \
+        "target auth_key should be rotated by admin revoke"
 
 
 @th.django_unit_test()
@@ -517,25 +517,41 @@ def test_users_perm_can_disable_other_user(opts):
 
 
 @th.django_unit_test()
-def test_self_service_actions_reject_admin_on_other(opts):
-    """All five self-service actions must reject an admin acting on a different user."""
+def test_actions_reject_unrelated_non_admin(opts):
+    """A plain user (not owner, no users/manage_users) is blocked at the save layer
+    from running any of the five actions on someone else's record."""
     from mojo.apps.account.models import User
 
+    User.objects.filter(email="user_actions_stranger@test.com").delete()
+    stranger = User.objects.create_user(
+        username="user_actions_stranger@test.com",
+        email="user_actions_stranger@test.com",
+        password="stranger_pw_99")
+    stranger.is_active = True
+    stranger.is_email_verified = True
+    stranger.save()  # deliberately no perms — only owner-of-self elsewhere
+
+    pre_auth_key = User.objects.get(pk=opts.user_id).get_auth_key()
+
     cases = [
-        {"change_username": {"username": "admin_blocked@test.com", "current_password": "other_pw_99"}},
-        {"revoke_sessions": {"current_password": "other_pw_99"}},
+        {"change_username": {"username": "stranger_set"}},
+        {"revoke_sessions": True},
         {"confirm_totp": {"code": "000000"}},
         {"regenerate_totp_codes": {"code": "000000"}},
         {"disable_totp": True},
     ]
 
-    assert opts.client.login(OTHER_USERNAME, "other_pw_99"), "admin login failed"
+    assert opts.client.login("user_actions_stranger@test.com", "stranger_pw_99"), "stranger login failed"
     for body in cases:
         resp = opts.client.post(f"/api/user/{opts.user_id}", body)
         action_name = next(iter(body.keys()))
         assert resp.status_code != 200, \
-            f"admin acting on another user should be rejected for {action_name}, got {resp.status_code}"
+            f"unrelated non-admin must be rejected for {action_name}, got {resp.status_code}"
     opts.client.logout()
 
     user = User.objects.get(pk=opts.user_id)
-    assert user.username == USERNAME, "target username should remain unchanged after admin attempts"
+    assert user.username == USERNAME, "target username must be unchanged after stranger attempts"
+    assert user.get_auth_key() == pre_auth_key, \
+        "target auth_key must NOT be rotated by an unrelated non-admin"
+
+    User.objects.filter(pk=stranger.pk).delete()

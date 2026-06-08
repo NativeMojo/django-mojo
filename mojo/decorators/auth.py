@@ -219,6 +219,38 @@ def requires_auth():
     return decorator
 
 
+def requires_fresh_auth(seconds=None):
+    """Require recent ("step-up") authentication for a sensitive endpoint.
+
+    Authenticated callers whose JWT auth_time is older than the window get a
+    440 reauth_required (see mojo.apps.account.services.fresh_auth). Inert when
+    FRESH_AUTH_WINDOW <= 0 (the default), so this is safe to apply broadly.
+    Pass `seconds` to override the global window for one endpoint.
+    """
+    def decorator(func):
+        func._mojo_requires_fresh_auth = True
+        func._mojo_fresh_auth_seconds = seconds
+        func._mojo_security_type = "fresh_auth"
+
+        key = f"{func.__module__}.{func.__name__}"
+        SECURITY_REGISTRY[key] = {
+            'type': 'fresh_auth',
+            'seconds': seconds,
+            'function': func,
+            'requires_auth': True
+        }
+
+        @wraps(func)
+        def wrapper(request, *args, **kwargs):
+            if not request.user.is_authenticated:
+                raise mojo.errors.PermissionDeniedException()
+            from mojo.apps.account.services import fresh_auth
+            fresh_auth.require_fresh(request, seconds)
+            return func(request, *args, **kwargs)
+        return wrapper
+    return decorator
+
+
 def requires_bearer(bearer):
     def decorator(func):
         # Add metadata for security detection
