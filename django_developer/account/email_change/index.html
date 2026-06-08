@@ -4214,8 +4214,8 @@
 </table>
 <hr />
 <h2 id="security-design-notes">Security Design Notes<a class="headerlink" href="#security-design-notes" title="Permanent link">&para;</a></h2>
-<p><strong>Why <code>current_password</code> is required</strong></p>
-<p>A Bearer token alone does not prove the legitimate user is present — it could be a stolen or leaked JWT. Requiring the current password ensures only someone who knows the credential can initiate a change.</p>
+<p><strong>Why <code>current_password</code> is optional (not required)</strong></p>
+<p><code>current_password</code> is accepted for users who have one but is no longer required. Passwordless accounts (passkey / SMS-OTP) have no usable password and would otherwise be locked out. The authenticated session is the primary ownership proof; for deployments that need a stronger freshness gate, set <code>FRESH_AUTH_WINDOW</code> (the <code>@md.requires_fresh_auth()</code> decorator enforces it). See <a href="../step_up_auth/">step_up_auth.md</a>.</p>
 <p><strong>Why confirm rotates <code>auth_key</code></strong></p>
 <p>If an attacker obtained a valid session and somehow bypassed the password check, rotating <code>auth_key</code> on confirm evicts every active session — including the attacker's — the moment the real owner confirms. The real owner gets a fresh JWT; everyone else is logged out. This applies equally to the link and code paths.</p>
 <p><strong>Why the old address receives a notification</strong></p>

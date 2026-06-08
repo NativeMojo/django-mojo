@@ -3952,6 +3952,7 @@
 <h2 id="api-reference">API Reference<a class="headerlink" href="#api-reference" title="Permanent link">&para;</a></h2>
 <ul>
 <li><a href="authentication/">Authentication</a> — Login, registration, token refresh, password reset</li>
+<li><a href="step_up_auth/">Step-Up Auth (HTTP 440)</a> — Handling <code>reauth_required</code>: when a sensitive op needs a recent login, re-auth and retry; the <code>440</code> vs <code>401</code>/<code>403</code> distinction</li>
 <li><a href="auth_config/">Auth Config</a> — <code>GET /api/auth/config</code>; per-group branding and enabled auth methods for custom front-ends</li>
 <li><a href="passkeys/">Passkeys</a> — Passwordless login with WebAuthn/FIDO2</li>
 <li><a href="mfa_totp/">TOTP / Authenticator App</a> — 2FA and standalone login with Google Authenticator etc.</li>

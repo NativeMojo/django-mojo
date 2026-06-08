@@ -3855,11 +3855,11 @@
 <h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
 <p>Self-service phone number change is a two-step flow: <strong>request → confirm.</strong></p>
 <ol>
-<li>The authenticated user submits their desired new number and current password.</li>
+<li>The authenticated user submits their desired new number.</li>
 <li>A 6-digit OTP is sent via SMS to the <strong>new</strong> number. The current number is not changed yet.</li>
 <li>The user submits the OTP (along with the session token returned in step 1) to commit the change.</li>
 </ol>
-<p><code>current_password</code> is always required. A valid Bearer token alone is not sufficient — this prevents an attacker who has stolen a session token from silently redirecting SMS communications to an attacker-controlled number.</p>
+<p><code>current_password</code> is <strong>optional</strong>. If provided and correct it is validated; if omitted the request proceeds — this supports OAuth-only and passkey-only users who have no usable password. When <code>FRESH_AUTH_WINDOW</code> is enabled server-side, a recent login is required instead (see <a href="../step_up_auth/">Step-Up Auth</a>).</p>
 <p>The feature is controlled by the <code>ALLOW_PHONE_CHANGE</code> setting (default <code>True</code>). When set to <code>False</code>, all requests to <code>POST /api/auth/phone/change/request</code> return 403.</p>
 <blockquote>
 <p><strong>Note — first-time number vs. change:</strong>
@@ -3871,11 +3871,10 @@ This flow is required only when <strong>replacing</strong> an existing phone num
 <p>Requires authentication (Bearer token). Rate limited.</p>
 <p><strong>Request:</strong></p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="p">{</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">&quot;phone_number&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;+14155550123&quot;</span><span class="p">,</span>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span><span class="nt">&quot;current_password&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;mysecretpassword&quot;</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="p">}</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">&quot;phone_number&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;+14155550123&quot;</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="p">}</span>
 </code></pre></div>
-<p>Phone numbers are accepted in any common format (E.164, national with country code, etc.) and are normalized server-side. Use E.164 (<code>+</code> followed by country code and number) for maximum reliability.</p>
+<p><code>current_password</code> is accepted in the body but is optional — omit it for OAuth/passkey-only users. Phone numbers are accepted in any common format (E.164, national with country code, etc.) and are normalized server-side. Use E.164 (<code>+</code> followed by country code and number) for maximum reliability.</p>
 <p><strong>Error cases:</strong></p>
 <table>
 <thead>
@@ -3887,12 +3886,12 @@ This flow is required only when <strong>replacing</strong> an existing phone num
 </thead>
 <tbody>
 <tr>
-<td><code>current_password</code> missing</td>
-<td>400</td>
-<td><code>"error": "current_password is required to change your phone number"</code></td>
+<td>Step-up auth required (stale session, <code>FRESH_AUTH_WINDOW</code> enabled)</td>
+<td>440</td>
+<td><code>"error": "reauth_required"</code></td>
 </tr>
 <tr>
-<td><code>current_password</code> incorrect</td>
+<td><code>current_password</code> provided but incorrect</td>
 <td>401</td>
 <td><code>"error": "Incorrect password"</code></td>
 </tr>
@@ -3990,7 +3989,7 @@ This flow is required only when <strong>replacing</strong> an existing phone num
 <hr />
 <h2 id="recommended-ui-flow">Recommended UI Flow<a class="headerlink" href="#recommended-ui-flow" title="Permanent link">&para;</a></h2>
 <ol>
-<li>Show the user a form with fields for <code>phone_number</code> (new number) and <code>current_password</code>.</li>
+<li>Show the user a form with a field for <code>phone_number</code> (new number).</li>
 <li>Call <code>POST /api/auth/phone/change/request</code>. On success, store the <code>session_token</code> and display a prompt: <em>"A 6-digit code has been sent to +14155550123. Enter it below to confirm."</em></li>
 <li>Optionally show a <strong>Cancel</strong> button that calls <code>POST /api/auth/phone/change/cancel</code>.</li>
 <li>When the user submits the code, call <code>POST /api/auth/phone/change/confirm</code> with the <code>session_token</code> and <code>code</code>.</li>
@@ -4061,7 +4060,7 @@ This flow is required only when <strong>replacing</strong> an existing phone num
 <hr />
 <h2 id="security-notes">Security Notes<a class="headerlink" href="#security-notes" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong><code>current_password</code> is always required.</strong> A stolen JWT alone is not enough to redirect SMS messages to an attacker-controlled number.</li>
+<li><strong><code>current_password</code> is optional.</strong> If provided and non-empty it is validated; if omitted the request proceeds. The primary ownership proof is the authenticated session; when <code>FRESH_AUTH_WINDOW</code> is enabled, a recent login is required as the step-up gate instead. See <a href="../step_up_auth/">Step-Up Auth</a>.</li>
 <li><strong>The OTP is sent only to the new number.</strong> The old number receives no notification. If you want to alert users of changes to their account, send a notification to the old number or email address in your application layer.</li>
 <li><strong>The session token proves identity; the OTP proves number ownership.</strong> Both must be correct for the change to commit.</li>
 <li><strong>The <code>session_token</code> (pc:) is single-use and bound to the user's <code>auth_key</code>.</strong> It cannot be replayed, transferred to another user, or used after it has been consumed or cancelled.</li>

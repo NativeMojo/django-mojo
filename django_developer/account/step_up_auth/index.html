@@ -10,31 +10,27 @@
       
       
       
-        <link rel="canonical" href="https://NativeMojo.github.io/django-mojo/django_developer/account/">
+        <link rel="canonical" href="https://NativeMojo.github.io/django-mojo/django_developer/account/step_up_auth/">
       
       
-        <link rel="prev" href="../helpers/other/">
-      
-      
-        <link rel="next" href="user/">
       
       
         
       
       
-      <link rel="icon" href="../../assets/images/favicon.png">
+      <link rel="icon" href="../../../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
     
     
       
-        <title>Overview - Django-MOJO</title>
+        <title>Step-Up Authentication (Recent-Auth Gate) - Django-MOJO</title>
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
       
         
-        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
       
       
 
@@ -53,7 +49,7 @@
       
     
     
-    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -78,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#account-authentication-django-developer-reference" class="md-skip">
+        <a href="#step-up-authentication-recent-auth-gate" class="md-skip">
           Skip to content
         </a>
       
@@ -92,7 +88,7 @@
 
 <header class="md-header" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../.." title="Django-MOJO" class="md-header__button md-logo" aria-label="Django-MOJO" data-md-component="logo">
+    <a href="../../.." title="Django-MOJO" class="md-header__button md-logo" aria-label="Django-MOJO" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -112,7 +108,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Overview
+              Step-Up Authentication (Recent-Auth Gate)
             
           </span>
         </div>
@@ -225,7 +221,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../.." class="md-tabs__link">
+      <a href="../../.." class="md-tabs__link">
         
   
   
@@ -242,13 +238,11 @@
   
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
-        <a href="../" class="md-tabs__link">
+      <li class="md-tabs__item">
+        <a href="../../" class="md-tabs__link">
           
   
   
@@ -268,7 +262,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../web_developer/" class="md-tabs__link">
+        <a href="../../../web_developer/" class="md-tabs__link">
           
   
   
@@ -302,7 +296,7 @@
 
 <nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../.." title="Django-MOJO" class="md-nav__button md-logo" aria-label="Django-MOJO" data-md-component="logo">
+    <a href="../../.." title="Django-MOJO" class="md-nav__button md-logo" aria-label="Django-MOJO" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -332,7 +326,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../.." class="md-nav__link">
+      <a href="../../.." class="md-nav__link">
         
   
   
@@ -356,31 +350,28 @@
       
   
   
-    
   
   
-  
     
     
     
     
-      
-        
-        
       
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
         
           
-          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
             
   
   
@@ -398,7 +389,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_2">
             <span class="md-nav__icon md-icon"></span>
             
@@ -416,7 +407,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../" class="md-nav__link">
+      <a href="../../" class="md-nav__link">
         
   
   
@@ -450,13 +441,10 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
@@ -465,7 +453,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2_2" >
         
           
-          <label class="md-nav__link" for="__nav_2_2" id="__nav_2_2_label" tabindex="">
+          <label class="md-nav__link" for="__nav_2_2" id="__nav_2_2_label" tabindex="0">
             
   
   
@@ -501,7 +489,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../core/" class="md-nav__link">
+      <a href="../../core/" class="md-nav__link">
         
   
   
@@ -529,7 +517,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../core/mojo_model/" class="md-nav__link">
+      <a href="../../core/mojo_model/" class="md-nav__link">
         
   
   
@@ -557,7 +545,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../core/decorators/" class="md-nav__link">
+      <a href="../../core/decorators/" class="md-nav__link">
         
   
   
@@ -585,7 +573,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../core/middleware/" class="md-nav__link">
+      <a href="../../core/middleware/" class="md-nav__link">
         
   
   
@@ -613,7 +601,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../core/graphs/" class="md-nav__link">
+      <a href="../../core/graphs/" class="md-nav__link">
         
   
   
@@ -641,7 +629,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../core/cache/" class="md-nav__link">
+      <a href="../../core/cache/" class="md-nav__link">
         
   
   
@@ -683,13 +671,10 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
@@ -698,7 +683,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2_3" >
         
           
-          <label class="md-nav__link" for="__nav_2_3" id="__nav_2_3_label" tabindex="">
+          <label class="md-nav__link" for="__nav_2_3" id="__nav_2_3_label" tabindex="0">
             
   
   
@@ -734,7 +719,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../helpers/" class="md-nav__link">
+      <a href="../../helpers/" class="md-nav__link">
         
   
   
@@ -762,7 +747,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../helpers/logit/" class="md-nav__link">
+      <a href="../../helpers/logit/" class="md-nav__link">
         
   
   
@@ -790,7 +775,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../helpers/dates/" class="md-nav__link">
+      <a href="../../helpers/dates/" class="md-nav__link">
         
   
   
@@ -818,7 +803,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../helpers/settings/" class="md-nav__link">
+      <a href="../../helpers/settings/" class="md-nav__link">
         
   
   
@@ -846,7 +831,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../helpers/settings_reference/" class="md-nav__link">
+      <a href="../../helpers/settings_reference/" class="md-nav__link">
         
   
   
@@ -874,7 +859,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../helpers/crypto/" class="md-nav__link">
+      <a href="../../helpers/crypto/" class="md-nav__link">
         
   
   
@@ -902,7 +887,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../helpers/request/" class="md-nav__link">
+      <a href="../../helpers/request/" class="md-nav__link">
         
   
   
@@ -930,7 +915,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../helpers/response/" class="md-nav__link">
+      <a href="../../helpers/response/" class="md-nav__link">
         
   
   
@@ -958,7 +943,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../helpers/other/" class="md-nav__link">
+      <a href="../../helpers/other/" class="md-nav__link">
         
   
   
@@ -991,31 +976,28 @@
                 
   
   
-    
   
   
-  
     
     
     
     
       
       
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
         
           
-          
         
-      
-    
-    
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_4" checked>
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2_4" >
         
           
-          <label class="md-nav__link" for="__nav_2_4" id="__nav_2_4_label" tabindex="">
+          <label class="md-nav__link" for="__nav_2_4" id="__nav_2_4_label" tabindex="0">
             
   
   
@@ -1033,7 +1015,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_4_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_4_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_2_4">
             <span class="md-nav__icon md-icon"></span>
             
@@ -1048,19 +1030,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
         
   
   
@@ -1076,7 +1049,6 @@
   
 
       </a>
-      
     </li>
   
 
@@ -1089,7 +1061,7 @@
   
   
     <li class="md-nav__item">
-      <a href="user/" class="md-nav__link">
+      <a href="../user/" class="md-nav__link">
         
   
   
@@ -1117,7 +1089,7 @@
   
   
     <li class="md-nav__item">
-      <a href="group/" class="md-nav__link">
+      <a href="../group/" class="md-nav__link">
         
   
   
@@ -1145,7 +1117,7 @@
   
   
     <li class="md-nav__item">
-      <a href="auth/" class="md-nav__link">
+      <a href="../auth/" class="md-nav__link">
         
   
   
@@ -1173,7 +1145,7 @@
   
   
     <li class="md-nav__item">
-      <a href="webhook_signing/" class="md-nav__link">
+      <a href="../webhook_signing/" class="md-nav__link">
         
   
   
@@ -1201,7 +1173,7 @@
   
   
     <li class="md-nav__item">
-      <a href="webhook_subscriptions/" class="md-nav__link">
+      <a href="../webhook_subscriptions/" class="md-nav__link">
         
   
   
@@ -1243,13 +1215,10 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
@@ -1258,7 +1227,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2_5" >
         
           
-          <label class="md-nav__link" for="__nav_2_5" id="__nav_2_5_label" tabindex="">
+          <label class="md-nav__link" for="__nav_2_5" id="__nav_2_5_label" tabindex="0">
             
   
   
@@ -1294,7 +1263,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../logging/" class="md-nav__link">
+      <a href="../../logging/" class="md-nav__link">
         
   
   
@@ -1322,7 +1291,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../logging/logit/" class="md-nav__link">
+      <a href="../../logging/logit/" class="md-nav__link">
         
   
   
@@ -1350,7 +1319,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../logging/incidents/" class="md-nav__link">
+      <a href="../../logging/incidents/" class="md-nav__link">
         
   
   
@@ -1392,13 +1361,10 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
@@ -1407,7 +1373,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2_6" >
         
           
-          <label class="md-nav__link" for="__nav_2_6" id="__nav_2_6_label" tabindex="">
+          <label class="md-nav__link" for="__nav_2_6" id="__nav_2_6_label" tabindex="0">
             
   
   
@@ -1443,7 +1409,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../files/README.md" class="md-nav__link">
+      <a href="../../files/README.md" class="md-nav__link">
         
   
   
@@ -1471,7 +1437,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../files/file.md" class="md-nav__link">
+      <a href="../../files/file.md" class="md-nav__link">
         
   
   
@@ -1499,7 +1465,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../files/file_manager.md" class="md-nav__link">
+      <a href="../../files/file_manager.md" class="md-nav__link">
         
   
   
@@ -1541,13 +1507,10 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
@@ -1556,7 +1519,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2_7" >
         
           
-          <label class="md-nav__link" for="__nav_2_7" id="__nav_2_7_label" tabindex="">
+          <label class="md-nav__link" for="__nav_2_7" id="__nav_2_7_label" tabindex="0">
             
   
   
@@ -1592,7 +1555,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../email/" class="md-nav__link">
+      <a href="../../email/" class="md-nav__link">
         
   
   
@@ -1620,7 +1583,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../email/architecture/" class="md-nav__link">
+      <a href="../../email/architecture/" class="md-nav__link">
         
   
   
@@ -1648,7 +1611,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../email/sending/" class="md-nav__link">
+      <a href="../../email/sending/" class="md-nav__link">
         
   
   
@@ -1676,7 +1639,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../email/receiving/" class="md-nav__link">
+      <a href="../../email/receiving/" class="md-nav__link">
         
   
   
@@ -1718,13 +1681,10 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
@@ -1733,7 +1693,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2_8" >
         
           
-          <label class="md-nav__link" for="__nav_2_8" id="__nav_2_8_label" tabindex="">
+          <label class="md-nav__link" for="__nav_2_8" id="__nav_2_8_label" tabindex="0">
             
   
   
@@ -1769,7 +1729,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../jobs/" class="md-nav__link">
+      <a href="../../jobs/" class="md-nav__link">
         
   
   
@@ -1797,7 +1757,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../jobs/publishing/" class="md-nav__link">
+      <a href="../../jobs/publishing/" class="md-nav__link">
         
   
   
@@ -1825,7 +1785,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../jobs/writing_jobs/" class="md-nav__link">
+      <a href="../../jobs/writing_jobs/" class="md-nav__link">
         
   
   
@@ -1853,7 +1813,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../jobs/job_model/" class="md-nav__link">
+      <a href="../../jobs/job_model/" class="md-nav__link">
         
   
   
@@ -1895,13 +1855,10 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
@@ -1910,7 +1867,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2_9" >
         
           
-          <label class="md-nav__link" for="__nav_2_9" id="__nav_2_9_label" tabindex="">
+          <label class="md-nav__link" for="__nav_2_9" id="__nav_2_9_label" tabindex="0">
             
   
   
@@ -1946,7 +1903,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../metrics/" class="md-nav__link">
+      <a href="../../metrics/" class="md-nav__link">
         
   
   
@@ -1974,7 +1931,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../metrics/recording/" class="md-nav__link">
+      <a href="../../metrics/recording/" class="md-nav__link">
         
   
   
@@ -2002,7 +1959,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../metrics/fetching/" class="md-nav__link">
+      <a href="../../metrics/fetching/" class="md-nav__link">
         
   
   
@@ -2044,13 +2001,10 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
@@ -2059,7 +2013,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2_10" >
         
           
-          <label class="md-nav__link" for="__nav_2_10" id="__nav_2_10_label" tabindex="">
+          <label class="md-nav__link" for="__nav_2_10" id="__nav_2_10_label" tabindex="0">
             
   
   
@@ -2095,7 +2049,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../realtime/" class="md-nav__link">
+      <a href="../../realtime/" class="md-nav__link">
         
   
   
@@ -2123,7 +2077,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../realtime/architecture/" class="md-nav__link">
+      <a href="../../realtime/architecture/" class="md-nav__link">
         
   
   
@@ -2151,7 +2105,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../realtime/publishing/" class="md-nav__link">
+      <a href="../../realtime/publishing/" class="md-nav__link">
         
   
   
@@ -2179,7 +2133,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../realtime/hooks/" class="md-nav__link">
+      <a href="../../realtime/hooks/" class="md-nav__link">
         
   
   
@@ -2215,7 +2169,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../phonehub/" class="md-nav__link">
+      <a href="../../phonehub/" class="md-nav__link">
         
   
   
@@ -2243,7 +2197,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../filevault/" class="md-nav__link">
+      <a href="../../filevault/" class="md-nav__link">
         
   
   
@@ -2271,7 +2225,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../docit/" class="md-nav__link">
+      <a href="../../docit/" class="md-nav__link">
         
   
   
@@ -2360,7 +2314,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/" class="md-nav__link">
+      <a href="../../../web_developer/" class="md-nav__link">
         
   
   
@@ -2442,7 +2396,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/core/" class="md-nav__link">
+      <a href="../../../web_developer/core/" class="md-nav__link">
         
   
   
@@ -2470,7 +2424,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/core/authentication/" class="md-nav__link">
+      <a href="../../../web_developer/core/authentication/" class="md-nav__link">
         
   
   
@@ -2498,7 +2452,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/core/request_response/" class="md-nav__link">
+      <a href="../../../web_developer/core/request_response/" class="md-nav__link">
         
   
   
@@ -2526,7 +2480,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/core/filtering/" class="md-nav__link">
+      <a href="../../../web_developer/core/filtering/" class="md-nav__link">
         
   
   
@@ -2554,7 +2508,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/core/pagination/" class="md-nav__link">
+      <a href="../../../web_developer/core/pagination/" class="md-nav__link">
         
   
   
@@ -2582,7 +2536,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/core/graphs/" class="md-nav__link">
+      <a href="../../../web_developer/core/graphs/" class="md-nav__link">
         
   
   
@@ -2672,7 +2626,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/account/" class="md-nav__link">
+      <a href="../../../web_developer/account/" class="md-nav__link">
         
   
   
@@ -2700,7 +2654,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/account/authentication/" class="md-nav__link">
+      <a href="../../../web_developer/account/authentication/" class="md-nav__link">
         
   
   
@@ -2728,7 +2682,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/account/user/" class="md-nav__link">
+      <a href="../../../web_developer/account/user/" class="md-nav__link">
         
   
   
@@ -2756,7 +2710,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/account/group/" class="md-nav__link">
+      <a href="../../../web_developer/account/group/" class="md-nav__link">
         
   
   
@@ -2784,7 +2738,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/account/admin_portal/" class="md-nav__link">
+      <a href="../../../web_developer/account/admin_portal/" class="md-nav__link">
         
   
   
@@ -2812,7 +2766,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/account/api_keys/" class="md-nav__link">
+      <a href="../../../web_developer/account/api_keys/" class="md-nav__link">
         
   
   
@@ -2840,7 +2794,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/account/webhook_signing/" class="md-nav__link">
+      <a href="../../../web_developer/account/webhook_signing/" class="md-nav__link">
         
   
   
@@ -2868,7 +2822,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/account/webhook_subscriptions/" class="md-nav__link">
+      <a href="../../../web_developer/account/webhook_subscriptions/" class="md-nav__link">
         
   
   
@@ -2958,7 +2912,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/logging/" class="md-nav__link">
+      <a href="../../../web_developer/logging/" class="md-nav__link">
         
   
   
@@ -2986,7 +2940,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/logging/logs/" class="md-nav__link">
+      <a href="../../../web_developer/logging/logs/" class="md-nav__link">
         
   
   
@@ -3014,7 +2968,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/logging/incidents/" class="md-nav__link">
+      <a href="../../../web_developer/logging/incidents/" class="md-nav__link">
         
   
   
@@ -3104,7 +3058,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/files/README.md" class="md-nav__link">
+      <a href="../../../web_developer/files/README.md" class="md-nav__link">
         
   
   
@@ -3132,7 +3086,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/files/upload.md" class="md-nav__link">
+      <a href="../../../web_developer/files/upload.md" class="md-nav__link">
         
   
   
@@ -3160,7 +3114,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/files/files.md" class="md-nav__link">
+      <a href="../../../web_developer/files/files.md" class="md-nav__link">
         
   
   
@@ -3250,7 +3204,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/email/" class="md-nav__link">
+      <a href="../../../web_developer/email/" class="md-nav__link">
         
   
   
@@ -3278,7 +3232,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/email/email/" class="md-nav__link">
+      <a href="../../../web_developer/email/email/" class="md-nav__link">
         
   
   
@@ -3368,7 +3322,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/jobs/" class="md-nav__link">
+      <a href="../../../web_developer/jobs/" class="md-nav__link">
         
   
   
@@ -3396,7 +3350,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/jobs/jobs/" class="md-nav__link">
+      <a href="../../../web_developer/jobs/jobs/" class="md-nav__link">
         
   
   
@@ -3486,7 +3440,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/metrics/" class="md-nav__link">
+      <a href="../../../web_developer/metrics/" class="md-nav__link">
         
   
   
@@ -3514,7 +3468,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/metrics/metrics/" class="md-nav__link">
+      <a href="../../../web_developer/metrics/metrics/" class="md-nav__link">
         
   
   
@@ -3604,7 +3558,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/realtime/" class="md-nav__link">
+      <a href="../../../web_developer/realtime/" class="md-nav__link">
         
   
   
@@ -3632,7 +3586,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/realtime/websocket/" class="md-nav__link">
+      <a href="../../../web_developer/realtime/websocket/" class="md-nav__link">
         
   
   
@@ -3668,7 +3622,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/phonehub/" class="md-nav__link">
+      <a href="../../../web_developer/phonehub/" class="md-nav__link">
         
   
   
@@ -3696,7 +3650,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/filevault/" class="md-nav__link">
+      <a href="../../../web_developer/filevault/" class="md-nav__link">
         
   
   
@@ -3724,7 +3678,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/docit/" class="md-nav__link">
+      <a href="../../../web_developer/docit/" class="md-nav__link">
         
   
   
@@ -3772,6 +3726,119 @@
     
   
   
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How it works
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configuration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#applying-the-gate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Applying the gate
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Applying the gate">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#endpoints-mdrequires_fresh_auth" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Endpoints — @md.requires_fresh_auth()
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#model-actions-service-code" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Model actions / service code
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#bypass-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bypass rules
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-response-reauthrequiredexception-http-440" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The response — ReauthRequiredException / HTTP 440
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#step-up-re-auth" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step-up re-auth
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#testing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Testing
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
 </nav>
                   </div>
                 </div>
@@ -3790,28 +3857,92 @@
   
 
 
-<h1 id="account-authentication-django-developer-reference">Account &amp; Authentication — Django Developer Reference<a class="headerlink" href="#account-authentication-django-developer-reference" title="Permanent link">&para;</a></h1>
+<h1 id="step-up-authentication-recent-auth-gate">Step-Up Authentication (Recent-Auth Gate)<a class="headerlink" href="#step-up-authentication-recent-auth-gate" title="Permanent link">&para;</a></h1>
+<p>Optional, <strong>off-by-default</strong> "recent authentication" requirement for sensitive
+operations. A valid JWT proves <em>who</em> you are; step-up additionally requires that
+the token was minted from a genuine login <strong>recently</strong>, so a leaked/long-lived
+token cannot perform account-takeover-grade actions (change username/email/phone,
+revoke sessions, enable/disable MFA, add passkeys, deactivate account, or an admin
+acting on another user) without a fresh re-authentication.</p>
+<p>It works for <strong>passwordless</strong> accounts (passkey / SMS-OTP) — re-auth is whatever
+factor the user has, never a password prompt — and it applies to <strong>admins</strong> too
+(the actor's own token must be fresh).</p>
+<h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
 <ul>
-<li><a href="user/">User Model</a> — User model, permissions, JWT auth</li>
-<li><a href="group/">Group Model</a> — Group/organization model, membership, hierarchy</li>
-<li><a href="auth/">Authentication Flow</a> — JWT tokens, login, password reset</li>
-<li><a href="step_up_auth/">Step-Up Auth</a> — Optional recent-auth gate for sensitive ops: <code>auth_time</code> claim, <code>FRESH_AUTH_WINDOW</code>, <code>@md.requires_fresh_auth()</code>, <code>fresh_auth</code> service, HTTP 440 <code>reauth_required</code></li>
-<li><a href="auth_pages/">Auth Pages</a> — Hosted <code>/auth</code>, <code>/register</code>, and <code>/passkey</code> pages; bouncer integration, OAuth, SMS login, multi-tenant group forwarding</li>
-<li><a href="auth_config/">Auth Config</a> — Per-group auth-page configuration (theme / login / registration); resolution order, schema, validation, migration from flat <code>AUTH_*</code> settings</li>
-<li><a href="oauth/">OAuth / Social Login</a> — Provider setup, auto-link logic, email verification, MFA behaviour, adding new providers</li>
-<li><a href="email_change/">Email Change</a> — Self-service email address change flow</li>
-<li><a href="api_keys/">API Keys</a> — Group-scoped programmatic access, permissions, token lifecycle</li>
-<li><a href="webhook_signing/">Webhook Signing</a> — Per-Group HMAC primitive for outbound webhooks, auto-signing via <code>jobs.publish_webhook(group=...)</code>, receiver verification helper</li>
-<li><a href="webhook_subscriptions/">Webhook Subscriptions</a> — Per-Group subscription registry, async fan-out dispatcher, signed delivery via the existing webhook primitive</li>
-<li><a href="notifications/">Notifications</a> — User inbox, WebSocket + push delivery, expiry</li>
-<li><a href="geoip/">GeoIP</a> — IP geolocation, threat intelligence, time lookup</li>
-<li><a href="geofence/">Geofencing</a> — Policy-based geographic access control: rule DSL, system+group rules, decorator, settings, bypass permission</li>
-<li><a href="login_events/">Login Events</a> — UserLoginEvent model, geo tracking, anomaly flags, metrics</li>
-<li><a href="inactive_sweep/">Inactive User/Group Sweep</a> — Auto-warn and disable inactive users and groups; feature flags, exemptions, email templates, incident events</li>
-<li><a href="disable_lifecycle/">Disable Lifecycle</a> — Unified disable/reactivate state for User and Group: <code>metadata.protected.disable.*</code> schema, REST POST_SAVE_ACTIONS, throttle-read endpoint, service API</li>
-<li><a href="bouncer/">Bouncer</a> — Bot detection gate for login, registration, and public message pages; adaptive learning, device reputation, signature management; continuous in-session detection (stream scorer, stream analyzers, gradient enforcement), static-page gating via <code>verify_pass</code> + nginx <code>auth_request</code>, cross-origin embedding, Bouncer-as-a-Service</li>
-<li><a href="bouncer/#public-messages-contact--support">Public Messages</a> — Bouncer-gated contact/support intake; <code>PublicMessage</code> model, <code>KIND_SCHEMAS</code>, notify_admins, admin RestMeta</li>
+<li><strong><code>auth_time</code> claim.</strong> <code>jwt_login</code> stamps <code>auth_time</code> (epoch seconds) into every
+  token at a genuine authentication event. This is <strong>unconditional</strong> — always
+  stamped, regardless of whether enforcement is on.</li>
+<li><strong>Survives refresh.</strong> The token refresh endpoint carries the original <code>auth_time</code>
+  forward unchanged (it is <em>not</em> reset on refresh — a refresh is not a fresh login,
+  and resetting it would defeat the gate). <code>iat</code> is <strong>not</strong> usable for freshness
+  because it is regenerated on every refresh.</li>
+<li><strong>Enforcement is gated.</strong> Sensitive handlers call the freshness check; if the
+  token's <code>auth_time</code> is older than the window they get HTTP <strong>440</strong>
+  <code>reauth_required</code>.</li>
 </ul>
+<h2 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">FRESH_AUTH_WINDOW</span> <span class="o">=</span> <span class="mi">0</span>      <span class="c1"># seconds; 0 (default) = disabled (no enforcement)</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="c1"># e.g. 300 to require a login within the last 5 minutes for sensitive ops</span>
+</code></pre></div>
+<p>Default <code>0</code> means upgrades are inert: nothing changes until an operator opts in.
+Stamping happens regardless, so when you later raise the window, existing tokens
+already carry <code>auth_time</code> — no flag-day mass re-auth. Legacy tokens minted before
+this shipped have no <code>auth_time</code> and are treated as stale (fail-closed) once a
+window is enabled, forcing one re-auth.</p>
+<h2 id="applying-the-gate">Applying the gate<a class="headerlink" href="#applying-the-gate" title="Permanent link">&para;</a></h2>
+<h3 id="endpoints-mdrequires_fresh_auth">Endpoints — <code>@md.requires_fresh_auth()</code><a class="headerlink" href="#endpoints-mdrequires_fresh_auth" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nd">@md</span><span class="o">.</span><span class="n">POST</span><span class="p">(</span><span class="s2">&quot;auth/sessions/revoke&quot;</span><span class="p">)</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nd">@md</span><span class="o">.</span><span class="n">requires_auth</span><span class="p">()</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="nd">@md</span><span class="o">.</span><span class="n">requires_fresh_auth</span><span class="p">()</span>          <span class="c1"># inner to requires_auth</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_sessions_revoke</span><span class="p">(</span><span class="n">request</span><span class="p">):</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>    <span class="o">...</span>
+</code></pre></div>
+<p>Place it <strong>inner to</strong> <code>@md.requires_auth()</code>. Pass <code>seconds=</code> to override the global
+window for one endpoint: <code>@md.requires_fresh_auth(seconds=120)</code>. Inert when
+<code>FRESH_AUTH_WINDOW &lt;= 0</code>, so it is safe to apply broadly.</p>
+<h3 id="model-actions-service-code">Model actions / service code<a class="headerlink" href="#model-actions-service-code" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.services</span><span class="w"> </span><span class="kn">import</span> <span class="n">fresh_auth</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="n">fresh_auth</span><span class="o">.</span><span class="n">require_fresh</span><span class="p">(</span><span class="n">request</span><span class="p">)</span>            <span class="c1"># raises ReauthRequiredException if stale</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="c1"># or, non-raising:</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="k">if</span> <span class="n">fresh_auth</span><span class="o">.</span><span class="n">is_fresh</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">seconds</span><span class="o">=</span><span class="mi">300</span><span class="p">):</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>    <span class="o">...</span>
+</code></pre></div>
+<p>The <code>User</code> model's sensitive <code>on_action_*</code> handlers call <code>self._require_fresh_auth()</code>
+(which delegates to <code>fresh_auth.require_fresh(self.active_request)</code>).</p>
+<h2 id="bypass-rules">Bypass rules<a class="headerlink" href="#bypass-rules" title="Permanent link">&para;</a></h2>
+<p><code>fresh_auth.is_fresh(request, seconds=None)</code> returns <strong>True</strong> (allow) when:</p>
+<ul>
+<li>the window is <code>&lt;= 0</code> (disabled), or</li>
+<li><code>request</code> is <code>None</code> (non-REST/internal call), or</li>
+<li>the request is <strong>not</strong> JWT-authenticated — i.e. <code>request.bearer != "bearer"</code>
+  (API-key callers bypass; machine credentials have no interactive login to be
+  "recent").</li>
+</ul>
+<p>It returns <strong>False</strong> (stale) when the JWT has no <code>auth_time</code> claim (legacy) or
+<code>now - auth_time &gt; window</code>.</p>
+<h2 id="the-response-reauthrequiredexception-http-440">The response — <code>ReauthRequiredException</code> / HTTP 440<a class="headerlink" href="#the-response-reauthrequiredexception-http-440" title="Permanent link">&para;</a></h2>
+<p><code>mojo.errors.ReauthRequiredException(reason="reauth_required", code=440, status=440)</code>
+→ body <code>{"status": false, "error": "reauth_required", "code": 440}</code> at HTTP 440.
+This is a deliberate <strong>third</strong> state, distinct from <code>403</code> (authorized: permission
+denied) and <code>401</code> (token invalid/expired). 440 avoids the common client
+<code>401 → token refresh</code> path, which cannot help here (a refresh preserves the stale
+<code>auth_time</code>). Clients branch on <code>code == 440</code> / <code>error == "reauth_required"</code> and
+drive a step-up re-auth.</p>
+<h2 id="step-up-re-auth">Step-up re-auth<a class="headerlink" href="#step-up-re-auth" title="Permanent link">&para;</a></h2>
+<p>There is <strong>no dedicated step-up endpoint</strong>. Every existing verify/login flow
+already calls <code>jwt_login</code>, which stamps a fresh <code>auth_time</code>. So a client that hits
+a 440 re-runs the appropriate flow for the signed-in user (passkey assertion,
+<code>POST /api/auth/sms/verify</code>, <code>POST /api/account/totp/verify</code>, or password login),
+swaps in the returned tokens, and retries the operation.</p>
+<h2 id="testing">Testing<a class="headerlink" href="#testing" title="Permanent link">&para;</a></h2>
+<p>Set the window per-request with the <code>X-Mojo-Test-Fresh-Auth-Window</code> header
+(test-mode only — gated by <code>mojo.helpers.test_mode.is_test_request</code>), so tests run
+in parallel without server reloads:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">resp</span> <span class="o">=</span> <span class="n">opts</span><span class="o">.</span><span class="n">client</span><span class="o">.</span><span class="n">post</span><span class="p">(</span><span class="s2">&quot;/api/auth/sessions/revoke&quot;</span><span class="p">,</span> <span class="p">{},</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>                        <span class="n">headers</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;X-Mojo-Test-Fresh-Auth-Window&quot;</span><span class="p">:</span> <span class="s2">&quot;300&quot;</span><span class="p">})</span>
+</code></pre></div>
+<p>See <code>tests/test_auth/fresh_auth.py</code>.</p>
 
 
 
@@ -3867,10 +3998,10 @@
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.suggest", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.suggest", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
       
     
   </body>

@@ -4891,14 +4891,14 @@ allowed for anyone with edit access.</p>
 </tr>
 <tr>
 <td><code>change_username</code></td>
-<td><code>{"change_username": {"username": "new", "current_password": "..."}}</code></td>
-<td>Self-service username change. Mirrors <code>POST /api/auth/username/change</code></td>
+<td><code>{"change_username": {"username": "new"}}</code></td>
+<td>Self-service username change. Mirrors <code>POST /api/auth/username/change</code>. No <code>current_password</code> — see step-up auth.</td>
 <td>self only</td>
 </tr>
 <tr>
 <td><code>revoke_sessions</code></td>
-<td><code>{"revoke_sessions": {"current_password": "..."}}</code></td>
-<td>Self-service global logout — rotates <code>auth_key</code>. Mirrors <code>POST /api/auth/sessions/revoke</code>. NOTE: returns a status only, not a fresh JWT — caller must re-authenticate.</td>
+<td><code>{"revoke_sessions": {}}</code></td>
+<td>Self-service global logout — rotates <code>auth_key</code>. Mirrors <code>POST /api/auth/sessions/revoke</code>. No <code>current_password</code> — see step-up auth. NOTE: returns a status only, not a fresh JWT — caller must re-authenticate.</td>
 <td>self only</td>
 </tr>
 <tr>
@@ -4923,7 +4923,7 @@ allowed for anyone with edit access.</p>
 </table>
 <p>The full disable-lifecycle schema and service API are in <a href="../disable_lifecycle/">disable_lifecycle.md</a>.</p>
 <p><code>pii_anonymize()</code> records <code>reason="anonymized"</code> in the namespace before flipping the flag, preserving any prior cycle in <code>history</code>.</p>
-<p><strong>"Self only"</strong> means <code>self.is_request_user()</code> must be true — admins acting on another user record cannot trigger these actions even with <code>manage_users</code>. The dedicated <code>/api/auth/*</code> and <code>/api/account/totp/*</code> endpoints remain available for back-compat; new code should prefer the POST_SAVE_ACTIONS form.</p>
+<p><strong>"Self only"</strong> — these actions are gated by standard model-save security (the record owner acting on self, or an admin with <code>manage_users</code>). No password is required — passwordless accounts must work too. Sensitive actions additionally call <code>_require_fresh_auth()</code> which raises HTTP 440 <code>reauth_required</code> when <code>FRESH_AUTH_WINDOW</code> is set and the caller's session is stale. See <a href="../step_up_auth/">step_up_auth.md</a> for details. The dedicated <code>/api/auth/*</code> and <code>/api/account/totp/*</code> endpoints remain available for back-compat; new code should prefer the POST_SAVE_ACTIONS form.</p>
 <h2 id="settings">Settings<a class="headerlink" href="#settings" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -5018,6 +5018,11 @@ allowed for anyone with edit access.</p>
 <td><code>USER_LOGIN_HANDLER</code></td>
 <td><code>None</code></td>
 <td>Dotted-path callable fired on every successful <code>jwt_login()</code>; errors are swallowed</td>
+</tr>
+<tr>
+<td><code>FRESH_AUTH_WINDOW</code></td>
+<td><code>0</code></td>
+<td>Step-up auth window in seconds. <code>0</code> (default) disables the gate entirely. When set, endpoints decorated with <code>@md.requires_fresh_auth()</code> require the caller's JWT <code>auth_time</code> to be within this many seconds of the request. See <a href="../step_up_auth/">step_up_auth.md</a>.</td>
 </tr>
 </tbody>
 </table>
