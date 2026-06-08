@@ -17,6 +17,15 @@ out passwordless passkey/SMS accounts); ownership is the authenticated session,
 freshness is the new gate. See `docs/django_developer/account/step_up_auth.md` and
 `docs/web_developer/account/step_up_auth.md`.
 
+**account** — Fixed the bouncer-hosted stepped (phone-first) **register page** so
+pressing **Enter** on the phone (step 1) or 6-digit code (step 2) field now runs
+that step's action (Continue / Verify) instead of firing the final step-3 submit.
+The hidden step-3 "Create account" button is the form's default submit button, so
+Enter previously ran final registration — whose first check is the Terms checkbox
+— surfacing a confusing "Please agree to the Terms & Conditions." error on a step
+where that checkbox isn't even shown. Single-pane (email) registration is
+unaffected.
+
 ## v1.2.34 - June 06, 2026
 
 

@@ -256,8 +256,10 @@ Already have an account? <a href="{{ auth_url|default:'/auth' }}">Log in</a>
     // ---- Stepped state machine -------------------------------------------
     var RESEND_COOLDOWN_SECONDS = 30;
     var resendTimer = null;
+    var currentStep = 1;
 
     function showStep(n) {
+        currentStep = n;
         ["view-reg-step1", "view-reg-step2", "view-reg-step3"].forEach(function (id, i) {
             var el = $(id);
             if (el) el.classList.toggle("is-active", (i + 1) === n);
@@ -414,6 +416,14 @@ Already have an account? <a href="{{ auth_url|default:'/auth' }}">Log in</a>
     // ---- Submit (final) ---------------------------------------------------
     $("form-register").addEventListener("submit", function (e) {
         e.preventDefault();
+        // Stepped flow: pressing Enter implicitly submits the form, because the
+        // step-3 "Create account" button is the form's default submit button
+        // even while its panel is hidden. Route Enter to the current step's
+        // action instead of running final registration — otherwise Enter on
+        // step 1/2 jumps straight to the step-3 Terms gate and shows a false
+        // "agree to the Terms" error. Step 3 / single-pane fall through below.
+        if (STEPPED && currentStep === 1) { $("btn-reg-continue").click(); return; }
+        if (STEPPED && currentStep === 2) { $("btn-reg-verify").click(); return; }
         var terms = $("reg-terms");
         if (terms && !terms.checked) { m.showMessage("Please agree to the Terms & Conditions.", "error"); return; }
 

@@ -424,6 +424,54 @@ def test_register_default_email_single_pane(opts):
                 "default email schema must NOT render the .mat-steps indicator")
 
 
+@th.django_unit_test("register.html: Enter runs the current step's action, not the final submit")
+def test_register_enter_runs_current_step_not_submit(opts):
+    """Regression for the stepped register page: pressing Enter on step 1 (phone)
+    or step 2 (OTP) must trigger that step's button, NOT the step-3 final submit
+    whose first gate is the Terms checkbox (which produced a false "agree to
+    Terms" error). Asserted against the rendered JS — the repo has no JS runtime.
+    """
+    html = _render_with_test_register_fields(
+        'account/register.html', PHONE_ONLY_FIELDS_JSON, group=opts.group)
+
+    step1_guard = 'if (STEPPED && currentStep === 1) { $("btn-reg-continue").click(); return; }'
+    step2_guard = 'if (STEPPED && currentStep === 2) { $("btn-reg-verify").click(); return; }'
+    assert_true(step1_guard in html,
+                "register.html submit handler must route Enter on step 1 to the "
+                f"Continue button instead of submitting. Missing: {step1_guard!r}")
+    assert_true(step2_guard in html,
+                "register.html submit handler must route Enter on step 2 to the "
+                f"Verify button instead of submitting. Missing: {step2_guard!r}")
+
+    # The step dispatch must come BEFORE the Terms check in source order. That
+    # ordering IS the fix: pre-fix, the Terms check is the handler's first
+    # statement, so Enter on step 1/2 surfaces the false Terms error.
+    i_dispatch = html.find('currentStep === 1')
+    i_terms = html.find('Please agree to the Terms & Conditions.')
+    assert_true(i_dispatch != -1 and i_terms != -1,
+                "expected both the step-1 dispatch and the Terms message in the "
+                f"rendered stepped form (dispatch={i_dispatch}, terms={i_terms})")
+    assert_true(i_dispatch < i_terms,
+                "the step dispatch must run BEFORE the Terms check — otherwise "
+                "Enter on step 1/2 reaches the step-3 Terms gate (the reported "
+                f"bug). Got dispatch index {i_dispatch} >= terms index {i_terms}.")
+
+    # currentStep must be real state the dispatch can read — set by showStep(n).
+    assert_true('var currentStep' in html and 'currentStep = n;' in html,
+                "showStep(n) must record the active step (`var currentStep` + "
+                "`currentStep = n;`) so the submit handler can dispatch on it.")
+
+
+@th.django_unit_test("register.html: step-3 final register path stays intact (regression)")
+def test_register_step3_final_path_intact(opts):
+    html = _render_with_test_register_fields(
+        'account/register.html', PHONE_ONLY_FIELDS_JSON, group=opts.group)
+    assert_true('Please agree to the Terms & Conditions.' in html,
+                "step-3 Terms gate must still exist for the final submit handler")
+    assert_true('MojoAuth.register(' in html,
+                "step-3 final submit must still call MojoAuth.register(...)")
+
+
 # ---------------------------------------------------------------------------
 # bouncer_challenge.html — JS redirectUrl must not be HTML-entity-escaped
 # ---------------------------------------------------------------------------
