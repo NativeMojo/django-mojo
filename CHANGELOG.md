@@ -1,5 +1,10 @@
 ## v1.2.29 - (current)
 
+## v1.2.35 - June 09, 2026
+
+reg enter key fix
+
+
 **account** — Optional **step-up ("recent authentication") gate** for sensitive
 operations (off by default). Logins now stamp an `auth_time` claim into the JWT
 (unconditional; carried forward unchanged across token refresh). When
