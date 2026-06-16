@@ -1,5 +1,10 @@
 ## v1.2.29 - (current)
 
+## v1.2.36 - June 16, 2026
+
+fixing login page
+
+
 **account** — **API key self-rotation.** New `POST /api/group/apikey/rotate`
 rotates the **calling** key's secret in place (same id / name / permissions /
 limits, new token); the old token is invalidated immediately and the new one is
