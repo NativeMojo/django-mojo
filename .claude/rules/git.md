@@ -14,6 +14,11 @@ running tests concurrently will collide on the port and corrupt the shared DB.
 Only **one test run at a time** — never spawn parallel agents that each run the suite.
 
 ## Commits
-- Commit or push only when the user asks.
+- **Commit when you finish a request.** Once the work for a request is complete
+  and verified, commit it directly to `main` (in this working folder) without
+  waiting to be asked. Stage specific files by name — never `git add -A` / `.`.
+  Don't leave finished work uncommitted in the tree.
+- **Pushing is still opt-in.** Never `git push` unless the user explicitly asks —
+  pushing is outward-facing and hard to reverse.
 - End commit messages with:
   `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`
