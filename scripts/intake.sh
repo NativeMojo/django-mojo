@@ -11,7 +11,10 @@ case "$src" in planning/inbox/*) ;; *) echo "warning: $src is not in planning/in
 counter="planning/.next_id"
 
 # Refuse if the item already has a non-empty id (don't consume a number).
-have="$(awk -F': *' '/^---/{f++;next} f==1&&$1=="id"{print $2;exit}' "$src" | tr -d '[:space:]')"
+# Strip any trailing `# ...` comment from the value first, so the template's
+# commented-but-blank `id:` line (e.g. `id:   # leave blank`) reads as empty
+# rather than being mistaken for an assigned id.
+have="$(awk -F': *' '/^---/{f++;next} f==1&&$1=="id"{v=$2; sub(/[[:space:]]*#.*/,"",v); gsub(/[[:space:]]/,"",v); print v; exit}' "$src")"
 [ -z "${have:-}" ] || { echo "already has id ($have); not consuming a number" >&2; exit 2; }
 
 # N = max(counter, highest ASSIGNED id + 1). Reconciling against the actual tree

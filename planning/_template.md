@@ -1,5 +1,6 @@
 ---
-id:                    # leave blank — /scope assigns on pickup
+# id is assigned by /scope on pickup — leave it blank
+id:
 type: feature          # feature | bug | chore
 title: [Title]
 priority: P2           # P0 (drop everything) | P1 | P2 | P3
