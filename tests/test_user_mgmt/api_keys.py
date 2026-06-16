@@ -305,6 +305,85 @@ def test_apikey_whoami_me_rejects_user(opts):
     opts.client.logout()
 
 
+@th.unit_test("apikey_rotate_token_model")
+def test_apikey_rotate_token_model(opts):
+    """rotate_token() issues a new secret in place: old token stops
+    authenticating, new token works, same row + permissions."""
+    from mojo.apps.account.models import Group, ApiKey
+    from testit.helpers import get_mock_request
+
+    group = Group.objects.get(pk=opts.parent_id)
+    api_key, old_token = ApiKey.create_for_group(
+        group=group, name="test_rotate_model", permissions={"view_data": True},
+    )
+    key_id = api_key.pk
+
+    new_token = api_key.rotate_token()
+    assert new_token and len(new_token) == 48, f"unexpected token: {new_token!r}"
+    assert new_token != old_token, "rotate must produce a different token"
+    assert api_key.pk == key_id, "rotate must not create a new row"
+    assert api_key.permissions.get("view_data") is True, "permissions preserved"
+
+    # Old token no longer authenticates; new token does.
+    u_old, err_old = ApiKey.validate_token(old_token, get_mock_request())
+    assert u_old is None and err_old, "old token must stop working after rotate"
+    u_new, err_new = ApiKey.validate_token(new_token, get_mock_request())
+    assert err_new is None and u_new is not None, f"new token must work: {err_new}"
+
+    ApiKey.objects.filter(pk=key_id).delete()
+
+
+@th.unit_test("apikey_rest_rotate_self")
+def test_apikey_rest_rotate_self(opts):
+    """POST /api/group/apikey/rotate rotates the calling key, returns the new
+    token once; the old token then fails and the new one works."""
+    from mojo.apps.account.models import Group, ApiKey
+
+    group = Group.objects.get(pk=opts.parent_id)
+    api_key, old_token = ApiKey.create_for_group(
+        group=group, name="test_rotate_rest", permissions={"view_data": True},
+    )
+    key_id = api_key.pk
+
+    opts.client.logout()
+    opts.client.bearer = "apikey"
+    opts.client.access_token = old_token
+    opts.client.is_authenticated = True
+
+    resp = opts.client.post("/api/group/apikey/rotate", {})
+    assert resp.status_code == 200, f"rotate failed: {resp.status_code} {resp.response}"
+    data = resp.response.data
+    new_token = data.get("token")
+    assert new_token and len(new_token) == 48, f"new token must be returned once: {new_token!r}"
+    assert new_token != old_token, "rotate must change the token"
+    assert data.id == key_id, "same key id — rotate is in place"
+
+    # Old token is now invalid; new token authenticates.
+    opts.client.access_token = old_token
+    assert opts.client.get("/api/group/apikey/me").status_code == 401, \
+        "old token must be rejected after rotate"
+    opts.client.access_token = new_token
+    resp_new = opts.client.get("/api/group/apikey/me")
+    assert resp_new.status_code == 200, f"new token must work: {resp_new.status_code}"
+    assert resp_new.response.data.id == key_id, "whoami resolves the same key"
+
+    opts.client.logout()
+    ApiKey.objects.filter(pk=key_id).delete()
+
+
+@th.unit_test("apikey_rest_rotate_rejects_user")
+def test_apikey_rest_rotate_rejects_user(opts):
+    """A user/JWT request (no API key) gets 401 from the rotate endpoint —
+    rotation is self-service for the authenticating key only."""
+    opts.client.logout()
+    opts.client.login(ADMIN_USER, ADMIN_PWORD)
+    assert opts.client.is_authenticated, "admin login failed"
+    resp = opts.client.post("/api/group/apikey/rotate", {})
+    assert resp.status_code == 401, \
+        f"non-apikey request must be 401, got {resp.status_code}: {resp.response}"
+    opts.client.logout()
+
+
 @th.unit_test("apikey_rest_delete")
 def test_apikey_rest_delete(opts):
     """REST DELETE removes the api key."""

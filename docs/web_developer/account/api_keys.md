@@ -87,6 +87,26 @@ Authorization: apikey <token>
 }
 ```
 
+### Rotate a Key — `POST /api/group/apikey/rotate`
+
+Rotates the **calling** API key's secret **in place** — same key, same permissions, a new token. Authenticate with the key being rotated; the previous token stops working immediately, so save the new one (it is returned only once, like creation). No management permission needed (you already hold the secret); a user/JWT session gets `401`.
+
+```json
+POST /api/group/apikey/rotate
+Authorization: apikey <current-token>
+
+{
+  "status": true,
+  "data": {
+    "id": 7,
+    "name": "sms-bridge",
+    "permissions": {"send_sms": true},
+    "group": {"id": 12, "name": "Acme Co"},
+    "token": "<new-token-returned-once>"
+  }
+}
+```
+
 ### Managing API Keys
 
 | Method | Path | Description |
@@ -95,6 +115,7 @@ Authorization: apikey <token>
 | `POST` | `/api/group/apikey` | Create a key |
 | `GET` | `/api/group/apikey/<id>` | Get key details |
 | `POST` | `/api/group/apikey/<id>` | Update name, permissions, limits, is_active |
+| `POST` | `/api/group/apikey/rotate` | Rotate the calling key's secret (returns new token once) |
 | `DELETE` | `/api/group/apikey/<id>` | Delete key |
 
 ### Deactivate a Key

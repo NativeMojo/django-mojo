@@ -255,3 +255,18 @@ class ApiKey(MojoSecrets, MojoModel):
         self._raw_token = self.generate_token()
         self.save()
         self.log(f"API Key '{self.name}' created", "api_key:generated")
+
+    def rotate_token(self):
+        """Rotate this key's secret in place: same id / name / permissions /
+        limits, a brand-new token.
+
+        ``generate_token`` overwrites ``token_hash`` and the encrypted secret,
+        so the previous token stops authenticating the instant this saves
+        (``validate_token`` looks up by hash). The new raw token is returned and
+        must be persisted by the caller — like creation, it cannot be recovered
+        after the next rotation. No new row, so existing references stay valid.
+        """
+        token = self.generate_token()
+        self.save()
+        self.log(f"API Key '{self.name}' rotated", "api_key:rotated")
+        return token

@@ -1,5 +1,13 @@
 ## v1.2.29 - (current)
 
+**account** — **API key self-rotation.** New `POST /api/group/apikey/rotate`
+rotates the **calling** key's secret in place (same id / name / permissions /
+limits, new token); the old token is invalidated immediately and the new one is
+returned exactly once. Self-service — requires only API-key auth, no
+`manage_group` (same trust model as `group/apikey/me`). Model-level equivalent:
+`ApiKey.rotate_token()`. Enables scheduled credential rotation without minting a
+second key or leaving the old secret live.
+
 ## v1.2.35 - June 09, 2026
 
 reg enter key fix
