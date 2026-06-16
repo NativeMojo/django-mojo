@@ -107,17 +107,17 @@ def test_rejects_metadata_ip(opts):
 
 @th.django_unit_test()
 def test_fetch_public_url(opts):
-    result = _browse({"url": "https://httpbin.org/html"}, opts.admin)
+    result = _browse({"url": "https://example.com"}, opts.admin)
     assert "error" not in result, f"Fetch should succeed: {result.get('error')}"
     assert "content" in result, "Result should have content"
     assert len(result["content"]) > 0, "Content should not be empty"
     assert "url" in result, "Result should have url"
-    assert result["url"] == "https://httpbin.org/html", "URL should match request"
+    assert result["url"] == "https://example.com", "URL should match request"
 
 
 @th.django_unit_test()
 def test_fetch_returns_title(opts):
-    result = _browse({"url": "https://httpbin.org/html"}, opts.admin)
+    result = _browse({"url": "https://example.com"}, opts.admin)
     assert "error" not in result, f"Fetch should succeed: {result.get('error')}"
     assert "title" in result, "Result should have title field"
 
@@ -240,7 +240,7 @@ def test_extracts_title(opts):
 
 @th.django_unit_test()
 def test_fetch_json_content(opts):
-    result = _browse({"url": "https://httpbin.org/json"}, opts.admin)
+    result = _browse({"url": "https://dns.google/resolve?name=example.com&type=A"}, opts.admin)
     assert "error" not in result, f"JSON fetch should succeed: {result.get('error')}"
     assert result["title"] is None, "JSON response should have no title"
     assert len(result["content"]) > 0, "JSON content should not be empty"
