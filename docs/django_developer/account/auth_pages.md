@@ -273,6 +273,16 @@ Methods rendered are those listed in the resolved auth config's
 - Forgot password (code or link method; auto-routes via SMS when identity is phone)
 - Reset code entry / set new password (from `?token=pr:...`)
 
+**Anti-enumeration UX (SMS view).** `on_sms_login` is deliberately generic — it
+returns the same success response whether or not the phone number has an account,
+and only actually sends a code to a real account. `login.html` reflects this
+honestly: the SMS view states up front that a code arrives only if the number is
+already linked to an account, shows a non-committal post-submit message (no false
+"we sent a code" certainty), and surfaces a "Create an account" link so a person
+with no account has a clear path out. A snooping third party still learns nothing.
+Do not change `on_sms_login` to branch on account existence — the privacy
+guarantee depends on the uniform response.
+
 The page leads with the **primary credential**: when `password` is in
 `login.methods` the sign-in form is the landing view and every other method
 (SMS, passkey, Google, Apple) is a button below an "or continue with" divider.

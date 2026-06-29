@@ -113,6 +113,8 @@ Always returns success to prevent account enumeration:
 }
 ```
 
+The hosted sign-in page (`/auth`) mirrors this honestly in its UX: it tells the user up front that a code arrives only if the number is already linked to an account, and offers a "Create an account" link in the SMS view for users who do not yet have one.
+
 ### Step 2 — Submit SMS Code
 
 **POST** `/api/auth/sms/verify`
