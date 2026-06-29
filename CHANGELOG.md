@@ -2,7 +2,13 @@
 
 ## v1.2.37 - June 28, 2026
 
-
+**account** — **Honest, anti-enumeration UX for hosted SMS sign-in.** The hosted
+sign-in page no longer dead-ends a phone number that has no account on a "code sent"
+screen. SMS sign-in now states up front that a code is sent *only if the number is
+already linked to an account* and surfaces a "Create an account" link in the SMS
+view. The server is unchanged — `POST /api/auth/sms/login` still returns the same
+generic success for known and unknown numbers (no account-existence signal), so
+account enumeration remains impossible.
 
 **account** — **Phone-register verify no longer burns the session on a wrong code.**
 `phone_register.verify_code()` now reads the Redis session, compares the code, and

@@ -44,6 +44,16 @@ sign-in form — so SMS sign-in is the first thing the user sees. With
 `password` present, the sign-in form leads and "Sign in with a code" is a
 button alongside passkey/Google/Apple.
 
+**Anti-enumeration UX.** SMS sign-in never reveals whether a phone number has an
+account — `POST /api/auth/sms/login` returns the same generic success for known
+and unknown numbers, and a code is only actually sent to a real account. So the
+form sets honest expectations instead of branching on existence: it states up
+front that a code arrives *only if the number is already linked to an account*,
+and surfaces a "New here? Create an account" link in the SMS view. A person with
+no account is no longer dead-ended on a code screen waiting for a text that never
+comes — they are pointed to sign-up — while a snooping third party still learns
+nothing about whether the number has an account.
+
 ### URL Parameters
 
 | Param | Purpose |

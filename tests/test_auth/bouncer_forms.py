@@ -131,6 +131,56 @@ def test_login_form_groupuuid_populated_from_context(opts):
 
 
 # ---------------------------------------------------------------------------
+# login.html SMS sign-in dead-end (ITEM-006) — honest, anti-enumeration copy
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test("login.html SMS view discloses a code is sent only if the number has an account")
+def test_login_sms_discloses_code_only_if_account(opts):
+    """ITEM-006: the SMS sign-in view must set honest expectations up front — a
+    code only arrives if the phone is already linked to an account — instead of
+    implying a code was definitely sent. Same generic text for everyone, so it
+    leaks nothing about account existence (anti-enumeration is preserved)."""
+    html = _render('account/login.html', group=opts.group)
+    assert_true(
+        'id="view-sms"' in html,
+        "SMS login view must render (sms is in the default login_methods)")
+    assert_true(
+        'linked to an account' in html,
+        "login.html SMS view must tell the user a code is only sent if the phone "
+        "is already linked to an account (honest, generic anti-enumeration copy). "
+        "Without it, a user with no account dead-ends on the code screen.")
+
+
+@th.django_unit_test("login.html SMS view offers a visible Create-an-account path")
+def test_login_sms_offers_signup_link(opts):
+    """A user with no account needs an obvious way to sign up from the SMS
+    sign-in flow (we can't auto-route without leaking existence). The link reuses
+    register_url, which already carries the group context."""
+    html = _render('account/login.html', group=opts.group)
+    assert_true(
+        'Create an account' in html,
+        "login.html SMS view must surface a visible 'Create an account' sign-up "
+        "link so an account-less user isn't stranded on the code screen.")
+
+
+@th.django_unit_test("login.html SMS submit message does not falsely claim a code was sent")
+def test_login_sms_post_submit_message_is_honest(opts):
+    """After submitting a phone, the page must not assert a code was definitely
+    sent (it isn't, for an unknown number). The message stays honest and points
+    account-less users toward sign-up."""
+    html = _render('account/login.html', group=opts.group)
+    assert_true(
+        'You may not have an account yet' in html,
+        "login.html SMS submit handler must set an honest post-submit message — a "
+        "code only arrives if an account exists — not a false 'we sent a code' "
+        "certainty.")
+    assert_true(
+        'we sent to " + phone' not in html,
+        "login.html must no longer hard-assert 'the code we sent to <phone>' on "
+        "submit — that false certainty is what dead-ends users with no account.")
+
+
+# ---------------------------------------------------------------------------
 # mojo-auth.js helper signature
 # ---------------------------------------------------------------------------
 

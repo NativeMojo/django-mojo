@@ -143,7 +143,7 @@
     <button class="mat-back" type="button" id="btn-back-signin-sms"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg> Back</button>
     {% endif %}
     <p class="mat-view-title">Sign in with a code</p>
-    <p class="mat-view-sub" id="sms-help">Enter your phone number and we'll text you a 6-digit code.</p>
+    <p class="mat-view-sub" id="sms-help">Enter your phone number. We'll text a 6-digit code only if it's already linked to an account.</p>
     <form id="form-sms" novalidate>
         <div class="mat-field">
             <label class="mat-label" for="sms-phone">Phone Number</label>
@@ -157,6 +157,9 @@
         </div>
         <button class="mat-btn mat-btn-primary" type="submit" id="btn-sms"><span class="mat-btn-text">Send Code</span><span class="mat-spinner"></span></button>
     </form>
+    <div class="mat-footer-links">
+        <span class="mat-footer-link">New here? <a href="{{ register_url|default:'/register' }}">Create an account</a></span>
+    </div>
     {% if login_primary == 'sms' %}
     {% if 'passkey' in login_methods or 'google' in login_methods or 'apple' in login_methods %}
     <div class="mat-divider">or</div>
@@ -318,7 +321,7 @@
                     .then(function () {
                         m.setLoading(btn, false);
                         codeBlock.style.display = "";
-                        $("sms-help").textContent = "Enter the 6-digit code we sent to " + phone + ".";
+                        $("sms-help").textContent = "If a code was sent to " + phone + ", enter it below. Did not get one? You may not have an account yet.";
                         var label = btn.querySelector(".mat-btn-text");
                         if (label) label.textContent = "Verify & Sign In";
                         // Do NOT programmatically focus the code field. SMS
