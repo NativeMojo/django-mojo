@@ -255,6 +255,9 @@ None blocking. Priority is filed P2 but the trigger is narrow (requires a per-gr
 reliable. Candidate A (FE double-submit) is intentionally out of scope (not a backend bug).
 
 ## Notes
+**Build baseline (2026-06-29, `bin/run_tests --agent`):** `status: passed` — total 2259, passed
+2203, **failed 0**, skipped 56. GREEN (reliably, post-ITEM-007). Every post-change failure is mine.
+
 Cluster: ITEM-005 (wrong-code burns session) and ITEM-006 (sms-login dead-end) are the siblings;
 this is the third phone-auth issue from the same report thread. **Repro done (2026-06-29):** the
 clean existing-account path works (3 passing tests); candidate B (per-group handler raise burns the
@@ -263,7 +266,8 @@ ITEM-005). Narrower than first feared — it only bites when a per-group `USER_R
 raises, so consider P3.
 
 ## Resolution
-- closed: YYYY-MM-DD
-- branch:
-- files changed:
-- tests added:
+- closed: 2026-06-29
+- branch: main
+- files changed: mojo/apps/account/services/phone_register.py, mojo/apps/account/rest/user.py, tests/test_register/configurable_form.py, docs/web_developer/account/authentication.md, docs/django_developer/account/auth.md, CHANGELOG.md   (close.sh stamp trimmed of intervening unrelated commits)
+- tests added: `tests/test_register/configurable_form.py` — `test_existing_account_handler_raise_keeps_token` + `test_new_user_handler_raise_keeps_token` (a raising USER_REGISTERED_HANDLER fails the first attempt; the SAME token works on retry).
+- verification: full suite green — 2205 passed, 0 failed. security review: passed (restore only in `except`→`raise`; no token abuse / double-fire / dup user; input-safe; new-user atomic block is a pure re-indent). docs: web `authentication.md` + django `auth.md` updated.
