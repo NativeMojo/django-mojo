@@ -3990,7 +3990,18 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Integration Examples">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#caller-responsibility-for-block-decisions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Caller Responsibility for "block" Decisions
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Caller Responsibility for &#34;block&#34; Decisions">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -4521,6 +4532,11 @@
 </tbody>
 </table>
 <h2 id="integration-examples">Integration Examples<a class="headerlink" href="#integration-examples" title="Permanent link">&para;</a></h2>
+<h2 id="caller-responsibility-for-block-decisions">Caller Responsibility for "block" Decisions<a class="headerlink" href="#caller-responsibility-for-block-decisions" title="Permanent link">&para;</a></h2>
+<p>content_guard returns <code>decision="block"</code> deterministically based on its rules. <strong>What the caller does with that decision is the caller's choice.</strong> A hard rejection is appropriate for usernames and text moderation surfaces, but may not be correct for display names.</p>
+<p><code>User.validate_name_fields</code> treats a name "block" as <strong>advisory</strong>: it logs the flagged name and allows the save instead of raising an error. This is intentional — content_guard's substring matching over-blocks legitimate real names that merely contain a high-severity substring (e.g. Matsushita, Harshita, Scunthorpe). The scoring logic inside content_guard is unchanged; only this specific caller's response to "block" differs.</p>
+<p>Other callers (comment/chat/contact_form moderation) continue to hard-block on <code>decision="block"</code> and are unaffected.</p>
+<hr />
 <h3 id="username-registration">Username Registration<a class="headerlink" href="#username-registration" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="n">content_guard</span>
 <a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>

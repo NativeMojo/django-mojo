@@ -3939,6 +3939,7 @@
 <a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;If the account exists, a code was sent.&quot;</span>
 <a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="p">}</span>
 </code></pre></div>
+<p>The hosted sign-in page (<code>/auth</code>) mirrors this honestly in its UX: it tells the user up front that a code arrives only if the number is already linked to an account, and offers a "Create an account" link in the SMS view for users who do not yet have one.</p>
 <h3 id="step-2-submit-sms-code">Step 2 — Submit SMS Code<a class="headerlink" href="#step-2-submit-sms-code" title="Permanent link">&para;</a></h3>
 <p><strong>POST</strong> <code>/api/auth/sms/verify</code></p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p">{</span>

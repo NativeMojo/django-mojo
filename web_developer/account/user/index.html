@@ -4652,7 +4652,8 @@
 <p>Attempts to set these fields without the required permission return <code>403</code>.</p>
 <p>For credentials: self-service users without an admin perm cannot direct-write <code>email</code>/<code>username</code>/<code>phone_number</code> (replace). They must use the dedicated change flows (<code>POST /api/auth/{email,phone}/change/request</code> → <code>/confirm</code>, or <code>POST /api/auth/username/change</code>) which verify ownership of the new channel via OTP/link.</p>
 <h3 id="name-validation">Name Validation<a class="headerlink" href="#name-validation" title="Permanent link">&para;</a></h3>
-<p><code>display_name</code>, <code>first_name</code>, and <code>last_name</code> are checked for inappropriate content on save. A blocked value returns a <code>400</code> error. Changed fields only are re-checked on updates.</p>
+<p><code>display_name</code>, <code>first_name</code>, and <code>last_name</code> are checked for inappropriate content on save. Changed fields only are re-checked on updates.</p>
+<p>Name checks are <strong>advisory</strong>: a flagged value is logged and the save is still allowed. Name fields will not return a <code>400</code> for content reasons — the server's substring-based profanity matching over-blocks legitimate names (e.g. names containing common South-Asian or place-name substrings). Comment and chat moderation are unaffected and continue to hard-block flagged content.</p>
 <hr />
 <h2 id="list-users">List Users<a class="headerlink" href="#list-users" title="Permanent link">&para;</a></h2>
 <p>Requires <code>view_users</code> or <code>manage_users</code> permission.</p>

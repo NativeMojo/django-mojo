@@ -4843,6 +4843,14 @@ that group, a <code>GroupMember</code> is created and <code>USER_REGISTERED_HAND
 that group. If the account is already a member, <code>USER_REGISTERED_HANDLER</code> does
 not fire. Email-identity registration is unchanged — an existing email is always
 a duplicate error.</p>
+<p><strong>Token restore on failure (<code>phone_register.restore()</code>):</strong></p>
+<p>The <code>verified_phone_token</code> is consumed before <code>USER_REGISTERED_HANDLER</code> fires. If
+the handler raises, <code>on_register</code> calls <code>phone_register.restore(verified_token, phone)</code>
+to re-mint the token so the caller can retry the same <code>/api/auth/register</code> POST
+without re-verifying the phone. The restore is scoped to the handler-firing step only —
+post-handler failures (JWT issuance, email send) keep the token consumed, preventing
+double-firing of the handler on retry. This applies to both the existing-account login
+path and new-user creation.</p>
 <p><strong>Protections:</strong></p>
 <ul>
 <li>Rate limited: 5 requests per IP per 5 minutes</li>
