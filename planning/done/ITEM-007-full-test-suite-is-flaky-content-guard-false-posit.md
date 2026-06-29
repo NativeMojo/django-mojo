@@ -205,13 +205,22 @@ None blocking. Optional future item: route flagged names to a moderation/review 
 opt-in hard-block for exact whole-word slurs — out of scope here.
 
 ## Notes
+**Build baseline (2026-06-29, `bin/run_tests --agent`):** `status: passed` — total 2255,
+passed 2199, **failed 0**, skipped 56. Green THIS run, but the suite is known-flaky (this
+item's target). Pre-existing flaky set accepted by the user:
+`test_register::test_register_handler_raise_rolls_back` and
+`configurable_form::test_phone_register_verify_account_exists`. Any OTHER new failure after
+my change is mine; after the fix those two must be stable across ≥5 runs.
+
 Surfaced during ITEM-006 build: two consecutive full-suite runs produced two *different*
 single failures, both green in isolation — the signature of flakiness, not a regression.
 The content_guard angle may be a real product bug (over-blocking benign strings), not just
 test data — worth confirming during scope.
 
 ## Resolution
-- closed: YYYY-MM-DD
-- branch:
-- files changed:
-- tests added:
+- closed: 2026-06-29
+- branch: main
+- files changed: mojo/apps/account/models/user.py, tests/test_account/test_name_moderation.py, tests/test_register/configurable_form.py, tests/test_register/passwordless.py, tests/test_auth/forgot_password_phone.py, docs/django_developer/account/user.md, docs/django_developer/helpers/content_guard.md, docs/web_developer/account/user.md, docs/web_developer/account/user_self_management.md, CHANGELOG.md   (close.sh stamp trimmed of intervening unrelated commits)
+- tests added: `tests/test_account/test_name_moderation.py` (legit names Matsushita/Harshita/Scunthorpe allowed + clean name still allowed + content_guard scoring unchanged); `tests/test_register/configurable_form.py::test_fresh_phone_is_unique`. `_fresh_phone` fixed in 3 copies (configurable_form, passwordless, forgot_password_phone).
+- verification: full suite green across **5/5** consecutive runs (was ~1 random failure/run). The two pre-existing flaky tests are now deterministically stable.
+- security review: passed (validate_name_fields was only a profanity gate, never an injection guard; downstream surfaces escape independently; log records identifier + reason codes, not the name value). docs: both tracks + content_guard.md updated.
