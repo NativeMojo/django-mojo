@@ -222,7 +222,8 @@ a successful match — leaving brute-force protection to the existing rate limit
 the final design.
 
 ## Resolution
-- closed: YYYY-MM-DD
-- branch:
-- files changed:
-- tests added:
+- closed: 2026-06-28
+- branch: main
+- files changed: mojo/apps/account/services/phone_register.py, tests/test_register/phone_verify.py, tests/test_register/phone_endpoints.py, docs/web_developer/account/authentication.md, docs/django_developer/account/auth_pages.md, CHANGELOG.md   (the close.sh auto-stamp over-reported intervening, unrelated commits — corrected to ITEM-005's actual files)
+- tests added: `test_register/phone_verify.py::test_verify_code_wrong_code` (rewritten — was asserting the bug; now requires the session survive a wrong code and the correct code then succeed); `test_register/phone_endpoints.py::test_verify_wrong_then_correct_same_session` (new HTTP regression)
+- security review: passed (no regressions; brute force bounded by rate limit + TTL). docs: web + django tracks updated.
