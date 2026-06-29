@@ -111,7 +111,9 @@ For credentials: self-service users without an admin perm cannot direct-write `e
 
 ### Name Validation
 
-`display_name`, `first_name`, and `last_name` are checked for inappropriate content on save. A blocked value returns a `400` error. Changed fields only are re-checked on updates.
+`display_name`, `first_name`, and `last_name` are checked for inappropriate content on save. Changed fields only are re-checked on updates.
+
+Name checks are **advisory**: a flagged value is logged and the save is still allowed. Name fields will not return a `400` for content reasons — the server's substring-based profanity matching over-blocks legitimate names (e.g. names containing common South-Asian or place-name substrings). Comment and chat moderation are unaffected and continue to hard-block flagged content.
 
 ---
 

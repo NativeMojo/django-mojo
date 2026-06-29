@@ -266,6 +266,16 @@ Bundled in `mojo/helpers/content_guard/data/`:
 
 ## Integration Examples
 
+## Caller Responsibility for "block" Decisions
+
+content_guard returns `decision="block"` deterministically based on its rules. **What the caller does with that decision is the caller's choice.** A hard rejection is appropriate for usernames and text moderation surfaces, but may not be correct for display names.
+
+`User.validate_name_fields` treats a name "block" as **advisory**: it logs the flagged name and allows the save instead of raising an error. This is intentional — content_guard's substring matching over-blocks legitimate real names that merely contain a high-severity substring (e.g. Matsushita, Harshita, Scunthorpe). The scoring logic inside content_guard is unchanged; only this specific caller's response to "block" differs.
+
+Other callers (comment/chat/contact_form moderation) continue to hard-block on `decision="block"` and are unaffected.
+
+---
+
 ### Username Registration
 
 ```python

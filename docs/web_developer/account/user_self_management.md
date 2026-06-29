@@ -83,9 +83,9 @@ Users can update any of the following fields on their own record:
 
 | Field | Notes |
 |---|---|
-| `display_name` | Checked for inappropriate content |
-| `first_name` | Checked for inappropriate content |
-| `last_name` | Checked for inappropriate content |
+| `display_name` | Scanned for inappropriate content (advisory — flagged and allowed, not rejected) |
+| `first_name` | Scanned for inappropriate content (advisory — flagged and allowed, not rejected) |
+| `last_name` | Scanned for inappropriate content (advisory — flagged and allowed, not rejected) |
 | `phone_number` | First-time set only — see [Phone Number](#5-phone-number) for replacing an existing number |
 | `dob` | Date of birth (`YYYY-MM-DD`). Changing this resets `is_dob_verified` to `false` |
 | `metadata` | Free-form JSON; app-defined |

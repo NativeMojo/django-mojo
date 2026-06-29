@@ -103,6 +103,8 @@ Called automatically from `on_rest_created`. Names are written via a direct quer
 
 Uses a lowered block threshold (`text_block_threshold=50`) since short strings carry proportionally more weight.
 
+When content_guard returns `decision="block"` for a name field, the result is treated as **advisory**: the name is logged as flagged and the save is **allowed**. This is intentional — content_guard's naive-substring matching over-blocks legitimate real names that merely contain a high-severity substring (e.g. Matsushita, Harshita, Scunthorpe). The guard's scoring logic is unchanged; only the response to "block" on name fields differs from other surfaces (comment/chat moderation still hard-blocks).
+
 ### Superuser Bypass
 
 Both `validate_username()` and `validate_name_fields()` are bypassed entirely when `request.user.is_superuser`. This allows superusers to create accounts with reserved names like `admin`, `support`, or `root`.
