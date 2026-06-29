@@ -1,5 +1,9 @@
 ## v1.2.29 - (current)
 
+## v1.2.37 - June 28, 2026
+
+
+
 **account** — **Phone-register verify no longer burns the session on a wrong code.**
 `phone_register.verify_code()` now reads the Redis session, compares the code, and
 deletes the session **only on a successful match** (previously an atomic `getdel`
