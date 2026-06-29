@@ -21,10 +21,12 @@ they enter the correct SMS code, when the phone already has an account. Expected
 in (profile step skipped). Reports are **unconfirmed / not yet reproduced**; captured from a
 relayed report (2026-06-28) plus a code review.
 
-**Most likely this is ITEM-005** (one wrong code permanently burns the register session, so
-the subsequent correct code fails). Fix ITEM-005 first and re-check whether any reports
-remain. This item covers the *residual, distinct* failure modes below that can occur on a
-**clean, correct-first-try** attempt.
+**UPDATE (2026-06-29, reproduced):** The *clean* existing-account magic-login **WORKS** — verified
+by three passing tests (`configurable_form::test_phone_existing_logs_in`,
+`test_phone_existing_joins_new_group`, `test_phone_existing_already_member`). So the bulk of the
+reports were **ITEM-005** (one wrong code burned the register session) — now fixed. What remains is
+one **confirmed** residual bug: candidate B below (a per-group registration handler that raises
+burns the verified token).
 
 ## Acceptance Criteria
 - [ ] An already-registered phone, after a correct code on the first try, is signed in
@@ -35,34 +37,43 @@ remain. This item covers the *residual, distinct* failure modes below that can o
 - [ ] Anti-enumeration and the existing happy path are preserved (see ITEM-006 + user memory
       `auth-no-account-enumeration`).
 
-## Repro — bugs only (UNCONFIRMED hypotheses)
-- **Candidate A (double-submit):** existing-account phone → correct code → the verify handler
-  calls `MojoAuth.register()`; if it fires twice (double-click / retry), the second call
-  re-consumes the single-use `verified_phone_token` and 400s "Invalid or expired phone
-  verification" → not signed in.
-- **Candidate B (handler burns token):** existing-account phone joining a new group → the token
-  is consumed *before* the atomic GroupMember / `USER_REGISTERED_HANDLER` block; if the handler
-  raises, the membership rolls back but the token is already gone → retry fails.
+## Repro
+- **Candidate B (handler burns token) — CONFIRMED (2026-06-29).** Existing-account phone joining a
+  NEW group whose `USER_REGISTERED_HANDLER` raises. Reproduced with a throwaway test injecting
+  `tests.test_register._capture.raising_register` via the `X-Mojo-Test-User-Registered-Handler`
+  header (then deleted — not committed):
+  - 1st `POST /api/auth/register` (phone + verified_phone_token + group_uuid, raising handler) →
+    **500** "test register handler raised"; GroupMember rolled back; user **NOT logged in**.
+  - retry with the **same** token → **400** "Invalid or expired phone verification" — the token was
+    already burned by the failed attempt → user **stuck** (must restart SMS verification).
+  Recipe: create an existing User with a phone + a new `Group`; `phone/register/start` + `/verify`
+  to mint a token; POST `/api/auth/register` with the raising-handler header; retry with same token.
+- **Candidate A (double-submit) — NOT a backend bug.** If `register()` fires twice, the FIRST call
+  consumes the token and logs the user in (200); the SECOND 400s. The user IS logged in from the
+  first call — any "not signed in" symptom is a FE promise-handling race, not a server bug. (A FE
+  in-flight guard is a nice-to-have, out of this item's backend scope.)
 
 ## Investigation
-**Confidence: code-plausible, unconfirmed (~60%).** From a read of current `main`:
-- Existing-account fast path: `mojo/apps/account/rest/user.py` → `on_register`, existing-phone
-  branch (~lines 362-408). It consumes the verified token via
-  `phone_register.consume(verified_token, norm_phone)` (~line 382) **before** the atomic
-  `GroupMember.get_or_create` + `fire_user_registered` block (~lines 395-401), then
-  `jwt_login(...)` (~line 408).
-- `phone_register.consume` (`mojo/apps/account/services/phone_register.py:149-168`) is `getdel`
-  — single-use; a second call returns False → "Invalid or expired phone verification".
-- FE: `mojo/apps/account/templates/account/register.html` step-2 verify handler (~lines 343-359)
-  calls `MojoAuth.register(p)` with no apparent double-submit guard.
-- Two fix levers to weigh in /scope: (1) guard the verify→register call against double-submit
-  (disable button / in-flight flag); (2) reorder so the token is consumed only once
-  registration/login is known to succeed, or make the existing-account login idempotent for a
-  still-valid token within its TTL.
+**Confidence: CONFIRMED (reproduced 2026-06-29).** Root cause in
+`mojo/apps/account/rest/user.py` → `on_register`, existing-phone fast path (lines 362-408):
+- `phone_register.consume(verified_token, norm_phone)` (line 382) consumes the token **before** the
+  atomic `GroupMember.get_or_create` + `fire_user_registered` block (lines 397-401).
+- `consume` (`phone_register.py:149-168`) is a Redis `getdel` — single-use and **NOT** part of the
+  Django transaction. So when `fire_user_registered` raises inside `transaction.atomic()`, the DB
+  GroupMember rolls back but the token deletion does not. The exception propagates → `jwt_login`
+  (line 408) is never reached → not logged in; and the token is gone → retry 400s.
+- The comment at lines 392-393 ("Atomic so a raising handler does not leave a dangling membership")
+  shows the DB rollback was intended — but the already-consumed token was missed.
+- **Same consume-before-success class as ITEM-005.** Fix mirrors it: validate the token WITHOUT
+  deleting (add a non-deleting `phone_register.peek/validate(token, phone)`, or move the delete),
+  run the registration/group-join/handler, and `consume` (delete) the token only AFTER success
+  (just before `jwt_login`). The verified-token TTL still bounds replay within the window. Re-check
+  the OTHER `consume()` caller (the new-registration path) for the same reorder.
 
-**Regression-test feasibility: MEDIUM** — endpoint test that double-submits `register` with the
-same `verified_phone_token` for an existing account and asserts the user is still signed in; and
-a test that a raising registration handler does not strand the token.
+**Regression-test feasibility: HIGH.** Endpoint test mirroring the repro: existing user + new group
++ a raising `USER_REGISTERED_HANDLER` → first attempt fails (5xx) but must NOT burn the token; a
+retry with the same token (handler no longer raising) returns 200 and signs the user in. Fails on
+`main`, passes after the consume-on-success fix.
 
 ## Plan
 
@@ -71,8 +82,11 @@ is UNPLANNED and /build MUST refuse it. Delete this comment when the plan is com
 
 ## Notes
 Cluster: ITEM-005 (wrong-code burns session) and ITEM-006 (sms-login dead-end) are the siblings;
-this is the third phone-auth issue from the same report thread. **Confirm-repro before building**
-— if ITEM-005's fix clears the reports, this may reduce to just the double-submit guard.
+this is the third phone-auth issue from the same report thread. **Repro done (2026-06-29):** the
+clean existing-account path works (3 passing tests); candidate B (per-group handler raise burns the
+token) is CONFIRMED; candidate A is FE-only. Scope as a backend **consume-on-success** fix (mirrors
+ITEM-005). Narrower than first feared — it only bites when a per-group `USER_REGISTERED_HANDLER`
+raises, so consider P3.
 
 ## Resolution
 - closed: YYYY-MM-DD
