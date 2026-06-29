@@ -192,11 +192,21 @@ New tests in `tests/test_auth/` (e.g. `sms_login_copy.py`, or extend `bouncer_fo
   `phone-signup-existing-account-not-signed-in` — do NOT fold into ITEM-006.
 
 ## Notes
+**Build baseline (2026-06-28, `bin/run_tests --agent`):** `status: passed` — total
+2252, passed 2196, **failed 0**, skipped 56 (post-ITEM-005 HEAD). GREEN → every
+post-change failure is mine. (Opt-in `test_incident`/`test_security` excluded as
+before — out of scope.) `register_url` already carries group context
+(`views.py:335`); default `login_methods` includes `sms` (`auth_config.py:79`), so
+`_render('account/login.html')` renders the SMS view. Backend anti-enumeration is
+already guarded by `tests/test_phone/sms.py:133-135` → change stays TEMPLATE-ONLY.
+
 Sibling bug from the same report: `phone-register-wrong-code-blocks-session`
 (one wrong SMS code permanently blocks the signup verify session). Independent fix.
 
 ## Resolution
-- closed: YYYY-MM-DD
-- branch:
-- files changed:
-- tests added:
+- closed: 2026-06-29
+- branch: main
+- files changed: mojo/apps/account/templates/account/login.html, tests/test_auth/bouncer_forms.py, docs/web_developer/account/auth_pages.md, docs/django_developer/account/auth_pages.md, docs/web_developer/account/mfa_sms.md, CHANGELOG.md   (close.sh stamp trimmed of the planning-meta files it also listed)
+- tests added: `tests/test_auth/bouncer_forms.py` — `test_login_sms_discloses_code_only_if_account`, `test_login_sms_offers_signup_link`, `test_login_sms_post_submit_message_is_honest` (rendered-HTML; all pass deterministically)
+- security review: passed (no enumeration leak; `register_url` autoescaped; JS uses `textContent`). docs: web auth_pages + django auth_pages + mfa_sms updated.
+- note: full-suite flakiness (content_guard false-positive + uncleaned phone user) is PRE-EXISTING and unrelated — ITEM-006's own tests are green. Filed `planning/inbox/flaky-full-suite-content-guard-and-phone-cleanup.md`.
