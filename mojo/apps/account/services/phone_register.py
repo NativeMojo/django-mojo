@@ -143,6 +143,9 @@ def verify_code(session_token, code, request=None):
     # Code verified — consume the session now (single-use ON SUCCESS only).
     # A wrong code above raised without deleting, so the user can retry the
     # correct code on the same session_token until it succeeds or the TTL expires.
+    # get+delete is intentionally non-atomic (vs the old getdel): the only race is
+    # two concurrent CORRECT-code verifies minting two verified tokens for the same
+    # phone — benign, and consume() (getdel) keeps each verified token single-use.
     get_connection().delete(f"{_SESSION_PREFIX}{session_token}")
     verified_token = uuid.uuid4().hex
     ttl = verified_ttl()

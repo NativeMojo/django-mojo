@@ -400,7 +400,7 @@ Two endpoints back the phone-verify flow:
 | Method | Path | Purpose |
 |--------|------|---------|
 | POST | `/api/auth/phone/register/start` | Body `{phone}` → `{session_token, expires_in}`. Accepts phones that already have accounts (the register flow handles the login). |
-| POST | `/api/auth/phone/register/verify` | Body `{session_token, code}` → `{verified_phone_token, expires_in, account_exists}`. `account_exists` is `true` when the verified phone already belongs to an account — the hosted form uses this to skip the profile step. |
+| POST | `/api/auth/phone/register/verify` | Body `{session_token, code}` → `{verified_phone_token, expires_in, account_exists}`. `account_exists` is `true` when the verified phone already belongs to an account — the hosted form uses this to skip the profile step. A wrong code returns 400 but does **not** consume the session — the caller may retry the correct code on the same `session_token` within the TTL. Only a successful match consumes the session. The returned `verified_phone_token` is single-use. |
 
 ### Extra (non-canonical) fields
 
