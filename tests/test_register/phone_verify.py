@@ -50,8 +50,15 @@ def test_verify_code_happy_path(opts):
     get_connection().delete(f"phone:register:verified:{verified_token}")
 
 
-@th.django_unit_test("phone_register.verify_code rejects wrong code and consumes session")
+@th.django_unit_test("phone_register.verify_code rejects a wrong code but keeps the session for retry")
 def test_verify_code_wrong_code(opts):
+    """Regression (ITEM-005): a wrong code must NOT consume the session.
+
+    The session is single-use ON SUCCESS only — a mistyped code is rejected but
+    leaves the session intact so the user can retry the correct code on the same
+    session_token (within the TTL). Brute force stays bounded by the endpoint
+    rate limit (phone_register_verify, 10/60s) + the session TTL.
+    """
     from mojo.apps.account.services import phone_register
     from mojo.helpers.redis import get_connection
     from mojo import errors as merrors
@@ -60,15 +67,29 @@ def test_verify_code_wrong_code(opts):
     wrong = "000000" if code != "000000" else "111111"
     try:
         phone_register.verify_code(session_token, wrong)
-        assert False, "verify_code must reject wrong code"
+        assert False, "verify_code must reject a wrong code"
     except merrors.ValueException:
         pass
 
-    # Session is gone even on bad code (single-use to prevent brute force at the
-    # service layer; endpoint rate limit covers the larger pattern).
+    # A wrong code must NOT consume the session — retry must remain possible.
     raw = get_connection().get(f"phone:register:session:{session_token}")
-    assert raw is None, \
-        "session must be consumed even when the code is wrong (single-use)"
+    assert raw is not None, \
+        "a wrong code must NOT consume the session (the correct code must still be retryable)"
+
+    # The correct code on the SAME session_token now succeeds.
+    verified_token, phone, ttl = phone_register.verify_code(session_token, code)
+    assert len(verified_token) == 32, \
+        f"correct code after a wrong attempt must mint a verified token, got {verified_token!r}"
+    assert phone == "+14155550222", \
+        f"verified phone must round-trip, got {phone!r}"
+
+    # Only NOW (after a successful verify) is the session consumed.
+    raw2 = get_connection().get(f"phone:register:session:{session_token}")
+    assert raw2 is None, \
+        "session must be consumed after a SUCCESSFUL verify (single-use on success)"
+
+    # Cleanup the minted verified key.
+    get_connection().delete(f"phone:register:verified:{verified_token}")
 
 
 @th.django_unit_test("phone_register.consume returns True only when phones match")

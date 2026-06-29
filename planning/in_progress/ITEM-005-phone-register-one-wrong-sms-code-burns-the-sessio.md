@@ -204,6 +204,14 @@ Run: `bin/run_tests --agent -t test_register.phone_verify` and `-t test_register
 None — root cause confirmed against current code, design approved (rate-limit only).
 
 ## Notes
+**Build baseline (2026-06-28, `bin/run_tests --agent`):** `status: passed` — total
+2251, passed 2195, **failed 0**, skipped 56. GREEN → every post-change failure is
+mine to fix. (The terminal also shows `test_incident` 243 + `test_security` 82 at
+0.0s; these are opt-in/excluded modules NOT in the agent suite or the JSON report —
+2576−2251 = 325 = 243+82 — pre-existing and tracked in
+`planning/inbox/test-security-full-suite-red.md`. Out of scope.) Target area
+`test_register` = 93/93.
+
 Sibling bug from the same report: `sms-login-unknown-number-dead-ends`
 (unrecognized number on sign-in dead-ends instead of routing to signup). The two
 are in the same phone-auth subsystem but independent fixes.
