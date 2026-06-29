@@ -445,7 +445,9 @@ Response:
 
 A wrong code returns **400** but does **not** invalidate the session — resubmit the correct code on the **same** `session_token` until it succeeds or the session expires (`expires_in`). Only a successful verification consumes the session; repeated attempts are bounded by the per-IP rate limit.
 
-The returned `verified_phone_token` is single-use. Include it (and the same `phone`) in the subsequent `/api/auth/register` POST. The server consumes the token, marks `is_phone_verified=True`, and creates the User row in a single transaction.
+The returned `verified_phone_token` is single-use on a successful registration. Include it (and the same `phone`) in the subsequent `/api/auth/register` POST. The server consumes the token, marks `is_phone_verified=True`, and creates the User row in a single transaction.
+
+**Retry behavior on failure:** if `/api/auth/register` fails (e.g. a server-side registration handler raises an error), the token is automatically restored and remains valid. You can retry the same `/api/auth/register` call with the same `verified_phone_token` — there is no need to re-verify the phone. The token is consumed for good only when registration succeeds.
 
 **Dev bypass** — when the server has `AUTH_PHONE_VERIFY_DEV_BYPASS_CODE` set (development environments only), that fixed code is accepted in place of the real SMS code. This setting must never be set in production.
 

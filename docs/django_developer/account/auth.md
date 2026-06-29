@@ -268,6 +268,16 @@ that group. If the account is already a member, `USER_REGISTERED_HANDLER` does
 not fire. Email-identity registration is unchanged — an existing email is always
 a duplicate error.
 
+**Token restore on failure (`phone_register.restore()`):**
+
+The `verified_phone_token` is consumed before `USER_REGISTERED_HANDLER` fires. If
+the handler raises, `on_register` calls `phone_register.restore(verified_token, phone)`
+to re-mint the token so the caller can retry the same `/api/auth/register` POST
+without re-verifying the phone. The restore is scoped to the handler-firing step only —
+post-handler failures (JWT issuance, email send) keep the token consumed, preventing
+double-firing of the handler on retry. This applies to both the existing-account login
+path and new-user creation.
+
 **Protections:**
 
 - Rate limited: 5 requests per IP per 5 minutes
