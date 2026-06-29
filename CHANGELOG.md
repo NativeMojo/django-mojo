@@ -1,5 +1,13 @@
 ## v1.2.29 - (current)
 
+**account** — **Phone-register verify no longer burns the session on a wrong code.**
+`phone_register.verify_code()` now reads the Redis session, compares the code, and
+deletes the session **only on a successful match** (previously an atomic `getdel`
+consumed it on the first attempt, right or wrong). A mistyped code is rejected with
+400 but leaves the session intact, so the correct code can be retried on the same
+`session_token` until it succeeds or the TTL expires. Brute force stays bounded by
+the existing per-IP rate limit (`phone_register_verify`, 10/60s) plus the session TTL.
+
 ## v1.2.36 - June 16, 2026
 
 fixing login page

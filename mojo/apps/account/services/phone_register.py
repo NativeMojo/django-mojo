@@ -11,7 +11,9 @@ Two-step Redis-backed token flow:
       Caller (endpoint) dispatches `code` over SMS. session_token is opaque.
 
   verify_code(token, code) -> (verified_token, phone, ttl)
-      Atomic getdel of session; on success mints a verified_token.
+      Reads the session and compares the code; on a match, mints a
+      verified_token and deletes the session (consume-on-success). A wrong
+      code leaves the session intact for retry within the TTL.
 
   consume(token, phone)   -> bool
       Atomic getdel of verified_token. Returns True iff the verified phone
@@ -102,12 +104,14 @@ def _dev_bypass_code(request=None):
 
 
 def verify_code(session_token, code, request=None):
-    """Atomically consume the session and mint a verified token.
+    """Verify the submitted code and, on success, consume the session.
 
     Returns (verified_token, phone, ttl) on success. Raises ValueException
-    on missing session, expired session, or mismatched code. Single-use:
-    the session is deleted whether the code matches or not (rate-limit at
-    the endpoint layer prevents brute force).
+    on missing/expired session or mismatched code. Single-use ON SUCCESS:
+    the session is deleted only when the code matches, so a wrong code leaves
+    the session intact and the user can retry the correct code on the same
+    session_token until it succeeds or the TTL expires. Brute force is bounded
+    by the endpoint rate limit (phone_register_verify, 10/60s) plus the TTL.
 
     Honors the AUTH_PHONE_VERIFY_DEV_BYPASS_CODE setting: when configured,
     the bypass code is accepted in addition to the real generated code.
@@ -116,7 +120,7 @@ def verify_code(session_token, code, request=None):
         raise merrors.ValueException("Invalid or expired verification session")
     if not code:
         raise merrors.ValueException("Invalid code")
-    raw = get_connection().getdel(f"{_SESSION_PREFIX}{session_token}")
+    raw = get_connection().get(f"{_SESSION_PREFIX}{session_token}")
     if not raw:
         raise merrors.ValueException("Invalid or expired verification session")
     try:
@@ -136,6 +140,10 @@ def verify_code(session_token, code, request=None):
     phone = data.get("phone")
     if not phone:
         raise merrors.ValueException("Invalid or expired verification session")
+    # Code verified — consume the session now (single-use ON SUCCESS only).
+    # A wrong code above raised without deleting, so the user can retry the
+    # correct code on the same session_token until it succeeds or the TTL expires.
+    get_connection().delete(f"{_SESSION_PREFIX}{session_token}")
     verified_token = uuid.uuid4().hex
     ttl = verified_ttl()
     get_connection().setex(

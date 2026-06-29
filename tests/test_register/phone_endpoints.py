@@ -124,3 +124,48 @@ def test_full_phone_register_flow(opts):
         f"verify must return verified_phone_token, got {verify.response}"
     assert len(verify.response.data.verified_phone_token) == 32, \
         "verified_phone_token must be a 32-char uuid hex"
+
+
+@th.django_unit_test("phone register verify: a wrong code does not burn the session; correct code then succeeds")
+def test_verify_wrong_then_correct_same_session(opts):
+    """Regression (ITEM-005): one wrong code must not invalidate the session.
+
+    Repro of the reported dead-end: start -> verify WRONG (4xx) -> verify CORRECT
+    on the SAME session_token must still succeed. On the buggy `main`, getdel
+    consumed the session on the first (wrong) attempt, so the second call returned
+    "Invalid or expired verification session".
+    """
+    import json
+    from mojo.helpers.redis import get_connection
+
+    _clear_register_limits()
+    start = opts.client.post(
+        "/api/auth/phone/register/start",
+        {"phone": "+14155557006"})
+    assert start.status_code == 200, \
+        f"start must succeed, got {start.status_code}: {opts.client.last_response.body}"
+    session_token = start.response.data.session_token
+
+    raw = get_connection().get(f"phone:register:session:{session_token}")
+    assert raw is not None, "session must be written so the test can read the code"
+    code = json.loads(raw)["code"]
+    wrong = "000000" if code != "000000" else "111111"
+
+    # A wrong code is rejected...
+    bad = opts.client.post(
+        "/api/auth/phone/register/verify",
+        {"session_token": session_token, "code": wrong})
+    assert bad.status_code in (400, 401, 422), \
+        f"a wrong code must be rejected, got {bad.status_code}: {opts.client.last_response.body}"
+
+    # ...but the SAME session_token still accepts the correct code.
+    good = opts.client.post(
+        "/api/auth/phone/register/verify",
+        {"session_token": session_token, "code": code})
+    assert good.status_code == 200, \
+        f"correct code on the same session must succeed after a wrong attempt, " \
+        f"got {good.status_code}: {opts.client.last_response.body}"
+    assert good.response.data.verified_phone_token, \
+        f"verify must return verified_phone_token, got {good.response}"
+    assert len(good.response.data.verified_phone_token) == 32, \
+        "verified_phone_token must be a 32-char uuid hex"
