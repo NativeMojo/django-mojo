@@ -1,5 +1,9 @@
 ## v1.2.29 - (current)
 
+## v1.2.38 - June 29, 2026
+
+
+
 **account** — **A failed phone registration no longer burns the verified-phone token.**
 If `/api/auth/register` fails *after* the single-use `verified_phone_token` was consumed —
 e.g. a per-group `USER_REGISTERED_HANDLER` raises — the token is now restored, so the user
