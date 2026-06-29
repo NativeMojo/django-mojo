@@ -157,6 +157,22 @@ def verify_code(session_token, code, request=None):
     return verified_token, phone, ttl
 
 
+def restore(verified_token, phone):
+    """Re-mint a verified token that was consumed but whose registration then
+    failed, so the caller's retry can succeed without re-verifying the phone.
+
+    Best-effort: a no-op on an invalid token/phone. Resets the TTL to
+    verified_ttl(); the token stays single-use and phone-bound.
+    """
+    if not _valid_token_hex(verified_token) or not phone:
+        return
+    get_connection().setex(
+        f"{_VERIFIED_PREFIX}{verified_token}",
+        verified_ttl(),
+        json.dumps({"phone": phone}),
+    )
+
+
 def consume(verified_token, phone):
     """Atomically consume a verified token; return True iff phones match.
 

@@ -381,24 +381,33 @@ def on_register(request):
                 raise merrors.ValueException("Phone verification required")
             if not phone_register.consume(verified_token, norm_phone):
                 raise merrors.ValueException("Invalid or expired phone verification")
-            if not existing.is_active:
-                raise merrors.PermissionDeniedException("Account is disabled", 403, 403)
-            if not existing.is_phone_verified:
-                existing.is_phone_verified = True
-                existing.save(update_fields=["is_phone_verified", "modified"])
-            # Joining a group the user is not yet a member of is a
-            # registration *into that group*: create the GroupMember and fire
-            # USER_REGISTERED_HANDLER so per-group setup runs. Already a member
-            # (or no group_uuid) → pure login, no handler. Atomic so a raising
-            # handler does not leave a dangling membership.
-            from mojo.apps.account.models.member import GroupMember
-            if group is not None and not GroupMember.objects.filter(
-                    user=existing, group=group).exists():
-                with transaction.atomic():
-                    GroupMember.objects.get_or_create(user=existing, group=group)
-                    account_extensions.fire_user_registered(
-                        user=existing, request=request, group=group,
-                        source="sms", extra=extra)
+            try:
+                if not existing.is_active:
+                    raise merrors.PermissionDeniedException("Account is disabled", 403, 403)
+                if not existing.is_phone_verified:
+                    existing.is_phone_verified = True
+                    existing.save(update_fields=["is_phone_verified", "modified"])
+                # Joining a group the user is not yet a member of is a
+                # registration *into that group*: create the GroupMember and fire
+                # USER_REGISTERED_HANDLER so per-group setup runs. Already a member
+                # (or no group_uuid) → pure login, no handler. Atomic so a raising
+                # handler does not leave a dangling membership.
+                from mojo.apps.account.models.member import GroupMember
+                if group is not None and not GroupMember.objects.filter(
+                        user=existing, group=group).exists():
+                    with transaction.atomic():
+                        GroupMember.objects.get_or_create(user=existing, group=group)
+                        account_extensions.fire_user_registered(
+                            user=existing, request=request, group=group,
+                            source="sms", extra=extra)
+            except Exception:
+                # The single-use token was consumed above. If the work failed
+                # (e.g. a per-group register handler raised), restore it so the user
+                # can retry without re-verifying their phone. report_incident +
+                # jwt_login stay OUTSIDE this guard: a post-handler failure must keep
+                # the token consumed (no double-fire of the handler on retry).
+                phone_register.restore(verified_token, norm_phone)
+                raise
             existing.report_incident(
                 f"{existing.username} signed in via the register flow "
                 f"(phone already registered)",
@@ -458,58 +467,67 @@ def on_register(request):
     # Verify-email send and jwt_login run OUTSIDE this block. An SMTP hiccup
     # or JWT-issuance failure must NOT roll back a user whose register-handler
     # has already fired side effects in consumer downstream systems.
-    with transaction.atomic():
-        user = User(email=email or None)
-        if first_name:
-            user.first_name = first_name
-        if last_name:
-            user.last_name = last_name
-        if phone:
-            user.phone_number = phone
-        if dob is not None:
-            user.dob = dob
+    try:
+        with transaction.atomic():
+            user = User(email=email or None)
+            if first_name:
+                user.first_name = first_name
+            if last_name:
+                user.last_name = last_name
+            if phone:
+                user.phone_number = phone
+            if dob is not None:
+                user.dob = dob
+            if phone_was_verified:
+                user.is_phone_verified = True
+            if identity_field == "email" and email:
+                user.username = user.generate_username_from_email()
+            else:
+                # Phone-as-identity: prefer first.last (lowercased + sanitized,
+                # numeric suffix on collision) so the username is human-readable.
+                # Falls back to the normalized phone when no names are supplied
+                # or every candidate collides.
+                user.username = user.generate_username_from_names(fallback=phone)
+            if has_password:
+                user.set_password(password)
+            else:
+                # Passwordless account — no usable password; the user logs in by
+                # SMS code (or an enrolled passkey).
+                user.set_unusable_password()
+            # on_rest_pre_save / on_rest_created don't fire on direct .save(),
+            # so mirror their profile setup explicitly: infer first/last from a
+            # business email, backfill display_name, then run the same content
+            # guard the REST path would (blocks profanity in name fields).
+            user.infer_names_from_email()
+            if not user.display_name:
+                user.display_name = user.generate_display_name()
+            user.validate_name_fields({}, created=True)
+            # Persist captured extras (promo/ref/tracking/etc.) under a dedicated
+            # metadata namespace. Merged so other metadata keys are untouched.
+            # USER_REGISTERED_HANDLER still receives `extra` below as well.
+            if extra:
+                meta = user.metadata or {}
+                reg = meta.get("registration") or {}
+                reg.update(extra)
+                meta["registration"] = reg
+                user.metadata = meta
+            user.save()
+
+            if group is not None:
+                from mojo.apps.account.models.member import GroupMember
+                GroupMember.objects.get_or_create(user=user, group=group)
+
+            account_extensions.fire_user_registered(
+                user=user, request=request, group=group,
+                source="password", extra=extra)
+    except Exception:
+        # The single-use token was consumed at line ~453, before this block. If
+        # user creation / the register handler failed, the user row rolled back —
+        # restore the token so the user can retry. (Post-atomic failures below keep
+        # the token consumed: the user exists, a retry must not duplicate it.)
         if phone_was_verified:
-            user.is_phone_verified = True
-        if identity_field == "email" and email:
-            user.username = user.generate_username_from_email()
-        else:
-            # Phone-as-identity: prefer first.last (lowercased + sanitized,
-            # numeric suffix on collision) so the username is human-readable.
-            # Falls back to the normalized phone when no names are supplied
-            # or every candidate collides.
-            user.username = user.generate_username_from_names(fallback=phone)
-        if has_password:
-            user.set_password(password)
-        else:
-            # Passwordless account — no usable password; the user logs in by
-            # SMS code (or an enrolled passkey).
-            user.set_unusable_password()
-        # on_rest_pre_save / on_rest_created don't fire on direct .save(),
-        # so mirror their profile setup explicitly: infer first/last from a
-        # business email, backfill display_name, then run the same content
-        # guard the REST path would (blocks profanity in name fields).
-        user.infer_names_from_email()
-        if not user.display_name:
-            user.display_name = user.generate_display_name()
-        user.validate_name_fields({}, created=True)
-        # Persist captured extras (promo/ref/tracking/etc.) under a dedicated
-        # metadata namespace. Merged so other metadata keys are untouched.
-        # USER_REGISTERED_HANDLER still receives `extra` below as well.
-        if extra:
-            meta = user.metadata or {}
-            reg = meta.get("registration") or {}
-            reg.update(extra)
-            meta["registration"] = reg
-            user.metadata = meta
-        user.save()
-
-        if group is not None:
-            from mojo.apps.account.models.member import GroupMember
-            GroupMember.objects.get_or_create(user=user, group=group)
-
-        account_extensions.fire_user_registered(
-            user=user, request=request, group=group,
-            source="password", extra=extra)
+            phone_register.restore(verified_token, phone)
+        raise
 
     # ---- Side effects (outside atomic) -------------------------------------
     # Email-verify only fires when email is configured. Phone-only registers

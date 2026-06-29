@@ -1,5 +1,13 @@
 ## v1.2.29 - (current)
 
+**account** — **A failed phone registration no longer burns the verified-phone token.**
+If `/api/auth/register` fails *after* the single-use `verified_phone_token` was consumed —
+e.g. a per-group `USER_REGISTERED_HANDLER` raises — the token is now restored, so the user
+can retry the same token instead of being left un-signed-in with a dead token (previously a
+retry returned "Invalid or expired phone verification"). Applies to both the existing-account
+login path and new-user registration. Single-use on success and the duplicate-user guard are
+unchanged.
+
 ## v1.2.37 - June 28, 2026
 
 **account** — **Display-name moderation no longer rejects legitimate names.** A name

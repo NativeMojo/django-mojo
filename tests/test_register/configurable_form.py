@@ -520,3 +520,96 @@ def test_default_email_register_still_works(opts):
         f"default email register must still work without the test-fields header, got {resp.status_code}: {opts.client.last_response.body}"
     assert User.objects.filter(email=email).exists(), \
         "user row must exist after default email register"
+
+
+@th.django_unit_test("phone register: a raising USER_REGISTERED_HANDLER must NOT burn the token (existing account retries)")
+def test_existing_account_handler_raise_keeps_token(opts):
+    """Regression (ITEM-008): when the per-group registration handler raises, the
+    existing user isn't logged in AND the verified token was consumed before the
+    failure — so on `main` a retry 400s ("Invalid or expired phone verification").
+    After the fix the SAME token is restored and the retry signs the user in."""
+    from mojo.apps.account.models import User, Group
+    from mojo.apps.account.models.member import GroupMember
+    _clear_register_limits()
+    phone = _fresh_phone()
+    group_uuid = _uuid.uuid4().hex
+
+    existing = User.objects.create_user(
+        username=f"exist_{_uuid.uuid4().hex[:6]}",
+        email=f"exist_{_uuid.uuid4().hex[:8]}@dup.test",
+        password="Abcd1234!")
+    existing.phone_number = phone
+    existing.save()
+    group = Group.objects.create(name=f"g-{group_uuid[:8]}", uuid=group_uuid, is_active=True)
+    try:
+        token = _start_and_verify_phone(opts, phone)
+
+        # First attempt: the group's handler raises → request fails, user not signed in.
+        bad = opts.client.post(
+            "/api/auth/register",
+            {"phone": phone, "verified_phone_token": token, "group_uuid": group_uuid},
+            headers={**_register_headers(),
+                     "X-Mojo-Test-User-Registered-Handler": "tests.test_register._capture.raising_register"})
+        assert bad.status_code >= 400, \
+            f"a raising handler must fail the request, got {bad.status_code}: {opts.client.last_response.body}"
+        assert not GroupMember.objects.filter(user=existing, group=group).exists(), \
+            "the group join must roll back when the handler raises"
+
+        # Retry with the SAME token (handler no longer raising) — must sign in.
+        good = opts.client.post(
+            "/api/auth/register",
+            {"phone": phone, "verified_phone_token": token, "group_uuid": group_uuid},
+            headers=_register_headers())
+        assert good.status_code == 200, \
+            f"the same token must still work on retry after the failed attempt, got " \
+            f"{good.status_code}: {opts.client.last_response.body}"
+        assert bool(good.response.data.access_token), \
+            "an access token must be issued on the successful retry"
+        assert GroupMember.objects.filter(user=existing, group=group).exists(), \
+            "the retry must complete the group join"
+    finally:
+        GroupMember.objects.filter(group=group).delete()
+        User.objects.filter(phone_number=phone).delete()
+        Group.objects.filter(uuid=group_uuid).delete()
+
+
+@th.django_unit_test("phone register: a raising USER_REGISTERED_HANDLER must NOT burn the token (new user retries)")
+def test_new_user_handler_raise_keeps_token(opts):
+    """Regression (ITEM-008): a new phone-only registration whose handler raises
+    creates no user and (on `main`) burns the token → retry 400s. After the fix the
+    token is restored and the retry creates the account + signs in."""
+    from mojo.apps.account.models import User, Group
+    _clear_register_limits()
+    phone = _fresh_phone()
+    group_uuid = _uuid.uuid4().hex
+    group = Group.objects.create(name=f"g-{group_uuid[:8]}", uuid=group_uuid, is_active=True)
+    payload = {"phone": phone, "group_uuid": group_uuid, "first_name": "Pat",
+               "last_name": "Lee", "dob": "1990-01-01", "password": "Abcd1234!"}
+    try:
+        token = _start_and_verify_phone(opts, phone)
+
+        # First attempt: handler raises → no user created.
+        bad = opts.client.post(
+            "/api/auth/register",
+            {**payload, "verified_phone_token": token},
+            headers={**_register_headers(),
+                     "X-Mojo-Test-User-Registered-Handler": "tests.test_register._capture.raising_register"})
+        assert bad.status_code >= 400, \
+            f"a raising handler must fail the request, got {bad.status_code}: {opts.client.last_response.body}"
+        assert not User.objects.filter(phone_number=phone).exists(), \
+            "no user may be created when the handler raises"
+
+        # Retry with the SAME token — must create the user + sign in.
+        good = opts.client.post(
+            "/api/auth/register",
+            {**payload, "verified_phone_token": token},
+            headers=_register_headers())
+        assert good.status_code == 200, \
+            f"the same token must still work on retry, got {good.status_code}: {opts.client.last_response.body}"
+        assert User.objects.filter(phone_number=phone).exists(), \
+            "the retry must create the user"
+        assert bool(good.response.data.access_token), \
+            "an access token must be issued on the successful retry"
+    finally:
+        User.objects.filter(phone_number=phone).delete()
+        Group.objects.filter(uuid=group_uuid).delete()
