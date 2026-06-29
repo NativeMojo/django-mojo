@@ -11,9 +11,9 @@ def _clear_forgot_limits():
 
 
 def _fresh_phone():
-    suffix = _uuid.uuid4().hex[:7]
-    digits = "".join(c for c in suffix if c.isdigit()).ljust(7, "1")[:7]
-    return f"+1555{digits}"
+    # 7 fully-random digits (10M space) so parallel tests don't collide on the
+    # same +1555 number — a collision pollutes account_exists / lookup checks.
+    return f"+1555{_uuid.uuid4().int % 10_000_000:07d}"
 
 
 @th.django_unit_setup()

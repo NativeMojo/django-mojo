@@ -2,6 +2,14 @@
 
 ## v1.2.37 - June 28, 2026
 
+**account** — **Display-name moderation no longer rejects legitimate names.** A name
+that merely *contains* a profanity substring — e.g. **Matsushita**, **Harshita**,
+**Scunthorpe** — was hard-blocked at registration ("Invalid display name: contains
+inappropriate content") because content_guard matches banned words as naive substrings.
+`User.validate_name_fields` now treats a name "block" as **advisory**: the name is
+allowed and logged for review instead of rejecting the signup. content_guard's scoring is
+unchanged; comment/chat/contact-form moderation is unaffected.
+
 **account** — **Honest, anti-enumeration UX for hosted SMS sign-in.** The hosted
 sign-in page no longer dead-ends a phone number that has no account on a "code sent"
 screen. SMS sign-in now states up front that a code is sent *only if the number is

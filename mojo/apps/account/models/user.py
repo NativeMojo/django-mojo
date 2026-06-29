@@ -6,6 +6,7 @@ from mojo import errors as merrors
 from mojo.helpers import dates
 from mojo.helpers import content_guard
 from mojo.helpers import crypto
+from mojo.helpers import logit
 from mojo.apps.account.utils.jwtoken import JWToken
 from mojo.apps import metrics
 from .device import UserDevice
@@ -583,8 +584,16 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
                 continue
             result = content_guard.check_text(value, surface="name", policy={"text_block_threshold": 50})
             if result.decision == "block":
-                label = field.replace("_", " ")
-                raise merrors.ValueException(f"Invalid {label}: contains inappropriate content")
+                # Advisory, NOT a hard block: content_guard matches profanity as
+                # naive substrings, which over-blocks legitimate names (e.g.
+                # Matsushita, Harshita, Scunthorpe). Flag for review and allow,
+                # rather than reject the registration. The guard's scoring is
+                # unchanged; only this caller's response to "block" changed.
+                logit.warning(
+                    "account",
+                    f"flagged display-name content (allowed): "
+                    f"user={self.username or self.email or '<new>'} "
+                    f"field={field} reasons={result.reasons}")
 
     def validate_username(self):
         if not self.username:

@@ -27,11 +27,23 @@ def _clear_register_limits():
 
 
 def _fresh_phone():
-    # Use the +1555 reserved range; vary the last 7 digits with a uuid hash
-    # so concurrent test runs don't collide on the unique constraint.
-    suffix = _uuid.uuid4().hex[:7]
-    digits = "".join(c for c in suffix if c.isdigit()).ljust(7, "1")[:7]
-    return f"+1555{digits}"
+    # 7 fully-random digits (10M space) so parallel tests don't collide on the
+    # same +1555 number — a collision pollutes account_exists / lookup checks.
+    return f"+1555{_uuid.uuid4().int % 10_000_000:07d}"
+
+
+@th.django_unit_test("_fresh_phone yields effectively-unique numbers (no cross-test collisions)")
+def test_fresh_phone_is_unique(opts):
+    """Regression (ITEM-007): _fresh_phone must have enough entropy that parallel
+    tests don't collide on the same +1555 number — a collision pollutes the
+    account_exists check in test_phone_register_verify_account_exists. The old impl
+    extracted only the digits from 7 hex chars and padded with '1', leaving a tiny,
+    collision-prone space."""
+    phones = {_fresh_phone() for _ in range(1000)}
+    assert len(phones) >= 995, (
+        f"_fresh_phone must be effectively unique across calls — got only "
+        f"{len(phones)}/1000 unique. Low entropy causes cross-test phone collisions "
+        f"under -j parallel execution.")
 
 
 def _register_headers(*, fields=PHONE_ONLY_FIELDS, min_age=None, capture_id=None):
