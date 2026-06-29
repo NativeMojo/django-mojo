@@ -10,6 +10,7 @@ API_PREFIX = "/".join([settings.get_static("MOJO_PREFIX", "api/").rstrip("/"), "
 LOGIT_DEBUG_ALL = settings.get_static("LOGIT_DEBUG_ALL", False)
 LOGIT_DB_ALL = settings.get_static("LOGIT_DB_ALL", False)
 LOGIT_FILE_ALL = settings.get_static("LOGIT_FILE_ALL", False)
+LOGIT_RETURN_REAL_ERROR = settings.get_static("LOGIT_RETURN_REAL_ERROR", True)
 LOGIT_MAX_RESPONSE_SIZE = settings.get_static("LOGIT_MAX_RESPONSE_SIZE", 1024)  # 1KB default
 LOGGER = logit.get_logger("requests", "requests.log")
 ERROR_LOGGER = logit.get_logger("error", "error.log")
@@ -88,9 +89,9 @@ class LoggerMiddleware:
         except Exception as e:
             err = ERROR_LOGGER.exception()
             Log.logit(request, err, "api_error")  # Keep errors synchronous
-            # Read the flag live (per-error) so it tracks the active settings profile —
-            # matches dispatch_error_handler. Errors are rare, so no hot-path cost.
-            error = str(e) if settings.get("LOGIT_RETURN_REAL_ERROR", True) else "system error"
+            error = "system error"
+            if LOGIT_RETURN_REAL_ERROR:
+                error = str(e)
             response = JsonResponse(dict(status=False, error=error), status=500)
 
         self.log_response(request, response)

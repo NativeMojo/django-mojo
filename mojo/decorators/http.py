@@ -39,13 +39,6 @@ def _events_on_errors():
     return settings.get("EVENTS_ON_ERRORS", True)
 
 
-def _return_real_error():
-    # When False, unhandled-500 bodies are scrubbed to a generic message (prod
-    # default — never disclose internal exception text). Read live so it tracks the
-    # active settings profile; mirrors the LoggerMiddleware gate (default True).
-    return settings.get("LOGIT_RETURN_REAL_ERROR", True)
-
-
 def _status_200_on_error():
     return settings.get("MOJO_APP_STATUS_200_ON_ERROR", False)
 
@@ -215,10 +208,7 @@ def dispatch_error_handler(func):
                     stack_trace=traceback.format_exc(),
                     request_path=getattr(request, "path", None),
                 )
-            # Never disclose raw exception text unless explicitly allowed (the full
-            # error + traceback is already logged above). Gate matches LoggerMiddleware.
-            err_body = str(err) if _return_real_error() else "system error"
-            return JsonResponse({"error": err_body, "code": 500, "status": False}, status=500)
+            return JsonResponse({"error": str(err), "code": 500, "status": False  }, status=500)
 
     return wrapper
 
