@@ -4511,7 +4511,7 @@ for the schema and <code>register_schema.py</code> for the field resolution logi
 <tr>
 <td>POST</td>
 <td><code>/api/auth/phone/register/verify</code></td>
-<td>Body <code>{session_token, code}</code> → <code>{verified_phone_token, expires_in, account_exists}</code>. <code>account_exists</code> is <code>true</code> when the verified phone already belongs to an account — the hosted form uses this to skip the profile step.</td>
+<td>Body <code>{session_token, code}</code> → <code>{verified_phone_token, expires_in, account_exists}</code>. <code>account_exists</code> is <code>true</code> when the verified phone already belongs to an account — the hosted form uses this to skip the profile step. A wrong code returns 400 but does <strong>not</strong> consume the session — the caller may retry the correct code on the same <code>session_token</code> within the TTL. Only a successful match consumes the session. The returned <code>verified_phone_token</code> is single-use.</td>
 </tr>
 </tbody>
 </table>
