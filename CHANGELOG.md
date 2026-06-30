@@ -20,6 +20,15 @@ shared `normalize_ip` helper), with the transport peer as a last-resort fallback
 `X-Forwarded-For` and `Forwarded` are no longer consulted. (`mojo.helpers.request._normalize_ip`
 is now the public `normalize_ip`, shared by the HTTP and WS resolvers.)
 
+**fix** — **IP-storage fields now handle IPv6 and a missing IP.** Several columns recording the
+client IP assumed IPv4 / a non-null value: `Event.source_ip`, `Incident.source_ip`, `Log.ip`, and
+`GeoLocatedIP.subnet` were too short for a full IPv6 address (silently truncating it at the DB),
+and `UserLoginEvent.ip_address` / `BouncerSignal.ip_address` were non-nullable (a `None` client IP
+silently dropped a login event / could crash pre-auth assessment). The IP CharFields are now 45
+chars, those two fields are nullable, and `GeoLocatedIP`'s subnet computation is IPv6-safe (the
+`/64` network instead of the dot-based prefix). Surfaced by the X-Real-IP resolver fixes above,
+which now emit normalized IPv6 / None. Includes migrations.
+
 ## v1.2.38 - June 29, 2026
 
 

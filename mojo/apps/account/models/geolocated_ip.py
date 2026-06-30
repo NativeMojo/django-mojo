@@ -1,3 +1,4 @@
+import ipaddress
 from datetime import timedelta
 from django.db import models, IntegrityError
 from mojo.helpers.settings import settings
@@ -25,7 +26,7 @@ class GeoLocatedIP(models.Model, MojoModel):
     last_seen = models.DateTimeField(auto_now=True, db_index=True, help_text="Last time this IP was encountered in the system")
 
     ip_address = models.GenericIPAddressField(db_index=True, unique=True)
-    subnet = models.CharField(max_length=16, db_index=True, null=True, default=None)
+    subnet = models.CharField(max_length=45, db_index=True, null=True, default=None)
 
     # Normalized and indexed fields for querying
     country_code = models.CharField(max_length=3, db_index=True, null=True, blank=True)
@@ -680,8 +681,15 @@ class GeoLocatedIP(models.Model, MojoModel):
         Returns:
             GeoLocatedIP instance
         """
-        # Extract subnet from IP address using simple string parsing
-        subnet = ip_address[:ip_address.rfind('.')]
+        # Extract subnet from the IP. IPv4 keeps the historical string prefix (so existing
+        # subnet_match rows still match); IPv6 uses the /64 network (rfind('.') doesn't apply).
+        if ':' in ip_address:
+            try:
+                subnet = str(ipaddress.ip_network(f"{ip_address}/64", strict=False).network_address)
+            except ValueError:
+                subnet = ip_address
+        else:
+            subnet = ip_address[:ip_address.rfind('.')]
         geo_ip = cls.objects.filter(ip_address=ip_address).first()
 
         if not geo_ip and subdomain_only:

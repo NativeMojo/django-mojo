@@ -32,7 +32,7 @@ class Incident(models.Model, MojoModel):
         related_name="+", on_delete=models.SET_NULL)
 
     # the
-    source_ip = models.CharField(max_length=16, null=True, default=None, db_index=True)
+    source_ip = models.CharField(max_length=45, null=True, default=None, db_index=True)
     hostname = models.CharField(max_length=16, null=True, default=None, db_index=True)
 
     # JSON-based metadata field

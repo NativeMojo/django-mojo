@@ -13,7 +13,7 @@ class Log(dm.Model, MojoModel):
     method = dm.CharField(max_length=200, default=None, null=True)
     path = dm.TextField(default=None, null=True)
     payload = dm.TextField(default=None, null=True)
-    ip = dm.CharField(max_length=32, default=None, null=True)
+    ip = dm.CharField(max_length=45, default=None, null=True)
     duid = dm.TextField(default=None, null=True)
     uid = dm.IntegerField(default=0)
     gid = dm.IntegerField(default=0)

@@ -36,7 +36,7 @@ class BouncerSignal(models.Model, MojoModel):
     mtab = models.CharField(max_length=64, db_index=True, default='', blank=True)
     session_id = models.CharField(max_length=64, db_index=True, default='', blank=True)
     stage = models.CharField(max_length=16, choices=STAGE_CHOICES, default='assess', db_index=True)
-    ip_address = models.GenericIPAddressField(db_index=True)
+    ip_address = models.GenericIPAddressField(db_index=True, null=True, blank=True)
     page_type = models.CharField(max_length=32, db_index=True, default='login')
     raw_signals = models.JSONField(default=dict, blank=True)
     server_signals = models.JSONField(default=dict, blank=True)

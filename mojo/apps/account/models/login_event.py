@@ -1,7 +1,7 @@
 from django.db import models
 from mojo.models import MojoModel
 from mojo.helpers.settings import settings
-from mojo.helpers import dates, request as rhelper
+from mojo.helpers import dates, logit, request as rhelper
 from mojo.apps import metrics
 
 
@@ -18,7 +18,7 @@ class UserLoginEvent(models.Model, MojoModel):
     user = models.ForeignKey("account.User", on_delete=models.CASCADE, related_name='login_events')
     device = models.ForeignKey("account.UserDevice", on_delete=models.SET_NULL, null=True, blank=True, related_name='login_events')
 
-    ip_address = models.GenericIPAddressField(db_index=True)
+    ip_address = models.GenericIPAddressField(db_index=True, null=True, blank=True)
     country_code = models.CharField(max_length=3, db_index=True, null=True, blank=True)
     region = models.CharField(max_length=100, db_index=True, null=True, blank=True)
     city = models.CharField(max_length=100, null=True, blank=True)
@@ -85,6 +85,9 @@ class UserLoginEvent(models.Model, MojoModel):
     def track(cls, request, user, device=None, source=None):
         if not LOGIN_EVENT_TRACKING_ENABLED:
             return None
+
+        if request.ip is None:
+            logit.warning("login_event: recording login with no resolved client IP for user %s" % user.id)
 
         from .geolocated_ip import GeoLocatedIP
         geo = GeoLocatedIP.objects.filter(ip_address=request.ip).first()
