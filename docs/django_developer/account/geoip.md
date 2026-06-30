@@ -13,7 +13,7 @@ Caches geolocation results per IP to reduce redundant API calls. Tracks security
 | Field | Description |
 |---|---|
 | `ip_address` | Unique, indexed IP address |
-| `subnet` | First three octets, used for subnet-based fallback lookups |
+| `subnet` | Subnet used for fallback lookups — IPv4: the dot-based `/24` prefix (first three octets); IPv6: the `/64` network. `CharField(max_length=45)`, nullable. |
 | `country_code`, `country_name`, `region`, `region_code`, `city`, `postal_code` | Location fields. `region_code` is the ISO 3166-2 subdivision code (e.g. `US-FL`); populated from MaxMind subdivisions, ip-api, ipstack, or ipinfo (paid tier) and backfilled lazily via `refresh()`. |
 | `latitude`, `longitude` | Coordinates |
 | `timezone` | IANA timezone string (e.g. `America/New_York`) |

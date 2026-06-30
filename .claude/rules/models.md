@@ -15,3 +15,4 @@ globs: mojo/**/models/**/*.py,mojo/**/models/*.py
 - Always include the domain category permission (`security`, `users`, `groups`, `comms`, `jobs`, `metrics`, `files`) in both `VIEW_PERMS` and `SAVE_PERMS`.
 - Use view/manage pairs for fine-grained access: `view_X` for read-only, `manage_X` for write.
 - If `manage_X` is in `SAVE_PERMS`, add it to `VIEW_PERMS` too — users must read what they can write.
+- IP-address columns stored as `CharField` (not `GenericIPAddressField`) must use `max_length=45` — the full length of an IPv6 address including `::ffff:`-mapped IPv4 notation. A client IP may also be unresolved (`None`); fields that record it should be `null=True, blank=True` unless the row is meaningless without one.

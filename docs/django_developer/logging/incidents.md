@@ -355,7 +355,7 @@ No extra code required — the dispatcher handles this automatically for all fra
 | `level` | Severity 0–15. 0–3 informational, 4–7 warning, 8–15 critical |
 | `scope` | Logical domain: `"global"`, `"account"`, `"payment"`, etc. |
 | `category` | Dot-namespaced event type: `"auth:failed"`, `"permission_denied"` |
-| `source_ip` | IP address of the originating request |
+| `source_ip` | IP address of the originating request. `CharField(max_length=45)`, nullable — holds a full IPv6 address or `None` |
 | `hostname` | Server hostname (auto-populated from `socket.gethostname()`) |
 | `uid` | User ID associated with this event |
 | `country_code` | ISO 3166-1 alpha-2 country code (auto-populated via GeoIP) |

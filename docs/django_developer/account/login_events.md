@@ -14,7 +14,7 @@ Inherits `models.Model, MojoModel`. Append-only audit log — no REST writes.
 |---|---|---|
 | `user` | FK → `account.User` | The user who logged in |
 | `device` | FK → `account.UserDevice` (nullable) | Device used, if known |
-| `ip_address` | `GenericIPAddressField` | IP at login time (indexed) |
+| `ip_address` | `GenericIPAddressField` | IP at login time (indexed). Nullable — a login can be recorded with no resolved client IP. |
 | `country_code` | `CharField(3)` | ISO 3166 code from GeoLocatedIP (nullable, indexed) |
 | `region` | `CharField(100)` | Region/state name (nullable, indexed) |
 | `city` | `CharField(100)` | City name (nullable) |

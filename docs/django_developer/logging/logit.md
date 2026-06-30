@@ -12,7 +12,7 @@ The `logit` app provides a database-backed structured logging model that complem
 | `method` | CharField | HTTP method of active request |
 | `path` | TextField | URL path of active request |
 | `payload` | JSONField | Arbitrary structured data |
-| `ip` | CharField | Client IP from active request |
+| `ip` | CharField(45), nullable | Client IP from active request — holds a full IPv6 address or `None` |
 | `duid` | CharField | Device unique ID |
 | `uid` | IntegerField | User ID |
 | `gid` | IntegerField | Group ID (auto-populated from model or request context) |
