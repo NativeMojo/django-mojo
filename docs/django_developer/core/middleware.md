@@ -25,7 +25,7 @@ Sets up the request object for all downstream handlers.
 - Sets `request.DATA` — unified `objict` containing all parsed GET params, POST body, and JSON body
 - Sets `request.group = None` (populated later by auth or decorator if group param present)
 - Sets `request.duid` — client-claimed device ID from `X-Mojo-UID` header or `duid` param
-- Sets `request.ip` — real client IP (respects `X-Forwarded-For`)
+- Sets `request.ip` — real client IP from `X-Real-IP` (proxy-authoritative, set by `asgi.inc`); falls back to `REMOTE_ADDR`. `X-Forwarded-For` is not consulted — see [request helpers](../helpers/request.md#get_remote_ip)
 - Sets `request.user_agent` — raw UA string
 - Sets `request.muid` — server-controlled device identity (see Device Identity below)
 - Sets `request.msid` — server-controlled session identity (see Device Identity below)

@@ -11,7 +11,19 @@ from mojo.helpers.request import get_remote_ip, get_user_agent, get_device_id
 ## Client Information
 
 ### `get_remote_ip(request)`
-Returns the real client IP, respecting proxy headers (`X-Forwarded-For`, `X-Real-IP`).
+Returns the real client IP from the proxy-authoritative `X-Real-IP` header, falling back
+to `REMOTE_ADDR`. The result is normalized: surrounding whitespace is stripped, an `IP:port`
+suffix is removed, bracketed IPv6 is unwrapped, and IPv4-mapped IPv6 (`::ffff:1.2.3.4`) is
+collapsed to plain IPv4.
+
+`X-Forwarded-For` is **not consulted** — its leftmost entry is client-controlled and
+spoofable. `X-Real-IP` must be set by the reverse proxy to the true client address, which
+the shipped `asgi.inc` does (`proxy_set_header X-Real-IP $remote_addr;`).
+
+**Deployment requirement:** your nginx (or equivalent) config must set `X-Real-IP` to
+`$remote_addr` and must overwrite any client-supplied value. Without this, `request.ip`
+falls back to `REMOTE_ADDR` (which is correct in direct-connect setups but may be the
+proxy IP behind a load balancer).
 
 ```python
 ip = get_remote_ip(request)

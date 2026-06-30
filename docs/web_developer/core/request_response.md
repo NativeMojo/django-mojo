@@ -112,3 +112,10 @@ When creating a record (POST without a pk), the framework automatically stamps t
 ```
 
 If the body sends `null` or `0` for `user`, the framework treats it as omitted and falls back to the authenticated caller. Omitting the field entirely is the normal self-signup path. See the framework reference for per-model opt-out options.
+
+## Client IP
+
+The server records your IP address for rate limiting, geofencing, API-key `allowed_ips`
+checks, audit logs, and login-anomaly detection. The recorded IP comes from the
+`X-Real-IP` header set by the reverse proxy — **not** from `X-Forwarded-For`. Sending a
+forged `X-Forwarded-For` header has no effect on the IP the server sees.
