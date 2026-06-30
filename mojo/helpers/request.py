@@ -1,3 +1,5 @@
+import ipaddress
+
 from objict import objict, nobjict
 from .request_parser import RequestDataParser
 from mojo.helpers.settings import settings
@@ -37,12 +39,35 @@ def get_referer(request):
     return request.META.get('HTTP_REFERER')
 
 
+def _normalize_ip(value):
+    # Return a clean IP string, or None for empty/garbage. Handles surrounding
+    # whitespace, an IP:port suffix, bracketed IPv6 ([::1]), and IPv4-mapped IPv6
+    # (::ffff:1.2.3.4 -> 1.2.3.4). Clean-or-None is safer for the
+    # GenericIPAddressField consumers of request.ip than a raw header value.
+    if not value:
+        return None
+    ip = value.strip()
+    if ip.startswith('[') and ']' in ip:        # [::1]:443 -> ::1
+        ip = ip[1:ip.index(']')]
+    elif ip.count(':') == 1:                     # 1.2.3.4:5678 -> 1.2.3.4 (IPv4:port)
+        ip = ip.split(':', 1)[0]
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return None
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+        addr = addr.ipv4_mapped                  # ::ffff:1.2.3.4 -> 1.2.3.4
+    return str(addr)
+
+
 def get_remote_ip(request):
-    x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
-    if x_forwarded_for:
-        ip = x_forwarded_for.split(',')[0]
-    else:
-        ip = request.META.get('REMOTE_ADDR')
+    # nginx (asgi.inc) sets X-Real-IP to the true client ($remote_addr) and overwrites
+    # any client-supplied value; trust that. Never parse the client-controlled
+    # X-Forwarded-For (its leftmost entry is attacker-supplied). Fall back to REMOTE_ADDR
+    # only when X-Real-IP is absent.
+    ip = _normalize_ip(request.META.get('HTTP_X_REAL_IP'))
+    if ip is None:
+        ip = _normalize_ip(request.META.get('REMOTE_ADDR'))
     return ip
 
 def get_ip_sources(request):

@@ -1,5 +1,16 @@
 ## v1.2.29 - (current)
 
+**security** — **Client IP is no longer spoofable via `X-Forwarded-For`.**
+`request.get_remote_ip()` (which sets `request.ip`) took the *leftmost* `X-Forwarded-For`
+entry — a value any client can forge — so the IP behind geofencing, API-key `allowed_ips`,
+rate limiting, audit logs, and login-anomaly geo was attacker-controlled. It now reads the
+proxy-authoritative `X-Real-IP` (set by the reverse proxy to the real client, overwriting any
+client-supplied value), falls back to `REMOTE_ADDR`, and normalizes the result (strips an
+`IP:port` suffix, unwraps bracketed IPv6, collapses IPv4-mapped IPv6). **Deployment
+requirement:** your reverse proxy must set `X-Real-IP` to the real client IP — the shipped
+`asgi.inc` does (`proxy_set_header X-Real-IP $remote_addr;`). `X-Forwarded-For` is no longer
+consulted for `request.ip`.
+
 ## v1.2.38 - June 29, 2026
 
 
