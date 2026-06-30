@@ -29,6 +29,22 @@ proxy IP behind a load balancer).
 ip = get_remote_ip(request)
 ```
 
+### `normalize_ip(value)`
+Normalizes a raw IP string: strips surrounding whitespace, removes an `IP:port` suffix,
+unwraps bracketed IPv6 (`[::1]`), and collapses IPv4-mapped IPv6 (`::ffff:1.2.3.4` →
+`1.2.3.4`). Returns `None` for empty or unparseable input.
+
+This is the shared low-level normalizer used by both `get_remote_ip` (HTTP) and the
+WebSocket `resolve_remote_ip` / `get_remote_ip(scope)` in `mojo.apps.realtime.handler`.
+
+```python
+from mojo.helpers.request import normalize_ip
+
+ip = normalize_ip("  ::ffff:203.0.113.7  ")  # -> "203.0.113.7"
+ip = normalize_ip("[::1]:0")                  # -> "::1"
+ip = normalize_ip("")                         # -> None
+```
+
 ### `get_ip_sources(request)`
 Returns all IP-related metadata as a dict (useful for logging/audit).
 

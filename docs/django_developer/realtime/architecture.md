@@ -130,6 +130,21 @@ All connection state lives in Redis, making workers stateless and horizontally s
 
 All keys have automatic TTL (default 300 seconds, refreshed on activity).
 
+## Client IP Resolution
+
+The WS handler derives the client IP using the same trust order as the HTTP path (ITEM-009 / ITEM-010):
+
+1. **`X-Real-IP`** (proxy-authoritative) — checked first in both the ASGI `scope` headers and the wrapper `request_headers`. This is the canonical source.
+2. **Transport peer** (`scope["client"]` / `peername`) — last-resort fallback only, used when `X-Real-IP` is absent (e.g. a direct-connect dev setup).
+
+`X-Forwarded-For` and the RFC 7239 `Forwarded` header are **not consulted** — both are client-controllable and spoofable. The resolved IP is passed through the shared `normalize_ip` helper (strips port suffix, normalises IPv4-mapped IPv6, etc.).
+
+**Deployment requirement:** the reverse proxy must set `X-Real-IP $remote_addr;` and overwrite any client-supplied value. The shipped `asgi.inc` already does this. Without it, the WS handler falls back to the transport peer address, which may be the proxy IP in a load-balancer setup.
+
+The resolved IP is stored in:
+- Redis connection records (`realtime:connections:{id}`)
+- Security/incident `Event.source_ip` generated during the WS session
+
 ## Scaling
 
 - Workers are stateless — add more processes behind a load balancer

@@ -9,6 +9,12 @@ ws://api.example.com/ws/realtime/
 wss://api.example.com/ws/realtime/   (production — always use TLS)
 ```
 
+## Client IP
+
+The server records a client IP for every WebSocket connection (used in connection logs and security events). It is derived from the `X-Real-IP` header set by the reverse proxy — **not** from `X-Forwarded-For`, `Forwarded`, or the raw ASGI transport peer. Sending forged `X-Forwarded-For` or `Forwarded` headers has no effect on the recorded IP.
+
+---
+
 ## Authentication Flow
 
 ### Step 1: Server sends auth challenge
