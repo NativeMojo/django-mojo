@@ -39,7 +39,7 @@ def get_referer(request):
     return request.META.get('HTTP_REFERER')
 
 
-def _normalize_ip(value):
+def normalize_ip(value):
     # Return a clean IP string, or None for empty/garbage. Handles surrounding
     # whitespace, an IP:port suffix, bracketed IPv6 ([::1]), and IPv4-mapped IPv6
     # (::ffff:1.2.3.4 -> 1.2.3.4). Clean-or-None is safer for the
@@ -65,9 +65,9 @@ def get_remote_ip(request):
     # any client-supplied value; trust that. Never parse the client-controlled
     # X-Forwarded-For (its leftmost entry is attacker-supplied). Fall back to REMOTE_ADDR
     # only when X-Real-IP is absent.
-    ip = _normalize_ip(request.META.get('HTTP_X_REAL_IP'))
+    ip = normalize_ip(request.META.get('HTTP_X_REAL_IP'))
     if ip is None:
-        ip = _normalize_ip(request.META.get('REMOTE_ADDR'))
+        ip = normalize_ip(request.META.get('REMOTE_ADDR'))
     return ip
 
 def get_ip_sources(request):

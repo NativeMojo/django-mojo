@@ -11,6 +11,15 @@ requirement:** your reverse proxy must set `X-Real-IP` to the real client IP —
 `asgi.inc` does (`proxy_set_header X-Real-IP $remote_addr;`). `X-Forwarded-For` is no longer
 consulted for `request.ip`.
 
+**security** — **WebSocket connections no longer trust a spoofable client IP.** The realtime
+WS handler resolved the client IP from `scope["client"]` / `X-Forwarded-For` / RFC 7239
+`Forwarded` ahead of `X-Real-IP`, so a WS client could forge the IP recorded in connection logs,
+Redis connection records, and security/incident `Event` records (skewing geolocation and
+per-country metrics). It now prefers the proxy-authoritative `X-Real-IP` (normalized via the
+shared `normalize_ip` helper), with the transport peer as a last-resort fallback;
+`X-Forwarded-For` and `Forwarded` are no longer consulted. (`mojo.helpers.request._normalize_ip`
+is now the public `normalize_ip`, shared by the HTTP and WS resolvers.)
+
 ## v1.2.38 - June 29, 2026
 
 

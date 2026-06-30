@@ -17,6 +17,7 @@ import time
 import uuid
 from mojo.helpers import logit
 from mojo.helpers.redis.client import get_connection
+from mojo.helpers.request import normalize_ip
 from .auth import async_validate_bearer_token
 
 logger = logit.get_logger("realtime", "realtime.log")
@@ -66,7 +67,9 @@ class WebSocketHandler:
 
     def resolve_remote_ip(self):
         """
-        Resolve the remote IP using ASGI scope first, then fallbacks.
+        Resolve the remote IP. Prefer the proxy-authoritative X-Real-IP; never trust the
+        client-controllable X-Forwarded-For / Forwarded. Fall back to the transport peer
+        only when X-Real-IP is absent.
         """
         try:
             scope = getattr(self.websocket, "scope", None)
@@ -74,32 +77,25 @@ class WebSocketHandler:
                 ip = self.get_remote_ip(scope)
                 if ip:
                     return ip
-            # Fallback to wrapper-provided request headers
+            # Fallback to wrapper-provided request headers: X-Real-IP only.
             headers = getattr(self.websocket, "request_headers", None)
             if headers:
-                xff = headers.get("x-forwarded-for") or headers.get("X-Forwarded-For")
-                xreal = headers.get("x-real-ip") or headers.get("X-Real-IP")
-                if xff:
-                    return xff.split(",")[0].strip()
-                if xreal:
-                    return xreal.strip()
-            # Final fallback to transport peername
+                ip = normalize_ip(headers.get("x-real-ip") or headers.get("X-Real-IP"))
+                if ip:
+                    return ip
+            # Final fallback to transport peername (empty over a unix socket).
             transport = getattr(self.websocket, "transport", None)
             if transport and hasattr(transport, "get_extra_info"):
                 peer = transport.get_extra_info("peername")
                 if peer:
-                    return peer[0] if isinstance(peer, (tuple, list)) else str(peer)
+                    raw = peer[0] if isinstance(peer, (tuple, list)) else str(peer)
+                    return normalize_ip(raw)
         except Exception:
             self._log_exception("resolve_remote_ip")
         return None
 
     def get_remote_ip(self, scope):
-        # Prefer the ASGI client tuple (ip, port)
-        client = scope.get("client")
-        if client and client[0]:
-            return client[0]
-
-        # Build lowercase header dict for fallbacks
+        # Build a lowercase header map from the ASGI scope.
         headers = {}
         for k, v in scope.get("headers", []):
             try:
@@ -107,24 +103,17 @@ class WebSocketHandler:
             except Exception:
                 pass
 
-        # RFC 7239 Forwarded header: for=...
-        fwd = headers.get("forwarded")
-        if fwd:
-            # naive parse – good enough for common cases
-            parts = [p.strip() for p in fwd.split(";")]
-            for p in parts:
-                if p.startswith("for="):
-                    return p.split("=", 1)[1].strip('"')
+        # Prefer the proxy-authoritative X-Real-IP (set by asgi.inc, overwriting any
+        # client value). Never trust X-Forwarded-For / RFC 7239 Forwarded — both are
+        # client-controllable and spoofable.
+        ip = normalize_ip(headers.get("x-real-ip"))
+        if ip:
+            return ip
 
-        # X-Forwarded-For: first IP
-        xff = headers.get("x-forwarded-for")
-        if xff:
-            return xff.split(",")[0].strip()
-
-        # X-Real-IP
-        xri = headers.get("x-real-ip")
-        if xri:
-            return xri
+        # Last-resort fallback: the ASGI transport peer (empty over a unix socket).
+        client = scope.get("client")
+        if client and client[0]:
+            return normalize_ip(client[0])
 
         return None
 
