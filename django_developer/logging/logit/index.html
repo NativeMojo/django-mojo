@@ -4111,8 +4111,8 @@
 </tr>
 <tr>
 <td><code>ip</code></td>
-<td>CharField</td>
-<td>Client IP from active request</td>
+<td>CharField(45), nullable</td>
+<td>Client IP from active request — holds a full IPv6 address or <code>None</code></td>
 </tr>
 <tr>
 <td><code>duid</code></td>

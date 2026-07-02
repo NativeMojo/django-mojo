@@ -4166,7 +4166,7 @@
 </tr>
 <tr>
 <td><code>subnet</code></td>
-<td>First three octets, used for subnet-based fallback lookups</td>
+<td>Subnet used for fallback lookups — IPv4: the dot-based <code>/24</code> prefix (first three octets); IPv6: the <code>/64</code> network. <code>CharField(max_length=45)</code>, nullable.</td>
 </tr>
 <tr>
 <td><code>country_code</code>, <code>country_name</code>, <code>region</code>, <code>region_code</code>, <code>city</code>, <code>postal_code</code></td>

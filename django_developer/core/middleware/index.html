@@ -4063,7 +4063,7 @@
 - Sets <code>request.DATA</code> — unified <code>objict</code> containing all parsed GET params, POST body, and JSON body
 - Sets <code>request.group = None</code> (populated later by auth or decorator if group param present)
 - Sets <code>request.duid</code> — client-claimed device ID from <code>X-Mojo-UID</code> header or <code>duid</code> param
-- Sets <code>request.ip</code> — real client IP (respects <code>X-Forwarded-For</code>)
+- Sets <code>request.ip</code> — real client IP from <code>X-Real-IP</code> (proxy-authoritative, set by <code>asgi.inc</code>); falls back to <code>REMOTE_ADDR</code>. <code>X-Forwarded-For</code> is not consulted — see <a href="../../helpers/request/#get_remote_ip">request helpers</a>
 - Sets <code>request.user_agent</code> — raw UA string
 - Sets <code>request.muid</code> — server-controlled device identity (see Device Identity below)
 - Sets <code>request.msid</code> — server-controlled session identity (see Device Identity below)

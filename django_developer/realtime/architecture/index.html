@@ -2300,6 +2300,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#client-ip-resolution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Client IP Resolution
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#scaling" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4081,6 +4092,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#client-ip-resolution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Client IP Resolution
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#scaling" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4248,6 +4270,17 @@
 </tbody>
 </table>
 <p>All keys have automatic TTL (default 300 seconds, refreshed on activity).</p>
+<h2 id="client-ip-resolution">Client IP Resolution<a class="headerlink" href="#client-ip-resolution" title="Permanent link">&para;</a></h2>
+<p>The WS handler derives the client IP using the same trust order as the HTTP path (ITEM-009 / ITEM-010):</p>
+<ol>
+<li><strong><code>X-Real-IP</code></strong> (proxy-authoritative) — checked first in both the ASGI <code>scope</code> headers and the wrapper <code>request_headers</code>. This is the canonical source.</li>
+<li><strong>Transport peer</strong> (<code>scope["client"]</code> / <code>peername</code>) — last-resort fallback only, used when <code>X-Real-IP</code> is absent (e.g. a direct-connect dev setup).</li>
+</ol>
+<p><code>X-Forwarded-For</code> and the RFC 7239 <code>Forwarded</code> header are <strong>not consulted</strong> — both are client-controllable and spoofable. The resolved IP is passed through the shared <code>normalize_ip</code> helper (strips port suffix, normalises IPv4-mapped IPv6, etc.).</p>
+<p><strong>Deployment requirement:</strong> the reverse proxy must set <code>X-Real-IP $remote_addr;</code> and overwrite any client-supplied value. The shipped <code>asgi.inc</code> already does this. Without it, the WS handler falls back to the transport peer address, which may be the proxy IP in a load-balancer setup.</p>
+<p>The resolved IP is stored in:
+- Redis connection records (<code>realtime:connections:{id}</code>)
+- Security/incident <code>Event.source_ip</code> generated during the WS session</p>
 <h2 id="scaling">Scaling<a class="headerlink" href="#scaling" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Workers are stateless — add more processes behind a load balancer</li>

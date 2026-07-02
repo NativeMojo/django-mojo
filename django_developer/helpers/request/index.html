@@ -996,6 +996,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#normalize_ipvalue" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        normalize_ip(value)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#get_ip_sourcesrequest" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3994,6 +4005,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#normalize_ipvalue" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        normalize_ip(value)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#get_ip_sourcesrequest" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4131,60 +4153,82 @@
 </code></pre></div>
 <h2 id="client-information">Client Information<a class="headerlink" href="#client-information" title="Permanent link">&para;</a></h2>
 <h3 id="get_remote_iprequest"><code>get_remote_ip(request)</code><a class="headerlink" href="#get_remote_iprequest" title="Permanent link">&para;</a></h3>
-<p>Returns the real client IP, respecting proxy headers (<code>X-Forwarded-For</code>, <code>X-Real-IP</code>).</p>
+<p>Returns the real client IP from the proxy-authoritative <code>X-Real-IP</code> header, falling back
+to <code>REMOTE_ADDR</code>. The result is normalized: surrounding whitespace is stripped, an <code>IP:port</code>
+suffix is removed, bracketed IPv6 is unwrapped, and IPv4-mapped IPv6 (<code>::ffff:1.2.3.4</code>) is
+collapsed to plain IPv4.</p>
+<p><code>X-Forwarded-For</code> is <strong>not consulted</strong> — its leftmost entry is client-controlled and
+spoofable. <code>X-Real-IP</code> must be set by the reverse proxy to the true client address, which
+the shipped <code>asgi.inc</code> does (<code>proxy_set_header X-Real-IP $remote_addr;</code>).</p>
+<p><strong>Deployment requirement:</strong> your nginx (or equivalent) config must set <code>X-Real-IP</code> to
+<code>$remote_addr</code> and must overwrite any client-supplied value. Without this, <code>request.ip</code>
+falls back to <code>REMOTE_ADDR</code> (which is correct in direct-connect setups but may be the
+proxy IP behind a load balancer).</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">ip</span> <span class="o">=</span> <span class="n">get_remote_ip</span><span class="p">(</span><span class="n">request</span><span class="p">)</span>
+</code></pre></div>
+<h3 id="normalize_ipvalue"><code>normalize_ip(value)</code><a class="headerlink" href="#normalize_ipvalue" title="Permanent link">&para;</a></h3>
+<p>Normalizes a raw IP string: strips surrounding whitespace, removes an <code>IP:port</code> suffix,
+unwraps bracketed IPv6 (<code>[::1]</code>), and collapses IPv4-mapped IPv6 (<code>::ffff:1.2.3.4</code> →
+<code>1.2.3.4</code>). Returns <code>None</code> for empty or unparseable input.</p>
+<p>This is the shared low-level normalizer used by both <code>get_remote_ip</code> (HTTP) and the
+WebSocket <code>resolve_remote_ip</code> / <code>get_remote_ip(scope)</code> in <code>mojo.apps.realtime.handler</code>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers.request</span><span class="w"> </span><span class="kn">import</span> <span class="n">normalize_ip</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="n">ip</span> <span class="o">=</span> <span class="n">normalize_ip</span><span class="p">(</span><span class="s2">&quot;  ::ffff:203.0.113.7  &quot;</span><span class="p">)</span>  <span class="c1"># -&gt; &quot;203.0.113.7&quot;</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="n">ip</span> <span class="o">=</span> <span class="n">normalize_ip</span><span class="p">(</span><span class="s2">&quot;[::1]:0&quot;</span><span class="p">)</span>                  <span class="c1"># -&gt; &quot;::1&quot;</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="n">ip</span> <span class="o">=</span> <span class="n">normalize_ip</span><span class="p">(</span><span class="s2">&quot;&quot;</span><span class="p">)</span>                         <span class="c1"># -&gt; None</span>
 </code></pre></div>
 <h3 id="get_ip_sourcesrequest"><code>get_ip_sources(request)</code><a class="headerlink" href="#get_ip_sourcesrequest" title="Permanent link">&para;</a></h3>
 <p>Returns all IP-related metadata as a dict (useful for logging/audit).</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">sources</span> <span class="o">=</span> <span class="n">get_ip_sources</span><span class="p">(</span><span class="n">request</span><span class="p">)</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="c1"># {&quot;remote_addr&quot;: &quot;1.2.3.4&quot;, &quot;x_forwarded_for&quot;: &quot;1.2.3.4, 10.0.0.1&quot;, ...}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">sources</span> <span class="o">=</span> <span class="n">get_ip_sources</span><span class="p">(</span><span class="n">request</span><span class="p">)</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="c1"># {&quot;remote_addr&quot;: &quot;1.2.3.4&quot;, &quot;x_forwarded_for&quot;: &quot;1.2.3.4, 10.0.0.1&quot;, ...}</span>
 </code></pre></div>
 <h3 id="get_user_agentrequest"><code>get_user_agent(request)</code><a class="headerlink" href="#get_user_agentrequest" title="Permanent link">&para;</a></h3>
 <p>Returns the raw User-Agent string.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">ua</span> <span class="o">=</span> <span class="n">get_user_agent</span><span class="p">(</span><span class="n">request</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">ua</span> <span class="o">=</span> <span class="n">get_user_agent</span><span class="p">(</span><span class="n">request</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="parse_user_agentrequest"><code>parse_user_agent(request)</code><a class="headerlink" href="#parse_user_agentrequest" title="Permanent link">&para;</a></h3>
 <p>Returns a structured dict with <code>browser</code>, <code>os</code>, and <code>device</code> info.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">ua_info</span> <span class="o">=</span> <span class="n">parse_user_agent</span><span class="p">(</span><span class="n">request</span><span class="p">)</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="c1"># {&quot;browser&quot;: &quot;Chrome 120&quot;, &quot;os&quot;: &quot;macOS 14&quot;, &quot;device&quot;: &quot;desktop&quot;}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">ua_info</span> <span class="o">=</span> <span class="n">parse_user_agent</span><span class="p">(</span><span class="n">request</span><span class="p">)</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="c1"># {&quot;browser&quot;: &quot;Chrome 120&quot;, &quot;os&quot;: &quot;macOS 14&quot;, &quot;device&quot;: &quot;desktop&quot;}</span>
 </code></pre></div>
 <h3 id="get_device_idrequest"><code>get_device_id(request)</code><a class="headerlink" href="#get_device_idrequest" title="Permanent link">&para;</a></h3>
 <p>Returns the device ID from <code>X-Device-Id</code> header or <code>device_id</code> param.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">device_id</span> <span class="o">=</span> <span class="n">get_device_id</span><span class="p">(</span><span class="n">request</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="n">device_id</span> <span class="o">=</span> <span class="n">get_device_id</span><span class="p">(</span><span class="n">request</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="get_refererrequest"><code>get_referer(request)</code><a class="headerlink" href="#get_refererrequest" title="Permanent link">&para;</a></h3>
 <p>Returns the HTTP Referer header value.</p>
 <h2 id="request-data-parsing">Request Data Parsing<a class="headerlink" href="#request-data-parsing" title="Permanent link">&para;</a></h2>
 <p><code>request.DATA</code> is already set by <code>MojoMiddleware</code>. In rare cases where you need to parse outside of middleware:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers.request_parser</span><span class="w"> </span><span class="kn">import</span> <span class="n">parse_request_data</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="n">data</span> <span class="o">=</span> <span class="n">parse_request_data</span><span class="p">(</span><span class="n">request</span><span class="p">)</span>  <span class="c1"># returns objict</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers.request_parser</span><span class="w"> </span><span class="kn">import</span> <span class="n">parse_request_data</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="n">data</span> <span class="o">=</span> <span class="n">parse_request_data</span><span class="p">(</span><span class="n">request</span><span class="p">)</span>  <span class="c1"># returns objict</span>
 </code></pre></div>
 <h2 id="webhook-signature-verification">Webhook Signature Verification<a class="headerlink" href="#webhook-signature-verification" title="Permanent link">&para;</a></h2>
 <h3 id="verify_signed_requestrequest-secret"><code>verify_signed_request(request, secret)</code><a class="headerlink" href="#verify_signed_requestrequest-secret" title="Permanent link">&para;</a></h3>
 <p>Returns <code>True</code> if the raw request body matches the <code>X-Mojo-Signature</code> header using HMAC-SHA256 keyed on <code>secret</code>. Returns <code>False</code> (never raises) when the secret is <code>None</code>, the header is absent, or the signature does not match. Uses <code>hmac.compare_digest</code> for constant-time comparison.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers.request</span><span class="w"> </span><span class="kn">import</span> <span class="n">verify_signed_request</span>
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">Group</span>
-<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>
-<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="n">group</span> <span class="o">=</span> <span class="n">Group</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">uuid</span><span class="o">=</span><span class="n">group_uuid</span><span class="p">)</span><span class="o">.</span><span class="n">first</span><span class="p">()</span>
-<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="k">if</span> <span class="ow">not</span> <span class="n">verify_signed_request</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">group</span><span class="o">.</span><span class="n">get_webhook_secret</span><span class="p">()</span> <span class="k">if</span> <span class="n">group</span> <span class="k">else</span> <span class="kc">None</span><span class="p">):</span>
-<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>    <span class="k">raise</span> <span class="n">merrors</span><span class="o">.</span><span class="n">PermissionDeniedException</span><span class="p">(</span><span class="s2">&quot;invalid signature&quot;</span><span class="p">,</span> <span class="mi">401</span><span class="p">,</span> <span class="mi">401</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers.request</span><span class="w"> </span><span class="kn">import</span> <span class="n">verify_signed_request</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">Group</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="n">group</span> <span class="o">=</span> <span class="n">Group</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">uuid</span><span class="o">=</span><span class="n">group_uuid</span><span class="p">)</span><span class="o">.</span><span class="n">first</span><span class="p">()</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="k">if</span> <span class="ow">not</span> <span class="n">verify_signed_request</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">group</span><span class="o">.</span><span class="n">get_webhook_secret</span><span class="p">()</span> <span class="k">if</span> <span class="n">group</span> <span class="k">else</span> <span class="kc">None</span><span class="p">):</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>    <span class="k">raise</span> <span class="n">merrors</span><span class="o">.</span><span class="n">PermissionDeniedException</span><span class="p">(</span><span class="s2">&quot;invalid signature&quot;</span><span class="p">,</span> <span class="mi">401</span><span class="p">,</span> <span class="mi">401</span><span class="p">)</span>
 </code></pre></div>
 <p>The secret is typically fetched with <code>group.get_webhook_secret()</code> (defaults to <code>auto_create=False</code>, so a missing secret correctly returns <code>False</code> rather than minting one). See <a href="../../account/webhook_signing/">Webhook Signing</a> for the full pattern.</p>
 <h2 id="requestdata">request.DATA<a class="headerlink" href="#requestdata" title="Permanent link">&para;</a></h2>
 <p><code>request.DATA</code> is an <a href="../objict/"><code>objict</code></a> — a dict subclass with attribute access, dot-notation nested keys, and type-safe getters. Set by <code>MojoMiddleware</code> from all request sources (POST body, GET params, JSON body).</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># All equivalent</span>
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="n">request</span><span class="o">.</span><span class="n">DATA</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;field&quot;</span><span class="p">)</span>
-<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="n">request</span><span class="o">.</span><span class="n">DATA</span><span class="p">[</span><span class="s2">&quot;field&quot;</span><span class="p">]</span>
-<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="n">request</span><span class="o">.</span><span class="n">DATA</span><span class="o">.</span><span class="n">field</span>
-<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>
-<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="c1"># Type-safe access (converts string query params to the right type)</span>
-<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="n">page</span> <span class="o">=</span> <span class="n">request</span><span class="o">.</span><span class="n">DATA</span><span class="o">.</span><span class="n">get_typed</span><span class="p">(</span><span class="s2">&quot;page&quot;</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">int</span><span class="p">)</span>
-<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="n">size</span> <span class="o">=</span> <span class="n">request</span><span class="o">.</span><span class="n">DATA</span><span class="o">.</span><span class="n">get_typed</span><span class="p">(</span><span class="s2">&quot;page_size&quot;</span><span class="p">,</span> <span class="mi">20</span><span class="p">,</span> <span class="nb">int</span><span class="p">)</span>
-<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>
-<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="c1"># Nested dot-notation keys (client sent &quot;address.city=Austin&quot;)</span>
-<a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="n">city</span> <span class="o">=</span> <span class="n">request</span><span class="o">.</span><span class="n">DATA</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;address.city&quot;</span><span class="p">)</span>
-<a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a><span class="n">last</span> <span class="o">=</span> <span class="n">request</span><span class="o">.</span><span class="n">DATA</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;metadata.user.last_name&quot;</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># All equivalent</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="n">request</span><span class="o">.</span><span class="n">DATA</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;field&quot;</span><span class="p">)</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="n">request</span><span class="o">.</span><span class="n">DATA</span><span class="p">[</span><span class="s2">&quot;field&quot;</span><span class="p">]</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="n">request</span><span class="o">.</span><span class="n">DATA</span><span class="o">.</span><span class="n">field</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="c1"># Type-safe access (converts string query params to the right type)</span>
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="n">page</span> <span class="o">=</span> <span class="n">request</span><span class="o">.</span><span class="n">DATA</span><span class="o">.</span><span class="n">get_typed</span><span class="p">(</span><span class="s2">&quot;page&quot;</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">int</span><span class="p">)</span>
+<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="n">size</span> <span class="o">=</span> <span class="n">request</span><span class="o">.</span><span class="n">DATA</span><span class="o">.</span><span class="n">get_typed</span><span class="p">(</span><span class="s2">&quot;page_size&quot;</span><span class="p">,</span> <span class="mi">20</span><span class="p">,</span> <span class="nb">int</span><span class="p">)</span>
+<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a>
+<a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a><span class="c1"># Nested dot-notation keys (client sent &quot;address.city=Austin&quot;)</span>
+<a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a><span class="n">city</span> <span class="o">=</span> <span class="n">request</span><span class="o">.</span><span class="n">DATA</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;address.city&quot;</span><span class="p">)</span>
+<a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a><span class="n">last</span> <span class="o">=</span> <span class="n">request</span><span class="o">.</span><span class="n">DATA</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;metadata.user.last_name&quot;</span><span class="p">)</span>
 </code></pre></div>
 <p>See <a href="../objict/">objict.md</a> for the full reference.</p>
 

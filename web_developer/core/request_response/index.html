@@ -2639,6 +2639,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#client-ip" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Client IP
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -4044,6 +4055,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#client-ip" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Client IP
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -4169,6 +4191,11 @@
 <div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span><span class="nt">&quot;user&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">7</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;abc&quot;</span><span class="p">}</span>
 </code></pre></div>
 <p>If the body sends <code>null</code> or <code>0</code> for <code>user</code>, the framework treats it as omitted and falls back to the authenticated caller. Omitting the field entirely is the normal self-signup path. See the framework reference for per-model opt-out options.</p>
+<h2 id="client-ip">Client IP<a class="headerlink" href="#client-ip" title="Permanent link">&para;</a></h2>
+<p>The server records your IP address for rate limiting, geofencing, API-key <code>allowed_ips</code>
+checks, audit logs, and login-anomaly detection. The recorded IP comes from the
+<code>X-Real-IP</code> header set by the reverse proxy — <strong>not</strong> from <code>X-Forwarded-For</code>. Sending a
+forged <code>X-Forwarded-For</code> header has no effect on the IP the server sees.</p>
 
 
 
