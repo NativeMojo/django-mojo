@@ -1,5 +1,9 @@
 ## v1.2.29 - (current)
 
+## v1.2.39 - July 01, 2026
+
+
+
 **security** — **Client IP is no longer spoofable via `X-Forwarded-For`.**
 `request.get_remote_ip()` (which sets `request.ip`) took the *leftmost* `X-Forwarded-For`
 entry — a value any client can forge — so the IP behind geofencing, API-key `allowed_ips`,
