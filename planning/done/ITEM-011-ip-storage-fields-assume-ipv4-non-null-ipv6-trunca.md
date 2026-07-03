@@ -201,7 +201,7 @@ nullable); `--full` at close = yes; no historical backfill — all confirmed wit
   by the subnet test.
 
 ## Resolution
-- closed: YYYY-MM-DD
-- branch:
-- files changed:
+- closed: 2026-07-03
+- branch: main
+- files changed: .claude/rules/models.md,CHANGELOG.md,docs/django_developer/account/geoip.md,docs/django_developer/account/login_events.md,docs/django_developer/logging/incidents.md,docs/django_developer/logging/logit.md,mojo/__init__.py,mojo/apps/account/migrations/0045_alter_bouncersignal_ip_address_and_more.py,mojo/apps/account/models/bouncer_signal.py,mojo/apps/account/models/geolocated_ip.py,mojo/apps/account/models/login_event.py,mojo/apps/incident/migrations/0030_alter_event_source_ip_alter_incident_source_ip.py,mojo/apps/incident/models/event.py,mojo/apps/incident/models/incident.py,mojo/apps/logit/migrations/0009_alter_log_ip.py,mojo/apps/logit/models/log.py,planning/.next_id,planning/in_progress/ITEM-011-ip-storage-fields-assume-ipv4-non-null-ipv6-trunca.md,planning/inbox/geofence-hardening.md,pyproject.toml,tests/test_models/ip_field_storage.py
 - tests added:
