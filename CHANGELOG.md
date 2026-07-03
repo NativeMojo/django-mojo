@@ -1,5 +1,9 @@
 ## v1.2.29 - (current)
 
+## v1.2.40 - July 03, 2026
+
+
+
 **fix** — **Auth middleware no longer 500s on a malformed `Authorization` header.**
 `AuthenticationMiddleware` unpacked the header with `prefix, token = token.split()`, which
 raised `ValueError` (→ unhandled HTTP 500) whenever the value was not exactly two
