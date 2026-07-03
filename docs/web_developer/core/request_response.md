@@ -79,6 +79,12 @@ Every response is wrapped in a standard envelope.
 
 **401 vs 403:** Permission-gated endpoints return **401** for unauthenticated requests and **403** for authenticated requests that lack the required permission. Both include `"is_authenticated": false` or `true` respectively in the error envelope. Clients should redirect to login on 401 and show a "not authorized" message on 403.
 
+**Malformed `Authorization` header never 500s.** If the header value isn't exactly
+`<scheme> <token>` (e.g. a bare token with no scheme, an empty header, or extra
+whitespace-separated parts), the server treats the request as unauthenticated rather than
+erroring — a permission-gated endpoint responds normally with **401**, and a public endpoint
+still succeeds.
+
 ## Dates
 
 All datetimes are returned in ISO 8601 UTC format: `"2024-01-15T10:30:00Z"`
