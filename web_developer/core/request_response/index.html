@@ -4174,6 +4174,11 @@
 </tbody>
 </table>
 <p><strong>401 vs 403:</strong> Permission-gated endpoints return <strong>401</strong> for unauthenticated requests and <strong>403</strong> for authenticated requests that lack the required permission. Both include <code>"is_authenticated": false</code> or <code>true</code> respectively in the error envelope. Clients should redirect to login on 401 and show a "not authorized" message on 403.</p>
+<p><strong>Malformed <code>Authorization</code> header never 500s.</strong> If the header value isn't exactly
+<code>&lt;scheme&gt; &lt;token&gt;</code> (e.g. a bare token with no scheme, an empty header, or extra
+whitespace-separated parts), the server treats the request as unauthenticated rather than
+erroring — a permission-gated endpoint responds normally with <strong>401</strong>, and a public endpoint
+still succeeds.</p>
 <h2 id="dates">Dates<a class="headerlink" href="#dates" title="Permanent link">&para;</a></h2>
 <p>All datetimes are returned in ISO 8601 UTC format: <code>"2024-01-15T10:30:00Z"</code></p>
 <p>When sending dates, ISO 8601 format is accepted: <code>"2024-01-15"</code> or <code>"2024-01-15T10:30:00Z"</code></p>

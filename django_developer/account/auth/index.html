@@ -4749,6 +4749,11 @@ for the end-to-end client-side flow.</p>
 <li><code>request.user</code> set to the resolved user (or anonymous)</li>
 <li><code>request.group</code> set if <code>group</code> param present and user is a member</li>
 </ol>
+<p><strong>Malformed headers don't error.</strong> If the <code>Authorization</code> value isn't exactly <code>&lt;scheme&gt;
+&lt;token&gt;</code>, the middleware treats the request as unauthenticated and continues — it does not
+500. A bare scheme-less single token is exposed on <code>request.auth_token</code> (prefix <code>"raw"</code>) so a
+public endpoint can read/validate it; an empty or 3+-part value is ignored. <code>request.bearer</code>
+stays unset in all these cases, so anything requiring auth still rejects.</p>
 <h2 id="custom-bearer-handlers">Custom Bearer Handlers<a class="headerlink" href="#custom-bearer-handlers" title="Permanent link">&para;</a></h2>
 <p>Register additional token types via settings:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># settings.py</span>

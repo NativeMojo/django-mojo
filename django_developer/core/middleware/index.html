@@ -4186,6 +4186,12 @@ the full security and auth page documentation.</p>
 - Calls the handler to resolve the token to a user
 - Sets <code>request.user</code> (authenticated <code>User</code> instance or anonymous)
 - Default handler: <code>User.validate_jwt(token)</code> for <code>Bearer</code> tokens</p>
+<p><strong>Malformed / scheme-less headers never 500.</strong> A value that isn't exactly <code>&lt;scheme&gt; &lt;token&gt;</code>
+is treated as unauthenticated and passed through (<code>request.bearer</code> / <code>request.user</code> left unset,
+so protected endpoints still reject — fail-closed). A bare scheme-less single token (e.g. a
+webhook validation key like Coinflow's <code>Authorization: &lt;key&gt;</code>) is exposed on
+<code>request.auth_token</code> (prefix <code>"raw"</code>, <code>request.auth_token.token</code> = the value) for a
+downstream/public endpoint to validate; an empty or 3+-part value is ignored.</p>
 <p><strong>Custom bearer handlers</strong> can be registered via settings to support API keys, service tokens, etc.</p>
 <p><strong><code>request.group</code></strong> is auto-populated if the request includes a <code>group</code> param that matches a group the user belongs to.</p>
 <hr />
