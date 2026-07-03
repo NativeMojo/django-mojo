@@ -349,7 +349,7 @@ from there instead of re-parsing the raw header, so the shim can likely be retir
 Fix is a small guard (~6 lines) plus a regression test; effort ~XS.
 
 ## Resolution
-- closed: YYYY-MM-DD
-- branch:
-- files changed:
-- tests added:
+- closed: 2026-07-03
+- branch: main
+- files changed: CHANGELOG.md,docs/django_developer/account/auth.md,docs/django_developer/core/middleware.md,docs/web_developer/core/request_response.md,mojo/middleware/auth.py,planning/in_progress/ITEM-012-auth-middleware-500s-on-a-malformed-authorization-.md,tests/test_middleware/__init__.py,tests/test_middleware/auth_malformed_header.py,uv.lock
+- tests added: tests/test_middleware/auth_malformed_header.py — bare / empty / 3+-part in-process + an HTTP smoke test through the real middleware chain (4 tests; all fail pre-fix, pass post-fix)
