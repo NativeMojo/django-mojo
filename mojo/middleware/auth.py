@@ -24,7 +24,16 @@ class AuthenticationMiddleware(MiddlewareMixin):
         token = request.META.get('HTTP_AUTHORIZATION', None)
         if token is None:
             return
-        prefix, token = token.split()
+        parts = token.split()
+        if len(parts) == 1:
+            # bare, scheme-less token (e.g. a Coinflow webhook validation key):
+            # expose it for a downstream/public endpoint to read, but do NOT
+            # authenticate — request.bearer stays None (fail-closed).
+            request.auth_token = objict(prefix="raw", token=parts[0])
+            return
+        if len(parts) != 2:
+            return  # empty or 3+ parts: genuinely malformed -> no credentials
+        prefix, token = parts
         prefix = prefix.lower()
         if prefix not in AUTH_BEARER_HANDLERS_CACHE:
             if prefix not in AUTH_BEARER_HANDLER_PATHS:

@@ -191,6 +191,12 @@ Returns the authenticated user's own record using their `pk`.
 4. `request.user` set to the resolved user (or anonymous)
 5. `request.group` set if `group` param present and user is a member
 
+**Malformed headers don't error.** If the `Authorization` value isn't exactly `<scheme>
+<token>`, the middleware treats the request as unauthenticated and continues — it does not
+500. A bare scheme-less single token is exposed on `request.auth_token` (prefix `"raw"`) so a
+public endpoint can read/validate it; an empty or 3+-part value is ignored. `request.bearer`
+stays unset in all these cases, so anything requiring auth still rejects.
+
 ## Custom Bearer Handlers
 
 Register additional token types via settings:

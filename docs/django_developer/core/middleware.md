@@ -119,6 +119,13 @@ Validates Bearer tokens and populates `request.user`.
 - Sets `request.user` (authenticated `User` instance or anonymous)
 - Default handler: `User.validate_jwt(token)` for `Bearer` tokens
 
+**Malformed / scheme-less headers never 500.** A value that isn't exactly `<scheme> <token>`
+is treated as unauthenticated and passed through (`request.bearer` / `request.user` left unset,
+so protected endpoints still reject — fail-closed). A bare scheme-less single token (e.g. a
+webhook validation key like Coinflow's `Authorization: <key>`) is exposed on
+`request.auth_token` (prefix `"raw"`, `request.auth_token.token` = the value) for a
+downstream/public endpoint to validate; an empty or 3+-part value is ignored.
+
 **Custom bearer handlers** can be registered via settings to support API keys, service tokens, etc.
 
 **`request.group`** is auto-populated if the request includes a `group` param that matches a group the user belongs to.

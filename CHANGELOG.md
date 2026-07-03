@@ -1,5 +1,16 @@
 ## v1.2.29 - (current)
 
+**fix** — **Auth middleware no longer 500s on a malformed `Authorization` header.**
+`AuthenticationMiddleware` unpacked the header with `prefix, token = token.split()`, which
+raised `ValueError` (→ unhandled HTTP 500) whenever the value was not exactly two
+whitespace-separated parts — a scheme-less single token, an empty string, or 3+ parts. Any
+client (or a payment webhook such as Coinflow, which sends `Authorization: <key>` with no
+scheme) could trigger a 500 on every request. Malformed headers now pass through as
+unauthenticated (`request.bearer` / `request.user` left unset — protected endpoints still
+reject, fail-closed). A bare scheme-less token is additionally exposed on `request.auth_token`
+(prefix `"raw"`, `request.auth_token.token` = the raw value) so a downstream/public endpoint
+can validate it without re-parsing the raw header.
+
 ## v1.2.39 - July 01, 2026
 
 

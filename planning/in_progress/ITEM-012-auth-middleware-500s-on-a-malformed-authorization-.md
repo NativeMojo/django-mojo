@@ -336,6 +336,10 @@ confirm it). If `objict` raises on an unset attribute instead of returning `None
 None. (Passthrough-vs-401, prefix `"raw"`, and `auth_token` exposure are all resolved.)
 
 ## Notes
+- Build baseline (2026-07-03, `bin/run_tests --agent`, default suite): **GREEN** — 2278 total,
+  2222 passed, 0 failed, 56 skipped (`testproject/var/test_failures.json`, `"failures": []`).
+  Any failure after this change is attributable to ITEM-012.
+
 Discovered while building `MVERIFY-API-007` (wallet payments) in the `mverify_api` project.
 Coinflow webhooks carry a scheme-less `Authorization: <validation_key>`. That project shipped
 a local `WebhookAuthShimMiddleware` as a workaround; this item fixes the framework so the shim
