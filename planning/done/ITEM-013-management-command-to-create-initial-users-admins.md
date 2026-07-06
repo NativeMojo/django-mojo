@@ -338,7 +338,8 @@ email happened to consonant-skeleton-match a blocked term in
 matches `"stfu"`). Renamed the fixture to `cucmd_scoped@test.com`.
 
 ## Resolution
-- closed: YYYY-MM-DD
-- branch:
-- files changed:
-- tests added:
+- closed: 2026-07-05
+- branch: main
+- files changed: CHANGELOG.md,docs/django_developer/account/README.md,docs/django_developer/account/bootstrap.md,mojo/apps/account/management/commands/create_user.py,planning/.next_id,planning/in_progress/ITEM-013-management-command-to-create-initial-users-admins.md,tests/test_account/test_create_user_command.py,uv.lock
+- tests added: tests/test_account/test_create_user_command.py (5 tests: email superuser,
+  phone-only user, staff + scoped permission, duplicate rejection, weak-password rejection)
