@@ -16,7 +16,7 @@ _Non-obvious choices made — why, not just what._
 
 ## Watch List
 _Fragile areas, known debt, things to tread carefully._
--
+- **`dev_server.conf` (testit dev-server host/port) has THREE readers that must stay in sync** — two Python (`testit/runner.py:get_host`, `testit/helpers.py:_read_dev_server_conf`) + one **bash** (`bin/asgi_local:_read_conf`, the one that actually binds uvicorn, easy to miss). All resolve the effective file the same way: prefer `var/dev_server.conf` (gitignored, per-machine) else committed `config/dev_server.conf` — **whole-file replace, no per-key merge**. Python routes through `paths.resolve_conf()`; bash duplicates it inline (can't import the helper). Change one → change all three, or the test client and server disagree on host/port. Tests: `tests/test_helpers/test_runner_config.py` (tmp dirs only — never write live `var/*.conf`; uvicorn's `--reload-include '*.conf'` would reload mid-suite). (ITEM-014)
 
 ## In Progress
 -
