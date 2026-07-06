@@ -52,6 +52,10 @@ _read_conf() {
     HOST="127.0.0.1"
     PORT="5555"
     CONF="$TESTPROJECT/config/dev_server.conf"
+    # var/ override wins when present (gitignored, per-machine); else fall back to config/.
+    if [ -f "$TESTPROJECT/var/dev_server.conf" ]; then
+        CONF="$TESTPROJECT/var/dev_server.conf"
+    fi
     if [ -f "$CONF" ]; then
         while IFS='=' read -r key value; do
             key=$(echo "$key" | tr -d '[:space:]')

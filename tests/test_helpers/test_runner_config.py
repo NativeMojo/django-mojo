@@ -175,3 +175,64 @@ def test_agent_report_writes(opts):
         th.assert_true(isinstance(data["failures"], list), "failures should be a list")
     finally:
         helpers.AGENT_MODE = old_agent
+
+
+@th.django_unit_test("dev_server.conf: var/ overrides config/ when both exist")
+def test_resolve_conf_var_overrides(opts):
+    from mojo.helpers import paths
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as var_dir, tempfile.TemporaryDirectory() as cfg_dir:
+        var_root, cfg_root = Path(var_dir), Path(cfg_dir)
+        (cfg_root / "dev_server.conf").write_text("host=10.0.0.1\nport=1111\n")
+        (var_root / "dev_server.conf").write_text("host=10.0.0.2\nport=2222\n")
+
+        resolved = paths.resolve_conf("dev_server.conf", var_root=var_root, config_root=cfg_root)
+        th.assert_eq(str(resolved), str(var_root / "dev_server.conf"),
+                     "var/dev_server.conf should win when it exists")
+
+
+@th.django_unit_test("dev_server.conf: falls back to config/ when var/ absent")
+def test_resolve_conf_fallback_to_config(opts):
+    from mojo.helpers import paths
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as var_dir, tempfile.TemporaryDirectory() as cfg_dir:
+        var_root, cfg_root = Path(var_dir), Path(cfg_dir)
+        (cfg_root / "dev_server.conf").write_text("host=10.0.0.1\nport=1111\n")
+        # deliberately no var/dev_server.conf
+
+        resolved = paths.resolve_conf("dev_server.conf", var_root=var_root, config_root=cfg_root)
+        th.assert_eq(str(resolved), str(cfg_root / "dev_server.conf"),
+                     "config/dev_server.conf should be used when var/ is absent")
+
+
+@th.django_unit_test("dev_server.conf: _read_dev_server_conf honors the var/ override")
+def test_read_dev_server_conf_uses_var_override(opts):
+    # Wire-through: proves the reader delegates to paths.resolve_conf (not a direct
+    # CONFIG_ROOT read). Patches the paths globals to temp dirs and restores them in
+    # finally — same pattern as test_agent_report_writes above. Never writes the live
+    # var/dev_server.conf (that would trip uvicorn's --reload-include '*.conf').
+    from mojo.helpers import paths
+    from testit import helpers
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as var_dir, tempfile.TemporaryDirectory() as cfg_dir:
+        var_root, cfg_root = Path(var_dir), Path(cfg_dir)
+        (cfg_root / "dev_server.conf").write_text("host=127.0.0.1\nport=5555\n")
+        (var_root / "dev_server.conf").write_text("host=192.168.1.50\nport=9999\n")
+
+        old_var, old_cfg = paths.VAR_ROOT, paths.CONFIG_ROOT
+        paths.VAR_ROOT, paths.CONFIG_ROOT = var_root, cfg_root
+        try:
+            host, port = helpers._read_dev_server_conf()
+        finally:
+            paths.VAR_ROOT, paths.CONFIG_ROOT = old_var, old_cfg
+
+        th.assert_eq(host, "192.168.1.50",
+                     "host should come from the var/dev_server.conf override")
+        th.assert_eq(port, 9999,
+                     "port should come from the var/dev_server.conf override, parsed as int")

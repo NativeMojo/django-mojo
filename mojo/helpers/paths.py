@@ -58,3 +58,23 @@ def configure_apps():
     global INSTALLED_APPS, APPS_CONFIG
     APPS_CONFIG = objict.fromFile(APPS_CONFIG_FILE)
     INSTALLED_APPS = APPS_CONFIG.installed
+
+
+def resolve_conf(name, var_root=None, config_root=None):
+    """
+    Resolve a .conf filename to its effective path, preferring a local override.
+
+    Returns VAR_ROOT/name when it exists (a gitignored, per-machine override),
+    otherwise CONFIG_ROOT/name (the committed default). Whole-file override: the
+    caller reads the returned file as-is; there is no per-key merge, so a key the
+    var file omits falls to the caller's built-in default, not config's value.
+
+    var_root / config_root default to the module globals and are injectable so the
+    resolution can be unit-tested against temporary directories.
+    """
+    var_root = VAR_ROOT if var_root is None else var_root
+    config_root = CONFIG_ROOT if config_root is None else config_root
+    var_path = var_root / name
+    if var_path.exists():
+        return var_path
+    return config_root / name

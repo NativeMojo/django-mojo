@@ -606,7 +606,7 @@ def _read_dev_server_conf():
     from mojo.helpers import paths
     host = '127.0.0.1'
     port = 5555
-    conf = paths.CONFIG_ROOT / 'dev_server.conf'
+    conf = paths.resolve_conf('dev_server.conf')
     if conf.exists():
         for line in conf.read_text().splitlines():
             if '=' in line:

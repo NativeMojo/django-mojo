@@ -239,7 +239,7 @@ def get_host():
     host = "127.0.0.1"
     port = 8001
     try:
-        config_path = paths.CONFIG_ROOT / "dev_server.conf"
+        config_path = paths.resolve_conf("dev_server.conf")
         with open(config_path, 'r') as file:
             for line in file:
                 if line.startswith("host"):

@@ -1,5 +1,14 @@
 ## v1.2.29 - (current)
 
+**feature** — **testit honors `var/dev_server.conf` as a local host/port override.**
+The test server's host/port is read from `config/dev_server.conf` (committed). A
+gitignored `var/dev_server.conf`, when present, now overrides it (whole-file
+replace — falls back to `config/` when absent), so you can retarget the local test
+server without editing the tracked file. All three readers agree on the effective
+file: `bin/asgi_local` (binds uvicorn), the testit runner's `--host` default, and
+`th.server_settings()`. Resolution is centralized in `paths.resolve_conf()`. See
+`docs/django_developer/testit/Overview.md`.
+
 **feature** — **New `create_user` management command for bootstrapping admins.**
 Django's built-in `createsuperuser` doesn't work against this project's custom
 `account.User` model — it calls the manager with `username=`/`password=` only,

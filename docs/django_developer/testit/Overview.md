@@ -87,6 +87,17 @@ Use `bin/run_tests` — it handles starting and stopping the test server automat
 
 All arguments are passed directly to `bin/testit.py`. If the server is already running, `bin/run_tests` will not stop it after the suite completes.
 
+### Dev-server host/port (`dev_server.conf`)
+
+The test server's host and port come from a small `key=value` file with two keys:
+
+```
+host=127.0.0.1
+port=5555
+```
+
+Resolution prefers a local override: if `var/dev_server.conf` exists it is used and `config/dev_server.conf` is ignored entirely (whole-file override — a key the var file omits falls to the built-in default, **not** config's value); otherwise the committed `config/dev_server.conf` is used. `var/` is gitignored, so `var/dev_server.conf` lets you point the test server at a different host/port on your machine without editing the tracked config. All three readers honor this order: `bin/asgi_local` (which binds uvicorn), the runner's `--host` default, and `th.server_settings()`.
+
 ### Parallel Execution
 
 By default the runner executes up to 3 modules in parallel using `ThreadPoolExecutor`. Each parallel module gets its own `RestClient` instance. Parallelism is automatically forced to 1 when `-s` (stop on fail), `-v` (verbose), or `--continue` (resume) is active — those modes require sequential output.
