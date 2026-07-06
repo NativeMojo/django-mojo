@@ -1,5 +1,6 @@
 # Account & Authentication — Django Developer Reference
 
+- [Bootstrap](bootstrap.md) — Creating initial admin users via `manage.py create_user`; why `createsuperuser` doesn't work; portal-permission reference table
 - [User Model](user.md) — User model, permissions, JWT auth
 - [Group Model](group.md) — Group/organization model, membership, hierarchy
 - [Authentication Flow](auth.md) — JWT tokens, login, password reset

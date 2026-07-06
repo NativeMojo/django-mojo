@@ -1,5 +1,18 @@
 ## v1.2.29 - (current)
 
+**feature** — **New `create_user` management command for bootstrapping admins.**
+Django's built-in `createsuperuser` doesn't work against this project's custom
+`account.User` model — it calls the manager with `username=`/`password=` only,
+but `CustomUserManager.create_superuser` requires `email`, so it raises a
+`TypeError`. `./manage.py create_user` is the supported replacement: creates an
+email-based or phone-only user, optionally granting `--staff`/`--superuser`
+and/or specific `--permission <key>` grants, with a `--password-env` option to
+avoid putting the plaintext password in shell history. See
+`docs/django_developer/account/bootstrap.md` for the portal-permission
+reference table and why a `{"admin": true}` permission key is *not* an
+equivalent of `--superuser` (it only satisfies the frontend's wildcard check,
+not the backend's).
+
 ## v1.2.40 - July 03, 2026
 
 
