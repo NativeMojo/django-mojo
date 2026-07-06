@@ -106,9 +106,25 @@ parsed = ua.parse("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)...")
 
 ## paths
 
+`configure_paths(base_dir)` (called once from Django settings) sets module-level
+globals for common project paths — `PROJECT_ROOT`, `VAR_ROOT`, `CONFIG_ROOT`,
+`BIN_ROOT`, `MEDIA_ROOT`, `STATIC_ROOT`, and others.
+
 ```python
 from mojo.helpers import paths
 
-base = paths.get_base_dir()          # project root
-media = paths.get_media_root()       # MEDIA_ROOT from settings
+paths.PROJECT_ROOT    # project root
+paths.MEDIA_ROOT      # VAR_ROOT / "media"
+paths.CONFIG_ROOT     # committed config/ dir
+paths.VAR_ROOT        # gitignored var/ dir (per-machine state)
+```
+
+`resolve_conf(name, var_root=None, config_root=None)` resolves a `.conf` filename
+to its effective path, preferring a local override: `VAR_ROOT/name` if it exists,
+else `CONFIG_ROOT/name`. Whole-file resolution — no per-key merge. Used by testit
+to let `var/dev_server.conf` override the committed `config/dev_server.conf`; see
+[testit Overview § Dev-server host/port](../testit/Overview.md#dev-server-hostport-dev_serverconf).
+
+```python
+conf_path = paths.resolve_conf("dev_server.conf")
 ```

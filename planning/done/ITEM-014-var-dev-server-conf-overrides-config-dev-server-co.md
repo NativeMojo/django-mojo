@@ -257,10 +257,27 @@ Add to `tests/test_helpers/test_runner_config.py` (tmp dirs only, never live var
 - none
 
 ## Notes
-[Scratch space — anything not part of the plan.]
+### Baseline (2026-07-06, before any edit) — `bin/run_tests --agent`
+GREEN. total 2287 / passed 2231 / failed 0 / skipped 56 (per
+`testproject/var/test_failures.json`; opt-in `test_incident`/`test_security` not
+collected in the default agent suite). No pre-existing failures — every failure
+after this change is mine to fix.
+
+### Post-build (2026-07-06)
+- Full suite GREEN via test-runner: passed 2234 / failed 0 (+3 = the new tests).
+  One transient `test_mfa` throttle flake on the first run — a documented known
+  parallel-load flake, unrelated to this diff; passed on isolated re-run and a
+  second full green suite.
+- Security review: passed, no concerns (`resolve_conf` receives only hardcoded
+  literals at every call site).
+- docs-updater additionally fixed a pre-existing stale section in
+  `docs/django_developer/helpers/other.md` (it documented fictional
+  `paths.get_base_dir()` / `get_media_root()`); rewrote it to the real module
+  globals and added the `resolve_conf` note. Small, correct, adjacent to the
+  resolve_conf doc — kept in this item's close commit.
 
 ## Resolution
-- closed: YYYY-MM-DD
-- branch:
-- files changed:
-- tests added:
+- closed: 2026-07-06
+- branch: main
+- files changed: mojo/helpers/paths.py,testit/runner.py,testit/helpers.py,bin/asgi_local,tests/test_helpers/test_runner_config.py,docs/django_developer/testit/Overview.md,docs/django_developer/helpers/other.md,CHANGELOG.md,planning/.next_id (close.sh auto-list over-reached across the last release range; corrected to this item's files only)
+- tests added: tests/test_helpers/test_runner_config.py — 3 tests: resolve_conf var-overrides, config-fallback, and _read_dev_server_conf var-override wire-through
