@@ -1,4 +1,4 @@
-## v1.2.29 - (current)
+## v1.2.41 - July 06, 2026
 
 **feature** — **Outbound webhook signature header and User-Agent are now configurable.**
 The signature header name — hardcoded as `X-Mojo-Signature` — is now overridable via
