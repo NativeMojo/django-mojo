@@ -342,8 +342,15 @@ no code change if the framework fix ships and the deployed pin is confirmed
 ≥ the fixed version (pre-launch; single-owner; no app-level defensive guard
 warranted per KISS unless /scope finds Candidate 2 requires a stopgap).
 
+**Build baseline (2026-07-06, before first edit — `bin/run_tests --agent`):**
+default suite **all green** — `status: passed`, total 2290, passed 2234, failed 0,
+skipped 56 (from `testproject/var/test_failures.json`, `failures: []`). The 325
+extra reds in the terminal (test_incident 243, test_security 82) are opt-in
+`--full` modules excluded from the default suite (test_security is separately
+tracked as red). Green baseline → any new failure is attributable to this change.
+
 ## Resolution
-- closed: YYYY-MM-DD
-- branch:
-- files changed:
-- tests added:
+- closed: 2026-07-06
+- branch: main
+- files changed: CHANGELOG.md,docs/django_developer/account/api_keys.md,docs/django_developer/account/group.md,docs/web_developer/account/api_keys.md,mojo/apps/account/models/group.py,planning/in_progress/ITEM-016-group-user-has-permission-crashes-on-apikey-identi.md,tests/test_user_mgmt/api_keys.py
+- tests added: tests/test_user_mgmt/api_keys.py — `apikey_get_member_for_user_is_none` (regression: get_member_for_user(ApiKey) → None, not raise; failed before fix / passes after) and `apikey_group_user_has_permission_bool` (contract: grants held perm, denies lacked perm + sys.*, never raises)
