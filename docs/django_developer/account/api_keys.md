@@ -17,7 +17,7 @@ Authorization: apikey <raw_token>
 3. Sets `request.group = api_key.group` and `request.api_key = api_key`
 4. Returns a synthetic user object whose `has_permission` delegates to `api_key.has_permission`
 
-From that point forward the request is indistinguishable from a normal group-scoped request — `RestMeta` permission checks, `requires_perms`, and `request.group` filtering all work as-is.
+From that point forward the request is indistinguishable from a normal group-scoped request — `RestMeta` permission checks, `requires_perms`, and `request.group` filtering all work as-is. This synthetic user is not a request `User`, so any code that touches group membership must be ApiKey-safe: see [`Group.get_member_for_user` / `user_has_permission`](group.md#membership) for the identity guard that makes group permission gates degrade to deny/`None` instead of raising for a non-`User` identity.
 
 ## Permissions
 

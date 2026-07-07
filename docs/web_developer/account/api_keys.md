@@ -65,6 +65,12 @@ Authorization: apikey <token>
 
 The key's group is automatically set on the request. Only permissions in the key's `permissions` dict are allowed. System-level permissions (`sys.*`) are always denied.
 
+Endpoints that resolve or inspect a group or its membership — `GET
+/api/group/uuid/<uuid>`, `GET /api/group/<pk>`, `GET /api/group/<pk>/member` —
+and any group-scoped permission check now work correctly under
+`Authorization: apikey <token>`: they cleanly grant or deny access instead of
+returning HTTP 400 `Must be "User" instance.`.
+
 ### Check a Key — `GET /api/group/apikey/me`
 
 Whoami for the **calling** API key. Authenticate with `Authorization: apikey <token>` and it returns that key's own identity and granted permissions — useful for confirming a token works and seeing what it can do. Requires no management permission. A normal user/JWT session has no API key and gets `401` (use `GET /api/user/me` instead). The raw token is never returned.
