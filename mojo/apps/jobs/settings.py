@@ -36,7 +36,8 @@ JOBS_SCHEDULER_LOCK_TTL_MS = 5000     # Scheduler leadership lock TTL
 JOBS_WEBHOOK_MAX_RETRIES = 5          # More retries for webhooks (network issues)
 JOBS_WEBHOOK_DEFAULT_TIMEOUT = 30     # Default webhook timeout in seconds
 JOBS_WEBHOOK_MAX_TIMEOUT = 300        # Maximum allowed webhook timeout
-JOBS_WEBHOOK_USER_AGENT = "Django-MOJO-Webhook/1.0"  # Default User-Agent header
+JOBS_WEBHOOK_USER_AGENT = "Django-MOJO-Webhook/1.0"  # Outbound User-Agent; override to avoid advertising the framework
+WEBHOOK_SIGNATURE_HEADER = "X-Mojo-Signature"  # Outbound signature header name; also the default read by inbound verify_signed_request (not a JOBS_* key)
 
 # Channels Configuration
 JOBS_CHANNELS = [
@@ -160,6 +161,20 @@ JOBS_SCHEDULER_LOCK_TTL_MS
     TTL in milliseconds for the scheduler leadership lock.
     Only one scheduler should be active cluster-wide.
     Default: 5000 (5 seconds)
+
+JOBS_WEBHOOK_USER_AGENT
+    Outbound User-Agent header for jobs.publish_webhook(). Override to avoid
+    advertising the framework to third-party receivers. A caller-supplied
+    User-Agent passed via publish_webhook(headers=...) still wins.
+    Default: "Django-MOJO-Webhook/1.0"
+
+WEBHOOK_SIGNATURE_HEADER
+    Header name used for the outbound webhook HMAC signature, and honored as
+    the default by inbound verify_signed_request() so send and verify stay in
+    sync. Not a JOBS_* key since verification lives outside the jobs app.
+    Renaming is a contract change with your webhook consumers — they must
+    read the same header name. See docs/django_developer/account/webhook_signing.md.
+    Default: "X-Mojo-Signature"
 
 JOBS_CHANNELS
     List of configured channels. Used by scheduler and manager

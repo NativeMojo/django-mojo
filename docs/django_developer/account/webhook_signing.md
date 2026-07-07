@@ -85,7 +85,7 @@ What happens at delivery time:
 
 1. The handler reads `payload['sign_group_id']` and loads the Group.
 2. Canonicalizes the body: `json.dumps(data, sort_keys=True, separators=(",", ":")).encode("utf-8")`.
-3. Computes `X-Mojo-Signature: <hex HMAC-SHA256>` keyed on the Group's secret.
+3. Computes the signature header `X-Mojo-Signature: <hex HMAC-SHA256>` (name configurable via `WEBHOOK_SIGNATURE_HEADER`) keyed on the Group's secret.
 4. Sends the exact bytes it hashed via `requests.post(..., data=body_bytes)` — guarantees signature and wire bytes match.
 
 If the Group has been deleted between publish and delivery, the handler returns `'failed'` with `error_type='sign_group_missing'` — it does **not** retry and does **not** silently send unsigned.
@@ -112,7 +112,7 @@ def on_webhook(request, group_uuid=None):
 
 `verify_signed_request`:
 
-- Pulls raw `request.body` and the `X-Mojo-Signature` header.
+- Pulls raw `request.body` and the configured signature header (`X-Mojo-Signature` by default, or `WEBHOOK_SIGNATURE_HEADER` if set — pass an explicit `header=` to override).
 - Returns `False` (never raises) when the secret is missing, the header is missing, or the signature does not match.
 - Uses `hmac.compare_digest` (via `verify_signature`) for constant-time comparison.
 
@@ -123,11 +123,11 @@ def on_webhook(request, group_uuid=None):
 For synchronous webhooks or custom transports, call the helper directly:
 
 ```python
-from mojo.helpers.crypto.sign import sign_for_group, WEBHOOK_SIGNATURE_HEADER
+from mojo.helpers.crypto.sign import sign_for_group, get_signature_header
 
 body_bytes = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
 sig = sign_for_group(group, body_bytes)
-response.headers[WEBHOOK_SIGNATURE_HEADER] = sig
+response.headers[get_signature_header()] = sig
 ```
 
 `sign_for_group` auto-mints on first use (same as the REST endpoint).
@@ -139,7 +139,7 @@ response.headers[WEBHOOK_SIGNATURE_HEADER] = sig
 - **Secret never in the queue**: `publish_webhook(group=...)` stores only `sign_group_id` in the job payload. Anyone reading the queue store sees no signing material.
 - **Rotation is immediate**: no overlap window. Receivers should accept transient signature-mismatch errors during operator-driven rotation, same as ApiKey rotation.
 - **Group hierarchy is not auto-resolved**: the signing secret is on the Group you pass, not its parent or descendants. Pass the exact Group whose data the webhook represents.
-- **Header is masked in logs**: the jobs handler runs `X-Mojo-Signature` through its `_sanitize_headers` masking — full signatures don't end up in job metadata or log lines.
+- **Header is masked in logs**: the jobs handler runs the configured signature header (`X-Mojo-Signature` by default) through its `_sanitize_headers` masking — full signatures don't end up in job metadata or log lines.
 
 ### Replay protection — receiver's responsibility
 

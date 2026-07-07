@@ -32,7 +32,7 @@ caller (request thread, sync)
 
 Three properties this gives you for free:
 
-- **Signing** — every published webhook job carries `sign_group_id`; the existing webhook handler injects `X-Mojo-Signature` at delivery (see [Webhook Signing](webhook_signing.md)).
+- **Signing** — every published webhook job carries `sign_group_id`; the existing webhook handler injects the signature header (`X-Mojo-Signature` by default, configurable via `WEBHOOK_SIGNATURE_HEADER`) at delivery (see [Webhook Signing](webhook_signing.md)).
 - **Retries / backoff / dead-letter** — inherited from `publish_webhook` and the jobs system.
 - **Skip-and-continue** — one flaky subscription cannot poison the fan-out. Per-row failures land in the incident app for follow-up.
 
@@ -140,7 +140,7 @@ Permission: `manage_group` / `manage_groups` / `groups` — same threshold as `A
 
 - **URL validation is at the syntactic level only**: `https://`-prefix, valid syntax, no embedded credentials (`user:pass@`). The framework does **not** restrict the target host. An operator with `manage_group` permission can register a URL pointing at `https://169.254.169.254/...` (AWS metadata), `https://10.0.0.1/...` (internal network), `https://localhost/...`, etc. — and the fan-out will dutifully deliver. **This is a deliberate trust model**: subscription writes require `manage_group` (same threshold as ApiKey CRUD), and `manage_group`-holders are considered trusted. If your deployment has a less-trusted operator tier and you need allow-list / deny-list enforcement of subscription URLs, layer that check in your own portal before POSTing to the framework endpoint, or open a follow-up request.
 - **Per-row failure reports are bounded**: `error_repr` is truncated to 500 chars before being recorded in incident events. Inner exceptions from `requests` / HTTP libraries can embed response bodies and auth headers in their reprs; the cap bounds that exposure window.
-- **Signing is automatic, not optional**: deliveries always go through `jobs.publish_webhook(group=...)` which always injects `X-Mojo-Signature`. There is no path through `dispatch()` that delivers unsigned.
+- **Signing is automatic, not optional**: deliveries always go through `jobs.publish_webhook(group=...)` which always injects the signature header. There is no path through `dispatch()` that delivers unsigned.
 - **Group hierarchy is not traversed**: `dispatch(group=g, ...)` only matches subscriptions whose `group_id == g.id`. Parent/child groups are not included.
 
 ## Out of scope (v1)

@@ -90,9 +90,11 @@ data = parse_request_data(request)  # returns objict
 
 ## Webhook Signature Verification
 
-### `verify_signed_request(request, secret)`
+### `verify_signed_request(request, secret, header=None)`
 
-Returns `True` if the raw request body matches the `X-Mojo-Signature` header using HMAC-SHA256 keyed on `secret`. Returns `False` (never raises) when the secret is `None`, the header is absent, or the signature does not match. Uses `hmac.compare_digest` for constant-time comparison.
+Returns `True` if the raw request body matches the signature header using HMAC-SHA256 keyed on `secret`. Returns `False` (never raises) when the secret is `None`, the header is absent, or the signature does not match. Uses `hmac.compare_digest` for constant-time comparison.
+
+`header` defaults to the effective signature header name — `X-Mojo-Signature` unless the `WEBHOOK_SIGNATURE_HEADER` setting overrides it — so verification stays in sync with the outbound send side without callers passing anything. Pass an explicit `header=` to check a different name.
 
 ```python
 from mojo.helpers.request import verify_signed_request
