@@ -4497,6 +4497,17 @@ group is detected. This preserves the default branding for the default flow.</p>
 <a id="__codelineno-11-13" name="__codelineno-11-13" href="#__codelineno-11-13"></a><span class="n">n</span> <span class="o">=</span> <span class="n">group</span><span class="o">.</span><span class="n">member_count</span>
 </code></pre></div>
 <p><code>member_count</code> is exposed via REST as an <code>extra</code> on the <code>default</code> graph (not <code>basic</code> — that stays minimal). List endpoints use <code>default</code> by, well, default, so the field appears in list payloads without an explicit <code>?graph=</code> parameter. Backed by <code>members.filter(is_active=True).count()</code> per record — at very large scale, consider an annotated queryset instead.</p>
+<blockquote>
+<p><strong>Non-<code>User</code> identities (e.g. API keys).</strong> <code>get_member_for_user</code> returns <code>None</code>
+for any identity that is not a request <code>User</code>. An <code>ApiKey</code> authenticating a
+request (<code>Authorization: apikey &lt;token&gt;</code>) has no <code>GroupMember</code> row, so it is
+treated as "not a member" rather than raising <code>Must be "User" instance.</code> from
+<code>members.filter(user=…)</code>. <code>user_has_permission</code> likewise returns a bool for an
+API key: it grants/denies via <code>ApiKey.has_permission</code> (group-scoped; <code>sys.*</code>
+always denied) and never runs a <code>User</code>-typed membership query. Every group
+permission gate is therefore safe to call with <code>request.user</code> whether the
+caller authenticated with a JWT or an API key.</p>
+</blockquote>
 <h2 id="groupmember-model">GroupMember Model<a class="headerlink" href="#groupmember-model" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">GroupMember</span><span class="p">(</span><span class="n">models</span><span class="o">.</span><span class="n">Model</span><span class="p">,</span> <span class="n">MojoModel</span><span class="p">):</span>
 <a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>    <span class="n">group</span> <span class="o">=</span> <span class="n">models</span><span class="o">.</span><span class="n">ForeignKey</span><span class="p">(</span><span class="n">Group</span><span class="p">,</span> <span class="n">related_name</span><span class="o">=</span><span class="s2">&quot;members&quot;</span><span class="p">,</span> <span class="o">...</span><span class="p">)</span>

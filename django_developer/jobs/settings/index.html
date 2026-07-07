@@ -4095,10 +4095,14 @@
 <tr>
 <td><code>JOBS_WEBHOOK_USER_AGENT</code></td>
 <td><code>"Django-MOJO-Webhook/1.0"</code></td>
-<td>Default User-Agent header</td>
+<td>Outbound <code>User-Agent</code>; override to avoid advertising the framework. A caller-supplied <code>User-Agent</code> in <code>publish_webhook(headers=...)</code> still wins.</td>
 </tr>
 </tbody>
 </table>
+<p>The outbound signature <strong>header name</strong> is also configurable, via the framework-wide
+<code>WEBHOOK_SIGNATURE_HEADER</code> setting (default <code>"X-Mojo-Signature"</code>) — not a <code>JOBS_*</code>
+key, since inbound verification honors it too. See
+<a href="../../account/webhook_signing/">Webhook Signing</a>.</p>
 <h2 id="example-configurations">Example Configurations<a class="headerlink" href="#example-configurations" title="Permanent link">&para;</a></h2>
 <h3 id="minimal-development">Minimal (Development)<a class="headerlink" href="#minimal-development" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Uses all defaults — just need Redis running</span>

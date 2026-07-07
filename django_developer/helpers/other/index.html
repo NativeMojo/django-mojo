@@ -4123,10 +4123,22 @@
 <a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="c1"># {&quot;browser&quot;: &quot;Chrome&quot;, &quot;os&quot;: &quot;macOS&quot;, &quot;device&quot;: &quot;desktop&quot;}</span>
 </code></pre></div>
 <h2 id="paths">paths<a class="headerlink" href="#paths" title="Permanent link">&para;</a></h2>
+<p><code>configure_paths(base_dir)</code> (called once from Django settings) sets module-level
+globals for common project paths — <code>PROJECT_ROOT</code>, <code>VAR_ROOT</code>, <code>CONFIG_ROOT</code>,
+<code>BIN_ROOT</code>, <code>MEDIA_ROOT</code>, <code>STATIC_ROOT</code>, and others.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="n">paths</span>
 <a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>
-<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="n">base</span> <span class="o">=</span> <span class="n">paths</span><span class="o">.</span><span class="n">get_base_dir</span><span class="p">()</span>          <span class="c1"># project root</span>
-<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="n">media</span> <span class="o">=</span> <span class="n">paths</span><span class="o">.</span><span class="n">get_media_root</span><span class="p">()</span>       <span class="c1"># MEDIA_ROOT from settings</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="n">paths</span><span class="o">.</span><span class="n">PROJECT_ROOT</span>    <span class="c1"># project root</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="n">paths</span><span class="o">.</span><span class="n">MEDIA_ROOT</span>      <span class="c1"># VAR_ROOT / &quot;media&quot;</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="n">paths</span><span class="o">.</span><span class="n">CONFIG_ROOT</span>     <span class="c1"># committed config/ dir</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="n">paths</span><span class="o">.</span><span class="n">VAR_ROOT</span>        <span class="c1"># gitignored var/ dir (per-machine state)</span>
+</code></pre></div>
+<p><code>resolve_conf(name, var_root=None, config_root=None)</code> resolves a <code>.conf</code> filename
+to its effective path, preferring a local override: <code>VAR_ROOT/name</code> if it exists,
+else <code>CONFIG_ROOT/name</code>. Whole-file resolution — no per-key merge. Used by testit
+to let <code>var/dev_server.conf</code> override the committed <code>config/dev_server.conf</code>; see
+<a href="../../testit/Overview/#dev-server-hostport-dev_serverconf">testit Overview § Dev-server host/port</a>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="n">conf_path</span> <span class="o">=</span> <span class="n">paths</span><span class="o">.</span><span class="n">resolve_conf</span><span class="p">(</span><span class="s2">&quot;dev_server.conf&quot;</span><span class="p">)</span>
 </code></pre></div>
 
 

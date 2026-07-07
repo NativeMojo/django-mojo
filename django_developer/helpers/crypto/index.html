@@ -4056,14 +4056,19 @@
 <p>Use for webhook payloads, API request signing, and tamper detection.</p>
 <h3 id="webhook-signing-helpers">Webhook signing helpers<a class="headerlink" href="#webhook-signing-helpers" title="Permanent link">&para;</a></h3>
 <p>For signing outbound webhooks keyed on a Group secret, use the higher-level helpers instead of calling <code>generate_signature</code> directly:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers.crypto.sign</span><span class="w"> </span><span class="kn">import</span> <span class="n">sign_for_group</span><span class="p">,</span> <span class="n">WEBHOOK_SIGNATURE_HEADER</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers.crypto.sign</span><span class="w"> </span><span class="kn">import</span> <span class="n">sign_for_group</span><span class="p">,</span> <span class="n">get_signature_header</span>
 <a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>
 <a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="c1"># sign_for_group auto-mints the Group&#39;s webhook secret on first use</span>
 <a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="n">body_bytes</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="n">payload</span><span class="p">,</span> <span class="n">sort_keys</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">separators</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;,&quot;</span><span class="p">,</span> <span class="s2">&quot;:&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">encode</span><span class="p">()</span>
 <a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="n">sig</span> <span class="o">=</span> <span class="n">sign_for_group</span><span class="p">(</span><span class="n">group</span><span class="p">,</span> <span class="n">body_bytes</span><span class="p">)</span>
-<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="n">response</span><span class="o">.</span><span class="n">headers</span><span class="p">[</span><span class="n">WEBHOOK_SIGNATURE_HEADER</span><span class="p">]</span> <span class="o">=</span> <span class="n">sig</span>   <span class="c1"># &quot;X-Mojo-Signature&quot;</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="n">response</span><span class="o">.</span><span class="n">headers</span><span class="p">[</span><span class="n">get_signature_header</span><span class="p">()]</span> <span class="o">=</span> <span class="n">sig</span>   <span class="c1"># &quot;X-Mojo-Signature&quot; by default</span>
 </code></pre></div>
-<p><code>WEBHOOK_SIGNATURE_HEADER</code> is the string constant <code>"X-Mojo-Signature"</code>.</p>
+<p><code>get_signature_header()</code> returns the effective signature header name —
+<code>"X-Mojo-Signature"</code> by default, or the value of the <code>WEBHOOK_SIGNATURE_HEADER</code>
+Django setting when an operator overrides it (e.g. to avoid advertising the
+framework to receivers). Use the accessor, not the <code>WEBHOOK_SIGNATURE_HEADER</code>
+module constant, when emitting or verifying so both sides honor the setting; the
+constant remains the default string for back-compat.</p>
 <p>Most webhook emission should go through <code>jobs.publish_webhook(group=...)</code>, which calls these helpers automatically. See <a href="../../account/webhook_signing/">Webhook Signing</a>.</p>
 <h2 id="asymmetric-publicprivate-key-encryption">Asymmetric (Public/Private Key) Encryption<a class="headerlink" href="#asymmetric-publicprivate-key-encryption" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers.crypto.privpub</span><span class="w"> </span><span class="kn">import</span> <span class="n">hybrid</span>

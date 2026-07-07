@@ -4634,7 +4634,7 @@
 <ol>
 <li>Stores <strong>only</strong> <code>sign_group_id</code> in the queue — the secret never enters the payload.</li>
 <li>At delivery, canonicalizes the body: <code>json.dumps(data, sort_keys=True, separators=(",", ":")).encode("utf-8")</code>.</li>
-<li>Computes <code>X-Mojo-Signature: &lt;hex&gt;</code> keyed on the Group's webhook secret (auto-minted on first use).</li>
+<li>Computes the signature header <code>X-Mojo-Signature: &lt;hex&gt;</code> (name configurable via the <code>WEBHOOK_SIGNATURE_HEADER</code> setting) keyed on the Group's webhook secret (auto-minted on first use).</li>
 <li>Sends those exact bytes via <code>requests.post(..., data=body_bytes)</code> — signature and wire bytes are guaranteed identical.</li>
 </ol>
 <p>If the Group has been deleted between publish and delivery, the handler returns <code>'failed'</code> with <code>error_type='sign_group_missing'</code> — no retry, no silent unsigned send.</p>

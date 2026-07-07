@@ -4273,10 +4273,11 @@
 <a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="n">JOBS_WEBHOOK_MAX_RETRIES</span> <span class="o">=</span> <span class="mi">5</span>           <span class="c1"># Default max retries for webhooks</span>
 <a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="n">JOBS_WEBHOOK_DEFAULT_TIMEOUT</span> <span class="o">=</span> <span class="mi">30</span>      <span class="c1"># Default HTTP timeout (seconds)</span>
 <a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="n">JOBS_WEBHOOK_MAX_TIMEOUT</span> <span class="o">=</span> <span class="mi">300</span>         <span class="c1"># Maximum allowed timeout (seconds)</span>
-<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="n">JOBS_WEBHOOK_USER_AGENT</span> <span class="o">=</span> <span class="s2">&quot;Django-MOJO-Webhook/1.0&quot;</span>
-<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>
-<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="c1"># Include webhooks channel</span>
-<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="n">JOBS_CHANNELS</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;default&#39;</span><span class="p">,</span> <span class="s1">&#39;webhooks&#39;</span><span class="p">]</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="n">JOBS_WEBHOOK_USER_AGENT</span> <span class="o">=</span> <span class="s2">&quot;Django-MOJO-Webhook/1.0&quot;</span>   <span class="c1"># Outbound User-Agent; override to hide the framework</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="n">WEBHOOK_SIGNATURE_HEADER</span> <span class="o">=</span> <span class="s2">&quot;X-Mojo-Signature&quot;</span>         <span class="c1"># Signature header name; override to hide the framework (coordinate with receivers)</span>
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a>
+<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="c1"># Include webhooks channel</span>
+<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="n">JOBS_CHANNELS</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;default&#39;</span><span class="p">,</span> <span class="s1">&#39;webhooks&#39;</span><span class="p">]</span>
 </code></pre></div>
 <p>Run a dedicated worker for webhooks:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>jobs_engine<span class="w"> </span>--channels<span class="w"> </span>webhooks<span class="w"> </span>--max-workers<span class="w"> </span><span class="m">20</span>

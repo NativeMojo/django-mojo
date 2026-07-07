@@ -10,7 +10,7 @@
       
       
       
-        <link rel="canonical" href="https://NativeMojo.github.io/django-mojo/django_developer/account/api_keys/">
+        <link rel="canonical" href="https://NativeMojo.github.io/django-mojo/django_developer/account/bootstrap/">
       
       
       
@@ -23,7 +23,7 @@
     
     
       
-        <title>API Keys — Django Developer Reference - Django-MOJO</title>
+        <title>Bootstrapping Users & Admins - Django-MOJO</title>
       
     
     
@@ -74,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#api-keys-django-developer-reference" class="md-skip">
+        <a href="#bootstrapping-users-admins" class="md-skip">
           Skip to content
         </a>
       
@@ -108,7 +108,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              API Keys — Django Developer Reference
+              Bootstrapping Users &amp; Admins
             
           </span>
         </div>
@@ -3733,10 +3733,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#how-it-works" class="md-nav__link">
+  <a href="#why-managepy-createsuperuser-doesnt-work" class="md-nav__link">
     <span class="md-ellipsis">
       
-        How It Works
+        Why ./manage.py createsuperuser doesn't work
       
     </span>
   </a>
@@ -3744,55 +3744,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#permissions" class="md-nav__link">
+  <a href="#the-create_user-management-command" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Permissions
+        The create_user management command
       
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#group-scoping" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Group Scoping
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#creating-keys" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Creating Keys
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Creating Keys">
+    <nav class="md-nav" aria-label="The create_user management command">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#programmatically" class="md-nav__link">
+  <a href="#flags" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Programmatically
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#via-rest" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Via REST
+        Flags
       
     </span>
   </a>
@@ -3805,10 +3772,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#rate-limit-overrides" class="md-nav__link">
+  <a href="#-superuser-vs-permission-there-is-no-partial-admin-shortcut" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Rate Limit Overrides
+        --superuser vs. --permission — there is no partial-admin shortcut
       
     </span>
   </a>
@@ -3816,49 +3783,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#rest-endpoints" class="md-nav__link">
+  <a href="#portal-section-permission-key-reference" class="md-nav__link">
     <span class="md-ellipsis">
       
-        REST Endpoints
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="REST Endpoints">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#get-apigroupapikeyme-whoami" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        GET /api/group/apikey/me — whoami
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#post-apigroupapikeyrotate-rotate-self" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        POST /api/group/apikey/rotate — rotate self
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#lifecycle" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Lifecycle
+        Portal section → permission key reference
       
     </span>
   </a>
@@ -3866,10 +3794,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#security-notes" class="md-nav__link">
+  <a href="#troubleshooting" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Security Notes
+        Troubleshooting
       
     </span>
   </a>
@@ -3896,209 +3824,176 @@
   
 
 
-<h1 id="api-keys-django-developer-reference">API Keys — Django Developer Reference<a class="headerlink" href="#api-keys-django-developer-reference" title="Permanent link">&para;</a></h1>
-<p>API keys give programmatic clients authenticated access scoped to a group, without requiring a user login. They authenticate via the standard <code>Authorization</code> header and plug into the existing permission system with no special cases.</p>
-<blockquote>
-<p><strong>API Keys vs User Auth Tokens:</strong> MOJO has two authentication mechanisms for programmatic access. <strong>API Keys</strong> (<code>ApiKey</code> model, <code>Authorization: apikey &lt;token&gt;</code>) are group-scoped with explicit permissions — use these for external integrations. <strong>User Auth Tokens</strong> (<code>User.generate_api_token()</code>, <code>Authorization: bearer &lt;token&gt;</code>) are JWT tokens that carry a user's full system-level permissions — use these only when you need to act as a specific user. See <a href="../../../web_developer/account/api_keys/">REST API docs</a> for the REST-facing comparison.</p>
-</blockquote>
-<h2 id="how-it-works">How It Works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>Authorization: apikey &lt;raw_token&gt;
+<h1 id="bootstrapping-users-admins">Bootstrapping Users &amp; Admins<a class="headerlink" href="#bootstrapping-users-admins" title="Permanent link">&para;</a></h1>
+<p>How to create the first admin user (and any subsequent user) for a fresh
+django-mojo deployment.</p>
+<h2 id="why-managepy-createsuperuser-doesnt-work">Why <code>./manage.py createsuperuser</code> doesn't work<a class="headerlink" href="#why-managepy-createsuperuser-doesnt-work" title="Permanent link">&para;</a></h2>
+<p>Django's built-in <code>createsuperuser</code> prompts for <code>USERNAME_FIELD</code> (<code>username</code>
+on this project's <code>account.User</code>) and calls the user manager as
+<code>create_superuser(username=..., password=...)</code>. But
+<code>CustomUserManager.create_superuser</code>/<code>create_user</code>
+(<code>mojo/apps/account/models/user.py</code>) require <code>email</code> as their first argument —
+so the built-in command raises <code>TypeError: create_superuser() missing 1
+required positional argument: 'email'</code>. This is not a configuration problem;
+it's a fundamental mismatch between Django's generic username-first flow and
+this project's email/phone-based identity model. Use <code>create_user</code> instead.</p>
+<h2 id="the-create_user-management-command">The <code>create_user</code> management command<a class="headerlink" href="#the-create_user-management-command" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># Full admin (bypasses every permission check, on both frontend and backend)</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>./manage.py<span class="w"> </span>create_user<span class="w"> </span>--email<span class="w"> </span>admin@example.com<span class="w"> </span>--superuser
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="c1"># Phone-only account, no admin access</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>./manage.py<span class="w"> </span>create_user<span class="w"> </span>--phone<span class="w"> </span>+15551234567<span class="w"> </span>--first-name<span class="w"> </span>Ada<span class="w"> </span>--last-name<span class="w"> </span>Lovelace
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="c1"># Non-superuser admin scoped to specific portal sections</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>./manage.py<span class="w"> </span>create_user<span class="w"> </span>--email<span class="w"> </span>ops@example.com<span class="w"> </span>--staff<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">    </span>--permission<span class="w"> </span>manage_users<span class="w"> </span>--permission<span class="w"> </span>view_logs
 </code></pre></div>
-<p><code>AuthenticationMiddleware</code> routes this to <code>ApiKey.validate_token()</code>, which:</p>
-<ol>
-<li>SHA-256 hashes the incoming token and looks it up by <code>token_hash</code></li>
-<li>Checks <code>is_active</code> and <code>expires_at</code></li>
-<li>Sets <code>request.group = api_key.group</code> and <code>request.api_key = api_key</code></li>
-<li>Returns a synthetic user object whose <code>has_permission</code> delegates to <code>api_key.has_permission</code></li>
-</ol>
-<p>From that point forward the request is indistinguishable from a normal group-scoped request — <code>RestMeta</code> permission checks, <code>requires_perms</code>, and <code>request.group</code> filtering all work as-is. This synthetic user is not a request <code>User</code>, so any code that touches group membership must be ApiKey-safe: see <a href="../group/#membership"><code>Group.get_member_for_user</code> / <code>user_has_permission</code></a> for the identity guard that makes group permission gates degrade to deny/<code>None</code> instead of raising for a non-<code>User</code> identity.</p>
-<h2 id="permissions">Permissions<a class="headerlink" href="#permissions" title="Permanent link">&para;</a></h2>
-<p>Permissions are stored as a plain JSON dict on the key:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span><span class="s2">&quot;view_data&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span> <span class="s2">&quot;edit_data&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">}</span>
-</code></pre></div>
-<p><strong>Rules:</strong>
-- <code>sys.*</code> permissions are <strong>always denied</strong> — API keys have no backing user to escalate to
-- <code>"all"</code> always returns <code>True</code>
-- List/set input uses OR logic — any match grants access
-- Everything else is a direct dict lookup</p>
-<p><strong>The <code>sys.</code> prefix convention:</strong></p>
-<p>In <code>GroupMember.has_permission</code>, a permission like <code>sys.manage_users</code> strips the prefix and checks <code>user.has_permission("manage_users")</code> — escalating to the user's system-level permissions. This is how endpoints enforce "only a real system-level user can do this, even within a group context." API keys have no backing user, so <code>sys.*</code> is unconditionally denied.</p>
-<p><strong>Why regular permissions are still group-scoped:</strong></p>
-<p><code>validate_token</code> always sets <code>request.group</code>. In <code>rest_check_permission</code>, when <code>request.group</code> is set the check routes to <code>group.user_has_permission(request.user, perms)</code> and returns immediately — the system-level user permission branch is never reached. This means <code>manage_users</code> on an API key applies within the key's group only, not system-wide.</p>
-<h2 id="group-scoping">Group Scoping<a class="headerlink" href="#group-scoping" title="Permanent link">&para;</a></h2>
-<p>Every API key belongs to one group. The key can access that group and any of its descendants. If a request passes <code>group=&lt;id&gt;</code> in the request data and that group is not the key's group or a descendant, the dispatcher returns 403.</p>
-<h2 id="creating-keys">Creating Keys<a class="headerlink" href="#creating-keys" title="Permanent link">&para;</a></h2>
-<h3 id="programmatically">Programmatically<a class="headerlink" href="#programmatically" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">ApiKey</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="n">api_key</span><span class="p">,</span> <span class="n">raw_token</span> <span class="o">=</span> <span class="n">ApiKey</span><span class="o">.</span><span class="n">create_for_group</span><span class="p">(</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>    <span class="n">group</span><span class="o">=</span><span class="n">my_group</span><span class="p">,</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;Mobile App v2&quot;</span><span class="p">,</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>    <span class="n">permissions</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;view_orders&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span> <span class="s2">&quot;create_orders&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="p">)</span>
-<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="c1"># raw_token is a 48-char alphanumeric string — store it now, it cannot be recovered</span>
-</code></pre></div>
-<h3 id="via-rest">Via REST<a class="headerlink" href="#via-rest" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>POST /api/group/apikey
-</code></pre></div>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">&quot;group&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">42</span><span class="p">,</span>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Mobile App v2&quot;</span><span class="p">,</span>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span><span class="nt">&quot;permissions&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;view_orders&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;create_orders&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">}</span>
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="p">}</span>
-</code></pre></div>
-<p>The raw token is included in the creation response under <code>data.token</code> and is stored encrypted via <code>MojoSecrets</code> so it can be retrieved at any time.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">    </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">7</span><span class="p">,</span>
-<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">    </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Mobile App v2&quot;</span><span class="p">,</span>
-<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">    </span><span class="nt">&quot;token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;aB3kR9...48chars&quot;</span><span class="p">,</span>
-<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">    </span><span class="nt">&quot;is_active&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">    </span><span class="nt">&quot;permissions&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;view_orders&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;create_orders&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">},</span>
-<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">    </span><span class="err">...</span>
-<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">  </span><span class="p">}</span>
-<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="p">}</span>
-</code></pre></div>
-<h2 id="rate-limit-overrides">Rate Limit Overrides<a class="headerlink" href="#rate-limit-overrides" title="Permanent link">&para;</a></h2>
-<p>The <code>limits</code> field stores per-endpoint rate limit overrides used by <code>@md.rate_limit</code> and <code>@md.strict_rate_limit</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="n">api_key</span><span class="p">,</span> <span class="n">token</span> <span class="o">=</span> <span class="n">ApiKey</span><span class="o">.</span><span class="n">create_for_group</span><span class="p">(</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>    <span class="n">group</span><span class="o">=</span><span class="n">my_group</span><span class="p">,</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;High-volume integration&quot;</span><span class="p">,</span>
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>    <span class="n">permissions</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;view_orders&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
-<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>    <span class="n">limits</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;orders&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;limit&quot;</span><span class="p">:</span> <span class="mi">500</span><span class="p">,</span> <span class="s2">&quot;window&quot;</span><span class="p">:</span> <span class="mi">60</span><span class="p">}},</span>  <span class="c1"># window in minutes</span>
-<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="p">)</span>
-</code></pre></div>
-<p>See <a href="../../core/rate_limiting/">Rate Limiting</a> for full details.</p>
-<h2 id="rest-endpoints">REST Endpoints<a class="headerlink" href="#rest-endpoints" title="Permanent link">&para;</a></h2>
+<p>Provide at least one of <code>--email</code> / <code>--phone</code>. If <code>--username</code> is omitted, one
+is generated from the email local-part or from first/last name (falling back
+to the phone number).</p>
+<p><strong>Password input</strong> (in priority order):
+1. <code>--password &lt;value&gt;</code> — simplest, but visible in shell history and process
+   list (<code>ps</code>). The command prints a warning when used.
+2. <code>--password-env &lt;VAR_NAME&gt;</code> — reads the password from an environment
+   variable; nothing sensitive touches argv.
+3. Interactive prompt (default when neither flag is given and stdin is a
+   tty) — prompts twice and requires a match.</p>
+<p>Password strength is enforced (same policy as changing a password via the
+API): 12+ characters, or 10+ with a mix of case/digits/special characters.</p>
+<h3 id="flags">Flags<a class="headerlink" href="#flags" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
 <tr>
-<th>Method</th>
-<th>Path</th>
-<th>Description</th>
+<th>Flag</th>
+<th>Purpose</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>GET</code></td>
-<td><code>/api/group/apikey</code></td>
-<td>List keys for a group</td>
+<td><code>--username</code></td>
+<td>Explicit username; auto-generated if omitted</td>
 </tr>
 <tr>
-<td><code>POST</code></td>
-<td><code>/api/group/apikey</code></td>
-<td>Create a key (returns token once)</td>
+<td><code>--email</code></td>
+<td>Email address</td>
 </tr>
 <tr>
-<td><code>GET</code></td>
-<td><code>/api/group/apikey/&lt;id&gt;</code></td>
-<td>Get key details</td>
+<td><code>--phone</code></td>
+<td>Phone number (phone-only accounts)</td>
 </tr>
 <tr>
-<td><code>POST</code></td>
-<td><code>/api/group/apikey/&lt;id&gt;</code></td>
-<td>Update name, permissions, limits, is_active</td>
+<td><code>--first-name</code>, <code>--last-name</code></td>
+<td>Profile name fields</td>
 </tr>
 <tr>
-<td><code>DELETE</code></td>
-<td><code>/api/group/apikey/&lt;id&gt;</code></td>
-<td>Delete key</td>
+<td><code>--password</code>, <code>--password-env</code></td>
+<td>Password source (see above)</td>
 </tr>
 <tr>
-<td><code>GET</code></td>
-<td><code>/api/group/apikey/me</code></td>
-<td>Whoami — the <strong>calling</strong> key's own identity + permissions</td>
+<td><code>--staff</code></td>
+<td>Sets <code>is_staff</code></td>
 </tr>
 <tr>
-<td><code>POST</code></td>
-<td><code>/api/group/apikey/rotate</code></td>
-<td>Rotate the <strong>calling</strong> key's secret in place; returns the new token once</td>
+<td><code>--superuser</code></td>
+<td>Sets <code>is_staff</code> + <code>is_superuser</code> — full access, frontend and backend</td>
+</tr>
+<tr>
+<td><code>--permission &lt;key&gt;</code></td>
+<td>Grant a permission key (repeatable)</td>
+</tr>
+<tr>
+<td><code>--org &lt;group_id&gt;</code></td>
+<td>Assign the user's default organization (<code>account.Group</code>)</td>
 </tr>
 </tbody>
 </table>
-<p>The CRUD endpoints require <code>manage_group</code> or <code>manage_groups</code> permission. The
-<code>me</code> and <code>rotate</code> endpoints require only that the request is authenticated
-<strong>with an API key</strong> (<code>@requires_auth</code>) — no management permission (the caller
-already holds the secret).</p>
-<h3 id="get-apigroupapikeyme-whoami"><code>GET /api/group/apikey/me</code> — whoami<a class="headerlink" href="#get-apigroupapikeyme-whoami" title="Permanent link">&para;</a></h3>
-<p>A self-introspection endpoint for service principals, analogous to
-<code>GET /api/user/me</code> for human users. It lets a key holder confirm the token
-is valid and inspect what the key is allowed to do, without holding any
-management permission.</p>
+<h2 id="-superuser-vs-permission-there-is-no-partial-admin-shortcut"><code>--superuser</code> vs. <code>--permission</code> — there is no partial-admin shortcut<a class="headerlink" href="#-superuser-vs-permission-there-is-no-partial-admin-shortcut" title="Permanent link">&para;</a></h2>
+<p>The web-mojo frontend's <code>hasPermission()</code> treats <code>permissions.admin = true</code>
+as a wildcard that satisfies every check — nav visibility, page gating,
+everything. <strong>The backend does not.</strong> <code>User.has_permission()</code>
+(<code>mojo/apps/account/models/user.py</code>) only checks <code>is_superuser</code>, the literal
+strings <code>"all"</code>/<code>"authenticated"</code>, or an exact key match in the <code>permissions</code>
+dict — it has no <code>"admin"</code> wildcard.</p>
+<p>So granting only <code>{"admin": true}</code> would get someone into the portal admin
+navigation, while every real REST call behind it (anything gated by, say,
+<code>manage_users</code>) still returns 403. <strong><code>create_user</code> intentionally does not
+offer this as a lighter-weight admin option.</strong> There are exactly two sound
+choices:</p>
 <ul>
-<li>Authenticate with <code>Authorization: apikey &lt;token&gt;</code>.</li>
-<li>A user/JWT-authenticated request has no API key and gets <strong>401</strong> — those
-  callers should use <code>GET /api/user/me</code> instead.</li>
-<li>Serialized with the <code>me</code> graph: <code>id</code>, <code>created</code>, <code>name</code>, <code>is_active</code>,
-  <code>permissions</code>, <code>limits</code>, <code>last_used</code>, <code>expires_at</code>, plus the nested
-  <code>group</code> (basic). The graph is forced server-side — a <code>?graph=</code> override
-  is ignored — so the raw <code>token</code> is <strong>never</strong> returned.</li>
+<li><strong><code>--superuser</code></strong> — <code>is_superuser=True</code> bypasses checks correctly on both
+  sides. Use for genuine full-access admins.</li>
+<li><strong><code>--permission &lt;key&gt;</code></strong> (repeatable) — grant the exact keys the desired
+  portal sections need. These behave identically on both sides since both
+  read the same JSON dict literally.</li>
 </ul>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span>
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">    </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">7</span><span class="p">,</span>
-<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">    </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;sms-bridge&quot;</span><span class="p">,</span>
-<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">    </span><span class="nt">&quot;is_active&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="w">    </span><span class="nt">&quot;permissions&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;send_sms&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">},</span>
-<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="w">    </span><span class="nt">&quot;group&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Acme Co&quot;</span><span class="p">},</span>
-<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="w">    </span><span class="nt">&quot;last_used&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-05-20T17:04:00Z&quot;</span><span class="p">,</span>
-<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="w">    </span><span class="nt">&quot;expires_at&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span>
-<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a><span class="w">  </span><span class="p">}</span>
-<a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a><span class="p">}</span>
-</code></pre></div>
-<p>This is what <code>PhoneConfig.test_connection()</code> calls to validate a <code>mojo</code>
-SMS-provider configuration without sending a real message.</p>
-<h3 id="post-apigroupapikeyrotate-rotate-self"><code>POST /api/group/apikey/rotate</code> — rotate self<a class="headerlink" href="#post-apigroupapikeyrotate-rotate-self" title="Permanent link">&para;</a></h3>
-<p>Rotates the <strong>calling</strong> key's secret <strong>in place</strong>: same key id, name,
-permissions, and limits — a brand-new token. The previous token is invalidated
-immediately (its hash is overwritten), so the new token must be persisted by
-the caller; like creation, it is returned <strong>exactly once</strong> and cannot be
-recovered afterward.</p>
+<h2 id="portal-section-permission-key-reference">Portal section → permission key reference<a class="headerlink" href="#portal-section-permission-key-reference" title="Permanent link">&para;</a></h2>
+<p>From web-mojo's <code>src/admin.js</code> route registrations:</p>
+<table>
+<thead>
+<tr>
+<th>Portal section</th>
+<th>Required permission key(s)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Dashboard</td>
+<td><code>security</code></td>
+</tr>
+<tr>
+<td>Users</td>
+<td><code>view_users</code>, <code>manage_users</code></td>
+</tr>
+<tr>
+<td>Groups / Members</td>
+<td><code>view_groups</code>/<code>manage_groups</code>, <code>view_members</code>/<code>manage_groups</code></td>
+</tr>
+<tr>
+<td>Jobs</td>
+<td><code>view_jobs</code>, <code>manage_jobs</code></td>
+</tr>
+<tr>
+<td>Logs</td>
+<td><code>view_logs</code></td>
+</tr>
+<tr>
+<td>Incidents / Events / Blocked IPs</td>
+<td><code>view_security</code></td>
+</tr>
+<tr>
+<td>Rulesets / Tickets</td>
+<td><code>manage_security</code></td>
+</tr>
+<tr>
+<td>S3 Buckets / Email / CloudWatch</td>
+<td><code>manage_aws</code></td>
+</tr>
+<tr>
+<td>Files / File Managers</td>
+<td><code>manage_files</code>, <code>view_fileman</code></td>
+</tr>
+<tr>
+<td>Push (dashboard/templates/deliveries/devices)</td>
+<td><code>manage_notifications</code>, <code>view_notifications</code>, <code>manage_push_config</code></td>
+</tr>
+<tr>
+<td>Settings</td>
+<td><code>manage_settings</code></td>
+</tr>
+</tbody>
+</table>
+<p>Any of these can be granted individually with <code>--permission &lt;key&gt;</code> for a
+non-superuser admin scoped to just those sections.</p>
+<h2 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Authenticate with <code>Authorization: apikey &lt;token&gt;</code> (the key being rotated).</li>
-<li>Self-service: no management permission — the caller already holds the secret
-  (same trust model as <code>me</code>). A user/JWT request has no API key and gets <strong>401</strong>.</li>
-<li>Returns the <code>me</code> graph <strong>plus</strong> the new <code>token</code>:</li>
-</ul>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p">{</span>
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">    </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">7</span><span class="p">,</span>
-<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">    </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;sms-bridge&quot;</span><span class="p">,</span>
-<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="w">    </span><span class="nt">&quot;is_active&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="w">    </span><span class="nt">&quot;permissions&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;send_sms&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">},</span>
-<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="w">    </span><span class="nt">&quot;group&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Acme Co&quot;</span><span class="p">},</span>
-<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="w">    </span><span class="nt">&quot;token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;new-48-char-token&gt;&quot;</span>
-<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="w">  </span><span class="p">}</span>
-<a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="p">}</span>
-</code></pre></div>
-<p>Use it for scheduled credential rotation: a service rotates its own key, stores
-the returned token, and continues — no second key, no <code>manage_group</code> grant, no
-gap where the old secret lingers. (<code>ApiKey.rotate_token()</code> is the model-level
-equivalent.)</p>
-<h2 id="lifecycle">Lifecycle<a class="headerlink" href="#lifecycle" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># Deactivate without deleting</span>
-<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="n">api_key</span><span class="o">.</span><span class="n">is_active</span> <span class="o">=</span> <span class="kc">False</span>
-<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="n">api_key</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
-<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>
-<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="c1"># Set expiry</span>
-<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="n">dates</span>
-<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="n">api_key</span><span class="o">.</span><span class="n">expires_at</span> <span class="o">=</span> <span class="n">dates</span><span class="o">.</span><span class="n">utcnow</span><span class="p">()</span> <span class="o">+</span> <span class="n">dates</span><span class="o">.</span><span class="n">timedelta</span><span class="p">(</span><span class="n">days</span><span class="o">=</span><span class="mi">90</span><span class="p">)</span>
-<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="n">api_key</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
-<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a>
-<a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a><span class="c1"># Rotate — create a new key, delete the old one</span>
-<a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a><span class="n">new_key</span><span class="p">,</span> <span class="n">new_token</span> <span class="o">=</span> <span class="n">ApiKey</span><span class="o">.</span><span class="n">create_for_group</span><span class="p">(</span><span class="n">group</span><span class="p">,</span> <span class="n">name</span><span class="p">,</span> <span class="n">permissions</span><span class="p">)</span>
-<a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a><span class="n">old_key</span><span class="o">.</span><span class="n">delete</span><span class="p">()</span>
-</code></pre></div>
-<h2 id="security-notes">Security Notes<a class="headerlink" href="#security-notes" title="Permanent link">&para;</a></h2>
-<ul>
-<li>The raw token is stored encrypted via <code>MojoSecrets</code> (AES encryption, key derived from the record's pk + created timestamp)</li>
-<li><code>sys.*</code> permissions are unconditionally denied</li>
-<li>Expired or inactive keys return 401</li>
-<li>Group scope is enforced at the dispatcher level — keys cannot access groups outside their hierarchy</li>
-<li><code>token_hash</code> and <code>mojo_secrets</code> are never included in API responses</li>
+<li><strong>"A user with email/username/phone already exists"</strong> — the command
+  pre-checks for conflicts and refuses rather than raising a raw database
+  error; pick a different identity or update the existing user through the
+  portal/REST API instead.</li>
+<li><strong>"Password is too weak..."</strong> — use a longer password or mix in
+  uppercase/lowercase/digits/special characters.</li>
+<li><strong>"No password source available in a non-interactive shell"</strong> — running
+  from a script/CI with no tty requires <code>--password</code> or <code>--password-env</code>.</li>
 </ul>
 
 

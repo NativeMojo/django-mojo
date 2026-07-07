@@ -4246,6 +4246,11 @@
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>Authorization: apikey &lt;token&gt;
 </code></pre></div>
 <p>The key's group is automatically set on the request. Only permissions in the key's <code>permissions</code> dict are allowed. System-level permissions (<code>sys.*</code>) are always denied.</p>
+<p>Endpoints that resolve or inspect a group or its membership — <code>GET
+/api/group/uuid/&lt;uuid&gt;</code>, <code>GET /api/group/&lt;pk&gt;</code>, <code>GET /api/group/&lt;pk&gt;/member</code> —
+and any group-scoped permission check now work correctly under
+<code>Authorization: apikey &lt;token&gt;</code>: they cleanly grant or deny access instead of
+returning HTTP 400 <code>Must be "User" instance.</code>.</p>
 <h3 id="check-a-key-get-apigroupapikeyme">Check a Key — <code>GET /api/group/apikey/me</code><a class="headerlink" href="#check-a-key-get-apigroupapikeyme" title="Permanent link">&para;</a></h3>
 <p>Whoami for the <strong>calling</strong> API key. Authenticate with <code>Authorization: apikey &lt;token&gt;</code> and it returns that key's own identity and granted permissions — useful for confirming a token works and seeing what it can do. Requires no management permission. A normal user/JWT session has no API key and gets <code>401</code> (use <code>GET /api/user/me</code> instead). The raw token is never returned.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="err">GET</span><span class="w"> </span><span class="err">/api/group/apikey/me</span>

@@ -4085,7 +4085,7 @@
 </code></pre></div>
 <p>Three properties this gives you for free:</p>
 <ul>
-<li><strong>Signing</strong> — every published webhook job carries <code>sign_group_id</code>; the existing webhook handler injects <code>X-Mojo-Signature</code> at delivery (see <a href="../webhook_signing/">Webhook Signing</a>).</li>
+<li><strong>Signing</strong> — every published webhook job carries <code>sign_group_id</code>; the existing webhook handler injects the signature header (<code>X-Mojo-Signature</code> by default, configurable via <code>WEBHOOK_SIGNATURE_HEADER</code>) at delivery (see <a href="../webhook_signing/">Webhook Signing</a>).</li>
 <li><strong>Retries / backoff / dead-letter</strong> — inherited from <code>publish_webhook</code> and the jobs system.</li>
 <li><strong>Skip-and-continue</strong> — one flaky subscription cannot poison the fan-out. Per-row failures land in the incident app for follow-up.</li>
 </ul>
@@ -4214,7 +4214,7 @@
 <ul>
 <li><strong>URL validation is at the syntactic level only</strong>: <code>https://</code>-prefix, valid syntax, no embedded credentials (<code>user:pass@</code>). The framework does <strong>not</strong> restrict the target host. An operator with <code>manage_group</code> permission can register a URL pointing at <code>https://169.254.169.254/...</code> (AWS metadata), <code>https://10.0.0.1/...</code> (internal network), <code>https://localhost/...</code>, etc. — and the fan-out will dutifully deliver. <strong>This is a deliberate trust model</strong>: subscription writes require <code>manage_group</code> (same threshold as ApiKey CRUD), and <code>manage_group</code>-holders are considered trusted. If your deployment has a less-trusted operator tier and you need allow-list / deny-list enforcement of subscription URLs, layer that check in your own portal before POSTing to the framework endpoint, or open a follow-up request.</li>
 <li><strong>Per-row failure reports are bounded</strong>: <code>error_repr</code> is truncated to 500 chars before being recorded in incident events. Inner exceptions from <code>requests</code> / HTTP libraries can embed response bodies and auth headers in their reprs; the cap bounds that exposure window.</li>
-<li><strong>Signing is automatic, not optional</strong>: deliveries always go through <code>jobs.publish_webhook(group=...)</code> which always injects <code>X-Mojo-Signature</code>. There is no path through <code>dispatch()</code> that delivers unsigned.</li>
+<li><strong>Signing is automatic, not optional</strong>: deliveries always go through <code>jobs.publish_webhook(group=...)</code> which always injects the signature header. There is no path through <code>dispatch()</code> that delivers unsigned.</li>
 <li><strong>Group hierarchy is not traversed</strong>: <code>dispatch(group=g, ...)</code> only matches subscriptions whose <code>group_id == g.id</code>. Parent/child groups are not included.</li>
 </ul>
 <h2 id="out-of-scope-v1">Out of scope (v1)<a class="headerlink" href="#out-of-scope-v1" title="Permanent link">&para;</a></h2>

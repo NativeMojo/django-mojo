@@ -4075,10 +4075,13 @@
 <h2 id="how-it-works">How It Works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
 <ol>
 <li>The framework's <code>Group</code> model owns a webhook secret, stored inside its existing <code>MojoSecrets</code> blob (no migration). The secret is minted lazily on first use.</li>
-<li>Outbound jobs published with <code>jobs.publish_webhook(..., group=g)</code> are signed at <strong>delivery time</strong>: the handler looks up <code>g</code>, canonicalizes the body, computes the HMAC, sets <code>X-Mojo-Signature</code>, and sends those exact bytes. Retries re-sign with whatever secret is current — rotation is safe.</li>
+<li>Outbound jobs published with <code>jobs.publish_webhook(..., group=g)</code> are signed at <strong>delivery time</strong>: the handler looks up <code>g</code>, canonicalizes the body, computes the HMAC, sets the signature header, and sends those exact bytes. Retries re-sign with whatever secret is current — rotation is safe.</li>
 <li>Inbound receivers verify with <code>verify_signed_request(request, group.get_webhook_secret())</code>.</li>
 </ol>
 <p>The secret never enters the job queue payload — only the Group id is stored.</p>
+<blockquote>
+<p><strong>Configurable header name.</strong> The signature header defaults to <code>X-Mojo-Signature</code> but is overridable via the <code>WEBHOOK_SIGNATURE_HEADER</code> Django setting — operators who don't want to advertise the framework can rename it. <code>verify_signed_request</code> reads the same setting as its default, so send and verify stay in sync. Renaming is a <strong>contract change with your webhook consumers</strong>: they must read the new header name. Use <code>get_signature_header()</code> (not the <code>WEBHOOK_SIGNATURE_HEADER</code> constant) if you emit or verify by hand. The outbound <code>User-Agent</code> is likewise configurable via <code>JOBS_WEBHOOK_USER_AGENT</code>.</p>
+</blockquote>
 <h2 id="group-secret-api">Group Secret API<a class="headerlink" href="#group-secret-api" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">Group</span>
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>
@@ -4146,7 +4149,7 @@
 <ol>
 <li>The handler reads <code>payload['sign_group_id']</code> and loads the Group.</li>
 <li>Canonicalizes the body: <code>json.dumps(data, sort_keys=True, separators=(",", ":")).encode("utf-8")</code>.</li>
-<li>Computes <code>X-Mojo-Signature: &lt;hex HMAC-SHA256&gt;</code> keyed on the Group's secret.</li>
+<li>Computes the signature header <code>X-Mojo-Signature: &lt;hex HMAC-SHA256&gt;</code> (name configurable via <code>WEBHOOK_SIGNATURE_HEADER</code>) keyed on the Group's secret.</li>
 <li>Sends the exact bytes it hashed via <code>requests.post(..., data=body_bytes)</code> — guarantees signature and wire bytes match.</li>
 </ol>
 <p>If the Group has been deleted between publish and delivery, the handler returns <code>'failed'</code> with <code>error_type='sign_group_missing'</code> — it does <strong>not</strong> retry and does <strong>not</strong> silently send unsigned.</p>
@@ -4168,18 +4171,18 @@
 </code></pre></div>
 <p><code>verify_signed_request</code>:</p>
 <ul>
-<li>Pulls raw <code>request.body</code> and the <code>X-Mojo-Signature</code> header.</li>
+<li>Pulls raw <code>request.body</code> and the configured signature header (<code>X-Mojo-Signature</code> by default, or <code>WEBHOOK_SIGNATURE_HEADER</code> if set — pass an explicit <code>header=</code> to override).</li>
 <li>Returns <code>False</code> (never raises) when the secret is missing, the header is missing, or the signature does not match.</li>
 <li>Uses <code>hmac.compare_digest</code> (via <code>verify_signature</code>) for constant-time comparison.</li>
 </ul>
 <p><strong>Important for receivers:</strong> hash the <strong>raw request body bytes</strong>. Do not re-serialize the parsed JSON — <code>requests</code>/your framework may use different separators or key ordering, and the HMAC will fail.</p>
 <h2 id="escape-hatch-sign-outside-the-jobs-queue">Escape Hatch: Sign Outside the Jobs Queue<a class="headerlink" href="#escape-hatch-sign-outside-the-jobs-queue" title="Permanent link">&para;</a></h2>
 <p>For synchronous webhooks or custom transports, call the helper directly:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers.crypto.sign</span><span class="w"> </span><span class="kn">import</span> <span class="n">sign_for_group</span><span class="p">,</span> <span class="n">WEBHOOK_SIGNATURE_HEADER</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers.crypto.sign</span><span class="w"> </span><span class="kn">import</span> <span class="n">sign_for_group</span><span class="p">,</span> <span class="n">get_signature_header</span>
 <a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>
 <a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">body_bytes</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="n">payload</span><span class="p">,</span> <span class="n">sort_keys</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">separators</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;,&quot;</span><span class="p">,</span> <span class="s2">&quot;:&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">encode</span><span class="p">()</span>
 <a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="n">sig</span> <span class="o">=</span> <span class="n">sign_for_group</span><span class="p">(</span><span class="n">group</span><span class="p">,</span> <span class="n">body_bytes</span><span class="p">)</span>
-<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="n">response</span><span class="o">.</span><span class="n">headers</span><span class="p">[</span><span class="n">WEBHOOK_SIGNATURE_HEADER</span><span class="p">]</span> <span class="o">=</span> <span class="n">sig</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="n">response</span><span class="o">.</span><span class="n">headers</span><span class="p">[</span><span class="n">get_signature_header</span><span class="p">()]</span> <span class="o">=</span> <span class="n">sig</span>
 </code></pre></div>
 <p><code>sign_for_group</code> auto-mints on first use (same as the REST endpoint).</p>
 <h2 id="security-notes">Security Notes<a class="headerlink" href="#security-notes" title="Permanent link">&para;</a></h2>
@@ -4189,7 +4192,7 @@
 <li><strong>Secret never in the queue</strong>: <code>publish_webhook(group=...)</code> stores only <code>sign_group_id</code> in the job payload. Anyone reading the queue store sees no signing material.</li>
 <li><strong>Rotation is immediate</strong>: no overlap window. Receivers should accept transient signature-mismatch errors during operator-driven rotation, same as ApiKey rotation.</li>
 <li><strong>Group hierarchy is not auto-resolved</strong>: the signing secret is on the Group you pass, not its parent or descendants. Pass the exact Group whose data the webhook represents.</li>
-<li><strong>Header is masked in logs</strong>: the jobs handler runs <code>X-Mojo-Signature</code> through its <code>_sanitize_headers</code> masking — full signatures don't end up in job metadata or log lines.</li>
+<li><strong>Header is masked in logs</strong>: the jobs handler runs the configured signature header (<code>X-Mojo-Signature</code> by default) through its <code>_sanitize_headers</code> masking — full signatures don't end up in job metadata or log lines.</li>
 </ul>
 <h3 id="replay-protection-receivers-responsibility">Replay protection — receiver's responsibility<a class="headerlink" href="#replay-protection-receivers-responsibility" title="Permanent link">&para;</a></h3>
 <p>The HMAC covers the body only. There is <strong>no nonce and no timestamp</strong> in the signature itself. A captured <code>(body, X-Mojo-Signature)</code> pair will validate indefinitely until the Group secret rotates. Receivers that need replay protection must implement it at the application layer:</p>

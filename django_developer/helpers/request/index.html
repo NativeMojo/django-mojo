@@ -1090,10 +1090,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#verify_signed_requestrequest-secret" class="md-nav__link">
+  <a href="#verify_signed_requestrequest-secret-headernone" class="md-nav__link">
     <span class="md-ellipsis">
       
-        verify_signed_request(request, secret)
+        verify_signed_request(request, secret, header=None)
       
     </span>
   </a>
@@ -4099,10 +4099,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#verify_signed_requestrequest-secret" class="md-nav__link">
+  <a href="#verify_signed_requestrequest-secret-headernone" class="md-nav__link">
     <span class="md-ellipsis">
       
-        verify_signed_request(request, secret)
+        verify_signed_request(request, secret, header=None)
       
     </span>
   </a>
@@ -4205,8 +4205,9 @@ WebSocket <code>resolve_remote_ip</code> / <code>get_remote_ip(scope)</code> in 
 <a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="n">data</span> <span class="o">=</span> <span class="n">parse_request_data</span><span class="p">(</span><span class="n">request</span><span class="p">)</span>  <span class="c1"># returns objict</span>
 </code></pre></div>
 <h2 id="webhook-signature-verification">Webhook Signature Verification<a class="headerlink" href="#webhook-signature-verification" title="Permanent link">&para;</a></h2>
-<h3 id="verify_signed_requestrequest-secret"><code>verify_signed_request(request, secret)</code><a class="headerlink" href="#verify_signed_requestrequest-secret" title="Permanent link">&para;</a></h3>
-<p>Returns <code>True</code> if the raw request body matches the <code>X-Mojo-Signature</code> header using HMAC-SHA256 keyed on <code>secret</code>. Returns <code>False</code> (never raises) when the secret is <code>None</code>, the header is absent, or the signature does not match. Uses <code>hmac.compare_digest</code> for constant-time comparison.</p>
+<h3 id="verify_signed_requestrequest-secret-headernone"><code>verify_signed_request(request, secret, header=None)</code><a class="headerlink" href="#verify_signed_requestrequest-secret-headernone" title="Permanent link">&para;</a></h3>
+<p>Returns <code>True</code> if the raw request body matches the signature header using HMAC-SHA256 keyed on <code>secret</code>. Returns <code>False</code> (never raises) when the secret is <code>None</code>, the header is absent, or the signature does not match. Uses <code>hmac.compare_digest</code> for constant-time comparison.</p>
+<p><code>header</code> defaults to the effective signature header name — <code>X-Mojo-Signature</code> unless the <code>WEBHOOK_SIGNATURE_HEADER</code> setting overrides it — so verification stays in sync with the outbound send side without callers passing anything. Pass an explicit <code>header=</code> to check a different name.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers.request</span><span class="w"> </span><span class="kn">import</span> <span class="n">verify_signed_request</span>
 <a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">Group</span>
 <a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>

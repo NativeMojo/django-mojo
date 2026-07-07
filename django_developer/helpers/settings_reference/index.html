@@ -1566,6 +1566,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#webhook" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WEBHOOK
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -5153,6 +5164,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#webhook" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WEBHOOK
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -5380,6 +5402,7 @@
 <li><code>JOBS_WEBHOOK_DEFAULT_TIMEOUT</code></li>
 <li><code>JOBS_WEBHOOK_MAX_RETRIES</code></li>
 <li><code>JOBS_WEBHOOK_MAX_TIMEOUT</code></li>
+<li><code>JOBS_WEBHOOK_USER_AGENT</code> — outbound webhook <code>User-Agent</code> (default <code>"Django-MOJO-Webhook/1.0"</code>); override to avoid advertising the framework.</li>
 <li><code>JOBS_XPENDING_IDLE_MS</code></li>
 </ul>
 <h3 id="jwt">JWT<a class="headerlink" href="#jwt" title="Permanent link">&para;</a></h3>
@@ -5572,6 +5595,10 @@
 <ul>
 <li><code>WEBAPP_AUTH_PATH</code></li>
 <li><code>WEBAPP_BASE_URL</code></li>
+</ul>
+<h3 id="webhook">WEBHOOK<a class="headerlink" href="#webhook" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>WEBHOOK_SIGNATURE_HEADER</code> — header name used for the outbound webhook HMAC signature and honored as the default by inbound <code>verify_signed_request</code> (default <code>"X-Mojo-Signature"</code>). Override to avoid advertising the framework; renaming is a contract change with your webhook consumers, who must read the same name. See <a href="../../account/webhook_signing/">Webhook Signing</a>.</li>
 </ul>
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">&para;</a></h2>
 <ul>
