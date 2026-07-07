@@ -317,6 +317,28 @@ assert carries a descriptive message.
 - none
 
 ## Notes
+- 2026-07-06 (build baseline): `bin/run_tests --agent` → `var/test_failures.json`
+  status=passed, total 2292, passed 2236, failed 0, skipped 56. GREEN before any
+  edit. (Terminal table lists test_incident 243 / test_security 82 as "failed",
+  but those are opt-in `--full`-only modules — 0.0s, not run in the default suite;
+  the JSON records them as failed:0 and the build-baseline rule excludes them.)
+- 2026-07-06 (build): implemented per plan. Post-build test-runner GREEN
+  (total 2292→2295, passed 2236→2239 — the +3 are the new tests; skipped 56
+  unchanged, failures=[]). security-review PASSED (fail-closed verify preserved;
+  log-masking strictly widened; malformed header-name setting is caught by
+  `requests` → failed job, and is operator config not attacker input).
+- 2026-07-06 (build): test-override mechanism refined vs. the acceptance-criteria
+  note. That note said use `th.server_settings`, but both target test files are
+  pure in-process (no `opts.client`, no server), so `th.server_settings` (which
+  reloads the *server* process) would not affect the in-process `get_static`
+  read. Used a local `_override_setting` contextmanager doing direct
+  setattr/restore on `django.conf.settings` (the Plan's Tests section specified
+  this). `override_settings` stays unused per the testing rules.
+- 2026-07-06 (build): docs-updater caught extra mentions the first commit missed
+  — `helpers/request.md` (verify signature `header=None`), the self-contradicting
+  Escape Hatch code sample in `account/webhook_signing.md`,
+  `account/webhook_subscriptions.md`, `web_developer/account/README.md`, and the
+  `mojo/apps/jobs/settings.py` reference module. Committed in a983d3e.
 - 2026-07-06 (scope): audit also found mojo-identifying User-Agents on
   outbound *scraper* requests — `Mojo-Assistant/1.0`
   (`mojo/apps/assistant/services/tools/web.py:17`,
@@ -325,7 +347,21 @@ assert carries a descriptive message.
   those as-is (not webhooks, not a concern). Out of scope here.
 
 ## Resolution
-- closed: YYYY-MM-DD
-- branch:
-- files changed:
+- closed: 2026-07-06
+- branch: main
+- commits: 1bb2a9a (feat + tests + docs), a983d3e (docs sweep)
+- files changed: (this item only — see the itemized list below; ITEM-015 commits 1bb2a9a + a983d3e)
+  - mojo/helpers/crypto/sign.py (new get_signature_header accessor)
+  - mojo/helpers/request.py (verify_signed_request header=None → accessor)
+  - mojo/apps/jobs/handlers/webhook.py (send site + log-mask follow the accessor)
+  - mojo/apps/jobs/__init__.py (User-Agent from JOBS_WEBHOOK_USER_AGENT; docstring)
+  - mojo/apps/jobs/settings.py (reference module: doc the two settings)
+  - docs: django_developer/{helpers/crypto.md, helpers/settings_reference.md,
+    helpers/request.md, jobs/settings.md, jobs/webhooks.md, jobs/publishing.md,
+    account/webhook_signing.md, account/webhook_subscriptions.md};
+    web_developer/account/{webhook_signing.md, README.md}
+  - CHANGELOG.md
 - tests added:
+  - tests/test_jobs/test_signed_webhook.py::test_signature_header_setting_override
+  - tests/test_jobs/test_signed_webhook.py::test_publish_webhook_user_agent_setting
+  - tests/test_account/test_webhook_signer.py::test_verify_uses_configured_header
