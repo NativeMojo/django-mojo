@@ -194,6 +194,7 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 - `JOBS_WEBHOOK_DEFAULT_TIMEOUT`
 - `JOBS_WEBHOOK_MAX_RETRIES`
 - `JOBS_WEBHOOK_MAX_TIMEOUT`
+- `JOBS_WEBHOOK_USER_AGENT` — outbound webhook `User-Agent` (default `"Django-MOJO-Webhook/1.0"`); override to avoid advertising the framework.
 - `JOBS_XPENDING_IDLE_MS`
 
 ### JWT
@@ -386,6 +387,10 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 
 - `WEBAPP_AUTH_PATH`
 - `WEBAPP_BASE_URL`
+
+### WEBHOOK
+
+- `WEBHOOK_SIGNATURE_HEADER` — header name used for the outbound webhook HMAC signature and honored as the default by inbound `verify_signed_request` (default `"X-Mojo-Signature"`). Override to avoid advertising the framework; renaming is a contract change with your webhook consumers, who must read the same name. See [Webhook Signing](../account/webhook_signing.md).
 
 ## Notes
 

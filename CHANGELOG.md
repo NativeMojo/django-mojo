@@ -1,5 +1,20 @@
 ## v1.2.29 - (current)
 
+**feature** — **Outbound webhook signature header and User-Agent are now configurable.**
+The signature header name — hardcoded as `X-Mojo-Signature` — is now overridable via
+the `WEBHOOK_SIGNATURE_HEADER` Django setting, and the outbound `User-Agent`
+(`Django-MOJO-Webhook/1.0`) via `JOBS_WEBHOOK_USER_AGENT` (a setting that was already
+documented but never read — now honored). Operators who don't want to advertise the
+framework to third-party webhook receivers can rename both. Defaults are unchanged, so
+existing deployments and consumers are unaffected. Inbound `verify_signed_request` reads
+the same `WEBHOOK_SIGNATURE_HEADER` default, so send and verify stay in sync; the new
+`sign.get_signature_header()` accessor is the effective-value source (the
+`WEBHOOK_SIGNATURE_HEADER` constant remains as the default, for back-compat). A
+caller-supplied `User-Agent` in `publish_webhook(headers=...)` still wins over the
+setting. Log masking follows the configured header name. Renaming the signature header
+is a contract change with your webhook consumers — they must read the same name. See
+`docs/django_developer/account/webhook_signing.md`.
+
 **fix** — **Group membership/permission helpers no longer crash on an API-key identity.**
 `Group.get_member_for_user` now returns `None` for a non-`User` identity (e.g. an
 `ApiKey` authenticating via `Authorization: apikey <token>`) instead of running

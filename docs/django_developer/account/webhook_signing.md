@@ -7,10 +7,12 @@ Django-MOJO ships a uniform primitive for signing outbound webhooks and verifyin
 ## How It Works
 
 1. The framework's `Group` model owns a webhook secret, stored inside its existing `MojoSecrets` blob (no migration). The secret is minted lazily on first use.
-2. Outbound jobs published with `jobs.publish_webhook(..., group=g)` are signed at **delivery time**: the handler looks up `g`, canonicalizes the body, computes the HMAC, sets `X-Mojo-Signature`, and sends those exact bytes. Retries re-sign with whatever secret is current — rotation is safe.
+2. Outbound jobs published with `jobs.publish_webhook(..., group=g)` are signed at **delivery time**: the handler looks up `g`, canonicalizes the body, computes the HMAC, sets the signature header, and sends those exact bytes. Retries re-sign with whatever secret is current — rotation is safe.
 3. Inbound receivers verify with `verify_signed_request(request, group.get_webhook_secret())`.
 
 The secret never enters the job queue payload — only the Group id is stored.
+
+> **Configurable header name.** The signature header defaults to `X-Mojo-Signature` but is overridable via the `WEBHOOK_SIGNATURE_HEADER` Django setting — operators who don't want to advertise the framework can rename it. `verify_signed_request` reads the same setting as its default, so send and verify stay in sync. Renaming is a **contract change with your webhook consumers**: they must read the new header name. Use `get_signature_header()` (not the `WEBHOOK_SIGNATURE_HEADER` constant) if you emit or verify by hand. The outbound `User-Agent` is likewise configurable via `JOBS_WEBHOOK_USER_AGENT`.
 
 ## Group Secret API
 

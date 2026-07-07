@@ -67,6 +67,8 @@ Sender adds:
 X-Mojo-Signature: <hex hmac-sha256 of the raw body>
 ```
 
+> **Header name may be customized.** `X-Mojo-Signature` is the default, but the API operator can configure a different header name (via the `WEBHOOK_SIGNATURE_HEADER` setting). If you don't see `X-Mojo-Signature` on incoming webhooks, confirm the exact header name with your provider and read the signature from that header instead — the verification recipe below is otherwise unchanged.
+
 The signature is computed over the **raw request body bytes**. The sender uses a canonical JSON encoding (sorted keys, compact separators) — but receivers do not need to know this. **Hash the bytes you actually receive on the wire** — do not re-serialize the parsed JSON.
 
 ## Verifying an Incoming Webhook

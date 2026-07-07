@@ -210,7 +210,8 @@ The webhook handler emits these metrics:
 JOBS_WEBHOOK_MAX_RETRIES = 5           # Default max retries for webhooks
 JOBS_WEBHOOK_DEFAULT_TIMEOUT = 30      # Default HTTP timeout (seconds)
 JOBS_WEBHOOK_MAX_TIMEOUT = 300         # Maximum allowed timeout (seconds)
-JOBS_WEBHOOK_USER_AGENT = "Django-MOJO-Webhook/1.0"
+JOBS_WEBHOOK_USER_AGENT = "Django-MOJO-Webhook/1.0"   # Outbound User-Agent; override to hide the framework
+WEBHOOK_SIGNATURE_HEADER = "X-Mojo-Signature"         # Signature header name; override to hide the framework (coordinate with receivers)
 
 # Include webhooks channel
 JOBS_CHANNELS = ['default', 'webhooks']

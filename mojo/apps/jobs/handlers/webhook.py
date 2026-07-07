@@ -11,7 +11,7 @@ from typing import Dict, Any, Optional
 from urllib.parse import urlparse
 
 from mojo.helpers.settings import settings
-from mojo.helpers.crypto.sign import sign_for_group, WEBHOOK_SIGNATURE_HEADER
+from mojo.helpers.crypto.sign import sign_for_group, get_signature_header
 
 from mojo.helpers import logit
 from mojo.apps.jobs.models import Job
@@ -106,7 +106,7 @@ def post_webhook(job: Job) -> str:
                 logit.error(f"Webhook {job.id} sign group {sign_group_id} missing — failing without retry")
                 return 'failed'
             signed_body = _canonical_body(data)
-            headers[WEBHOOK_SIGNATURE_HEADER] = sign_for_group(group, signed_body)
+            headers[get_signature_header()] = sign_for_group(group, signed_body)
             headers.setdefault('Content-Type', 'application/json')
             job.metadata['signed'] = True
             job.metadata['sign_group_id'] = sign_group_id
@@ -268,6 +268,10 @@ def _sanitize_headers(headers: Dict[str, str]) -> Dict[str, str]:
         'x-webhook-secret', 'x-hub-signature', 'x-signature',
         'x-mojo-signature',
     }
+    # Also mask the configured signature header name (may differ from the
+    # X-Mojo-Signature default when WEBHOOK_SIGNATURE_HEADER is overridden).
+    # The literal above is kept so default-named logs stay masked across a rename.
+    sensitive_headers.add(get_signature_header().lower())
 
     sanitized = {}
     for key, value in headers.items():

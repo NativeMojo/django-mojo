@@ -327,8 +327,9 @@ def publish_webhook(
         data: Data to POST (will be JSON encoded)
         group: Optional account.Group (or int id). When provided, the job
                handler signs the outbound body with the Group's webhook secret
-               and adds an `X-Mojo-Signature` header at delivery time. The
-               secret is never stored in the queue — only the group id.
+               and adds a signature header at delivery time — `X-Mojo-Signature`
+               by default, or the WEBHOOK_SIGNATURE_HEADER setting if configured.
+               The secret is never stored in the queue — only the group id.
         headers: Optional HTTP headers (default includes Content-Type: application/json)
         channel: Channel to publish to (default: "webhooks")
         delay: Delay in seconds from now
@@ -357,7 +358,8 @@ def publish_webhook(
             max_retries=3
         )
 
-        # Signed webhook — handler injects X-Mojo-Signature at delivery
+        # Signed webhook — handler injects the signature header
+        # (X-Mojo-Signature by default) at delivery
         job_id = publish_webhook(
             url=receiver_url,
             data={"event": "verification_complete", "customer_id": 42},
@@ -378,10 +380,12 @@ def publish_webhook(
     except (TypeError, ValueError) as e:
         raise ValueError(f"Data must be JSON serializable: {e}")
 
-    # Build headers with defaults
+    # Build headers with defaults. The User-Agent default is overridable via the
+    # JOBS_WEBHOOK_USER_AGENT setting so operators need not advertise the
+    # framework; a caller-supplied User-Agent in `headers` still wins (merge below).
     webhook_headers = {
         'Content-Type': 'application/json',
-        'User-Agent': 'Django-MOJO-Webhook/1.0'
+        'User-Agent': settings.get_static('JOBS_WEBHOOK_USER_AGENT', 'Django-MOJO-Webhook/1.0')
     }
     if headers:
         webhook_headers.update(headers)

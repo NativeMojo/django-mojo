@@ -51,15 +51,20 @@ Use for webhook payloads, API request signing, and tamper detection.
 For signing outbound webhooks keyed on a Group secret, use the higher-level helpers instead of calling `generate_signature` directly:
 
 ```python
-from mojo.helpers.crypto.sign import sign_for_group, WEBHOOK_SIGNATURE_HEADER
+from mojo.helpers.crypto.sign import sign_for_group, get_signature_header
 
 # sign_for_group auto-mints the Group's webhook secret on first use
 body_bytes = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
 sig = sign_for_group(group, body_bytes)
-response.headers[WEBHOOK_SIGNATURE_HEADER] = sig   # "X-Mojo-Signature"
+response.headers[get_signature_header()] = sig   # "X-Mojo-Signature" by default
 ```
 
-`WEBHOOK_SIGNATURE_HEADER` is the string constant `"X-Mojo-Signature"`.
+`get_signature_header()` returns the effective signature header name —
+`"X-Mojo-Signature"` by default, or the value of the `WEBHOOK_SIGNATURE_HEADER`
+Django setting when an operator overrides it (e.g. to avoid advertising the
+framework to receivers). Use the accessor, not the `WEBHOOK_SIGNATURE_HEADER`
+module constant, when emitting or verifying so both sides honor the setting; the
+constant remains the default string for back-compat.
 
 Most webhook emission should go through `jobs.publish_webhook(group=...)`, which calls these helpers automatically. See [Webhook Signing](../account/webhook_signing.md).
 

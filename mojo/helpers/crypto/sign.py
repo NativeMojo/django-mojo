@@ -7,6 +7,17 @@ from mojo.helpers.settings import settings
 WEBHOOK_SIGNATURE_HEADER = "X-Mojo-Signature"
 
 
+def get_signature_header():
+    """Effective webhook signature header name.
+
+    Defaults to X-Mojo-Signature (the WEBHOOK_SIGNATURE_HEADER constant) and is
+    overridable via the WEBHOOK_SIGNATURE_HEADER Django setting, so operators can
+    avoid advertising the framework to third-party receivers. Falls back to the
+    default when the setting is unset or empty.
+    """
+    return settings.get_static("WEBHOOK_SIGNATURE_HEADER", WEBHOOK_SIGNATURE_HEADER) or WEBHOOK_SIGNATURE_HEADER
+
+
 def generate_signature(data, secret_key=None):
     """
     Generate an HMAC-SHA256 signature for the given data using the secret key.

@@ -1,6 +1,7 @@
 """Tests for jobs.publish_webhook(group=...) auto-signing and the matching
 post_webhook handler-time signing path.
 """
+from contextlib import contextmanager
 from unittest import mock
 from testit import helpers as th
 
@@ -247,6 +248,110 @@ def test_handler_unsigned_path_still_uses_json_kwarg(opts):
 
 
 # ---------------------------------------------------------------------------
+# Configurable signature header + User-Agent (ITEM-015)
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test()
+def test_signature_header_setting_override(opts):
+    """WEBHOOK_SIGNATURE_HEADER renames the outbound signature header; the value
+    is still the correct HMAC, the X-Mojo-Signature default is not sent, and the
+    custom-named header is masked in the recorded headers_sent metadata.
+    """
+    import json
+    from mojo.apps.account.models import Group
+    from mojo.apps.jobs.handlers import webhook as webhook_handler
+    from mojo.helpers.crypto.sign import generate_signature
+
+    g = Group.objects.get(pk=opts.group_id)
+    g.get_webhook_secret(auto_create=True)
+    g.refresh_from_db()
+    secret = g.get_webhook_secret()
+    assert secret, "precondition: group must have a secret"
+
+    job = _build_job(payload={
+        "url": "https://example.test/hook",
+        "data": {"event": "verified", "id": 7},
+        "headers": {"Content-Type": "application/json"},
+        "timeout": 30,
+        "webhook_id": "test_signed_custom",
+        "sign_group_id": g.pk,
+    })
+    expected_body = json.dumps(job.payload["data"], sort_keys=True, separators=(",", ":")).encode()
+    expected_sig = generate_signature(expected_body, secret)
+
+    with _override_setting("WEBHOOK_SIGNATURE_HEADER", "X-Acme-Signature"):
+        with mock.patch.object(webhook_handler, "requests") as mock_requests:
+            mock_resp = mock.Mock()
+            mock_resp.status_code = 200
+            mock_resp.content = b""
+            mock_resp.headers = {}
+            mock_resp.raise_for_status = mock.Mock()
+            mock_requests.post.return_value = mock_resp
+            import requests as real_requests
+            mock_requests.exceptions = real_requests.exceptions
+
+            result = webhook_handler.post_webhook(job)
+            assert result == "success", f"handler must succeed, got {result!r}; metadata={job.metadata}"
+
+            _, kwargs = mock_requests.post.call_args
+            headers_sent = kwargs.get("headers", {})
+            assert headers_sent.get("X-Acme-Signature") == expected_sig, (
+                f"configured header X-Acme-Signature must carry the HMAC, "
+                f"got {headers_sent.get('X-Acme-Signature')!r}"
+            )
+            assert "X-Mojo-Signature" not in headers_sent, (
+                "the X-Mojo-Signature default must NOT be sent when the setting overrides the name"
+            )
+            masked = job.metadata.get("headers_sent", {}).get("X-Acme-Signature")
+            assert masked and masked != expected_sig and "..." in masked, (
+                f"configured signature header must be masked in headers_sent, got {masked!r}"
+            )
+
+
+@th.django_unit_test()
+def test_publish_webhook_user_agent_setting(opts):
+    """JOBS_WEBHOOK_USER_AGENT overrides the default outbound User-Agent; the
+    default applies when unset; a caller-supplied User-Agent still wins.
+    """
+    from mojo.apps.jobs.models import Job
+    from mojo.apps import jobs
+
+    Job.objects.filter(channel="webhooks").delete()
+
+    # Default (setting unset) → Django-MOJO-Webhook/1.0
+    job_id = jobs.publish_webhook(url="https://example.test/hook", data={"event": "ping"})
+    job = Job.objects.get(id=job_id)
+    assert job.payload["headers"]["User-Agent"] == "Django-MOJO-Webhook/1.0", (
+        f"default User-Agent must be Django-MOJO-Webhook/1.0, "
+        f"got {job.payload['headers'].get('User-Agent')!r}"
+    )
+    Job.objects.filter(id=job_id).delete()
+
+    with _override_setting("JOBS_WEBHOOK_USER_AGENT", "Acme-Hooks/2.0"):
+        # Setting override → custom User-Agent
+        job_id = jobs.publish_webhook(url="https://example.test/hook", data={"event": "ping"})
+        job = Job.objects.get(id=job_id)
+        assert job.payload["headers"]["User-Agent"] == "Acme-Hooks/2.0", (
+            f"JOBS_WEBHOOK_USER_AGENT must set the outbound User-Agent, "
+            f"got {job.payload['headers'].get('User-Agent')!r}"
+        )
+        Job.objects.filter(id=job_id).delete()
+
+        # Caller-supplied User-Agent still wins over the setting
+        job_id = jobs.publish_webhook(
+            url="https://example.test/hook",
+            data={"event": "ping"},
+            headers={"User-Agent": "Caller/1.0"},
+        )
+        job = Job.objects.get(id=job_id)
+        assert job.payload["headers"]["User-Agent"] == "Caller/1.0", (
+            f"caller-supplied User-Agent must override the setting, "
+            f"got {job.payload['headers'].get('User-Agent')!r}"
+        )
+        Job.objects.filter(id=job_id).delete()
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -283,3 +388,30 @@ def _run_handler_capture_sig(job, webhook_handler):
         assert result == "success", f"handler must succeed, got {result!r}; metadata={job.metadata}"
         _, kwargs = mock_requests.post.call_args
         return kwargs.get("headers", {}).get(WEBHOOK_SIGNATURE_HEADER)
+
+
+@contextmanager
+def _override_setting(name, value):
+    """Temporarily set a Django setting for these in-process tests.
+
+    The handler/publish code reads the setting via settings.get_static, which
+    resolves against this process's own django.conf.settings — and these tests
+    call the code directly (no test server). So setting the attribute here is
+    visible to the code under test. override_settings is banned by the testing
+    rules; th.server_settings only affects the separate server process, which
+    these in-process tests never touch.
+    """
+    from django.conf import settings as dj
+    missing = object()
+    original = getattr(dj, name, missing)
+    setattr(dj, name, value)
+    try:
+        yield
+    finally:
+        if original is missing:
+            try:
+                delattr(dj, name)
+            except AttributeError:
+                pass
+        else:
+            setattr(dj, name, original)

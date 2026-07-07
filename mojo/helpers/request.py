@@ -3,7 +3,7 @@ import ipaddress
 from objict import objict, nobjict
 from .request_parser import RequestDataParser
 from mojo.helpers.settings import settings
-from mojo.helpers.crypto.sign import verify_signature, WEBHOOK_SIGNATURE_HEADER
+from mojo.helpers.crypto.sign import verify_signature, get_signature_header
 
 DUID_HEADER = settings.get_static('DUID_HEADER', 'X-Mojo-UID').replace('-', '_').upper()
 DUID_HEADER = f"HTTP_{DUID_HEADER}"
@@ -100,7 +100,7 @@ def get_user_agent(request):
     return request.META.get("HTTP_USER_AGENT", "")
 
 
-def verify_signed_request(request, secret, header=WEBHOOK_SIGNATURE_HEADER):
+def verify_signed_request(request, secret, header=None):
     """Verify an HMAC-SHA256 signature header on a Django request.
 
     Pulls raw `request.body` and the named header, then constant-time-compares
@@ -110,6 +110,10 @@ def verify_signed_request(request, secret, header=WEBHOOK_SIGNATURE_HEADER):
         - header is missing
         - signature does not match
 
+    `header` defaults to the effective signature header name — X-Mojo-Signature
+    unless the WEBHOOK_SIGNATURE_HEADER setting overrides it — so it stays in
+    sync with the outbound send side. Pass an explicit `header` to override.
+
     Typical use after the view has resolved its own Group:
 
         if not verify_signed_request(request, group.get_webhook_secret()):
@@ -117,6 +121,8 @@ def verify_signed_request(request, secret, header=WEBHOOK_SIGNATURE_HEADER):
     """
     if not secret:
         return False
+    if header is None:
+        header = get_signature_header()
     meta_key = "HTTP_" + header.replace("-", "_").upper()
     sig = request.META.get(meta_key)
     if sig is None and hasattr(request, "headers"):

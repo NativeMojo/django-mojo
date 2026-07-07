@@ -70,7 +70,12 @@ Controls the job engine (runner) behavior.
 | `JOBS_WEBHOOK_MAX_RETRIES` | `5` | Default max retries for webhook jobs |
 | `JOBS_WEBHOOK_DEFAULT_TIMEOUT` | `30` | Default HTTP request timeout (seconds) |
 | `JOBS_WEBHOOK_MAX_TIMEOUT` | `300` | Maximum allowed webhook timeout (seconds) |
-| `JOBS_WEBHOOK_USER_AGENT` | `"Django-MOJO-Webhook/1.0"` | Default User-Agent header |
+| `JOBS_WEBHOOK_USER_AGENT` | `"Django-MOJO-Webhook/1.0"` | Outbound `User-Agent`; override to avoid advertising the framework. A caller-supplied `User-Agent` in `publish_webhook(headers=...)` still wins. |
+
+The outbound signature **header name** is also configurable, via the framework-wide
+`WEBHOOK_SIGNATURE_HEADER` setting (default `"X-Mojo-Signature"`) — not a `JOBS_*`
+key, since inbound verification honors it too. See
+[Webhook Signing](../account/webhook_signing.md).
 
 ## Example Configurations
 
