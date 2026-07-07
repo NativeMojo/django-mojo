@@ -1,5 +1,17 @@
 ## v1.2.29 - (current)
 
+**fix** — **Group membership/permission helpers no longer crash on an API-key identity.**
+`Group.get_member_for_user` now returns `None` for a non-`User` identity (e.g. an
+`ApiKey` authenticating via `Authorization: apikey <token>`) instead of running
+`members.filter(user=<ApiKey>)`, which Django rejected with `Must be "User"
+instance.`. This fixes an HTTP 400 on API-key-authenticated
+`GET /api/group/uuid/<uuid>`, `GET /api/group/<pk>`, and
+`GET /api/group/<pk>/member`, and on any direct
+`group.get_member_for_user(api_key, …)` call. Group permission checks now cleanly
+grant/deny a group-scoped key via `ApiKey.has_permission` (`sys.*` still denied).
+The guard lives at the single choke point, so every present and future caller is
+covered. See `docs/django_developer/account/api_keys.md`.
+
 **feature** — **testit honors `var/dev_server.conf` as a local host/port override.**
 The test server's host/port is read from `config/dev_server.conf` (committed). A
 gitignored `var/dev_server.conf`, when present, now overrides it (whole-file

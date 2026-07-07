@@ -263,6 +263,13 @@ class Group(MojoSecrets, MojoModel):
         Returns:
             GroupMember object if found, None otherwise
         """
+        # A GroupMember always links an account.User. A non-User identity — e.g.
+        # an ApiKey authenticating the request (request.user can be a bare ApiKey)
+        # — has no member row, and `.members.filter(user=<ApiKey>)` makes Django
+        # raise 'Must be "User" instance.'. Treat it as "no membership" so every
+        # caller (guarded or not) degrades to deny/None instead of crashing.
+        if not hasattr(user, "is_request_user"):
+            return None
         # First check direct membership
         queryset = self.members.filter(user=user)
         if is_active:

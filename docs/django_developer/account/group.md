@@ -201,6 +201,16 @@ n = group.member_count
 
 `member_count` is exposed via REST as an `extra` on the `default` graph (not `basic` — that stays minimal). List endpoints use `default` by, well, default, so the field appears in list payloads without an explicit `?graph=` parameter. Backed by `members.filter(is_active=True).count()` per record — at very large scale, consider an annotated queryset instead.
 
+> **Non-`User` identities (e.g. API keys).** `get_member_for_user` returns `None`
+> for any identity that is not a request `User`. An `ApiKey` authenticating a
+> request (`Authorization: apikey <token>`) has no `GroupMember` row, so it is
+> treated as "not a member" rather than raising `Must be "User" instance.` from
+> `members.filter(user=…)`. `user_has_permission` likewise returns a bool for an
+> API key: it grants/denies via `ApiKey.has_permission` (group-scoped; `sys.*`
+> always denied) and never runs a `User`-typed membership query. Every group
+> permission gate is therefore safe to call with `request.user` whether the
+> caller authenticated with a JWT or an API key.
+
 ## GroupMember Model
 
 ```python

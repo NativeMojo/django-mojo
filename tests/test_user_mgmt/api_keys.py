@@ -397,6 +397,42 @@ def test_apikey_rest_delete(opts):
     assert not ApiKey.objects.filter(pk=opts.rest_key_id).exists(), "api key should be deleted"
 
 
+@th.unit_test("apikey_get_member_for_user_is_none")
+def test_apikey_get_member_for_user_is_none(opts):
+    """Regression (ITEM-016): Group.get_member_for_user must return None for an
+    ApiKey identity — never run the User-typed members.filter(user=...) query.
+    Before the fix this raised 'Cannot query "...": Must be "User" instance.'."""
+    from mojo.apps.account.models import Group, ApiKey
+
+    # child has a parent, so check_parents=True also exercises the parent-walk
+    # branch (the second unguarded filter(user=...) site).
+    child = Group.objects.get(pk=opts.child_id)
+    api_key, _ = ApiKey.create_for_group(
+        group=child, name="test_member_lookup", permissions={"manage_payments": True},
+    )
+    member = child.get_member_for_user(api_key, check_parents=True)
+    assert member is None, \
+        "get_member_for_user must return None for an ApiKey, not raise or return a member"
+
+
+@th.unit_test("apikey_group_user_has_permission_bool")
+def test_apikey_group_user_has_permission_bool(opts):
+    """ITEM-016: Group.user_has_permission returns a bool for an ApiKey identity —
+    grants a held perm, denies a lacked one and sys.*, and never raises."""
+    from mojo.apps.account.models import Group, ApiKey
+
+    child = Group.objects.get(pk=opts.child_id)
+    api_key, _ = ApiKey.create_for_group(
+        group=child, name="test_perm_bool", permissions={"manage_payments": True},
+    )
+    assert child.user_has_permission(api_key, ["manage_payments", "admin"]) is True, \
+        "ApiKey holding manage_payments must be granted"
+    assert child.user_has_permission(api_key, ["manage_users"]) is False, \
+        "ApiKey lacking the perm must be denied (bool), not raise"
+    assert child.user_has_permission(api_key, ["sys.superuser"]) is False, \
+        "sys.* must always be denied for an ApiKey"
+
+
 @th.unit_test("apikey_cleanup")
 def test_apikey_cleanup(opts):
     """Remove test groups and keys."""
