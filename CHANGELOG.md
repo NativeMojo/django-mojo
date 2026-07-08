@@ -1,4 +1,4 @@
-## Unreleased
+## v1.2.43 - July 08, 2026
 
 **security** — **A group API key can no longer reach platform-global models (cross-tenant data-exposure fix).**
 An `ApiKey` is a group-scoped credential, but two gaps let a low-trust group
