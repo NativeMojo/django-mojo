@@ -114,7 +114,7 @@ class GeoLocatedIP(models.Model, MojoModel):
             'basic': {
                 'fields': ['id', 'ip_address', 'country_code', 'country_name', 'city', 'region',
                            'is_tor', 'is_vpn', 'is_proxy', 'is_known_attacker', 'is_known_abuser',
-                           'threat_level', 'is_blocked', 'blocked_at', 'blocked_until',
+                           'threat_level', 'is_blocked', 'blocked_at', 'blocked_until', "provider",
                            'blocked_reason', 'block_count', 'is_whitelisted', 'whitelisted_reason',
                            'whitelisted_until'],
                 'extra': ['is_threat', 'is_suspicious', 'risk_score', 'block_active', 'whitelist_active'],
