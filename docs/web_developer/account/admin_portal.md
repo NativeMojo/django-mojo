@@ -191,6 +191,15 @@ This prevents non-admin users from escalating their own access.
 > the GroupMember. Genuinely group-scoped endpoints (group/member management,
 > per-group webhook secret, ApiKey-federated SMS send) still accept a
 > group-scoped grant as before.
+>
+> **This extends past the decorator-gated list above.** Any plain CRUD
+> endpoint backed by a model with no per-group ownership — `/api/user`,
+> `/api/system/geoip`, `/api/jobs/job`, `/api/jobs/event`, `/api/jobs/logs`,
+> `/api/account/logins`, `/api/account/bouncer/*`, `/api/fileman/rendition` —
+> also rejects a group API key by default, even if the key's `permissions`
+> dict has the exact permission the model requires. There's no group to
+> confine the key's access to, so the model-security layer denies it up
+> front. See [API Keys](api_keys.md).
 
 ## Secure Settings API (Admin)
 

@@ -220,6 +220,13 @@ POST /api/system/geoip
 
 Standard CRUD via `GeoLocatedIP.on_rest_request`. Requires `manage_users` permission.
 
+**A group ApiKey is rejected here** — `GeoLocatedIP` has no `group` FK, so
+`_evaluate_permission`'s groupless branch denies an ApiKey identity by default
+even if its `permissions` dict includes `manage_users` (`RestMeta` does not set
+`ALLOW_API_KEY_GLOBAL`). Use a service-account `User`, or see
+`POST system/geoip/sync` below for the supported key-based access path. See
+[API Keys](api_keys.md#how-it-works).
+
 ### `GET/PUT/DELETE system/geoip/<pk>` — Detail / Update / Delete
 
 ```
@@ -228,7 +235,7 @@ PUT    /api/system/geoip/123
 DELETE /api/system/geoip/123
 ```
 
-Requires `manage_users` permission. PUT supports POST_SAVE_ACTIONS for block/unblock/whitelist.
+Requires `manage_users` permission. PUT supports POST_SAVE_ACTIONS for block/unblock/whitelist. Same ApiKey restriction as List/Create above.
 
 ### `GET system/geoip/lookup` — Authenticated IP Lookup
 

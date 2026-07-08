@@ -65,6 +65,18 @@ Authorization: apikey <token>
 
 The key's group is automatically set on the request. Only permissions in the key's `permissions` dict are allowed. System-level permissions (`sys.*`) are always denied.
 
+**A key cannot reach platform-global data, even with a matching permission.**
+Some models have no per-group ownership at all — `User`, `GeoLocatedIP`,
+jobs (`Job`/`JobEvent`/`JobLog`/`ScheduledTask`), login events, bouncer
+devices/signals/bot-signatures, and file renditions, among others. Because
+there is no group to confine the key's access to, these reject an API key by
+default regardless of what's in its `permissions` dict — e.g. a key with
+`{"manage_users": true}` still gets `403` from `GET /api/user`. Use a
+service-account `User` with a real permission grant for that kind of machine
+access instead. A handful of endpoints are purpose-built to accept a key for
+shared/global data (like the GeoIP federation-sync receiver — see
+[GeoIP](geoip.md)) and say so explicitly in their own docs.
+
 Endpoints that resolve or inspect a group or its membership — `GET
 /api/group/uuid/<uuid>`, `GET /api/group/<pk>`, `GET /api/group/<pk>/member` —
 and any group-scoped permission check now work correctly under

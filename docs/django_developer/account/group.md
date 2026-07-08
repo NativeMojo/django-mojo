@@ -210,6 +210,14 @@ n = group.member_count
 > always denied) and never runs a `User`-typed membership query. Every group
 > permission gate is therefore safe to call with `request.user` whether the
 > caller authenticated with a JWT or an API key.
+>
+> **`check_view_permission` confines a key to its own group.** The gate behind
+> `GET /api/group/<pk>` special-cases an ApiKey identity directly — it returns
+> `api_key.is_group_allowed(self)` before any of the fallbacks above run, so a
+> key can never read another tenant's group by pk (list is confined the same
+> way via `ApiKey.get_groups`). It does **not** get the "any member sees a
+> basic-graph view" fallback that applies to a real `User`. See
+> [API Keys — Group Scoping](api_keys.md#group-scoping).
 
 ## GroupMember Model
 

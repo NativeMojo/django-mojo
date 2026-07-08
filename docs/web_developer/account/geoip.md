@@ -70,7 +70,11 @@ When `reason` is `ip_allowlisted` (the IP matches the [IP allowlist](../../djang
 GET /api/system/geoip
 ```
 
-**Requires:** `manage_users` permission.
+**Requires:** `manage_users` permission. A group ApiKey is rejected here even
+if its `permissions` dict includes `manage_users` — `GeoLocatedIP` has no
+per-group ownership, so this endpoint requires a real `User` session. See
+[API Keys](api_keys.md) and the federation-sync endpoint below for the
+supported key-based access path.
 
 Returns a paginated list of cached GeoIP records. Supports standard query parameters (`search`, `sort`, `start`, `size`, `graph`).
 
@@ -92,7 +96,7 @@ Returns a paginated list of cached GeoIP records. Supports standard query parame
 GET /api/system/geoip/123
 ```
 
-**Requires:** `manage_users` permission.
+**Requires:** `manage_users` permission. Same ApiKey restriction as the list endpoint above.
 
 Returns a single GeoIP record. Supports `?graph=` parameter.
 
