@@ -18,9 +18,17 @@ manage_settings):
 see *why* they're blocked. Config writes are recorded as geofence_config
 incident events (the change history) and invalidate the decision cache via
 the Setting model hooks.
+
+SECURITY: config-plane permissions are checked against the user's GLOBAL
+grants only (see _requires_global_perms) — a GroupMember-scoped permission,
+which any tenant/group admin can hand out, must never authorize reading or
+writing platform-wide enforcement config.
 """
+from functools import wraps
+
 from mojo import decorators as md
 from mojo import errors as merrors
+from mojo.decorators.auth import SECURITY_REGISTRY
 from mojo.helpers import dates
 from mojo.helpers.response import JsonResponse
 from mojo.helpers.settings import settings
@@ -33,6 +41,43 @@ SYSTEM_RULES_KEY = "GEOFENCE_SYSTEM_RULES"
 ALLOWLIST_KEY = "GEOFENCE_ALLOWLIST"
 BYPASS_HOLDERS_MAX = 200
 GEOIP_LIST_MAX = 500
+
+
+def _requires_global_perms(*perms):
+    """Like @md.requires_perms but WITHOUT the group-permission fallback.
+
+    requires_perms falls back to request.group.user_has_permission(...) using a
+    client-supplied "group" param — fine for endpoints whose effect is scoped
+    to that group, but every endpoint below reads/writes PLATFORM-GLOBAL
+    config (global Setting rows, platform exemption lists). A GroupMember-
+    scoped grant (which any group admin can assign, arbitrary keys allowed)
+    must never satisfy these: global User.permissions (or superuser) only.
+    """
+    perm_set = set(perms)
+
+    def decorator(func):
+        # Mirror requires_perms' security-registry entry for audit tooling.
+        func._mojo_requires_perms = True
+        func._mojo_required_permissions = list(perms)
+        func._mojo_security_type = "permissions"
+        SECURITY_REGISTRY[f"{func.__module__}.{func.__name__}"] = {
+            'type': 'permissions',
+            'permissions': list(perms),
+            'function': func,
+            'requires_auth': True,
+            'global_only': True,
+        }
+
+        @wraps(func)
+        def wrapper(request, *args, **kwargs):
+            user = getattr(request, "user", None)
+            if user is None or not user.is_authenticated:
+                raise merrors.PermissionDeniedException()
+            if not user.has_permission(perm_set):
+                raise merrors.PermissionDeniedException()
+            return func(request, *args, **kwargs)
+        return wrapper
+    return decorator
 
 
 @md.GET("geo/check")
@@ -120,7 +165,7 @@ def _allowlist_summary():
 
 
 @md.GET("geo/rules")
-@md.requires_perms("view_geofence", "manage_geofence", "security")
+@_requires_global_perms("view_geofence", "manage_geofence", "security")
 def on_geo_rules_get(request):
     """Effective geofence configuration — the machine-readable "rules in an
     active state" artifact for the admin UI and compliance reviews."""
@@ -157,7 +202,7 @@ def on_geo_rules_get(request):
 
 
 @md.POST("geo/rules")
-@md.requires_perms("manage_geofence", "security")
+@_requires_global_perms("manage_geofence", "security")
 def on_geo_rules_post(request):
     """Replace the system geofence rule. Full replace, never merge —
     legal-reviewed rulesets are replace-by-review. Validated with the DSL
@@ -181,7 +226,7 @@ def on_geo_rules_post(request):
 
 
 @md.DELETE("geo/rules")
-@md.requires_perms("manage_geofence", "security")
+@_requires_global_perms("manage_geofence", "security")
 def on_geo_rules_delete(request):
     """Remove the DB override — the engine falls back to the django.conf value
     (or to no rules). Setting.delete() invalidates cached decisions."""
@@ -192,7 +237,7 @@ def on_geo_rules_delete(request):
 
 
 @md.POST("geo/simulate")
-@md.requires_perms("view_geofence", "manage_geofence", "security")
+@_requires_global_perms("view_geofence", "manage_geofence", "security")
 def on_geo_simulate(request):
     """Uncached what-if decision for an arbitrary IP or geo dict — lets a
     non-engineer demonstrate "a WA IP is blocked" without owning a WA IP.
@@ -213,7 +258,7 @@ def on_geo_simulate(request):
 
 
 @md.GET("geo/allowlist")
-@md.requires_perms("view_geofence", "manage_geofence", "security")
+@_requires_global_perms("view_geofence", "manage_geofence", "security")
 def on_geo_allowlist_get(request):
     """Active IP exemptions with reason/expiry — the auditor's "who is
     exempt" artifact (IP/CIDR side; user grants are geo/bypass_holders).
@@ -239,7 +284,7 @@ def on_geo_allowlist_get(request):
 
 
 @md.POST("geo/allowlist")
-@md.requires_perms("manage_geofence", "security")
+@_requires_global_perms("manage_geofence", "security")
 def on_geo_allowlist_post(request):
     """Replace the GEOFENCE_ALLOWLIST setting (full replace; an empty list
     clears it). Entries are "CIDR-or-IP" strings or {cidr, reason, until}.
@@ -263,12 +308,16 @@ def on_geo_allowlist_post(request):
 
 
 @md.GET("geo/bypass_holders")
-@md.requires_perms("view_geofence", "manage_geofence", "security")
+@_requires_global_perms("view_geofence", "manage_geofence", "security")
 def on_geo_bypass_holders(request):
     """Users exempt from geofencing: explicit bypass_geofence grants PLUS
     superusers (User.has_permission returns True for a superuser on every
     perm, so they bypass implicitly — an auditor list that omitted them
-    would be misleading). High-privilege audit surface."""
+    would be misleading). High-privilege audit surface.
+
+    Deliberately returns id/username only — email/display_name are gated by
+    the "users" permission category on the User model and must not leak
+    through a geofence-only grant."""
     from django.db.models import Q
     from mojo.apps.account.models.user import User
     qs = User.objects.filter(
@@ -284,8 +333,6 @@ def on_geo_bypass_holders(request):
         holders.append({
             "id": user.pk,
             "username": user.username,
-            "display_name": user.display_name,
-            "email": user.email,
             "is_active": user.is_active,
             "source": "permission" if value else "superuser",
             "value": value,

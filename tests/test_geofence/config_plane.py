@@ -182,6 +182,23 @@ def test_settings_rest_backdoor_validated(opts):
         assert resp.status_code == 200, \
             f"valid rule via settings REST must save, got {resp.status_code}: {opts.client.last_response.body}"
         assert _system_row() is not None, "valid settings write must persist"
+
+        # group-scoped rows for geofence keys are dead (engine resolves these
+        # keys globally only) — must be rejected loudly, not silently accepted
+        from mojo.apps.account.models.group import Group
+        grp = Group.objects.create(
+            name=f"Geofence SettingScope {_uuid.uuid4().hex[:8]}", is_active=True)
+        try:
+            resp = opts.client.post(
+                "/api/settings",
+                {"key": SYSTEM_KEY, "value": '{"country": {"in": ["US"]}}',
+                 "group": grp.pk})
+            assert resp.status_code == 400, \
+                f"group-scoped geofence setting must 400, got {resp.status_code}"
+            assert "global-only" in str(opts.client.last_response.body), \
+                f"rejection must explain why: {opts.client.last_response.body}"
+        finally:
+            grp.delete()
     finally:
         _cleanup_settings()
         opts.client.logout()
@@ -476,7 +493,65 @@ def test_bypass_holders(opts):
         assert falsy.pk not in by_id, \
             "falsy grant must NOT be listed (has_permission would deny it)"
         assert d.count == len(d.holders), "count must match the returned list"
+        # PII guard: email/display_name are "users"-category data and must not
+        # leak through a geofence-only permission
+        row = by_id[holder.pk]
+        assert "email" not in row, f"bypass_holders must not expose email: {dict(row)}"
+        assert "display_name" not in row, \
+            f"bypass_holders must not expose display_name: {dict(row)}"
     finally:
         holder.delete()
         falsy.delete()
         opts.client.logout()
+
+
+@th.django_unit_test("config: GroupMember-scoped grant must NOT reach global config")
+def test_group_scoped_perm_cannot_touch_global_config(opts):
+    """SECURITY regression: requires_perms' group fallback lets a per-group
+    (GroupMember) permission satisfy endpoint checks when the client passes a
+    "group" param. These endpoints act on PLATFORM-GLOBAL config, so a
+    tenant-admin-assignable member grant must never authorize them —
+    _requires_global_perms checks global User.permissions only."""
+    from mojo.apps.account.models import User
+    from mojo.apps.account.models.group import Group
+    from mojo.apps.account.models.member import GroupMember
+    suffix = _uuid.uuid4().hex[:8]
+    email = f"gf_tenant_admin_{suffix}@geofence.test"
+    password = "Geo##tenant99"
+    user = User.objects.create_user(username=email, email=email, password=password)
+    user.is_email_verified = True
+    user.requires_mfa = False
+    user.save()
+    grp = Group.objects.create(name=f"Geofence Tenant {suffix}", is_active=True)
+    grp.add_member(user)
+    member = GroupMember.objects.get(group=grp, user=user)
+    member.add_permission("manage_geofence")
+    member.add_permission("security")
+    member.save()
+    assert member.has_permission("manage_geofence"), \
+        "setup: member-scoped grant must exist for this test to mean anything"
+    try:
+        _login(opts, email, password)
+        resp = opts.client.post(
+            "/api/geo/rules",
+            {"rule": {"country": {"in": ["US"]}}, "group": grp.pk})
+        assert resp.status_code == 403, \
+            f"group-scoped grant must NOT rewrite global rules, got {resp.status_code}"
+        assert _system_row() is None, "no global write may occur"
+        resp = opts.client.get(f"/api/geo/rules?group={grp.pk}")
+        assert resp.status_code == 403, \
+            f"group-scoped grant must NOT read global config, got {resp.status_code}"
+        resp = opts.client.post(
+            "/api/geo/allowlist",
+            {"entries": ["203.0.113.0/24"], "group": grp.pk})
+        assert resp.status_code == 403, \
+            f"group-scoped grant must NOT rewrite the allowlist, got {resp.status_code}"
+        resp = opts.client.get(f"/api/geo/bypass_holders?group={grp.pk}")
+        assert resp.status_code == 403, \
+            f"group-scoped grant must NOT read bypass holders, got {resp.status_code}"
+    finally:
+        opts.client.logout()
+        member.delete()
+        grp.delete()
+        user.delete()
+        _cleanup_settings()

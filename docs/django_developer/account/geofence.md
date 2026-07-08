@@ -209,6 +209,13 @@ New fine-grained perms: **`view_geofence`** (read) and **`manage_geofence`**
 staff get geofence management *without* `manage_settings` (which exposes every
 setting including secrets).
 
+These endpoints check **global `User.permissions` only** (no
+`requires_perms`-style group fallback): a GroupMember-scoped grant — which any
+group admin can assign — must never authorize platform-wide enforcement
+config. Relatedly, `GEOFENCE_SYSTEM_RULES` / `GEOFENCE_ALLOWLIST` are
+**global-only Setting keys**: the engine never resolves them per-group, and
+group-scoped rows are rejected with a 400 at write time.
+
 | Endpoint | Perms | Purpose |
 |---|---|---|
 | `GET /api/geo/rules` | view | Effective config: system rule + source (`setting`/`conf`/`none`) + modified stamp, posture (enabled, fail modes, scopes, cache TTL), allowlist summary, evaluation order, and every `@requires_geofence` endpoint with its scope. Pass `group_uuid` to include a group's rule. |

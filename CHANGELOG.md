@@ -6,7 +6,12 @@ perm-gated REST — `GET/POST/DELETE /api/geo/rules` (full-replace writes valida
 the DSL validator with readable 400s; the DB row wins over the settings file; the
 engine now reads the setting with `kind="dict"` so the stored JSON parses). New
 fine-grained perms `view_geofence` / `manage_geofence` (domain category `security`)
-let legal/business staff maintain jurisdiction rules without `manage_settings`.
+let legal/business staff maintain jurisdiction rules without `manage_settings`;
+the config-plane endpoints check **global** user grants only (no group-permission
+fallback — a GroupMember-scoped grant must never authorize platform-wide
+enforcement config), the geofence setting keys are global-only (group-scoped rows
+rejected 400), and `bypass_holders` returns id/username without email/display_name
+(users-category PII stays behind users-category perms).
 Group rules (`Group.metadata.geofence`) are validated at REST save time (400 instead
 of a request-time `rule_invalid` deny). Every rule/allowlist change invalidates the
 decision cache automatically (Setting/Group/GeoLocatedIP model hooks — REST,

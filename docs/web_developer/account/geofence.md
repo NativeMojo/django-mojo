@@ -15,10 +15,12 @@ for rule semantics see the django-developer
 | `manage_geofence` | Everything, including writes |
 | `security` | Domain category — grants all of the above |
 
-All endpoints return `403` without a matching permission. Writes are recorded
-as `geofence_config` incident events (queryable via
-`GET /api/incident/event?category=geofence_config`, needs `view_security`) —
-that stream is the change history.
+All endpoints return `403` without a matching permission. **Permissions must
+be global user grants** — group-scoped (member) permissions do NOT apply,
+because these endpoints manage platform-wide config; passing a `group` param
+does not change that. Writes are recorded as `geofence_config` incident
+events (queryable via `GET /api/incident/event?category=geofence_config`,
+needs `view_security`) — that stream is the change history.
 
 ---
 
@@ -141,8 +143,7 @@ grants plus superusers (who hold every permission implicitly).
   "status": true,
   "data": {
     "holders": [
-      {"id": 12, "username": "dev@example.com", "display_name": "Dev",
-       "email": "dev@example.com", "is_active": true,
+      {"id": 12, "username": "dev@example.com", "is_active": true,
        "source": "permission", "value": true}
     ],
     "count": 1,
@@ -152,4 +153,6 @@ grants plus superusers (who hold every permission implicitly).
 ```
 
 `source` is `"permission"` or `"superuser"`. The list is capped at 200 rows
-(`capped: true` when truncated).
+(`capped: true` when truncated). The response deliberately carries
+id/username only — `email`/`display_name` are "users"-category data and are
+not exposed through a geofence-only permission.

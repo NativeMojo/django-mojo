@@ -97,11 +97,17 @@ class Setting(MojoSecrets, MojoModel):
         """400 on a malformed geofence rule/allowlist written via the generic
         /api/settings REST — the dedicated /api/geo endpoints validate too, so
         there is no unvalidated write path."""
-        if self.group_id is not None or self.is_secret:
-            return
         if self.key not in self.GEOFENCE_KEYS:
             return
         from mojo import errors as merrors
+        if self.group_id is not None:
+            # The engine only ever resolves these keys globally — a group-scoped
+            # row would be dead, unvalidated config. Reject loudly instead of
+            # silently accepting it.
+            raise merrors.ValueException(
+                f"{self.key} is a global-only setting; group-scoped rows are not supported")
+        if self.is_secret:
+            return
         parsed = self.value
         if isinstance(parsed, str):
             if not parsed.strip():
