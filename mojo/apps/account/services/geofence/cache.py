@@ -44,3 +44,30 @@ def invalidate(ip, group_id=None):
         get_connection().delete(_key(ip, group_id))
     except Exception as exc:
         logit.error("geofence", f"cache delete failed: {exc}")
+
+
+def invalidate_ip(ip):
+    """Remove every cached decision for one IP (any group scope) — used when a
+    per-IP whitelist entry changes."""
+    _invalidate_pattern(f"geofence:dec:{ip}:*")
+
+
+def invalidate_group(group_id):
+    """Remove every cached decision evaluated against a group — used when the
+    group's geofence rules change."""
+    _invalidate_pattern(f"geofence:dec:*:{group_id}")
+
+
+def invalidate_all():
+    """Remove every cached geofence decision — used when the system rules or
+    the allowlist change (an emergency edit must not serve stale allows)."""
+    _invalidate_pattern("geofence:dec:*")
+
+
+def _invalidate_pattern(pattern):
+    try:
+        r = get_connection()
+        for key in r.scan_iter(pattern):
+            r.delete(key)
+    except Exception as exc:
+        logit.error("geofence", f"cache invalidate failed for {pattern}: {exc}")

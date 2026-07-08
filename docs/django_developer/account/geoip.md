@@ -44,6 +44,7 @@ Caches geolocation results per IP to reduce redundant API calls. Tracks security
 |---|---|
 | `is_whitelisted` | Whitelisted IPs are never blocked, even by auto-escalation |
 | `whitelisted_reason` | Why this IP is whitelisted |
+| `whitelisted_until` | When the whitelist expires (`null` = permanent) — mirrors `blocked_until`. An expired whitelist stops suppressing blocks and stops exempting geofence. |
 
 ### Computed Properties
 
@@ -53,7 +54,8 @@ Caches geolocation results per IP to reduce redundant API calls. Tracks security
 | `is_threat` | True if `is_known_attacker` or `is_known_abuser` |
 | `is_suspicious` | True if Tor, VPN, proxy, or high/critical threat level |
 | `risk_score` | 0–100 score based on threat indicators |
-| `block_active` | True if `is_blocked` AND not whitelisted AND `blocked_until` hasn't passed |
+| `block_active` | True if `is_blocked` AND no *active* whitelist AND `blocked_until` hasn't passed |
+| `whitelist_active` | True if `is_whitelisted` AND `whitelisted_until` hasn't passed. Every consumer of whitelist state (block suppression, auto-block guards, geofence allowlist) uses this — an expired whitelist means the same thing everywhere. |
 
 ### Key Methods
 
@@ -66,8 +68,8 @@ Caches geolocation results per IP to reduce redundant API calls. Tracks security
 | `instance.update_threat_from_incident(priority, block=False, from_sync=False)` | Escalate threat level from incident priority (0–15 scale). Pass `block=True` to allow auto-blocking when threat reaches `high`/`critical`. Pass `from_sync=True` to suppress outbound federation push. |
 | `instance.block(reason, ttl, broadcast, from_sync=False)` | Block this IP fleet-wide (DB + broadcast). Always escalates `threat_level` to at least `high`. Pass `from_sync=True` to suppress outbound federation push. |
 | `instance.unblock(reason, broadcast)` | Unblock this IP fleet-wide |
-| `instance.whitelist(reason)` | Whitelist — also unblocks if currently blocked |
-| `instance.unwhitelist()` | Remove whitelist status |
+| `instance.whitelist(reason, ttl=None, until=None)` | Whitelist — also unblocks if currently blocked. `ttl` seconds or an explicit `until` datetime sets `whitelisted_until` (`until` wins; omit both for permanent). |
+| `instance.unwhitelist()` | Remove whitelist status (clears `whitelisted_until` too) |
 
 ---
 
@@ -103,15 +105,18 @@ geo.unblock(reason="manual: false positive")
 - Updates DB and broadcasts fleet-wide iptables removal
 - `broadcast=False` for DB-only updates
 
-### whitelist(reason)
+### whitelist(reason, ttl=None, until=None)
 
 ```python
-geo.whitelist(reason="office IP range")
+geo.whitelist(reason="office IP range")                       # permanent
+geo.whitelist(reason="contractor laptop", ttl=86400)          # 24h expiry
+geo.whitelist(reason="audit window", until=some_datetime)     # explicit expiry
 ```
 
-- Sets `is_whitelisted=True`
+- Sets `is_whitelisted=True` (+ `whitelisted_until` from `ttl`/`until`; `until` wins)
 - If the IP is currently blocked, it unblocks fleet-wide immediately
-- Prevents all future auto-blocks (threat escalation, rule handlers)
+- Prevents all future auto-blocks (threat escalation, rule handlers) **while active** — an expired whitelist no longer suppresses anything
+- Also exempts the IP from geofencing (see [Geofence — IP Allowlist](geofence.md)); every whitelist change invalidates that IP's cached geofence decisions and emits a `geofence_config` incident event
 
 ### unwhitelist()
 
@@ -119,7 +124,7 @@ geo.whitelist(reason="office IP range")
 geo.unwhitelist()
 ```
 
-Removes whitelist protection. Does not auto-block — the IP would need to trigger rules again.
+Removes whitelist protection (clears `whitelisted_until`). Does not auto-block — the IP would need to trigger rules again.
 
 ### Auto-block via threat escalation
 
@@ -157,7 +162,7 @@ All blocking and management operations are exposed as POST_SAVE_ACTIONS on the m
 |---|---|---|
 | `block` | `{"reason": "...", "ttl": 600}` or omit for defaults | Block IP fleet-wide. Defaults to 600s TTL and logs the admin username. |
 | `unblock` | `"reason string"` or omit for default | Unblock IP fleet-wide |
-| `whitelist` | `"reason string"` or omit for default | Whitelist IP, unblocks if currently blocked |
+| `whitelist` | `"reason string"` or `{"reason": "...", "ttl": 3600, "until": "<iso>"}` | Whitelist IP, unblocks if currently blocked. `ttl` seconds or ISO `until` sets the expiry (invalid `until` → 400). |
 | `unwhitelist` | — | Remove whitelist status |
 | `refresh` | — | Re-fetch geolocation data from provider (with threat checks) |
 | `threat_analysis` | — | Run threat intelligence checks only |

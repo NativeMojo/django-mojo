@@ -80,12 +80,45 @@ class Setting(MojoSecrets, MojoModel):
     # REST hooks
     # ------------------------------------------------------------------
 
+    # Global settings the geofence engine consumes. Writes must be validated
+    # (a typo'd rule otherwise surfaces as a request-time rule_invalid deny)
+    # and must invalidate the geofence decision cache immediately.
+    GEOFENCE_KEYS = ("GEOFENCE_SYSTEM_RULES", "GEOFENCE_ALLOWLIST")
+
     def on_rest_pre_save(self, changed_fields, created):
         """Encrypt secret values before saving via REST."""
         if self.is_secret and "value" in changed_fields:
             raw = self.value
             self.value = ""
             self.set_secret("value", raw)
+        self._validate_geofence_value()
+
+    def _validate_geofence_value(self):
+        """400 on a malformed geofence rule/allowlist written via the generic
+        /api/settings REST — the dedicated /api/geo endpoints validate too, so
+        there is no unvalidated write path."""
+        if self.group_id is not None or self.is_secret:
+            return
+        if self.key not in self.GEOFENCE_KEYS:
+            return
+        from mojo import errors as merrors
+        parsed = self.value
+        if isinstance(parsed, str):
+            if not parsed.strip():
+                return
+            try:
+                parsed = json.loads(parsed)
+            except (json.JSONDecodeError, TypeError):
+                raise merrors.ValueException(f"{self.key} must be valid JSON")
+        try:
+            if self.key == "GEOFENCE_SYSTEM_RULES":
+                from mojo.apps.account.services.geofence.dsl import validate_rule
+                validate_rule(parsed)
+            else:
+                from mojo.apps.account.services.geofence.engine import validate_allowlist
+                validate_allowlist(parsed)
+        except ValueError as exc:
+            raise merrors.ValueException(str(exc))
 
     # ------------------------------------------------------------------
     # Redis cache helpers
@@ -249,7 +282,21 @@ class Setting(MojoSecrets, MojoModel):
     def save(self, *args, **kwargs):
         super().save(*args, **kwargs)
         self.push_to_cache()
+        self._invalidate_geofence_decisions()
 
     def delete(self, *args, **kwargs):
         self.remove_from_cache()
+        self._invalidate_geofence_decisions()
         super().delete(*args, **kwargs)
+
+    def _invalidate_geofence_decisions(self):
+        """A geofence rule/allowlist edit must take effect immediately — a
+        stale cached allow must not outlive an emergency block. Hooked at the
+        model layer so Setting.set(), REST saves, and shell writes all count."""
+        if self.group_id is not None or self.key not in self.GEOFENCE_KEYS:
+            return
+        try:
+            from mojo.apps.account.services.geofence import cache as gf_cache
+            gf_cache.invalidate_all()
+        except Exception as exc:
+            logit.error("geofence", f"decision-cache invalidation failed: {exc}")

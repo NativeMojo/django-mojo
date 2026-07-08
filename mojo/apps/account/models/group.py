@@ -627,6 +627,17 @@ class Group(MojoSecrets, MojoModel):
         if auth_cfg is not None:
             from mojo.apps.account.services.auth_config import validate_auth_config
             validate_auth_config(auth_cfg)
+        # Same for geofence rules — a typo'd rule must 400 here, not surface
+        # as a request-time rule_invalid deny. Validation runs on the merged
+        # metadata, so partial REST updates are checked post-merge.
+        gf_rule = (self.metadata or {}).get("geofence")
+        if gf_rule is not None:
+            from mojo import errors as merrors
+            from mojo.apps.account.services.geofence.dsl import validate_rule
+            try:
+                validate_rule(gf_rule)
+            except ValueError as exc:
+                raise merrors.ValueException(f"Invalid geofence rule: {exc}")
 
     def on_rest_created(self):
         metrics.set_value("total_groups", Group.objects.filter(is_active=True).count(), account="global")
@@ -636,6 +647,18 @@ class Group(MojoSecrets, MojoModel):
             metrics.set_value("total_groups", Group.objects.filter(is_active=True).count(), account="global")
         if "auth_domain" in changed_fields or "is_active" in changed_fields:
             self._invalidate_auth_domain_cache(changed_fields)
+        # JSONField merges don't register in changed_fields, so invalidate this
+        # group's cached geofence decisions on every update — a rule edit must
+        # not serve stale allows for up to GEOFENCE_CACHE_TTL. Bounded scan.
+        if not created:
+            self._invalidate_geofence_decisions()
+
+    def _invalidate_geofence_decisions(self):
+        try:
+            from mojo.apps.account.services.geofence import cache as gf_cache
+            gf_cache.invalidate_group(self.pk)
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Auth domain cache (white-label auth pages)

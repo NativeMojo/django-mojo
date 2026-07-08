@@ -81,6 +81,7 @@ class GeoLocatedIP(models.Model, MojoModel):
     # Whitelisting — takes precedence over all blocking
     is_whitelisted = models.BooleanField(default=False, db_index=True, help_text="Whitelisted IPs are never blocked")
     whitelisted_reason = models.CharField(max_length=255, null=True, blank=True, help_text="Why this IP is whitelisted")
+    whitelisted_until = models.DateTimeField(null=True, blank=True, db_index=True, help_text="When the whitelist expires (null = permanent)")
 
     # Auditing and source tracking
     provider = models.CharField(max_length=50, null=True, blank=True)
@@ -114,8 +115,9 @@ class GeoLocatedIP(models.Model, MojoModel):
                 'fields': ['id', 'ip_address', 'country_code', 'country_name', 'city', 'region',
                            'is_tor', 'is_vpn', 'is_proxy', 'is_known_attacker', 'is_known_abuser',
                            'threat_level', 'is_blocked', 'blocked_at', 'blocked_until',
-                           'blocked_reason', 'block_count', 'is_whitelisted', 'whitelisted_reason'],
-                'extra': ['is_threat', 'is_suspicious', 'risk_score', 'block_active'],
+                           'blocked_reason', 'block_count', 'is_whitelisted', 'whitelisted_reason',
+                           'whitelisted_until'],
+                'extra': ['is_threat', 'is_suspicious', 'risk_score', 'block_active', 'whitelist_active'],
             },
             'detailed': {
                 # Include all fields including raw data
@@ -162,9 +164,22 @@ class GeoLocatedIP(models.Model, MojoModel):
         """True if the IP is blocked AND the block hasn't expired."""
         if not self.is_blocked:
             return False
-        if self.is_whitelisted:
+        if self.whitelist_active:
             return False
         if self.blocked_until and dates.utcnow() > self.blocked_until:
+            return False
+        return True
+
+    @property
+    def whitelist_active(self):
+        """True if the IP is whitelisted AND the whitelist hasn't expired.
+
+        Every consumer of whitelist state (geofence allowlist, block
+        suppression, auto-block guards) must use this, not is_whitelisted,
+        so an expired whitelist means the same thing everywhere."""
+        if not self.is_whitelisted:
+            return False
+        if self.whitelisted_until and dates.utcnow() > self.whitelisted_until:
             return False
         return True
 
@@ -413,8 +428,8 @@ class GeoLocatedIP(models.Model, MojoModel):
         self.threat_level = new_level
         update_fields = ['threat_level']
 
-        # Never auto-block whitelisted IPs
-        if self.is_whitelisted or not block:
+        # Never auto-block whitelisted IPs (expired whitelists don't count)
+        if self.whitelist_active or not block:
             self.save(update_fields=update_fields)
             if not from_sync:
                 self._maybe_push_abuse_signals(prev)
@@ -446,7 +461,7 @@ class GeoLocatedIP(models.Model, MojoModel):
         Returns:
             bool: True if the IP was blocked
         """
-        if self.is_whitelisted:
+        if self.whitelist_active:
             return False
 
         # Idempotency: skip if already blocked and block hasn't expired
@@ -573,23 +588,37 @@ class GeoLocatedIP(models.Model, MojoModel):
                 logit.exception("Failed to broadcast unblock for %s", self.ip_address)
                 metrics.record("firewall:broadcast_errors", category="firewall")
 
-    def whitelist(self, reason="manual"):
+    def whitelist(self, reason="manual", ttl=None, until=None):
         """
         Whitelist this IP. Unblocks fleet-wide if currently blocked
         and prevents future auto-blocks.
+
+        Args:
+            reason: Why the IP is whitelisted
+            ttl: Seconds until the whitelist expires (None = permanent)
+            until: Explicit expiry datetime — wins over ttl
         """
         # Read DB truth to avoid stale in-memory state from concurrent updates
-        db_state = GeoLocatedIP.objects.filter(pk=self.pk).values("is_blocked", "blocked_until").first()
+        db_state = GeoLocatedIP.objects.filter(pk=self.pk).values(
+            "is_blocked", "blocked_until", "is_whitelisted", "whitelisted_until").first()
         was_blocked = bool(db_state and db_state["is_blocked"])
         was_permanent = was_blocked and db_state["blocked_until"] is None
+        prior = {
+            "is_whitelisted": bool(db_state and db_state["is_whitelisted"]),
+            "until": str(db_state["whitelisted_until"]) if db_state and db_state["whitelisted_until"] else None,
+        }
+
+        if until is None and ttl:
+            until = dates.utcnow() + timedelta(seconds=int(ttl))
 
         self.is_whitelisted = True
         self.whitelisted_reason = reason
+        self.whitelisted_until = until
         if self.is_blocked:
             self.is_blocked = False
             self.blocked_until = None
         self.save(update_fields=[
-            'is_whitelisted', 'whitelisted_reason',
+            'is_whitelisted', 'whitelisted_reason', 'whitelisted_until',
             'is_blocked', 'blocked_until',
         ])
 
@@ -599,10 +628,12 @@ class GeoLocatedIP(models.Model, MojoModel):
             payload=ujson.dumps({
                 "ip": self.ip_address,
                 "reason": reason,
+                "until": str(self.whitelisted_until) if self.whitelisted_until else None,
                 "was_blocked": was_blocked,
                 "trigger": "manual",
             }),
         )
+        self._on_whitelist_changed("whitelist", reason=reason, old=prior)
 
         if was_blocked:
             try:
@@ -624,9 +655,14 @@ class GeoLocatedIP(models.Model, MojoModel):
 
     def unwhitelist(self):
         """Remove whitelist status."""
+        prior = {
+            "is_whitelisted": self.is_whitelisted,
+            "until": str(self.whitelisted_until) if self.whitelisted_until else None,
+        }
         self.is_whitelisted = False
         self.whitelisted_reason = None
-        self.save(update_fields=['is_whitelisted', 'whitelisted_reason'])
+        self.whitelisted_until = None
+        self.save(update_fields=['is_whitelisted', 'whitelisted_reason', 'whitelisted_until'])
 
         self.log(
             f"IP Unwhitelisted: {self.ip_address}",
@@ -636,6 +672,30 @@ class GeoLocatedIP(models.Model, MojoModel):
                 "trigger": "manual",
             }),
         )
+        self._on_whitelist_changed("unwhitelist", old=prior)
+
+    def _on_whitelist_changed(self, action, reason=None, old=None):
+        """Geofence hooks for whitelist changes — model-level so every write
+        path (REST action, assistant tool, shell) invalidates cached decisions
+        and lands in the config-change evidence stream. Never raises."""
+        try:
+            from mojo.apps.account.services.geofence import cache as gf_cache
+            from mojo.apps.account.services.geofence import evidence
+            gf_cache.invalidate_ip(self.ip_address)
+            evidence.report_config_change(
+                f"ip:{self.ip_address}",
+                old=old,
+                new={
+                    "action": action,
+                    "reason": reason,
+                    "is_whitelisted": self.is_whitelisted,
+                    "until": str(self.whitelisted_until) if self.whitelisted_until else None,
+                },
+                request=getattr(self, "active_request", None),
+                user=getattr(self, "active_user", None),
+            )
+        except Exception:
+            logit.exception("geofence whitelist hook failed for %s", self.ip_address)
 
     def on_action_block(self, value):
         if not isinstance(value, dict):
@@ -650,8 +710,25 @@ class GeoLocatedIP(models.Model, MojoModel):
         self.unblock(reason=value)
 
     def on_action_whitelist(self, value):
+        username = self.active_user.username if self.active_user else "unknown"
+        if isinstance(value, dict):
+            # {reason, ttl, until} — mirrors on_action_block's dict form
+            until = value.get("until")
+            if until is not None:
+                from mojo import errors as merrors
+                try:
+                    until = dates.parse_datetime(until)
+                except Exception:
+                    until = None
+                if until is None:
+                    raise merrors.ValueException("Invalid 'until' datetime for whitelist")
+            self.whitelist(
+                reason=value.get("reason") or f"manual whitelist: by {username}",
+                ttl=value.get("ttl"),
+                until=until,
+            )
+            return
         if not isinstance(value, str):
-            username = self.active_user.username if self.active_user else "unknown"
             value = f"manual whitelist: by {username}"
         self.whitelist(reason=value)
 

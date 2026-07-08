@@ -27,7 +27,7 @@ _FEDERATED_FIELDS = (
 _FIREWALL_FIELDS = (
     "is_blocked", "is_whitelisted",
     "blocked_at", "blocked_until", "blocked_reason", "block_count",
-    "whitelisted_reason",
+    "whitelisted_reason", "whitelisted_until",
 )
 
 

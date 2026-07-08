@@ -140,7 +140,13 @@ _Write a complete, self-contained design here — enough that a fresh session ca
 - [blocking unknowns, or "none"]
 
 ## Notes
-[Scratch space — anything not part of the plan.]
+- **Overlap resolution (2026-07-07, ITEM-017 scope):** ITEM-017 (geofence config
+  + evidence plane) builds **(D) bypass visibility** (`GET /api/geo/bypass_holders`)
+  and the **per-scope fail posture map** (`GEOFENCE_FAIL_CLOSED_SCOPES`, decorator
+  scope passed into `GeoFenceEngine.check`). Drop (D) from this item when scoping;
+  keep (A) strict posture, (B) per-group posture, (C) threat-list caching. Strict
+  posture must **compose** with the scope map (effective fail_closed = global flag
+  OR strict posture OR scope ∈ fail-closed scopes) — don't replace it.
 
 ## Resolution
 - closed: YYYY-MM-DD

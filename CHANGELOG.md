@@ -1,3 +1,55 @@
+## Unreleased
+
+**feature** — **Geofence config plane: editable system rules, IP allowlist, simulate, and exemption audit.**
+`GEOFENCE_SYSTEM_RULES` is now manageable at runtime as a DB-backed `Setting` row via
+perm-gated REST — `GET/POST/DELETE /api/geo/rules` (full-replace writes validated by
+the DSL validator with readable 400s; the DB row wins over the settings file; the
+engine now reads the setting with `kind="dict"` so the stored JSON parses). New
+fine-grained perms `view_geofence` / `manage_geofence` (domain category `security`)
+let legal/business staff maintain jurisdiction rules without `manage_settings`.
+Group rules (`Group.metadata.geofence`) are validated at REST save time (400 instead
+of a request-time `rule_invalid` deny). Every rule/allowlist change invalidates the
+decision cache automatically (Setting/Group/GeoLocatedIP model hooks — REST,
+programmatic, and shell writes all covered) and is recorded as a `geofence_config`
+incident event carrying old/new/actor — that stream is the admin UI's change history.
+`POST /api/geo/simulate` returns an uncached what-if `GeoDecision` for an arbitrary
+IP or geo dict (works while geofencing is disabled; never emits evidence).
+`GET /api/geo/rules` also reports posture, allowlist summary, and every enforced
+endpoint+scope. See `docs/django_developer/account/geofence.md` and
+`docs/web_developer/account/geofence.md`.
+
+**feature** — **Geofence IP allowlist — full exemption for developer/office IPs, with expiry.**
+Two sources, checked after `bypass_geofence` and before rules: a `GEOFENCE_ALLOWLIST`
+setting of CIDR entries (strings or `{cidr, reason, until}`; managed via
+`GET/POST /api/geo/allowlist`) and the existing per-IP `GeoLocatedIP` whitelist. The
+whitelist gains `whitelisted_until` (mirrors `blocked_until`; the
+`/api/system/geoip` whitelist action now accepts `{reason, ttl, until}`) and a
+`whitelist_active` property honored everywhere — an **expired whitelist no longer
+suppresses incident-driven firewall blocking** (permanent whitelists unchanged), and
+`whitelisted_until` never federates. Allowlisted requests pass jurisdiction AND
+abuse rules with reason `ip_allowlisted`, but still shadow-evaluate so evidence can
+record `would_block`. Exemptions are auditable: `GET /api/geo/allowlist` (expired
+entries listed `active:false`) and `GET /api/geo/bypass_holders` (explicit grants +
+superusers).
+
+**feature** — **Geofence evidence plane: every block becomes an incident event, with metrics.**
+Blocks now call `incident.report_event(category="geofence_block", request=…)` from
+the enforcement decorator (cached denials included): level 3 ordinary jurisdiction
+block, 5 abuse-flag or fail-closed-scope block, 6 lookup-failure-while-fail-open,
+7 invalid-rule-at-evaluation (crosses the default `INCIDENT_LEVEL_THRESHOLD` and
+pages). Exercised allowlist exemptions emit `geofence_exempt` (level 3). Events are
+deduped per `(ip, reason)` hourly so a blocked client can't flood the stream;
+metrics count every block including deduped ones (`geofence:blocks`,
+`geofence:blocks:country:{cc}`, `geofence:blocks:region:{iso}`, `geofence:exempt`).
+
+**feature** — **Per-scope geofence fail posture.**
+`@md.requires_geofence(scope=…)` now passes its scope to the engine: scopes listed
+in the new `GEOFENCE_FAIL_CLOSED_SCOPES` setting (e.g. `["payments"]`) fail
+**closed** on geo-lookup failure while auth stays fail-open. Default `[]` — zero
+behavior change until configured. `lookup_failed` decisions are no longer cached
+(scope isn't part of the cache key, so a fail-open allow must not be replayed to a
+fail-closed scope).
+
 ## v1.2.41 - July 06, 2026
 
 **feature** — **Outbound webhook signature header and User-Agent are now configurable.**

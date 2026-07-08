@@ -28,17 +28,29 @@ GEO_PRIVATE = {"country_code": None, "region_code": None,
 
 
 def headers(*, geo=None, system_rules=None, enabled=None, fail_closed=None,
-            allow_private=None, cache_ttl=0):
+            allow_private=None, cache_ttl=0, allowlist=None,
+            fail_closed_scopes=None):
     """Build the test-mode header dict for a geofence request.
 
     Defaults `cache_ttl=0` so tests never see stale cached decisions from
     other tests. Pass cache_ttl>0 only when testing cache behavior.
+
+    geo accepts a dict (JSON geo override) or the literal string "fail"
+    (forces the lookup_failed path). allowlist is a JSON list replacing
+    GEOFENCE_ALLOWLIST; fail_closed_scopes is a list or comma string
+    replacing GEOFENCE_FAIL_CLOSED_SCOPES.
     """
     h = {}
     if geo is not None:
-        h["X-Mojo-Test-Geo"] = json.dumps(geo)
+        h["X-Mojo-Test-Geo"] = geo if isinstance(geo, str) else json.dumps(geo)
     if system_rules is not None:
         h["X-Mojo-Test-Geofence-System"] = json.dumps(system_rules)
+    if allowlist is not None:
+        h["X-Mojo-Test-Geofence-Allowlist"] = json.dumps(allowlist)
+    if fail_closed_scopes is not None:
+        if isinstance(fail_closed_scopes, (list, tuple)):
+            fail_closed_scopes = ",".join(fail_closed_scopes)
+        h["X-Mojo-Test-Geofence-Fail-Closed-Scopes"] = fail_closed_scopes
     if enabled is not None:
         h["X-Mojo-Test-Geofence-Enabled"] = "1" if enabled else "0"
     if fail_closed is not None:
