@@ -562,13 +562,16 @@ class Group(MojoSecrets, MojoModel):
         )
 
     def check_view_permission(self, perms, request):
-        # A group-scoped ApiKey may view ONLY its own group (and descendants) —
-        # it must not satisfy the global perm grant below, or a key self-claiming
-        # `groups` could read any tenant's group by pk. (The list path is already
-        # confined via ApiKey.get_groups in on_rest_handle_list.)
+        # A group-scoped ApiKey may act ONLY on its own group (and descendants)
+        # AND only if it actually holds the required permission — this override
+        # gates SAVE as well as VIEW (on_rest_handle_save passes VIEW_PERMS in
+        # the list), so `is_group_allowed` alone would let a zero-permission key
+        # write its own group's auth_config/geofence. Require both confinement
+        # and the perm, matching the group-scoped ApiKey branch in
+        # MojoModel._evaluate_permission.
         api_key = getattr(request, "api_key", None)
         if api_key is not None:
-            return api_key.is_group_allowed(self)
+            return api_key.is_group_allowed(self) and api_key.has_permission(perms)
         # check if the user is a member of the group
         if request.user.has_permission(perms):
             return True

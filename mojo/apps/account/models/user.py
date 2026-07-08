@@ -908,6 +908,16 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
                 metrics.record("user_deactivated", category="user", min_granularity="hours")
 
     def check_edit_permission(self, perms, request):
+        # User is a groupless (platform-global) model, and this override is
+        # consulted for VIEW-by-pk too (User has no check_view_permission), so it
+        # is the choke point for /api/user/<pk>. A group-scoped ApiKey must NOT
+        # satisfy the global perm grant here — otherwise a key self-claiming
+        # manage_users could read/edit any tenant's user by pk. Deny unless the
+        # model explicitly opts in (RestMeta.ALLOW_API_KEY_GLOBAL, default False).
+        api_key = getattr(request, "api_key", None)
+        if api_key is not None:
+            return (type(self).get_rest_meta_prop("ALLOW_API_KEY_GLOBAL", False)
+                    and api_key.has_permission(perms))
         if "owner" in perms and self.is_request_user():
             return True
         return request.user.has_permission(perms)

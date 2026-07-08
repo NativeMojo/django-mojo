@@ -56,7 +56,8 @@ def setup_apikey_groupless(opts):
     # must never appear in a key's /api/user response.
     tag = _uuid.uuid4().hex[:10]
     opts.victim_email = f"gpless_victim_{tag}@globalperms.test"
-    User.objects.create_user(username=opts.victim_email, email=opts.victim_email, password="Gpless##99")
+    victim = User.objects.create_user(username=opts.victim_email, email=opts.victim_email, password="Gpless##99")
+    opts.victim_id = victim.pk
 
     group = Group.objects.create(name=f"gpless_grp_{tag}", kind="organization")
     _, opts.token = ApiKey.create_for_group(
@@ -103,8 +104,38 @@ def test_apikey_user_body_no_leak(opts):
         assert resp.status_code in (401, 403), \
             f"apikey targeted /api/user?email lookup must be denied, got {resp.status_code}"
         assert v not in body, f"SECURITY: victim email leaked in targeted lookup: {body[:300]}"
+
+        # Detail-by-pk: User.check_edit_permission is consulted for VIEW too, so
+        # this path bypasses the list gate — it must ALSO deny the key.
+        resp = opts.client.get(f"/api/user/{opts.victim_id}")
+        body = str(opts.client.last_response.body)
+        assert resp.status_code in (401, 403, 404), \
+            f"apikey GET /api/user/<pk> must be denied, got {resp.status_code}: {body[:200]}"
+        assert v not in body, f"SECURITY: victim email leaked in detail-by-pk: {body[:300]}"
     finally:
         opts.client.logout()
+
+
+@th.django_unit_test("groupless: apikey with NO group perms cannot WRITE its own group")
+def test_apikey_cannot_write_own_group_without_perm(opts):
+    """Group.check_view_permission gates SAVE too — a key must hold the perm, not
+    just be confined to its own group, to write it (else a zero-perm key could
+    rewrite auth_config/geofence)."""
+    from mojo.apps.account.models import Group, ApiKey
+    grp = Group.objects.create(name=f"gpless_wgrp_{_uuid.uuid4().hex[:8]}", kind="organization")
+    _, token = ApiKey.create_for_group(group=grp, name="gpless_test_noperm", permissions={})  # zero grants
+    try:
+        use_apikey(opts, token)
+        resp = opts.client.post(f"/api/group/{grp.pk}", {"metadata": {"geofence": {"country": {"in": ["US"]}}}})
+        assert resp.status_code in (401, 403), \
+            f"zero-perm key must NOT write its own group, got {resp.status_code}: {opts.client.last_response.body}"
+        grp.refresh_from_db()
+        assert not (grp.metadata or {}).get("geofence"), \
+            "SECURITY: zero-perm key wrote group.metadata.geofence"
+    finally:
+        opts.client.logout()
+        ApiKey.objects.filter(group=grp).delete()
+        grp.delete()
 
 
 @th.django_unit_test("groupless: apikey cannot read ANOTHER group's detail, only its own")

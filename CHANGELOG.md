@@ -11,11 +11,14 @@ cannot group-filter, so the key read every tenant's rows. Verified end-to-end: a
 group-A key self-claiming `manage_users` read another tenant's user record via
 `GET /api/user`. Fixes: `_evaluate_permission` now **denies an ApiKey by
 default** on a groupless model (opt back in per-model with
-`RestMeta.ALLOW_API_KEY_GLOBAL = True`, default `False`; none do); `Group`'s
-custom view path confines a key to its own group + descendants (list was
-already confined, detail-by-pk now is too); and `ApiKey.set_permissions` /
-`can_change_permission` (mirroring `GroupMember`) gate assignment via a new
-`APIKEY_PERMS_PROTECTION` setting (dict, default `{}`). The exposed set included
+`RestMeta.ALLOW_API_KEY_GLOBAL = True`, default `False`; none do). Models that
+override the permission check are handled too: `User.check_edit_permission` (the
+choke point for `GET /api/user/<pk>`, since `User` has no `check_view_permission`)
+denies keys, and `Group`'s custom view path confines a key to its own group +
+descendants **and** requires it to actually hold the permission (so a
+zero-permission key cannot write its own group's `auth_config`/`geofence`). And
+`ApiKey.set_permissions` / `can_change_permission` (mirroring `GroupMember`) gate
+assignment via a new `APIKEY_PERMS_PROTECTION` setting (dict, default `{}`). The exposed set included
 `User`, `GeoLocatedIP`, `UserLoginEvent`, `Job`/`JobEvent`/`JobLog`,
 `ScheduledTask`, bouncer admin models, and `FileRendition`. Legitimate key flows
 are unaffected — group-scoped models (settings, webhook subscriptions, chat,
