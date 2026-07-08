@@ -55,13 +55,15 @@ Response includes block details:
 | Field | Description |
 |-------|-------------|
 | `is_blocked` | Currently blocked (may be expired — check `block_active`) |
-| `block_active` | Computed: blocked AND not expired AND not whitelisted |
+| `block_active` | Computed: blocked AND not expired AND no *active* whitelist (an expired whitelist no longer counts) |
 | `blocked_at` | When the current block was applied |
 | `blocked_until` | When the block expires (`null` = permanent) |
 | `blocked_reason` | Why — includes trigger info (manual, auto:threat_escalation) |
 | `block_count` | Total times this IP has been blocked |
-| `is_whitelisted` | Whitelisted IPs are never blocked |
+| `is_whitelisted` | Whitelisted IPs are never blocked while the whitelist is active — see `whitelist_active` |
 | `whitelisted_reason` | Why it was whitelisted |
+| `whitelisted_until` | When the whitelist expires (`null` = permanent) — mirrors `blocked_until` |
+| `whitelist_active` | Computed: `is_whitelisted` AND `whitelisted_until` hasn't passed |
 | `threat_level` | `low`, `medium`, `high`, `critical` |
 | `risk_score` | 0–100 computed score from threat signals |
 
@@ -117,7 +119,24 @@ POST /api/system/geoip/42
 }
 ```
 
-If the IP is currently blocked, whitelisting also unblocks it fleet-wide.
+Or with an expiry instead of a permanent whitelist:
+
+```json
+{
+  "whitelist": {
+    "reason": "Contractor laptop",
+    "ttl": 86400
+  }
+}
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `reason` | No | Why the IP is being whitelisted (defaults to "manual whitelist: by {username}") |
+| `ttl` | No | Seconds until the whitelist expires |
+| `until` | No | Explicit ISO expiry — wins over `ttl` if both are given. Invalid `until` → 400. |
+
+Omit both `ttl` and `until` for a permanent whitelist. If the IP is currently blocked, whitelisting also unblocks it fleet-wide. An expired whitelist (past `until`) stops suppressing blocks — it is not a permanent exemption.
 
 ### Remove Whitelist
 

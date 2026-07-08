@@ -427,10 +427,12 @@ Several framework hooks (geofence engine, account extension handlers, bouncer de
 
 | Header | Overrides | Defined in |
 |---|---|---|
-| `X-Mojo-Test-Geo` (JSON) | geoip lookup result | `mojo.apps.account.services.geofence.engine` |
+| `X-Mojo-Test-Geo` (JSON, or the literal `"fail"`) | geoip lookup result (`"fail"` forces a lookup failure) | `mojo.apps.account.services.geofence.engine` |
 | `X-Mojo-Test-Geofence-System` (JSON) | `GEOFENCE_SYSTEM_RULES` | `mojo.apps.account.services.geofence.engine` |
+| `X-Mojo-Test-Geofence-Allowlist` (JSON list) | `GEOFENCE_ALLOWLIST` | same |
 | `X-Mojo-Test-Geofence-Enabled` (`0`/`1`) | `GEOFENCE_ENABLED` | same |
 | `X-Mojo-Test-Geofence-Fail-Closed` (`0`/`1`) | `GEOFENCE_FAIL_CLOSED` | same |
+| `X-Mojo-Test-Geofence-Fail-Closed-Scopes` (comma list) | `GEOFENCE_FAIL_CLOSED_SCOPES` | same |
 | `X-Mojo-Test-Geofence-Allow-Private` (`0`/`1`) | `GEOFENCE_ALLOW_PRIVATE_IPS` | same |
 | `X-Mojo-Test-Geofence-Cache-Ttl` (int) | `GEOFENCE_CACHE_TTL` | same |
 | `X-Mojo-Test-Pre-Register-Validator` (dotted path) | `PRE_REGISTER_VALIDATOR` | `mojo.apps.account.services.extensions` |

@@ -20,6 +20,7 @@ Use this before showing a login or registration form to detect whether the curre
 | Param | Required | Description |
 |---|---|---|
 | `group_uuid` | No | UUID of a specific group. When provided, group-level geofence rules are evaluated in addition to system rules. Omit to check system rules only. |
+| `scope` | No | Endpoint scope to preview fail posture for — a scope listed in `GEOFENCE_FAIL_CLOSED_SCOPES` fails **closed** (denies) on a geo-lookup failure instead of the fail-open default. |
 
 ### Response
 
@@ -28,12 +29,12 @@ Use this before showing a login or registration form to detect whether the curre
     "status": true,
     "data": {
         "allowed": true,
-        "reason": "allowed",
-        "detail": "Request is permitted.",
+        "reason": "passed",
+        "detail": "Allowed.",
         "ip": "1.2.3.4",
-        "country": "United States",
+        "country": "US",
         "country_code": "US",
-        "region": "New York",
+        "region": "US-NY",
         "region_code": "US-NY",
         "abuse": {
             "tor": false,
@@ -47,15 +48,19 @@ Use this before showing a login or registration form to detect whether the curre
 }
 ```
 
+`country`/`country_code` and `region`/`region_code` always carry the same ISO code — there is no separate human-readable name field.
+
 When `allowed` is `false`, `rule_level` indicates which level caused the block (`"system"` or `"group"`), and `reason` and `detail` describe the specific rule that matched.
 
 | Field | Description |
 |---|---|
 | `allowed` | `true` if all geofence rules passed |
-| `reason` | `"allowed"`, `"system_rule"`, `"group_rule"`, or `"lookup_failed"` |
+| `reason` | One of `no_rules`, `disabled`, `bypass`, `ip_allowlisted`, `passed`, `lookup_failed`, `private_ip`, `country_not_allowed`, `region_not_allowed`, `tor_detected`, `vpn_detected`, `proxy_detected`, `datacenter_detected`, `rule_invalid`, `group_inactive` — see the django-developer [GeoDecision Shape](../../django_developer/account/geofence.md#geodecision-shape) reference |
 | `detail` | Human-readable explanation of the decision |
 | `rule_level` | `"system"` or `"group"` when blocked; `null` when allowed |
 | `abuse` | Connection-type flags from the IP intelligence lookup |
+
+When `reason` is `ip_allowlisted` (the IP matches the [IP allowlist](../../django_developer/account/geofence.md#ip-allowlist--full-exemption)), the response also carries `allowlist_source` (`"setting"` or `"geoip"`), `allowlist_reason`, `allowlist_until`, and the shadow-evaluation outcome `would_block` / `would_block_reason` (what the rules would have decided without the exemption).
 
 ---
 
@@ -99,7 +104,7 @@ Returns a single GeoIP record. Supports `?graph=` parameter.
 | `threat_analysis` | — | Run threat intelligence checks |
 | `block` | `{"reason": "...", "ttl": 600}` | Block this IP fleet-wide (ttl in seconds, null=permanent) |
 | `unblock` | `"reason string"` | Unblock this IP fleet-wide |
-| `whitelist` | `"reason string"` | Whitelist — prevents all future blocks |
+| `whitelist` | `"reason string"` or `{"reason": "...", "ttl": 3600, "until": "<iso>"}` | Whitelist — prevents all future blocks. `ttl` seconds or ISO `until` sets an expiry (invalid `until` → 400); omit both for permanent. |
 | `unwhitelist` | — | Remove whitelist status |
 
 See [firewall.md](firewall.md) for full firewall management and security dashboard guide.

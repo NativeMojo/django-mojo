@@ -23,7 +23,7 @@ Category permissions are the **recommended way** to assign access. Each category
 |---|---|---|
 | `users` | User Management | Users, passkeys, MFA, API keys, OAuth, devices, locations |
 | `groups` | Group Management | Groups, members, group API keys, settings |
-| `security` | Security & Logs | Incidents, events, rules, tickets, IP blocks, bouncer, GeoIP, system logs |
+| `security` | Security & Logs | Incidents, events, rules, tickets, IP blocks, bouncer, GeoIP, system logs, geofence config |
 | `comms` | Communications | Email, phone, SMS, push notifications, chat rooms, messages |
 | `jobs` | Job System | Jobs, job events, job logs, runners, queue control |
 | `metrics` | Metrics | All metrics — recording, fetching, categories, permissions |
@@ -131,6 +131,8 @@ Category permissions cover most use cases. Fine-grained permissions exist for wh
 | Fine-Grained | Category | Use case |
 |---|---|---|
 | `view_security` | `security` | Read-only security dashboard (no edit access) |
+| `view_geofence` | `security` | Read-only geofence admin section — rules, allowlist, simulate, bypass holders (no edit access) |
+| `manage_geofence` | `security` | Manage geofence system rules and IP allowlist without full `security` |
 | `view_users` | `users` | Read-only user directory |
 | `view_groups` | `groups` | Read-only group listing |
 | `view_fileman` | `files` | Read-only file browser |
@@ -160,6 +162,7 @@ This prevents non-admin users from escalating their own access.
 | Secure settings | `GET/POST /api/settings`, `DELETE /api/settings/<id>` | `groups` |
 | Security dashboard | `GET /api/incident/incident`, `GET /api/incident/event` | `security` |
 | Firewall / IP blocks | `GET/POST /api/incident/ipset` — see [IPSet Bulk Blocking](../security/README.md#ipset-bulk-blocking) | `security` |
+| Geofence admin | `GET/POST /api/geo/rules`, `GET/POST /api/geo/allowlist` — see [Geofence Admin](geofence.md) | `security` (or `view_geofence`/`manage_geofence`) |
 | Bouncer devices | `GET /api/account/bouncer/device` | `security` or `users` |
 | Bot signatures | `GET/POST /api/account/bouncer/bot_signature` | `security` or `users` |
 | System logs | `GET /api/logs` | `security` |

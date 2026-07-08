@@ -47,7 +47,7 @@ Category permissions grant full read+write access to an entire domain. Use these
 
 | Permission | Domain | Grants access to |
 |-----------|--------|-----------------|
-| `security` | Security & Logs | Incidents, events, rules, tickets, IPSets, bouncer devices/signals/signatures, GeoLocatedIP, system logs |
+| `security` | Security & Logs | Incidents, events, rules, tickets, IPSets, bouncer devices/signals/signatures, GeoLocatedIP, system logs, geofence config |
 | `users` | Users | All user records, passkeys, TOTP, API keys, OAuth, devices, locations, bouncer/GeoLocatedIP |
 | `groups` | Groups | Groups, members, group API keys, settings |
 | `comms` | Communications | Email (mailboxes, domains, templates, messages), phone (numbers, config, SMS), push (config, templates, delivery, devices), chat (rooms, messages, reactions, receipts, membership) |
@@ -73,6 +73,8 @@ Use these when you need read-only access or scoped access within a domain:
 | `manage_settings` | Groups | Secure settings CRUD |
 | `view_security` | Security | Read incidents, events, rules, firewall, bouncer data |
 | `manage_security` | Security | Write access to incidents, rules, tickets, IP blocks |
+| `view_geofence` | Security | Read-only access to geofence config (system rules, allowlist, simulate, bypass holders) |
+| `manage_geofence` | Security | Write access to geofence system rules and IP allowlist |
 | `manage_aws` | Email | SES email templates, domains, mailboxes |
 | `manage_chat` | Communications | Create/manage chat rooms and membership |
 | `view_fileman` | Files | Read file manager records |
@@ -124,6 +126,8 @@ Use these when you need read-only access or scoped access within a domain:
 | BouncerDevice | manage_users, view_security, manage_security, **security**, **users** | manage_users, manage_security, **security**, **users** | |
 | BouncerSignal | manage_users, view_security, manage_security, **security**, **users** | (read-only) | Audit trail |
 | BotSignature | manage_users, view_security, manage_security, **security**, **users** | manage_users, manage_security, **security**, **users** | |
+
+**REST endpoints (non-RestMeta):** The geofence config-plane endpoints in `account/rest/geofence.py` (`geo/rules`, `geo/simulate`, `geo/allowlist`, `geo/bypass_holders`) accept `view_geofence`/`manage_geofence`/`security`, not RestMeta perms.
 
 ### Incident App
 
