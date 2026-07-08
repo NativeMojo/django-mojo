@@ -58,8 +58,6 @@ The full surface has NOT been audited.
       group fallback applies and how to opt out for global-effect endpoints.
 
 ## Plan
-<!-- PLAN PENDING — /scope fills this section. While this marker is present the item
-is UNPLANNED and /build MUST refuse it. Delete this comment when the plan is complete. -->
 
 ### Goal
 Close the cross-tenant escalation class: promote a global-only permission
@@ -405,3 +403,62 @@ and documents).
   this item is the rest of the audit.
 - The reviewer verified the fallback mechanism itself is long-standing,
   pre-existing behavior — the audit is about which endpoints sit on top of it.
+
+- **Baseline (2026-07-08, `bin/run_tests --agent`)**: passed — 2316 total,
+  2260 passed, 0 failed, 56 skipped. Green.
+- **Build outcome (2026-07-08, commit `21197b1`)**: full suite 2323 / 2267 / **0
+  failed** / 56 skipped (+7 = the new module; baseline invariant held). The
+  legitimate group-fallback flows stayed green (`test_webhook_secret`,
+  `test_geoip_sync_endpoint`, phonehub apikey SMS) as did the admin suites.
+- **Plan deviations (evidence-driven at build time):**
+  1. **`phonehub sms/send` NOT switched** — the plan listed it as a judgment
+     call; reading the code (`phonehub/rest/sms.py:39-42`) shows it is
+     ApiKey-by-design (handles `request.user` being an ApiKey) and its effect is
+     group-scoped (SMS attributed to `request.group`); it is also
+     ApiKey-federated (`phonehub/services/mojo_provider.py:47` POSTs to a
+     remote's sms/send with `apikey`). Switching would break SMS federation. Left
+     on `requires_perms`.
+  2. **`geoip/sync` resolved (open Q #3)** — fleet federation authenticates via
+     ApiKey (`account/asyncjobs.py:93` `Authorization: apikey`), so it uses
+     `requires_global_perms('geoip_sync', allow_api_keys=True)` — closes the
+     member fallback while keeping the federation key working. This drove the
+     `allow_api_keys` parameter on the promoted decorator.
+  3. **`model_permissions` tested via import, not HTTP** — the route is not
+     mounted in the testproject (`mojo/rest/` isn't auto-discovered), so the
+     500-fix regression asserts the decorator metadata is a flat varargs list
+     (the bug was a nested list) + `global_only`, rather than an HTTP 200.
+- **Post-review completion (security review, 2026-07-08):** the review found a
+  sibling vector — six delegating `requires_perms` endpoints on **groupless**
+  models (`aws/rest/{email,templates,messages}.py`: EmailDomain/Mailbox/
+  EmailTemplate/IncomingEmail/SentMessage; `account/rest/device.py` location →
+  UserDeviceLocation). A self-minted group **ApiKey** with self-claimed
+  `manage_aws`/`manage_users` reached them cross-tenant via the model-layer
+  api_key branch (`mojo/models/rest.py:288`). These are in ITEM-018's audited
+  surface (they are `requires_perms` endpoints I'd misclassified as
+  "model-security re-gates" — true for the GroupMember vector, false for the
+  ApiKey vector), so switched them to `requires_global_perms` and extended
+  `apikey_gate.py` to assert 403 on all six. The **broader** ApiKey issue —
+  unrestricted `ApiKey.permissions` + the same `rest.py:288` branch letting a
+  self-minted key reach OTHER groupless `uses_model_security` models (User,
+  GeoLocatedIP) — is a distinct pre-existing mechanism; filed as
+  `planning/inbox/apikey-permissions-unrestricted-groupless-model-access.md`
+  (P1) with the full evidence chain.
+
+## Resolution
+- closed: 2026-07-08
+- branch: main
+- files changed: mojo/decorators/auth.py (+requires_global_perms);
+  switched endpoints — jobs/rest/{control,jobs}.py, aws/rest/{cloudwatch,
+  email_ops,s3,send}.py, account/rest/{user,push,login_event,device}.py,
+  metrics/rest/permissions.py, incident/rest/event.py, assistant/rest/
+  assistant.py, account/rest/geofence.py (dropped local copy),
+  mojo/rest/model_permissions.py; adjacent fixes — account/models/member.py
+  (kind="dict"), account/rest/group.py (invite→set_permissions); docs
+  (core/permissions.md, helpers/settings_reference.md, web admin_portal.md),
+  CHANGELOG.md
+- tests added: tests/test_global_perms/ — escalation.py (member-grant 403
+  sweep over ~25 global endpoints + global-grant/superuser 200 checks),
+  apikey_gate.py (ApiKey denied on global gate + geoip/sync allow_api_keys
+  accepted), invite_protection.py (MEMBER_PERMS_PROTECTION enforced on invite +
+  kind="dict"), model_permissions.py (flat-perms 500-fix regression),
+  _helpers.py
