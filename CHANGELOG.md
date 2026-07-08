@@ -1,3 +1,27 @@
+## v1.2.44 - July 08, 2026
+
+**security** — **Dependency floors raised to patched versions (fleet-wide vulnerability remediation).**
+Downstream deployments upgrade via `pip install django-mojo --upgrade`, which
+resolves against these declared constraints (not the dev `uv.lock`). Several
+runtime dependencies had known CVEs whose fixes were installable but not
+*forced* — `pip --upgrade` leaves an already-satisfied dependency in place — and
+`cryptography` was actively capped **below** its fix. Lower bounds are now raised
+to the patched versions so the standard upgrade command pulls them: `pyjwt`
+`>=2.13.0` (HS256/JWK confusion enabling forged tokens — CVE-2026-48526, plus
+algorithm-allowlist bypass / DoS), `cryptography` `>=48.0.1,<49.0.0` (bundled
+OpenSSL, ceiling was `<47.0.0`), `django` `>=5.2.14` (**drops Django 4.2 support**
+— sensitive-info-in-cookies/cache + length-parameter handling; CVE-2026-5766 /
+-35192 / -6907), `ujson` `>=5.13.0`, `mistune` `>=3.2.1` (ReDoS + several XSS).
+Three runtime-transitive deps (pulled via requests / boto3 / pyfcm / twilio /
+httpx) are now explicit floor pins so the upgrade command controls them too:
+`urllib3>=2.7.0` (sensitive headers forwarded across origins in proxied
+redirects — relevant to signed-webhook and apikey-federation calls),
+`aiohttp>=3.14.1`, `idna>=3.15`. No code changes; resolves to django 5.2.16,
+cryptography 48.0.1, pyjwt 2.13.0, urllib3 2.7.0, ujson 5.13.0, mistune 3.3.2,
+aiohttp 3.14.1, idna 3.18. Note: one mistune math-plugin XSS
+(CVE-2026-44708) has no upstream fix — do not enable the math plugin on
+untrusted Markdown.
+
 ## v1.2.43 - July 08, 2026
 
 **security** — **A group API key can no longer reach platform-global models (cross-tenant data-exposure fix).**
