@@ -101,6 +101,22 @@ is UNPLANNED and /build MUST refuse it. Delete this comment when the plan is com
 
 ## Notes
 
+- **VERIFIED end-to-end (2026-07-08).** A throwaway probe (group-A `ApiKey` with
+  `{"manage_users": true}`, `Authorization: apikey <token>`, `GET /api/user`)
+  returned **HTTP 200 with users the key's group does not own** — cross-tenant
+  read confirmed through the real middleware → dispatcher → `on_rest_request` →
+  `_evaluate_permission` stack (not a mock). `/api/user`
+  (`uses_model_security(User)`, groupless) was NOT touched by ITEM-018, so it is
+  live. This is the reproduction to convert into a regression (assert 403 after
+  the fix — do NOT keep a bug-confirmation test).
+- **Why the "ApiKey is group-scoped" design doesn't catch this:** the model's
+  only system-permission guard is the `sys.` prefix (`api_key.py:118-119`) —
+  real admin perms (`manage_users`, `manage_aws`, `security`) are not
+  `sys.`-prefixed, so a key may hold them; and group-scoping (`is_group_allowed`
+  + instance-group rebind) only bites for models WITH a `group` FK — a groupless
+  model has no group to scope to, so `rest.py:288` trusts the key's plain perm
+  globally. Both intended safeguards have the same blind spot: global data +
+  non-`sys.` admin permission names.
 - Origin: ITEM-018 post-build security review (2026-07-08). That review rated
   the **six covered endpoints** CRITICAL (now fixed in ITEM-018 commit) and the
   **underlying ApiKey-permissions gap** a WARNING (this item).
