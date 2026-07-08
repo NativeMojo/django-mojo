@@ -4507,6 +4507,13 @@ API key: it grants/denies via <code>ApiKey.has_permission</code> (group-scoped; 
 always denied) and never runs a <code>User</code>-typed membership query. Every group
 permission gate is therefore safe to call with <code>request.user</code> whether the
 caller authenticated with a JWT or an API key.</p>
+<p><strong><code>check_view_permission</code> confines a key to its own group.</strong> The gate behind
+<code>GET /api/group/&lt;pk&gt;</code> special-cases an ApiKey identity directly — it returns
+<code>api_key.is_group_allowed(self)</code> before any of the fallbacks above run, so a
+key can never read another tenant's group by pk (list is confined the same
+way via <code>ApiKey.get_groups</code>). It does <strong>not</strong> get the "any member sees a
+basic-graph view" fallback that applies to a real <code>User</code>. See
+<a href="../api_keys/#group-scoping">API Keys — Group Scoping</a>.</p>
 </blockquote>
 <h2 id="groupmember-model">GroupMember Model<a class="headerlink" href="#groupmember-model" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">GroupMember</span><span class="p">(</span><span class="n">models</span><span class="o">.</span><span class="n">Model</span><span class="p">,</span> <span class="n">MojoModel</span><span class="p">):</span>
@@ -4521,7 +4528,7 @@ caller authenticated with a JWT or an API key.</p>
 <a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="n">member</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
 </code></pre></div>
 <h2 id="requestgroup">request.group<a class="headerlink" href="#requestgroup" title="Permanent link">&para;</a></h2>
-<p>When a request includes <code>?group=&lt;id&gt;</code>, <code>MojoMiddleware</code> and auth decorators auto-populate <code>request.group</code> with the <code>Group</code> instance if the user is a member. All permission checks and list queries are then scoped to that group.</p>
+<p>When a request includes <code>?group=&lt;id&gt;</code>, <code>MojoMiddleware</code> and auth decorators auto-populate <code>request.group</code> with the <code>Group</code> instance if the user is a member. All permission checks and list queries are then scoped to that group — <strong>except</strong> endpoints gated with <code>@md.requires_global_perms</code>, which never consult <code>request.group</code> at all (global <code>User.permissions</code> or superuser only). See <a href="../../core/permissions/#global-vs-group-scoped-permission-checks">Global vs Group-Scoped Permission Checks</a>.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="c1"># In a REST handler</span>
 <a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="k">if</span> <span class="n">request</span><span class="o">.</span><span class="n">group</span><span class="p">:</span>
 <a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>    <span class="n">queryset</span> <span class="o">=</span> <span class="n">queryset</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">group</span><span class="o">=</span><span class="n">request</span><span class="o">.</span><span class="n">group</span><span class="p">)</span>

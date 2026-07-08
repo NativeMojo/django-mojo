@@ -962,6 +962,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#apikey" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        APIKEY
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#apple" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4571,6 +4582,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#apikey" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        APIKEY
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#apple" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -5263,6 +5285,17 @@
 <li><code>API_METRICS</code></li>
 <li><code>API_METRICS_GRANULARITY</code></li>
 </ul>
+<h3 id="apikey">APIKEY<a class="headerlink" href="#apikey" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>APIKEY_PERMS_PROTECTION</code> — dict, default <code>{}</code> (read with <code>kind="dict"</code>, so a
+  DB-backed <code>Setting</code> JSON string is honored). Maps a permission key → the
+  permission(s) the granter must hold to assign it to an <code>ApiKey</code>, gating
+  <code>ApiKey.set_permissions</code> on REST write. Empty by default (any group admin with
+  a key-management perm may assign any non-<code>sys.</code> key). Mirrors
+  <a href="#member"><code>MEMBER_PERMS_PROTECTION</code></a>; <code>sys.</code>-prefixed requirements escalate to
+  a global grant. Stops a group admin from self-minting a key with permissions
+  they aren't entitled to grant.</li>
+</ul>
 <h3 id="apple">APPLE<a class="headerlink" href="#apple" title="Permanent link">&para;</a></h3>
 <ul>
 <li><code>APPLE_CLIENT_ID</code></li>
@@ -5480,7 +5513,16 @@
 </ul>
 <h3 id="member">MEMBER<a class="headerlink" href="#member" title="Permanent link">&para;</a></h3>
 <ul>
-<li><code>MEMBER_PERMS_PROTECTION</code></li>
+<li><code>MEMBER_PERMS_PROTECTION</code> — dict, default <code>{}</code> (read with <code>kind="dict"</code>, so a
+  DB-backed <code>Setting</code> JSON string is honored). Maps a member-assignable
+  permission key → the permission(s) the granter must themselves hold to assign
+  it, gating <code>GroupMember.set_permissions</code> / the group-invite path. Empty by
+  default (any group admin holding <code>manage_group</code>/<code>manage_members</code>/<code>manage_users</code>/
+  <code>manage_groups</code> may assign arbitrary member keys). Example — require a <em>global</em>
+  <code>manage_jobs</code> to grant a member <code>manage_jobs</code>:
+  <code>{"manage_jobs": "sys.manage_jobs"}</code> (the <code>sys.</code> prefix escalates the
+  requirement to the granter's global permission). Use it to stop tenant admins
+  from minting high-privilege member grants.</li>
 </ul>
 <h3 id="metrics">METRICS<a class="headerlink" href="#metrics" title="Permanent link">&para;</a></h3>
 <ul>
@@ -5562,7 +5604,15 @@
 </ul>
 <h3 id="requires">REQUIRES<a class="headerlink" href="#requires" title="Permanent link">&para;</a></h3>
 <ul>
-<li><code>REQUIRES_PERMS_IS_GROUP</code></li>
+<li><code>REQUIRES_PERMS_IS_GROUP</code> — bool, default <code>True</code> (read once at import). When
+  <code>True</code>, <code>@md.requires_perms</code> falls back to the caller's <strong>group/member</strong>
+  permission (<code>request.group.user_has_permission(...)</code>) if their global grant is
+  missing — correct for endpoints scoped to <code>request.group</code>. Setting it <code>False</code>
+  globally disables that fallback for <strong>every</strong> <code>requires_perms</code> endpoint,
+  which breaks legitimate group-scoped admin flows; to disable the fallback for
+  a single platform-global endpoint, decorate it with
+  <code>@md.requires_global_perms(...)</code> instead (see
+  <a href="../../core/permissions/#global-vs-group-scoped-permission-checks">permissions.md</a>).</li>
 </ul>
 <h3 id="secret">SECRET<a class="headerlink" href="#secret" title="Permanent link">&para;</a></h3>
 <ul>

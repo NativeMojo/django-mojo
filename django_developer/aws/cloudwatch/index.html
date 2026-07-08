@@ -4383,7 +4383,10 @@ by the REST layer.</p>
 </code></pre></div>
 <hr />
 <h2 id="rest-api">REST API<a class="headerlink" href="#rest-api" title="Permanent link">&para;</a></h2>
-<p>Two endpoints under the <code>aws</code> URL prefix, both requiring <code>manage_aws</code>:</p>
+<p>Two endpoints under the <code>aws</code> URL prefix, both requiring <code>manage_aws</code> — gated
+with <code>@md.requires_global_perms</code>, so the grant must be on the caller's
+<strong>global</strong> <code>User.permissions</code> (no group/member fallback; see
+<a href="../../core/permissions/#global-vs-group-scoped-permission-checks">Global vs Group-Scoped Permission Checks</a>):</p>
 <table>
 <thead>
 <tr>

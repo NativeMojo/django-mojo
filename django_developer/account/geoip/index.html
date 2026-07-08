@@ -4552,12 +4552,18 @@
 <a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>POST /api/system/geoip
 </code></pre></div>
 <p>Standard CRUD via <code>GeoLocatedIP.on_rest_request</code>. Requires <code>manage_users</code> permission.</p>
+<p><strong>A group ApiKey is rejected here</strong> — <code>GeoLocatedIP</code> has no <code>group</code> FK, so
+<code>_evaluate_permission</code>'s groupless branch denies an ApiKey identity by default
+even if its <code>permissions</code> dict includes <code>manage_users</code> (<code>RestMeta</code> does not set
+<code>ALLOW_API_KEY_GLOBAL</code>). Use a service-account <code>User</code>, or see
+<code>POST system/geoip/sync</code> below for the supported key-based access path. See
+<a href="../api_keys/#how-it-works">API Keys</a>.</p>
 <h3 id="getputdelete-systemgeoippk-detail-update-delete"><code>GET/PUT/DELETE system/geoip/&lt;pk&gt;</code> — Detail / Update / Delete<a class="headerlink" href="#getputdelete-systemgeoippk-detail-update-delete" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>GET    /api/system/geoip/123
 <a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>PUT    /api/system/geoip/123
 <a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>DELETE /api/system/geoip/123
 </code></pre></div>
-<p>Requires <code>manage_users</code> permission. PUT supports POST_SAVE_ACTIONS for block/unblock/whitelist.</p>
+<p>Requires <code>manage_users</code> permission. PUT supports POST_SAVE_ACTIONS for block/unblock/whitelist. Same ApiKey restriction as List/Create above.</p>
 <h3 id="get-systemgeoiplookup-authenticated-ip-lookup"><code>GET system/geoip/lookup</code> — Authenticated IP Lookup<a class="headerlink" href="#get-systemgeoiplookup-authenticated-ip-lookup" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>GET /api/system/geoip/lookup?ip=1.2.3.4
 </code></pre></div>

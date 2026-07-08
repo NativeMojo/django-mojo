@@ -3944,7 +3944,10 @@ two endpoints that mirror the <a href="../../metrics/metrics/">metrics app</a> e
 <li><strong>RDS / ElastiCache</strong>: the identifier is already human-readable (e.g. <code>"prod-postgres"</code>, <code>"prod-redis-001"</code>), so it is used as-is.</li>
 </ul>
 <p>Use the <code>slug</code> value from the <code>resources</code> endpoint when targeting specific instances via the <code>fetch</code> endpoint's <code>slugs</code> parameter.</p>
-<p><strong>Permission required:</strong> <code>manage_aws</code> on all endpoints.</p>
+<p><strong>Permission required:</strong> <code>manage_aws</code> on all endpoints — checked as a
+<strong>global</strong> <code>User.permissions</code> grant only (<code>@md.requires_global_perms</code>); a
+<code>manage_aws</code> permission held only at the group/member level does not
+authorize these endpoints.</p>
 <hr />
 <h2 id="endpoints">Endpoints<a class="headerlink" href="#endpoints" title="Permanent link">&para;</a></h2>
 <table>

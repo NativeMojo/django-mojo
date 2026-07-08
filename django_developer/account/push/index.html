@@ -4163,6 +4163,10 @@
 </tr>
 </tbody>
 </table>
+<p><code>push/send</code> and <code>push/config/&lt;pk&gt;/test</code> are gated with <code>@md.requires_global_perms</code>
+— the permission must be a global grant on the User (no group/member fallback).
+The CRUD rows above (<code>push</code>, <code>push/templates</code>, <code>push/config</code>, <code>push/deliveries</code>)
+are standard RestMeta endpoints and follow normal model permission rules.</p>
 <hr />
 <h2 id="see-also">See Also<a class="headerlink" href="#see-also" title="Permanent link">&para;</a></h2>
 <ul>

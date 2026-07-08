@@ -4274,6 +4274,7 @@
 <li>Feature must be enabled server-side (<code>LLM_ADMIN_ENABLED = True</code>)</li>
 <li>User must have <code>view_admin</code> permission to access all endpoints</li>
 <li>Tool access depends on the user's additional permissions (see <a href="#permission-mapping">Permission Mapping</a>)</li>
+<li><code>POST /api/assistant</code> and <code>POST /api/assistant/context</code> are gated with <code>@md.requires_global_perms('view_admin', 'assistant')</code> — the permission must be a <strong>global</strong> grant on the User; a group/member-scoped grant does not authorize these endpoints (individual tool calls were already global-only, since tools check <code>user.has_permission()</code> directly)</li>
 </ul>
 <h2 id="endpoints">Endpoints<a class="headerlink" href="#endpoints" title="Permanent link">&para;</a></h2>
 <h3 id="send-message">Send Message<a class="headerlink" href="#send-message" title="Permanent link">&para;</a></h3>

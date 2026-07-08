@@ -4775,6 +4775,9 @@
 </tbody>
 </table>
 <p>Both <code>view_jobs</code> and <code>manage_jobs</code> grant read access. Write/action endpoints require <code>manage_jobs</code> specifically.</p>
+<blockquote>
+<p><strong>Global grant required.</strong> Every endpoint below except the <code>job</code>/<code>event</code>/<code>logs</code> CRUD (which follow standard RestMeta permission rules) is gated with <code>@md.requires_global_perms</code> — job control is platform-wide, so the permission must be held on the <strong>User</strong> directly. A <code>view_jobs</code>/<code>manage_jobs</code> grant held only at the group/member level does not authorize them, even if you pass a <code>group</code> param.</p>
+</blockquote>
 <hr />
 <h2 id="endpoint-index">Endpoint Index<a class="headerlink" href="#endpoint-index" title="Permanent link">&para;</a></h2>
 <table>

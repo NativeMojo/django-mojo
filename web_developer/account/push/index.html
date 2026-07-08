@@ -4158,7 +4158,9 @@
 <hr />
 <h2 id="sending-notifications">Sending Notifications<a class="headerlink" href="#sending-notifications" title="Permanent link">&para;</a></h2>
 <blockquote>
-<p>Requires the <code>send_notifications</code> permission.</p>
+<p>Requires the <code>send_notifications</code> permission, held as a <strong>global</strong> grant on
+the User — this endpoint is gated with <code>@md.requires_global_perms</code>, so a
+group/member-scoped grant does not authorize it.</p>
 </blockquote>
 <p><strong>POST</strong> <code>/api/account/devices/push/send</code></p>
 <h3 id="direct-notification">Direct Notification<a class="headerlink" href="#direct-notification" title="Permanent link">&para;</a></h3>
@@ -4300,7 +4302,7 @@
 </blockquote>
 <p><strong>GET</strong> <code>/api/account/devices/push/config</code> — list configs</p>
 <p><strong>POST</strong> <code>/api/account/devices/push/config/&lt;id&gt;/test</code></p>
-<p>Test FCM credentials for a config. Optionally provide a real device token to test end-to-end delivery.</p>
+<p>Test FCM credentials for a config. Optionally provide a real device token to test end-to-end delivery. Unlike the config CRUD endpoints above, this action is gated with <code>@md.requires_global_perms</code> — <code>manage_push_config</code> must be a global grant on the User (no group/member fallback).</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="p">{</span>
 <a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="w">  </span><span class="nt">&quot;device_token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;optional-real-fcm-token&quot;</span>
 <a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a><span class="p">}</span>

@@ -3938,6 +3938,11 @@
 <h1 id="login-events-rest-api-reference">Login Events — REST API Reference<a class="headerlink" href="#login-events-rest-api-reference" title="Permanent link">&para;</a></h1>
 <p>Admin-only endpoints for querying login history with geolocation data. Designed for map visualizations and anomaly detection in admin portals.</p>
 <p><strong>Permissions required</strong>: <code>manage_users</code> + <code>security</code> + <code>users</code></p>
+<p><code>GET /api/account/logins/summary</code> and <code>GET /api/account/logins/user</code> are
+gated with <code>@md.requires_global_perms</code> — a <strong>global</strong> grant on the User is
+required (no group/member fallback). <code>GET /api/account/logins</code> and
+<code>GET /api/account/logins/&lt;id&gt;</code> are standard RestMeta endpoints and follow
+normal permission rules.</p>
 <hr />
 <h2 id="list-login-events">List Login Events<a class="headerlink" href="#list-login-events" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>GET /api/account/logins

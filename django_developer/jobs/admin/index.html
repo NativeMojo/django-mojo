@@ -4148,6 +4148,13 @@
 <h1 id="jobs-admin-control-django-developer-reference">Jobs Admin &amp; Control — Django Developer Reference<a class="headerlink" href="#jobs-admin-control-django-developer-reference" title="Permanent link">&para;</a></h1>
 <p>REST endpoints for monitoring and managing the jobs system. All require <code>view_jobs</code> or <code>manage_jobs</code> permission.</p>
 <p>Base path: <code>/api/jobs/</code></p>
+<p>Every endpoint below (health/monitoring, job control, runner management) is
+gated with <code>@md.requires_global_perms</code> — job control is platform-wide, so
+only the caller's <strong>global</strong> <code>User.permissions</code> (or superuser) satisfy it;
+the usual <code>requires_perms</code> group/member fallback does not apply. See
+<a href="../../core/permissions/#global-vs-group-scoped-permission-checks">Global vs Group-Scoped Permission Checks</a>.
+The <code>job</code>/<code>event</code>/<code>logs</code> CRUD endpoints below are the exception — those are
+RestMeta-driven and follow standard model permission rules.</p>
 <h2 id="health-monitoring">Health &amp; Monitoring<a class="headerlink" href="#health-monitoring" title="Permanent link">&para;</a></h2>
 <h3 id="get-apijobshealth">GET /api/jobs/health<a class="headerlink" href="#get-apijobshealth" title="Permanent link">&para;</a></h3>
 <p>Overview health for all channels.</p>

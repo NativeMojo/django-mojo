@@ -4123,10 +4123,15 @@
 <tr>
 <td><code>/api/metrics/permissions</code></td>
 <td>GET/POST/DELETE</td>
-<td><code>@md.requires_perms("manage_incidents", "metrics", "manage_metrics")</code></td>
+<td><code>@md.requires_global_perms("manage_incidents", "metrics", "manage_metrics")</code></td>
 </tr>
 </tbody>
 </table>
+<p>Unlike the account-based checks above, <code>/api/metrics/permissions</code> (which
+manages the per-account config every other endpoint reads) is gated with
+<code>@md.requires_global_perms</code> — the caller's <strong>global</strong> <code>User.permissions</code> (or
+superuser) only, no group/member fallback. See
+<a href="../../core/permissions/#global-vs-group-scoped-permission-checks">Global vs Group-Scoped Permission Checks</a>.</p>
 
 
 

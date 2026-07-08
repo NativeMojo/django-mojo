@@ -4044,7 +4044,11 @@
 <h2 id="get-systemgeoip-list-geoip-records"><code>GET system/geoip</code> — List GeoIP Records<a class="headerlink" href="#get-systemgeoip-list-geoip-records" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>GET /api/system/geoip
 </code></pre></div>
-<p><strong>Requires:</strong> <code>manage_users</code> permission.</p>
+<p><strong>Requires:</strong> <code>manage_users</code> permission. A group ApiKey is rejected here even
+if its <code>permissions</code> dict includes <code>manage_users</code> — <code>GeoLocatedIP</code> has no
+per-group ownership, so this endpoint requires a real <code>User</code> session. See
+<a href="../api_keys/">API Keys</a> and the federation-sync endpoint below for the
+supported key-based access path.</p>
 <p>Returns a paginated list of cached GeoIP records. Supports standard query parameters (<code>search</code>, <code>sort</code>, <code>start</code>, <code>size</code>, <code>graph</code>).</p>
 <p><strong>Search fields:</strong> <code>ip_address</code>, <code>city</code>, <code>country_name</code>, <code>asn_org</code>, <code>isp</code></p>
 <h3 id="graphs">Graphs<a class="headerlink" href="#graphs" title="Permanent link">&para;</a></h3>
@@ -4074,7 +4078,7 @@
 <h2 id="get-systemgeoippk-geoip-detail"><code>GET system/geoip/&lt;pk&gt;</code> — GeoIP Detail<a class="headerlink" href="#get-systemgeoippk-geoip-detail" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>GET /api/system/geoip/123
 </code></pre></div>
-<p><strong>Requires:</strong> <code>manage_users</code> permission.</p>
+<p><strong>Requires:</strong> <code>manage_users</code> permission. Same ApiKey restriction as the list endpoint above.</p>
 <p>Returns a single GeoIP record. Supports <code>?graph=</code> parameter.</p>
 <h3 id="actions-via-post">Actions (via POST)<a class="headerlink" href="#actions-via-post" title="Permanent link">&para;</a></h3>
 <table>

@@ -4371,7 +4371,9 @@
 <p>The history shows the full timeline: creation, handler execution, LLM assessments, admin edits, merges.</p>
 <h3 id="3-health-summary-strip">3. Health Summary Strip<a class="headerlink" href="#3-health-summary-strip" title="Permanent link">&para;</a></h3>
 <p>A single endpoint returns the most recent event for each <code>system:health:*</code> category. Use it to render a row of per-subsystem health indicators without making N separate queries.</p>
-<p><strong>Permission:</strong> <code>view_security</code> / <code>security</code></p>
+<p><strong>Permission:</strong> <code>view_security</code> / <code>security</code> — held as a <strong>global</strong> grant;
+gated with <code>@md.requires_global_perms</code>, so a group/member-scoped grant does
+not authorize this endpoint.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>GET /api/incident/health/summary
 </code></pre></div>
 <p><strong>Response:</strong></p>

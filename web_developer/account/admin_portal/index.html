@@ -4627,6 +4627,30 @@
 </tr>
 </tbody>
 </table>
+<blockquote>
+<p><strong>Global grants required for platform-wide endpoints.</strong> Job control/status,
+AWS ops and email admin (<code>cloudwatch/*</code>, <code>s3/bucket</code>, <code>email/send</code>,
+<code>email/domain[/&lt;id&gt;/onboard|audit|reconcile]</code>, <code>email/mailbox</code>,
+<code>email/template</code>, <code>email/incoming</code>, <code>email/sent</code> — these AWS/SES models are
+platform-global, not per-group), metrics permissions, geofence config
+(<code>/api/geo/*</code>), incident health, and cross-tenant user admin
+(<code>/api/auth/manage/*</code>, device lookup, device location, login-event reads,
+push send/config-test) are gated on the user's <strong>global</strong> permission grant. A
+permission held only at the group/member level — <strong>or an API key</strong> — does
+<strong>not</strong> authorize them (passing a <code>group</code> param does not change this, and a
+group API key cannot substitute a global grant). Grant these on the User, not
+the GroupMember. Genuinely group-scoped endpoints (group/member management,
+per-group webhook secret, ApiKey-federated SMS send) still accept a
+group-scoped grant as before.</p>
+<p><strong>This extends past the decorator-gated list above.</strong> Any plain CRUD
+endpoint backed by a model with no per-group ownership — <code>/api/user</code>,
+<code>/api/system/geoip</code>, <code>/api/jobs/job</code>, <code>/api/jobs/event</code>, <code>/api/jobs/logs</code>,
+<code>/api/account/logins</code>, <code>/api/account/bouncer/*</code>, <code>/api/fileman/rendition</code> —
+also rejects a group API key by default, even if the key's <code>permissions</code>
+dict has the exact permission the model requires. There's no group to
+confine the key's access to, so the model-security layer denies it up
+front. See <a href="../api_keys/">API Keys</a>.</p>
+</blockquote>
 <h2 id="secure-settings-api-admin">Secure Settings API (Admin)<a class="headerlink" href="#secure-settings-api-admin" title="Permanent link">&para;</a></h2>
 <p>The secure settings API is intended for admin portals and configuration consoles.</p>
 <h3 id="endpoints">Endpoints<a class="headerlink" href="#endpoints" title="Permanent link">&para;</a></h3>

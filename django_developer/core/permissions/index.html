@@ -3772,6 +3772,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#global-vs-group-scoped-permission-checks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Global vs Group-Scoped Permission Checks
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#permission-names" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4073,6 +4084,56 @@
 <a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>    <span class="n">VIEW_PERMS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;view_books&quot;</span><span class="p">,</span> <span class="s2">&quot;manage_books&quot;</span><span class="p">]</span>
 <a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>    <span class="n">SAVE_PERMS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;manage_books&quot;</span><span class="p">]</span>
 </code></pre></div>
+<h2 id="global-vs-group-scoped-permission-checks">Global vs Group-Scoped Permission Checks<a class="headerlink" href="#global-vs-group-scoped-permission-checks" title="Permanent link">&para;</a></h2>
+<p>Non-RestMeta endpoints gate with a decorator. There are two, and choosing the
+wrong one is a <strong>cross-tenant privilege-escalation risk</strong>.</p>
+<ul>
+<li><strong><code>@md.requires_perms(...)</code></strong> — checks the caller's <strong>global</strong>
+  <code>User.permissions</code> first, then (when <code>REQUIRES_PERMS_IS_GROUP</code> is <code>True</code>, the
+  default) falls back to their <strong>group/member</strong> permission for the group named in
+  the request (<code>request.group.user_has_permission(...)</code>). Correct when the
+  endpoint's effect is confined to <code>request.group</code> (e.g. rotating <em>that</em> group's
+  webhook secret).</li>
+<li><strong><code>@md.requires_global_perms(...)</code></strong> — checks <strong>global <code>User.permissions</code> (or
+  superuser) only</strong>, never the group/member fallback. Use it for any endpoint
+  whose effect is <strong>platform-wide</strong>: global settings, fleet/job control, AWS
+  infra, cross-tenant data, metrics ACLs, geofence config.</li>
+</ul>
+<p>Why it matters: <code>GroupMember.permissions</code> accepts <strong>arbitrary key names</strong>, and
+any group admin (holding <code>manage_group</code>/<code>manage_members</code>/<code>manage_users</code>/
+<code>manage_groups</code>) can assign them — bounded only by <code>MEMBER_PERMS_PROTECTION</code>
+(empty by default). So under <code>requires_perms</code>, a tenant admin can grant a
+teammate any permission <em>scoped to their own group</em>, then satisfy the check on
+<strong>any</strong> endpoint by passing their own <code>group</code> id. If that endpoint's effect is
+global, that's an escalation. <code>requires_global_perms</code> closes it: a group-scoped
+grant never authorizes a global action.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Group-scoped effect — group/member fallback is correct:</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="nd">@md</span><span class="o">.</span><span class="n">requires_perms</span><span class="p">(</span><span class="s2">&quot;manage_group&quot;</span><span class="p">,</span> <span class="s2">&quot;manage_groups&quot;</span><span class="p">,</span> <span class="s2">&quot;groups&quot;</span><span class="p">)</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_group_webhook_secret</span><span class="p">(</span><span class="n">request</span><span class="p">):</span> <span class="o">...</span>   <span class="c1"># touches request.group only</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="c1"># Platform-wide effect — global grant required:</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="nd">@md</span><span class="o">.</span><span class="n">requires_global_perms</span><span class="p">(</span><span class="s2">&quot;manage_jobs&quot;</span><span class="p">,</span> <span class="s2">&quot;jobs&quot;</span><span class="p">)</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_clear_queue</span><span class="p">(</span><span class="n">request</span><span class="p">):</span> <span class="o">...</span>            <span class="c1"># clears the global job queue</span>
+</code></pre></div>
+<p><strong>API keys.</strong> An <code>ApiKey</code> (<code>Authorization: apikey &lt;token&gt;</code>) is a <em>group-scoped</em>
+credential, so <code>requires_global_perms</code> <strong>rejects it by default</strong> — letting a key
+satisfy a platform-global gate would recreate the escalation through a machine
+door. Machine access to a global endpoint should use a real service-account User
+with a global grant. The one exception is a federation/ingest receiver whose
+intended caller <em>is</em> a fleet-peer key: decorate it
+<code>@md.requires_global_perms("perm", allow_api_keys=True)</code> (e.g. the geoip sync
+receiver). The group/member fallback is still never consulted.</p>
+<p>The same principle applies at the <strong>model-security layer</strong>, not just the
+decorator: a <code>uses_model_security</code> model with <strong>no <code>group</code> foreign key</strong> is
+platform-global, so <code>_evaluate_permission</code> <strong>denies an ApiKey by default</strong> on it
+(there is no group to confine the key to). A model may opt back in with
+<code>RestMeta.ALLOW_API_KEY_GLOBAL = True</code> (default <code>False</code>; none do initially).
+Without this, a key self-claiming <code>manage_users</code> could read every tenant's
+<code>User</code> rows. A key's own <code>permissions</code> are additionally gated on assignment by
+<code>APIKEY_PERMS_PROTECTION</code> (see <a href="../../account/api_keys/">API Keys</a>). Net: an
+ApiKey can only ever reach <strong>group-owned</strong> data, confined to its own group.</p>
+<p>The security registry records <code>global_only: True</code> for these endpoints, so audit
+tooling can tell them apart.</p>
 <h2 id="permission-names">Permission Names<a class="headerlink" href="#permission-names" title="Permanent link">&para;</a></h2>
 <h3 id="category-permissions-broad-access">Category Permissions (Broad Access)<a class="headerlink" href="#category-permissions-broad-access" title="Permanent link">&para;</a></h3>
 <p>Category permissions grant full read+write access to an entire domain. Use these for admin roles that need everything in a domain without toggling individual permissions.</p>
@@ -4722,7 +4783,7 @@
 </tr>
 </tbody>
 </table>
-<p><strong>REST endpoints (non-RestMeta):</strong> All 26 <code>@md.requires_perms()</code> endpoints in jobs/rest/ also accept <code>jobs</code>.</p>
+<p><strong>REST endpoints (non-RestMeta):</strong> all jobs/rest/ control + status endpoints accept <code>manage_jobs</code>/<code>view_jobs</code>/<code>jobs</code>, but are gated with <code>@md.requires_global_perms(...)</code> (job control is platform-wide) — a group/member-scoped <code>jobs</code> grant does <strong>not</strong> authorize them (see <a href="#global-vs-group-scoped-permission-checks">Global vs Group-Scoped Permission Checks</a>).</p>
 <h3 id="metrics-app">Metrics App<a class="headerlink" href="#metrics-app" title="Permanent link">&para;</a></h3>
 <p>Metrics does not use RestMeta models. Permission checking is handled via <code>check_view_permissions()</code> and <code>check_write_permissions()</code> in <code>mojo/apps/metrics/rest/helpers.py</code>. See <a href="../../metrics/permissions/">Metrics Permissions</a> for details.</p>
 <p>The <code>metrics</code> category grants full read+write access to all metrics operations. Fine-grained: <code>view_metrics</code> (read), <code>write_metrics</code> (record), <code>manage_metrics</code> (admin).</p>

@@ -4067,7 +4067,10 @@ on a race or already-in-target-state collision.</p>
 <h3 id="throttle-read-endpoint">Throttle read endpoint<a class="headerlink" href="#throttle-read-endpoint" title="Permanent link">&para;</a></h3>
 <p>Returns <code>{count, limit, window, retry_after_seconds}</code> from the per-account login
 sliding-window in Redis. Pure read — does not modify Redis state. Pairs with
-<code>POST /api/auth/manage/clear_rate_limit</code> for the reset operation.</p>
+<code>POST /api/auth/manage/clear_rate_limit</code> for the reset operation. Unlike the
+disable/reactivate actions above (RestMeta <code>SAVE_PERMS</code>, which allow the usual
+group/member fallback), both throttle endpoints are gated with
+<code>@md.requires_global_perms</code> — <code>manage_users</code> must be a global grant on the User.</p>
 <p>Only <code>key="login"</code> is supported in v1. Unsupported keys return 400. Lookup by
 <code>user_id</code> or <code>username</code>.</p>
 <hr />

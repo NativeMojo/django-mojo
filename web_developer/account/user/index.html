@@ -4863,7 +4863,7 @@
 </tbody>
 </table>
 <h3 id="read-login-throttle-status">Read login throttle status<a class="headerlink" href="#read-login-throttle-status" title="Permanent link">&para;</a></h3>
-<p><strong>GET</strong> <code>/api/auth/manage/throttle?user_id=42</code>  (or <code>?username=alice</code>) · requires <code>manage_users</code></p>
+<p><strong>GET</strong> <code>/api/auth/manage/throttle?user_id=42</code>  (or <code>?username=alice</code>) · requires <code>manage_users</code> as a <strong>global</strong> grant (<code>@md.requires_global_perms</code> — no group/member fallback)</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="p">{</span>
 <a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
 <a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
@@ -4876,7 +4876,7 @@
 </code></pre></div>
 <p><code>count</code> is the number of failed-login attempts in the current sliding window. <code>retry_after_seconds &gt; 0</code> means the user is currently locked out. Pure read — does not modify the counter. Pass <code>key=login</code> (default; only <code>login</code> is supported in v1).</p>
 <h3 id="clear-login-throttle">Clear login throttle<a class="headerlink" href="#clear-login-throttle" title="Permanent link">&para;</a></h3>
-<p><strong>POST</strong> <code>/api/auth/manage/clear_rate_limit</code> · requires <code>manage_users</code></p>
+<p><strong>POST</strong> <code>/api/auth/manage/clear_rate_limit</code> · requires <code>manage_users</code> as a <strong>global</strong> grant (<code>@md.requires_global_perms</code> — no group/member fallback)</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="p">{</span><span class="nt">&quot;key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;login&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;user_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">42</span><span class="p">}</span>
 </code></pre></div>
 <p>Use this to manually unlock a user after a failed-login lockout.</p>

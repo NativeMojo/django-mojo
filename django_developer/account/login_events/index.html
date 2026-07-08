@@ -4085,7 +4085,10 @@
 </tr>
 </tbody>
 </table>
-<p>All endpoints require <code>manage_users</code> + <code>security</code> + <code>users</code> permissions.</p>
+<p>All endpoints require <code>manage_users</code> + <code>security</code> + <code>users</code> permissions.
+<code>summary</code> and <code>user</code> are gated with <code>@md.requires_global_perms</code> (global grant
+only, no group/member fallback); <code>logins</code>/<code>logins/&lt;pk&gt;</code> are RestMeta-driven
+and follow normal permission rules.</p>
 
 
 

@@ -4246,6 +4246,17 @@
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>Authorization: apikey &lt;token&gt;
 </code></pre></div>
 <p>The key's group is automatically set on the request. Only permissions in the key's <code>permissions</code> dict are allowed. System-level permissions (<code>sys.*</code>) are always denied.</p>
+<p><strong>A key cannot reach platform-global data, even with a matching permission.</strong>
+Some models have no per-group ownership at all — <code>User</code>, <code>GeoLocatedIP</code>,
+jobs (<code>Job</code>/<code>JobEvent</code>/<code>JobLog</code>/<code>ScheduledTask</code>), login events, bouncer
+devices/signals/bot-signatures, and file renditions, among others. Because
+there is no group to confine the key's access to, these reject an API key by
+default regardless of what's in its <code>permissions</code> dict — e.g. a key with
+<code>{"manage_users": true}</code> still gets <code>403</code> from <code>GET /api/user</code>. Use a
+service-account <code>User</code> with a real permission grant for that kind of machine
+access instead. A handful of endpoints are purpose-built to accept a key for
+shared/global data (like the GeoIP federation-sync receiver — see
+<a href="../geoip/">GeoIP</a>) and say so explicitly in their own docs.</p>
 <p>Endpoints that resolve or inspect a group or its membership — <code>GET
 /api/group/uuid/&lt;uuid&gt;</code>, <code>GET /api/group/&lt;pk&gt;</code>, <code>GET /api/group/&lt;pk&gt;/member</code> —
 and any group-scoped permission check now work correctly under
