@@ -11,8 +11,14 @@ AWS infrastructure, metrics ACLs, geofence config, incident health, or
 cross-tenant user administration. A new framework decorator
 `@md.requires_global_perms(...)` authorizes on the caller's **global**
 `User.permissions` (or superuser) only — never the group fallback — and is now
-applied to ~45 platform-wide endpoints across the jobs, aws, account, metrics,
-incident, assistant, and geofence (ITEM-017 config plane) surfaces. The same
+applied to ~50 platform-wide endpoints across the jobs, aws, account, metrics,
+incident, assistant, and geofence (ITEM-017 config plane) surfaces. This also
+closes a sibling vector on the AWS email CRUD + device-location endpoints
+(`EmailDomain`/`Mailbox`/`EmailTemplate`/`IncomingEmail`/`SentMessage`/
+`UserDeviceLocation` — all groupless models): a self-minted group **ApiKey**
+with a self-claimed `manage_aws`/`manage_users` permission could read/write
+them cross-tenant through the model-security layer; the global gate now rejects
+the key before the handler runs. The same
 permission names are unchanged; only *where* the grant must live changes, so
 deployments that granted admins these perms globally (the intended usage) are
 unaffected — only member/group-scoped grants stop authorizing global actions.

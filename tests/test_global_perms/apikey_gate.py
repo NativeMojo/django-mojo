@@ -23,7 +23,9 @@ def setup_apikey_gate(opts):
     key_admin, token_admin = ApiKey.create_for_group(
         group=group, name="gp_apikey_test_admin",
         permissions={"manage_jobs": True, "jobs": True, "manage_geofence": True,
-                     "view_geofence": True, "security": True, "geoip_sync": True},
+                     "view_geofence": True, "security": True, "geoip_sync": True,
+                     "manage_aws": True, "comms": True,
+                     "manage_users": True, "manage_devices": True, "users": True},
     )
     opts.group_id = group.pk
     opts.token_admin = token_admin
@@ -37,6 +39,17 @@ def test_apikey_denied_on_global_endpoints(opts):
             ("GET", "/api/jobs/control/config"),
             ("GET", "/api/geo/rules"),
             ("POST", "/api/geo/rules"),
+            # Groupless RestMeta models reached via delegating requires_perms
+            # endpoints: a self-minted group key with manage_aws / manage_users
+            # would otherwise LIST them cross-tenant through the model layer's
+            # api_key branch (rest.py:288). The global gate must reject the key
+            # BEFORE on_rest_request runs.
+            ("GET", "/api/aws/email/domain"),
+            ("GET", "/api/aws/email/mailbox"),
+            ("GET", "/api/aws/email/template"),
+            ("GET", "/api/aws/email/incoming"),
+            ("GET", "/api/aws/email/sent"),
+            ("GET", "/api/user/device/location"),
         ]:
             if method == "GET":
                 resp = opts.client.get(path)
