@@ -1,4 +1,4 @@
-## Unreleased
+## v1.2.42 - July 08, 2026
 
 **feature** — **Geofence config plane: editable system rules, IP allowlist, simulate, and exemption audit.**
 `GEOFENCE_SYSTEM_RULES` is now manageable at runtime as a DB-backed `Setting` row via
