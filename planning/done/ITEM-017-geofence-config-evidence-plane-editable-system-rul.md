@@ -780,3 +780,44 @@ auto-blocking too (`whitelist_active` everywhere — a deliberate behavior fix).
   working, not an incident — hence level 3 + dedupe + metrics, with
   escalation left to incident bundling (same-subnet probing, post-rule-change
   spikes).
+- **Build outcome (2026-07-08)**: implemented in commit `0bfbf05`. Full default
+  suite after change: 2315 total / 2259 passed / **0 failed** / 56 skipped —
+  baseline invariant held (green → green).
+- **Post-build security review (2026-07-08)**: found one CRITICAL — the
+  `@md.requires_perms` group-permission fallback would let a tenant/group
+  admin self-assign `manage_geofence` at the GroupMember level and (with a
+  client-supplied `group` param) rewrite PLATFORM-GLOBAL geofence config.
+  Fixed: `/api/geo/*` config endpoints now use `_requires_global_perms`
+  (global `User.permissions`/superuser only) + regression test. Also fixed
+  per review: `bypass_holders` no longer returns email/display_name
+  (users-category PII behind a geofence-only perm), and group-scoped Setting
+  rows for the geofence keys are rejected 400 instead of silently accepted
+  (the engine only resolves them globally). The same fallback pattern exists
+  on other global-effect endpoints (e.g. `jobs/rest/control.py`) — follow-up
+  filed in `planning/inbox/requires-perms-group-fallback-audit.md`. Two mid-build full-suite failures in
+  `test_email/email_change` were traced to MY tests priming a cached geofence
+  DENY under the shared `(127.0.0.1, no-group)` decision-cache key while a
+  global rules row existed — parallel unheadered auth requests (default cache
+  TTL 300) were served the poisoned deny. Fixed by priming cache-test denials
+  only under group-scoped keys. Second test-infra gotcha: direct
+  `POST /api/auth/login` calls in tests trip the login `muid` rate tier
+  (10/300s per `_muid` cookie) — clear it like `testit client.login()` does.
+
+## Resolution
+- closed: 2026-07-08
+- branch: main
+- files changed: CHANGELOG.md,docs/django_developer/account/README.md,docs/django_developer/account/geofence.md,docs/django_developer/account/geoip.md,docs/django_developer/core/permissions.md,docs/django_developer/helpers/settings_reference.md,docs/django_developer/testit/Overview.md,docs/web_developer/account/README.md,docs/web_developer/account/admin_portal.md,docs/web_developer/account/firewall.md,docs/web_developer/account/geofence.md,docs/web_developer/account/geoip.md,mojo/apps/account/migrations/0046_geolocatedip_whitelisted_until.py,mojo/apps/account/models/geolocated_ip.py,mojo/apps/account/models/group.py,mojo/apps/account/models/setting.py,mojo/apps/account/rest/device.py,mojo/apps/account/rest/geofence.py,mojo/apps/account/services/geofence/cache.py,mojo/apps/account/services/geofence/engine.py,mojo/apps/account/services/geofence/evidence.py,mojo/decorators/geofence.py,mojo/helpers/geoip/mojo.py,planning/.next_id,planning/in_progress/ITEM-017-geofence-config-evidence-plane-editable-system-rul.md,planning/inbox/geofence-hardening.md,tests/test_geofence/_helpers.py,tests/test_geofence/config_plane.py,tests/test_geofence/evidence_plane.py,uv.lock
+  mojo/decorators/geofence.py, mojo/apps/account/rest/{geofence,device}.py,
+  mojo/apps/account/models/{geolocated_ip,setting,group}.py,
+  mojo/helpers/geoip/mojo.py,
+  mojo/apps/account/migrations/0046_geolocatedip_whitelisted_until.py,
+  docs (django geofence/geoip/README, web geofence[new]/README), CHANGELOG.md
+- tests added: tests/test_geofence/config_plane.py (10 tests — rules CRUD +
+  validation + perms, settings back-door validation, system/group/allowlist
+  cache invalidation, geoip whitelist action + until/ttl + simulate +
+  invalidate_ip + expiry listing, bypass_holders) and
+  tests/test_geofence/evidence_plane.py (9 tests — block levels 3/5/6/7 +
+  dedupe, exempt event + dedupe + no-event-when-not-blocking, ip_allowlisted
+  decision shape + expired entry, metrics count deduped blocks, expired-
+  whitelist firewall regression); tests/test_geofence/_helpers.py extended
+  (allowlist / fail-closed-scopes / geo="fail" headers)
