@@ -4411,14 +4411,19 @@ It is intentionally lightweight so both humans and LLM agents can reason about a
 </thead>
 <tbody>
 <tr>
-<td><code>X-Mojo-Test-Geo</code> (JSON)</td>
-<td>geoip lookup result</td>
+<td><code>X-Mojo-Test-Geo</code> (JSON, or the literal <code>"fail"</code>)</td>
+<td>geoip lookup result (<code>"fail"</code> forces a lookup failure)</td>
 <td><code>mojo.apps.account.services.geofence.engine</code></td>
 </tr>
 <tr>
 <td><code>X-Mojo-Test-Geofence-System</code> (JSON)</td>
 <td><code>GEOFENCE_SYSTEM_RULES</code></td>
 <td><code>mojo.apps.account.services.geofence.engine</code></td>
+</tr>
+<tr>
+<td><code>X-Mojo-Test-Geofence-Allowlist</code> (JSON list)</td>
+<td><code>GEOFENCE_ALLOWLIST</code></td>
+<td>same</td>
 </tr>
 <tr>
 <td><code>X-Mojo-Test-Geofence-Enabled</code> (<code>0</code>/<code>1</code>)</td>
@@ -4428,6 +4433,11 @@ It is intentionally lightweight so both humans and LLM agents can reason about a
 <tr>
 <td><code>X-Mojo-Test-Geofence-Fail-Closed</code> (<code>0</code>/<code>1</code>)</td>
 <td><code>GEOFENCE_FAIL_CLOSED</code></td>
+<td>same</td>
+</tr>
+<tr>
+<td><code>X-Mojo-Test-Geofence-Fail-Closed-Scopes</code> (comma list)</td>
+<td><code>GEOFENCE_FAIL_CLOSED_SCOPES</code></td>
 <td>same</td>
 </tr>
 <tr>

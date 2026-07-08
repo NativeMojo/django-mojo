@@ -4088,7 +4088,7 @@
 <tr>
 <td><code>security</code></td>
 <td>Security &amp; Logs</td>
-<td>Incidents, events, rules, tickets, IPSets, bouncer devices/signals/signatures, GeoLocatedIP, system logs</td>
+<td>Incidents, events, rules, tickets, IPSets, bouncer devices/signals/signatures, GeoLocatedIP, system logs, geofence config</td>
 </tr>
 <tr>
 <td><code>users</code></td>
@@ -4183,6 +4183,16 @@
 <td><code>manage_security</code></td>
 <td>Security</td>
 <td>Write access to incidents, rules, tickets, IP blocks</td>
+</tr>
+<tr>
+<td><code>view_geofence</code></td>
+<td>Security</td>
+<td>Read-only access to geofence config (system rules, allowlist, simulate, bypass holders)</td>
+</tr>
+<tr>
+<td><code>manage_geofence</code></td>
+<td>Security</td>
+<td>Write access to geofence system rules and IP allowlist</td>
 </tr>
 <tr>
 <td><code>manage_aws</code></td>
@@ -4436,6 +4446,7 @@
 </tr>
 </tbody>
 </table>
+<p><strong>REST endpoints (non-RestMeta):</strong> The geofence config-plane endpoints in <code>account/rest/geofence.py</code> (<code>geo/rules</code>, <code>geo/simulate</code>, <code>geo/allowlist</code>, <code>geo/bypass_holders</code>) accept <code>view_geofence</code>/<code>manage_geofence</code>/<code>security</code>, not RestMeta perms.</p>
 <h3 id="incident-app">Incident App<a class="headerlink" href="#incident-app" title="Permanent link">&para;</a></h3>
 <table>
 <thead>

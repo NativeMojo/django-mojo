@@ -3883,6 +3883,39 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#ip-allowlist-full-exemption" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        IP Allowlist — Full Exemption
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#config-plane-rest-permissions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Config Plane — REST + Permissions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#evidence-plane-incident-events-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Evidence Plane — Incident Events + Metrics
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#settings-reference" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3987,12 +4020,21 @@
 <h2 id="two-rule-levels">Two Rule Levels<a class="headerlink" href="#two-rule-levels" title="Permanent link">&para;</a></h2>
 <p>Both levels must pass for a request to proceed (AND-ed). System rules are evaluated first.</p>
 <h3 id="system-rules-geofence_system_rules">System rules — <code>GEOFENCE_SYSTEM_RULES</code><a class="headerlink" href="#system-rules-geofence_system_rules" title="Permanent link">&para;</a></h3>
-<p>Platform-wide hard floor. Applies to every request regardless of which group the user belongs to. Set in Django settings:</p>
+<p>Platform-wide hard floor. Applies to every request regardless of which group the user belongs to. Two sources, DB winning over file:</p>
+<ol>
+<li><strong>DB-backed <code>Setting</code> row</strong> (key <code>GEOFENCE_SYSTEM_RULES</code>, global scope) — the
+   editable config plane. Managed through <code>POST /api/geo/rules</code> (validated,
+   attributed, cache-invalidating — see <em>Config Plane</em> below) or the generic
+   <code>/api/settings</code> REST (also validated via <code>Setting.on_rest_pre_save</code>).</li>
+<li><strong>Django settings file</strong> — the deploy-time fallback:</li>
+</ol>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">GEOFENCE_SYSTEM_RULES</span> <span class="o">=</span> <span class="p">{</span>
 <a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>    <span class="s2">&quot;country&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;in&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;US&quot;</span><span class="p">,</span> <span class="s2">&quot;CA&quot;</span><span class="p">]},</span>
 <a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>    <span class="s2">&quot;abuse&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;tor&quot;</span><span class="p">:</span> <span class="n">false</span><span class="p">}</span>
 <a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="p">}</span>
 </code></pre></div>
+<p>The engine reads the setting with <code>kind="dict"</code>, so the DB-stored JSON string
+parses transparently.</p>
 <h3 id="group-rules-groupmetadatageofence">Group rules — <code>Group.metadata['geofence']</code><a class="headerlink" href="#group-rules-groupmetadatageofence" title="Permanent link">&para;</a></h3>
 <p>Per-tenant override stored in the group's metadata JSON. Evaluated after system rules pass.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">group</span><span class="o">.</span><span class="n">metadata</span><span class="p">[</span><span class="s1">&#39;geofence&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
@@ -4001,6 +4043,12 @@
 <a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="p">}</span>
 <a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="n">group</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
 </code></pre></div>
+<p>REST writes to <code>metadata.geofence</code> are <strong>validated at save time</strong>
+(<code>Group.on_rest_pre_save</code> runs <code>validate_rule</code> on the merged metadata and
+returns a readable 400 — a typo'd rule can no longer lie in wait as a
+request-time <code>rule_invalid</code> deny). Note REST JSON fields <strong>merge</strong> by default;
+send <code>{"geofence": {..., "__replace": true}}</code> to replace the rule wholesale.
+Every group save also invalidates that group's cached decisions.</p>
 <hr />
 <h2 id="geodecision-shape">GeoDecision Shape<a class="headerlink" href="#geodecision-shape" title="Permanent link">&para;</a></h2>
 <p>The result of a geofence evaluation is a <code>GeoDecision</code> dict:</p>
@@ -4021,7 +4069,7 @@
 <tr>
 <td><code>reason</code></td>
 <td>str</td>
-<td><code>"allowed"</code>, <code>"system_rule"</code>, <code>"group_rule"</code>, <code>"lookup_failed"</code>, etc.</td>
+<td>One of: <code>no_rules</code>, <code>disabled</code>, <code>bypass</code>, <code>ip_allowlisted</code>, <code>passed</code>, <code>lookup_failed</code>, <code>private_ip</code>, <code>country_not_allowed</code>, <code>region_not_allowed</code>, <code>tor_detected</code>, <code>vpn_detected</code>, <code>proxy_detected</code>, <code>datacenter_detected</code>, <code>rule_invalid</code>, <code>group_inactive</code></td>
 </tr>
 <tr>
 <td><code>detail</code></td>
@@ -4034,22 +4082,12 @@
 <td>Evaluated IP address</td>
 </tr>
 <tr>
-<td><code>country</code></td>
-<td>str</td>
-<td>Country name</td>
-</tr>
-<tr>
-<td><code>country_code</code></td>
+<td><code>country</code> / <code>country_code</code></td>
 <td>str</td>
 <td>ISO 3166-1 alpha-2 code</td>
 </tr>
 <tr>
-<td><code>region</code></td>
-<td>str</td>
-<td>Subdivision name</td>
-</tr>
-<tr>
-<td><code>region_code</code></td>
+<td><code>region</code> / <code>region_code</code></td>
 <td>str</td>
 <td>ISO 3166-2 code</td>
 </tr>
@@ -4070,6 +4108,11 @@
 </tr>
 </tbody>
 </table>
+<p><code>ip_allowlisted</code> decisions additionally carry <code>allowlist_source</code>
+(<code>"setting"</code> or <code>"geoip"</code>), <code>allowlist_reason</code>, <code>allowlist_until</code>, and the
+shadow-evaluation outcome <code>would_block</code> / <code>would_block_reason</code> (what the rules
+would have decided without the exemption). <code>simulate()</code> results also carry
+<code>enabled</code>.</p>
 <p>The full <code>GeoDecision</code> is returned by the pre-flight endpoint. Blocked HTTP responses omit geo/abuse fields intentionally (info-leak guard).</p>
 <hr />
 <h2 id="decorator">Decorator<a class="headerlink" href="#decorator" title="Permanent link">&para;</a></h2>
@@ -4080,20 +4123,178 @@
 <a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_protected</span><span class="p">(</span><span class="n">request</span><span class="p">):</span>
 <a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>    <span class="o">...</span>
 </code></pre></div>
+<p>The <code>scope</code> string is recorded in the security registry AND drives fail
+posture: scopes listed in <code>GEOFENCE_FAIL_CLOSED_SCOPES</code> fail <strong>closed</strong> on
+geo-lookup failure (use for money/payment endpoints), while everything else
+keeps the fail-open default. Because posture is scope-sensitive,
+<code>lookup_failed</code> decisions are never cached.</p>
 <p>When a request is blocked the decorator returns 403 immediately with only:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span>
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Access denied&quot;</span><span class="p">,</span>
-<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;geofence_blocked&quot;</span><span class="p">,</span>
-<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">  </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;system_rule&quot;</span><span class="p">,</span>
-<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">  </span><span class="nt">&quot;detail&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Your country is not permitted.&quot;</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;geofence_blocked&quot;</span><span class="p">,</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">403</span><span class="p">,</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">  </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;country_not_allowed&quot;</span><span class="p">,</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">  </span><span class="nt">&quot;detail&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Service is not available in your country.&quot;</span>
 <a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="p">}</span>
 </code></pre></div>
-<p>Country, region, and abuse details are intentionally omitted from the blocked response to prevent information leakage.</p>
+<p>Country, region, and abuse details are intentionally omitted from the blocked response to prevent information leakage. Every block is also recorded by the evidence plane (below).</p>
 <h3 id="oauth-complete-is-not-decorated">OAuth <code>/complete</code> is not decorated<a class="headerlink" href="#oauth-complete-is-not-decorated" title="Permanent link">&para;</a></h3>
 <p>The OAuth <code>/callback</code> endpoint returns an HTTP redirect, not JSON, so <code>@md.requires_geofence</code> is not applied there. System rules still apply at other OAuth steps; group rules do not apply at <code>/complete</code> because the <code>group_uuid</code> is encoded inside the signed OAuth state string and is not decoded until inside the view — after any decorator would have run.</p>
 <hr />
 <h2 id="bypass_geofence-permission"><code>bypass_geofence</code> Permission<a class="headerlink" href="#bypass_geofence-permission" title="Permanent link">&para;</a></h2>
 <p>A user with the <code>bypass_geofence</code> permission short-circuits all geofence checks entirely. The check returns <code>allowed=True</code> immediately without writing a cache entry, so revoking the permission takes effect on the very next request.</p>
+<p><strong>This is a high-privilege grant</strong> — superusers hold it implicitly
+(<code>User.has_permission</code> returns <code>True</code> for a superuser on every perm).
+<code>GET /api/geo/bypass_holders</code> lists everyone who is exempt this way (explicit
+grants plus superusers) for audit.</p>
+<hr />
+<h2 id="ip-allowlist-full-exemption">IP Allowlist — Full Exemption<a class="headerlink" href="#ip-allowlist-full-exemption" title="Permanent link">&para;</a></h2>
+<p>Developer/office IPs can be exempted from geofencing entirely (jurisdiction
+<strong>and</strong> abuse flags — a developer on a VPN is not re-blocked as
+<code>vpn_detected</code>). Decision priority: <strong>bypass → allowlist → rules</strong>. Two
+sources, checked in order:</p>
+<ol>
+<li><strong><code>GEOFENCE_ALLOWLIST</code> setting</strong> — a list of CIDR entries for office/VPN
+   egress ranges. Entries are <code>"CIDR-or-IP"</code> strings or
+   <code>{"cidr": ..., "reason": ..., "until": ...}</code> objects. Managed via
+   <code>GET/POST /api/geo/allowlist</code> (validated: parseable CIDR, ISO <code>until</code>).</li>
+<li><strong>Per-IP <code>GeoLocatedIP.is_whitelisted</code></strong> — the existing firewall whitelist,
+   managed via the <code>/api/system/geoip</code> <code>whitelist</code> / <code>unwhitelist</code> actions.
+   The action accepts a dict <code>{"reason": ..., "ttl": &lt;seconds&gt;, "until": &lt;iso&gt;}</code>
+   (bare-string reason still works).</li>
+</ol>
+<p><strong>Expiry</strong>: setting entries carry <code>until</code>; <code>GeoLocatedIP</code> rows carry
+<code>whitelisted_until</code> (mirrors <code>blocked_until</code>; <code>null</code> = permanent). Expiry is
+evaluated lazily via the <code>whitelist_active</code> property — expired entries stop
+matching and are listed with <code>active: false</code>, and an expired whitelist also
+stops suppressing incident-driven firewall blocking (<code>block_active</code>,
+<code>block()</code>, <code>update_threat_from_incident</code> all honor it).</p>
+<p><strong>Compliance guardrails</strong>: an allowlisted request still shadow-evaluates the
+rules; when it <em>would</em> have blocked, the pass is recorded as a
+<code>geofence_exempt</code> incident event with the would-block reason. Allowlist
+changes (either source) invalidate the decision cache automatically and land
+in the <code>geofence_config</code> event stream. Whitelist state never federates
+(<code>/api/system/geoip/sync</code> rejects it).</p>
+<hr />
+<h2 id="config-plane-rest-permissions">Config Plane — REST + Permissions<a class="headerlink" href="#config-plane-rest-permissions" title="Permanent link">&para;</a></h2>
+<p>New fine-grained perms: <strong><code>view_geofence</code></strong> (read) and <strong><code>manage_geofence</code></strong>
+(write); the <code>security</code> domain-category perm grants both. Legal/business
+staff get geofence management <em>without</em> <code>manage_settings</code> (which exposes every
+setting including secrets).</p>
+<p>These endpoints check <strong>global <code>User.permissions</code> only</strong> (no
+<code>requires_perms</code>-style group fallback): a GroupMember-scoped grant — which any
+group admin can assign — must never authorize platform-wide enforcement
+config. Relatedly, <code>GEOFENCE_SYSTEM_RULES</code> / <code>GEOFENCE_ALLOWLIST</code> are
+<strong>global-only Setting keys</strong>: the engine never resolves them per-group, and
+group-scoped rows are rejected with a 400 at write time.</p>
+<table>
+<thead>
+<tr>
+<th>Endpoint</th>
+<th>Perms</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET /api/geo/rules</code></td>
+<td>view</td>
+<td>Effective config: system rule + source (<code>setting</code>/<code>conf</code>/<code>none</code>) + modified stamp, posture (enabled, fail modes, scopes, cache TTL), allowlist summary, evaluation order, and every <code>@requires_geofence</code> endpoint with its scope. Pass <code>group_uuid</code> to include a group's rule.</td>
+</tr>
+<tr>
+<td><code>POST /api/geo/rules</code></td>
+<td>manage</td>
+<td>Full-replace the system rule (<code>{"rule": {...}}</code>). Validated → readable 400. Persists as the global <code>Setting</code> row.</td>
+</tr>
+<tr>
+<td><code>DELETE /api/geo/rules</code></td>
+<td>manage</td>
+<td>Drop the DB override (falls back to django.conf).</td>
+</tr>
+<tr>
+<td><code>POST /api/geo/simulate</code></td>
+<td>view</td>
+<td>Uncached what-if: <code>{"ip": ...}</code> or <code>{"geo": {...}}</code> + optional <code>group_uuid</code>/<code>scope</code> → full <code>GeoDecision</code> (evaluates even while <code>GEOFENCE_ENABLED</code> is off; consults the allowlist when <code>ip</code> is given; emits nothing).</td>
+</tr>
+<tr>
+<td><code>GET /api/geo/allowlist</code></td>
+<td>view</td>
+<td>Active exemptions from both sources, with reason/until/active.</td>
+</tr>
+<tr>
+<td><code>POST /api/geo/allowlist</code></td>
+<td>manage</td>
+<td>Full-replace the CIDR allowlist (<code>{"entries": [...]}</code>, empty list clears).</td>
+</tr>
+<tr>
+<td><code>GET /api/geo/bypass_holders</code></td>
+<td>view</td>
+<td>Users exempt via <code>bypass_geofence</code> or superuser.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Cache coherence is automatic</strong>: <code>Setting.save()</code>/<code>delete()</code> for the geofence
+keys invalidates every cached decision; <code>Group</code> saves invalidate that group's
+decisions; <code>GeoLocatedIP.whitelist()</code>/<code>unwhitelist()</code> invalidate that IP's
+decisions. An emergency rule edit takes effect immediately — no ops step.</p>
+<p><strong>Change history</strong>: every config write emits a <code>geofence_config</code> incident
+event carrying <code>target</code> (<code>system</code> / <code>allowlist</code> / <code>ip:&lt;addr&gt;</code>), <code>old</code>, <code>new</code>,
+and the acting user. Query <code>/api/incident/event?category=geofence_config</code>
+(needs <code>view_security</code>).</p>
+<hr />
+<h2 id="evidence-plane-incident-events-metrics">Evidence Plane — Incident Events + Metrics<a class="headerlink" href="#evidence-plane-incident-events-metrics" title="Permanent link">&para;</a></h2>
+<p>Every enforcement outcome that matters to an auditor becomes an incident
+Event (<code>mojo.apps.incident</code>); blocks also record metrics. Emission happens at
+the <strong>decorator</strong> (so cache hits still emit); <code>/api/geo/check</code> and simulate
+are advisory and emit nothing.</p>
+<table>
+<thead>
+<tr>
+<th>Category</th>
+<th>When</th>
+<th>Level</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>geofence_block</code></td>
+<td><code>rule_invalid</code> at evaluation (broken rule denying traffic — pages via <code>INCIDENT_LEVEL_THRESHOLD</code> default 7)</td>
+<td>7</td>
+</tr>
+<tr>
+<td><code>geofence_block</code></td>
+<td>lookup failure while failing OPEN (enforcement silently off)</td>
+<td>6</td>
+</tr>
+<tr>
+<td><code>geofence_block</code></td>
+<td>abuse-flag block, or any block on a scope in <code>GEOFENCE_FAIL_CLOSED_SCOPES</code></td>
+<td>5</td>
+</tr>
+<tr>
+<td><code>geofence_block</code></td>
+<td>ordinary jurisdiction block</td>
+<td>3</td>
+</tr>
+<tr>
+<td><code>geofence_exempt</code></td>
+<td>allowlisted pass that would otherwise have blocked</td>
+<td>3</td>
+</tr>
+<tr>
+<td><code>geofence_config</code></td>
+<td>any rules/allowlist/whitelist change</td>
+<td>3</td>
+</tr>
+</tbody>
+</table>
+<p>Block/exempt events are <strong>deduped per <code>(ip, reason)</code> per hour</strong> (Redis key
+<code>geofence:evt:{ip}:{reason}</code>) so a blocked client hammering login cannot
+flood the stream. Metrics count <strong>every</strong> block including deduped ones:
+<code>geofence:blocks</code>, <code>geofence:blocks:country:{cc}</code>,
+<code>geofence:blocks:region:{iso-3166-2}</code>, plus <code>geofence:exempt</code> — all under the
+<code>geofence</code> category (mirrors <code>firewall:blocks</code>). Escalation of level-3/5/6
+events stays with incident RuleSet bundling — blocked-jurisdiction login
+traffic is the system <em>working</em>, not an incident.</p>
 <hr />
 <h2 id="settings-reference">Settings Reference<a class="headerlink" href="#settings-reference" title="Permanent link">&para;</a></h2>
 <table>
@@ -4113,7 +4314,12 @@
 <tr>
 <td><code>GEOFENCE_SYSTEM_RULES</code></td>
 <td><code>{}</code></td>
-<td>Platform-wide hard-floor rule (no-op by default).</td>
+<td>Platform-wide hard-floor rule (no-op by default). DB <code>Setting</code> row wins over the settings file.</td>
+</tr>
+<tr>
+<td><code>GEOFENCE_ALLOWLIST</code></td>
+<td><code>[]</code></td>
+<td>CIDR exemption list (strings or <code>{cidr, reason, until}</code>) — full geofence bypass for matching IPs.</td>
 </tr>
 <tr>
 <td><code>GEOFENCE_CACHE_TTL</code></td>
@@ -4124,6 +4330,11 @@
 <td><code>GEOFENCE_FAIL_CLOSED</code></td>
 <td><code>False</code></td>
 <td>If <code>True</code>, deny access when the geoip lookup fails. If <code>False</code>, allow on failure.</td>
+</tr>
+<tr>
+<td><code>GEOFENCE_FAIL_CLOSED_SCOPES</code></td>
+<td><code>[]</code></td>
+<td>Decorator scopes that fail CLOSED on lookup failure (e.g. <code>["payments"]</code>) while everything else stays fail-open.</td>
 </tr>
 <tr>
 <td><code>GEOFENCE_ALLOW_PRIVATE_IPS</code></td>

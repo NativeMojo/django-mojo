@@ -3977,6 +3977,11 @@
 <td>No</td>
 <td>UUID of a specific group. When provided, group-level geofence rules are evaluated in addition to system rules. Omit to check system rules only.</td>
 </tr>
+<tr>
+<td><code>scope</code></td>
+<td>No</td>
+<td>Endpoint scope to preview fail posture for — a scope listed in <code>GEOFENCE_FAIL_CLOSED_SCOPES</code> fails <strong>closed</strong> (denies) on a geo-lookup failure instead of the fail-open default.</td>
+</tr>
 </tbody>
 </table>
 <h3 id="response">Response<a class="headerlink" href="#response" title="Permanent link">&para;</a></h3>
@@ -3984,12 +3989,12 @@
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">    </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
 <a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">    </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
 <a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">        </span><span class="nt">&quot;allowed&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">        </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;allowed&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">        </span><span class="nt">&quot;detail&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Request is permitted.&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">        </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;passed&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">        </span><span class="nt">&quot;detail&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Allowed.&quot;</span><span class="p">,</span>
 <a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">        </span><span class="nt">&quot;ip&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;1.2.3.4&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">        </span><span class="nt">&quot;country&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;United States&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">        </span><span class="nt">&quot;country&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;US&quot;</span><span class="p">,</span>
 <a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">        </span><span class="nt">&quot;country_code&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;US&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">        </span><span class="nt">&quot;region&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;New York&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">        </span><span class="nt">&quot;region&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;US-NY&quot;</span><span class="p">,</span>
 <a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">        </span><span class="nt">&quot;region_code&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;US-NY&quot;</span><span class="p">,</span>
 <a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">        </span><span class="nt">&quot;abuse&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
 <a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="w">            </span><span class="nt">&quot;tor&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
@@ -4002,6 +4007,7 @@
 <a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a><span class="w">    </span><span class="p">}</span>
 <a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a><span class="p">}</span>
 </code></pre></div>
+<p><code>country</code>/<code>country_code</code> and <code>region</code>/<code>region_code</code> always carry the same ISO code — there is no separate human-readable name field.</p>
 <p>When <code>allowed</code> is <code>false</code>, <code>rule_level</code> indicates which level caused the block (<code>"system"</code> or <code>"group"</code>), and <code>reason</code> and <code>detail</code> describe the specific rule that matched.</p>
 <table>
 <thead>
@@ -4017,7 +4023,7 @@
 </tr>
 <tr>
 <td><code>reason</code></td>
-<td><code>"allowed"</code>, <code>"system_rule"</code>, <code>"group_rule"</code>, or <code>"lookup_failed"</code></td>
+<td>One of <code>no_rules</code>, <code>disabled</code>, <code>bypass</code>, <code>ip_allowlisted</code>, <code>passed</code>, <code>lookup_failed</code>, <code>private_ip</code>, <code>country_not_allowed</code>, <code>region_not_allowed</code>, <code>tor_detected</code>, <code>vpn_detected</code>, <code>proxy_detected</code>, <code>datacenter_detected</code>, <code>rule_invalid</code>, <code>group_inactive</code> — see the django-developer <a href="../../../django_developer/account/geofence/#geodecision-shape">GeoDecision Shape</a> reference</td>
 </tr>
 <tr>
 <td><code>detail</code></td>
@@ -4033,6 +4039,7 @@
 </tr>
 </tbody>
 </table>
+<p>When <code>reason</code> is <code>ip_allowlisted</code> (the IP matches the <a href="../../../django_developer/account/geofence/#ip-allowlist--full-exemption">IP allowlist</a>), the response also carries <code>allowlist_source</code> (<code>"setting"</code> or <code>"geoip"</code>), <code>allowlist_reason</code>, <code>allowlist_until</code>, and the shadow-evaluation outcome <code>would_block</code> / <code>would_block_reason</code> (what the rules would have decided without the exemption).</p>
 <hr />
 <h2 id="get-systemgeoip-list-geoip-records"><code>GET system/geoip</code> — List GeoIP Records<a class="headerlink" href="#get-systemgeoip-list-geoip-records" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>GET /api/system/geoip
@@ -4101,8 +4108,8 @@
 </tr>
 <tr>
 <td><code>whitelist</code></td>
-<td><code>"reason string"</code></td>
-<td>Whitelist — prevents all future blocks</td>
+<td><code>"reason string"</code> or <code>{"reason": "...", "ttl": 3600, "until": "&lt;iso&gt;"}</code></td>
+<td>Whitelist — prevents all future blocks. <code>ttl</code> seconds or ISO <code>until</code> sets an expiry (invalid <code>until</code> → 400); omit both for permanent.</td>
 </tr>
 <tr>
 <td><code>unwhitelist</code></td>

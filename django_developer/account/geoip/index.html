@@ -3839,10 +3839,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#whitelistreason" class="md-nav__link">
+  <a href="#whitelistreason-ttlnone-untilnone" class="md-nav__link">
     <span class="md-ellipsis">
       
-        whitelist(reason)
+        whitelist(reason, ttl=None, until=None)
       
     </span>
   </a>
@@ -4270,6 +4270,10 @@
 <td><code>whitelisted_reason</code></td>
 <td>Why this IP is whitelisted</td>
 </tr>
+<tr>
+<td><code>whitelisted_until</code></td>
+<td>When the whitelist expires (<code>null</code> = permanent) — mirrors <code>blocked_until</code>. An expired whitelist stops suppressing blocks and stops exempting geofence.</td>
+</tr>
 </tbody>
 </table>
 <h3 id="computed-properties">Computed Properties<a class="headerlink" href="#computed-properties" title="Permanent link">&para;</a></h3>
@@ -4299,7 +4303,11 @@
 </tr>
 <tr>
 <td><code>block_active</code></td>
-<td>True if <code>is_blocked</code> AND not whitelisted AND <code>blocked_until</code> hasn't passed</td>
+<td>True if <code>is_blocked</code> AND no <em>active</em> whitelist AND <code>blocked_until</code> hasn't passed</td>
+</tr>
+<tr>
+<td><code>whitelist_active</code></td>
+<td>True if <code>is_whitelisted</code> AND <code>whitelisted_until</code> hasn't passed. Every consumer of whitelist state (block suppression, auto-block guards, geofence allowlist) uses this — an expired whitelist means the same thing everywhere.</td>
 </tr>
 </tbody>
 </table>
@@ -4341,12 +4349,12 @@
 <td>Unblock this IP fleet-wide</td>
 </tr>
 <tr>
-<td><code>instance.whitelist(reason)</code></td>
-<td>Whitelist — also unblocks if currently blocked</td>
+<td><code>instance.whitelist(reason, ttl=None, until=None)</code></td>
+<td>Whitelist — also unblocks if currently blocked. <code>ttl</code> seconds or an explicit <code>until</code> datetime sets <code>whitelisted_until</code> (<code>until</code> wins; omit both for permanent).</td>
 </tr>
 <tr>
 <td><code>instance.unwhitelist()</code></td>
-<td>Remove whitelist status</td>
+<td>Remove whitelist status (clears <code>whitelisted_until</code> too)</td>
 </tr>
 </tbody>
 </table>
@@ -4378,18 +4386,21 @@
 <li>Updates DB and broadcasts fleet-wide iptables removal</li>
 <li><code>broadcast=False</code> for DB-only updates</li>
 </ul>
-<h3 id="whitelistreason">whitelist(reason)<a class="headerlink" href="#whitelistreason" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">geo</span><span class="o">.</span><span class="n">whitelist</span><span class="p">(</span><span class="n">reason</span><span class="o">=</span><span class="s2">&quot;office IP range&quot;</span><span class="p">)</span>
+<h3 id="whitelistreason-ttlnone-untilnone">whitelist(reason, ttl=None, until=None)<a class="headerlink" href="#whitelistreason-ttlnone-untilnone" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">geo</span><span class="o">.</span><span class="n">whitelist</span><span class="p">(</span><span class="n">reason</span><span class="o">=</span><span class="s2">&quot;office IP range&quot;</span><span class="p">)</span>                       <span class="c1"># permanent</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">geo</span><span class="o">.</span><span class="n">whitelist</span><span class="p">(</span><span class="n">reason</span><span class="o">=</span><span class="s2">&quot;contractor laptop&quot;</span><span class="p">,</span> <span class="n">ttl</span><span class="o">=</span><span class="mi">86400</span><span class="p">)</span>          <span class="c1"># 24h expiry</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="n">geo</span><span class="o">.</span><span class="n">whitelist</span><span class="p">(</span><span class="n">reason</span><span class="o">=</span><span class="s2">&quot;audit window&quot;</span><span class="p">,</span> <span class="n">until</span><span class="o">=</span><span class="n">some_datetime</span><span class="p">)</span>     <span class="c1"># explicit expiry</span>
 </code></pre></div>
 <ul>
-<li>Sets <code>is_whitelisted=True</code></li>
+<li>Sets <code>is_whitelisted=True</code> (+ <code>whitelisted_until</code> from <code>ttl</code>/<code>until</code>; <code>until</code> wins)</li>
 <li>If the IP is currently blocked, it unblocks fleet-wide immediately</li>
-<li>Prevents all future auto-blocks (threat escalation, rule handlers)</li>
+<li>Prevents all future auto-blocks (threat escalation, rule handlers) <strong>while active</strong> — an expired whitelist no longer suppresses anything</li>
+<li>Also exempts the IP from geofencing (see <a href="../geofence/">Geofence — IP Allowlist</a>); every whitelist change invalidates that IP's cached geofence decisions and emits a <code>geofence_config</code> incident event</li>
 </ul>
 <h3 id="unwhitelist">unwhitelist()<a class="headerlink" href="#unwhitelist" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">geo</span><span class="o">.</span><span class="n">unwhitelist</span><span class="p">()</span>
 </code></pre></div>
-<p>Removes whitelist protection. Does not auto-block — the IP would need to trigger rules again.</p>
+<p>Removes whitelist protection (clears <code>whitelisted_until</code>). Does not auto-block — the IP would need to trigger rules again.</p>
 <h3 id="auto-block-via-threat-escalation">Auto-block via threat escalation<a class="headerlink" href="#auto-block-via-threat-escalation" title="Permanent link">&para;</a></h3>
 <p><code>update_threat_from_incident(priority, block=False)</code> is called when incidents are created for an IP. It escalates <code>threat_level</code> (never downgrades) based on incident priority:</p>
 <table>
@@ -4451,8 +4462,8 @@
 </tr>
 <tr>
 <td><code>whitelist</code></td>
-<td><code>"reason string"</code> or omit for default</td>
-<td>Whitelist IP, unblocks if currently blocked</td>
+<td><code>"reason string"</code> or <code>{"reason": "...", "ttl": 3600, "until": "&lt;iso&gt;"}</code></td>
+<td>Whitelist IP, unblocks if currently blocked. <code>ttl</code> seconds or ISO <code>until</code> sets the expiry (invalid <code>until</code> → 400).</td>
 </tr>
 <tr>
 <td><code>unwhitelist</code></td>

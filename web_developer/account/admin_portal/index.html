@@ -4354,7 +4354,7 @@
 <tr>
 <td><code>security</code></td>
 <td>Security &amp; Logs</td>
-<td>Incidents, events, rules, tickets, IP blocks, bouncer, GeoIP, system logs</td>
+<td>Incidents, events, rules, tickets, IP blocks, bouncer, GeoIP, system logs, geofence config</td>
 </tr>
 <tr>
 <td><code>comms</code></td>
@@ -4461,6 +4461,16 @@
 <td>Read-only security dashboard (no edit access)</td>
 </tr>
 <tr>
+<td><code>view_geofence</code></td>
+<td><code>security</code></td>
+<td>Read-only geofence admin section — rules, allowlist, simulate, bypass holders (no edit access)</td>
+</tr>
+<tr>
+<td><code>manage_geofence</code></td>
+<td><code>security</code></td>
+<td>Manage geofence system rules and IP allowlist without full <code>security</code></td>
+</tr>
+<tr>
 <td><code>view_users</code></td>
 <td><code>users</code></td>
 <td>Read-only user directory</td>
@@ -4544,6 +4554,11 @@
 <td>Firewall / IP blocks</td>
 <td><code>GET/POST /api/incident/ipset</code> — see <a href="../../security/#ipset-bulk-blocking">IPSet Bulk Blocking</a></td>
 <td><code>security</code></td>
+</tr>
+<tr>
+<td>Geofence admin</td>
+<td><code>GET/POST /api/geo/rules</code>, <code>GET/POST /api/geo/allowlist</code> — see <a href="../geofence/">Geofence Admin</a></td>
+<td><code>security</code> (or <code>view_geofence</code>/<code>manage_geofence</code>)</td>
 </tr>
 <tr>
 <td>Bouncer devices</td>
