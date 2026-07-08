@@ -64,7 +64,7 @@ def _build_aggregation(qs, country_code, drill_region):
 
 
 @md.GET('account/logins/summary')
-@md.requires_perms('manage_users', 'security', 'users')
+@md.requires_global_perms('manage_users', 'security', 'users')
 def on_login_geo_summary(request):
     qs = UserLoginEvent.objects.exclude(country_code__isnull=True).exclude(country_code='')
     qs = _apply_date_filters(qs, request)
@@ -76,7 +76,7 @@ def on_login_geo_summary(request):
 
 
 @md.GET('account/logins/user')
-@md.requires_perms('manage_users', 'security', 'users')
+@md.requires_global_perms('manage_users', 'security', 'users')
 @md.requires_params('user_id')
 def on_login_geo_user(request):
     try:

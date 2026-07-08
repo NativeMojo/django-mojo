@@ -21,7 +21,7 @@ def on_event(request, pk=None):
 
 
 @md.GET('health/summary')
-@md.requires_perms("view_security", "security")
+@md.requires_global_perms("view_security", "security")
 def on_health_summary(request):
     """
     Return the most recent Event per ``system:health:*`` category (or any

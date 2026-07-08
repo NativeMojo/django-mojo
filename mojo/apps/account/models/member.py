@@ -6,7 +6,9 @@ from mojo.helpers import dates
 
 
 def _member_perms_protection():
-    return settings.get("MEMBER_PERMS_PROTECTION", {})
+    # kind="dict" so a DB-backed Setting (stored as a JSON string) parses into a
+    # dict — otherwise `perm in <str>` would silently degrade to substring matching.
+    return settings.get("MEMBER_PERMS_PROTECTION", {}, kind="dict") or {}
 
 
 def _user_last_activity_freq():

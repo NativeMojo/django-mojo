@@ -11,7 +11,9 @@ def on_user_device(request, pk=None):
 
 @md.GET('user/device/lookup')
 @md.requires_params('duid')
-@md.requires_perms("manage_users", "manage_devices", "users")
+# Cross-tenant lookup: any device by duid, and on_rest_get does not re-run the
+# permission gate — so this must require a GLOBAL grant, not a group-scoped one.
+@md.requires_global_perms("manage_users", "manage_devices", "users")
 def on_user_device_by_duid(request):
     duid = request.DATA.get('duid')
     device = UserDevice.objects.filter(duid=duid).first()
@@ -78,7 +80,11 @@ _GEOIP_SYNC_FORBIDDEN_FIELDS = (
 @md.POST('system/geoip/sync')
 @md.rate_limit("geoip_sync", ip_limit=60)
 @md.requires_params('ip')
-@md.requires_perms('geoip_sync')
+# Federation ingest: writes GLOBAL threat intel, so no group-permission
+# fallback (a member-scoped geoip_sync grant must not reach it). allow_api_keys
+# because the intended caller is a fleet peer authenticating with an ApiKey
+# holding geoip_sync (see mojo/apps/account/asyncjobs.py push_abuse_signals).
+@md.requires_global_perms('geoip_sync', allow_api_keys=True)
 def on_geo_located_ip_sync(request):
     """
     Receive abuse-signal updates from a downstream mojo instance.

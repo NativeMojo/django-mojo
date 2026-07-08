@@ -177,6 +177,16 @@ This prevents non-admin users from escalating their own access.
 | Metrics permissions | `GET/POST /api/metrics/permissions` | `metrics` |
 | File management | `GET/POST /api/fileman/manager`, `GET/POST /api/fileman/file` | `files` |
 
+> **Global grants required for platform-wide endpoints.** Job control/status,
+> AWS infrastructure (`/api/aws/*`), metrics permissions, geofence config
+> (`/api/geo/*`), incident health, and cross-tenant user admin
+> (`/api/auth/manage/*`, device lookup, login-event reads, push send) are gated
+> on the user's **global** permission grant. A permission held only at the
+> group/member level — or an API key — does **not** authorize them (passing a
+> `group` param does not change this). Grant these on the User, not the
+> GroupMember. Group-scoped endpoints (group/member management, per-group
+> webhook secret, SMS send) still accept a group-scoped grant as before.
+
 ## Secure Settings API (Admin)
 
 The secure settings API is intended for admin portals and configuration consoles.

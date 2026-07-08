@@ -36,7 +36,7 @@ def _get_helper():
 
 
 @md.GET("cloudwatch/resources")
-@md.requires_perms("manage_aws")
+@md.requires_global_perms("manage_aws")
 def on_cloudwatch_resources(request):
     """
     List all EC2 instances, RDS DB instances, and ElastiCache clusters.
@@ -72,7 +72,7 @@ def on_cloudwatch_resources(request):
 
 
 @md.GET("cloudwatch/fetch")
-@md.requires_perms("manage_aws")
+@md.requires_global_perms("manage_aws")
 @md.requires_params("account", "category")
 def on_cloudwatch_fetch(request):
     """

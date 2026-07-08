@@ -19,7 +19,7 @@ from mojo.apps.assistant.models import Conversation, Message, Skill
 
 
 @md.POST('')
-@md.requires_perms('view_admin', 'assistant')
+@md.requires_global_perms('view_admin', 'assistant')
 @md.rate_limit("assistant", ip_limit=60, duid_limit=30)
 @md.requires_params('message')
 def on_assistant_message(request):
@@ -53,7 +53,7 @@ def on_assistant_message(request):
 
 
 @md.POST('context')
-@md.requires_perms('view_admin', 'assistant')
+@md.requires_global_perms('view_admin', 'assistant')
 @md.requires_params('model', 'pk')
 def on_assistant_context(request):
     """Create a conversation pre-loaded with context from any MojoModel instance."""

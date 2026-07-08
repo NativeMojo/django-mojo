@@ -33,7 +33,7 @@ def on_user_me(request):
 
 
 @md.POST('auth/manage/clear_rate_limit')
-@md.requires_perms("users", "manage_users")
+@md.requires_global_perms("users", "manage_users")
 def on_clear_rate_limit(request):
     """Clear rate limit counters for an IP, device, client, or user account.
 
@@ -74,7 +74,7 @@ def on_clear_rate_limit(request):
 
 
 @md.GET('auth/manage/throttle')
-@md.requires_perms("users", "manage_users")
+@md.requires_global_perms("users", "manage_users")
 def on_read_throttle(request):
     """Read the per-account login attempt counter for support tooling.
 

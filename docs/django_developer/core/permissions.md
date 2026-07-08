@@ -39,6 +39,53 @@ class RestMeta:
     SAVE_PERMS = ["manage_books"]
 ```
 
+## Global vs Group-Scoped Permission Checks
+
+Non-RestMeta endpoints gate with a decorator. There are two, and choosing the
+wrong one is a **cross-tenant privilege-escalation risk**.
+
+- **`@md.requires_perms(...)`** — checks the caller's **global**
+  `User.permissions` first, then (when `REQUIRES_PERMS_IS_GROUP` is `True`, the
+  default) falls back to their **group/member** permission for the group named in
+  the request (`request.group.user_has_permission(...)`). Correct when the
+  endpoint's effect is confined to `request.group` (e.g. rotating *that* group's
+  webhook secret).
+- **`@md.requires_global_perms(...)`** — checks **global `User.permissions` (or
+  superuser) only**, never the group/member fallback. Use it for any endpoint
+  whose effect is **platform-wide**: global settings, fleet/job control, AWS
+  infra, cross-tenant data, metrics ACLs, geofence config.
+
+Why it matters: `GroupMember.permissions` accepts **arbitrary key names**, and
+any group admin (holding `manage_group`/`manage_members`/`manage_users`/
+`manage_groups`) can assign them — bounded only by `MEMBER_PERMS_PROTECTION`
+(empty by default). So under `requires_perms`, a tenant admin can grant a
+teammate any permission *scoped to their own group*, then satisfy the check on
+**any** endpoint by passing their own `group` id. If that endpoint's effect is
+global, that's an escalation. `requires_global_perms` closes it: a group-scoped
+grant never authorizes a global action.
+
+```python
+# Group-scoped effect — group/member fallback is correct:
+@md.requires_perms("manage_group", "manage_groups", "groups")
+def on_group_webhook_secret(request): ...   # touches request.group only
+
+# Platform-wide effect — global grant required:
+@md.requires_global_perms("manage_jobs", "jobs")
+def on_clear_queue(request): ...            # clears the global job queue
+```
+
+**API keys.** An `ApiKey` (`Authorization: apikey <token>`) is a *group-scoped*
+credential, so `requires_global_perms` **rejects it by default** — letting a key
+satisfy a platform-global gate would recreate the escalation through a machine
+door. Machine access to a global endpoint should use a real service-account User
+with a global grant. The one exception is a federation/ingest receiver whose
+intended caller *is* a fleet-peer key: decorate it
+`@md.requires_global_perms("perm", allow_api_keys=True)` (e.g. the geoip sync
+receiver). The group/member fallback is still never consulted.
+
+The security registry records `global_only: True` for these endpoints, so audit
+tooling can tell them apart.
+
 ## Permission Names
 
 ### Category Permissions (Broad Access)
@@ -189,7 +236,7 @@ Use these when you need read-only access or scoped access within a domain:
 | JobEvent | manage_jobs, view_jobs, **jobs** | (system-created) | SAVE_PERMS = [] |
 | JobLog | manage_jobs, view_jobs, **jobs** | (system-created) | SAVE_PERMS = [] |
 
-**REST endpoints (non-RestMeta):** All 26 `@md.requires_perms()` endpoints in jobs/rest/ also accept `jobs`.
+**REST endpoints (non-RestMeta):** all jobs/rest/ control + status endpoints accept `manage_jobs`/`view_jobs`/`jobs`, but are gated with `@md.requires_global_perms(...)` (job control is platform-wide) — a group/member-scoped `jobs` grant does **not** authorize them (see [Global vs Group-Scoped Permission Checks](#global-vs-group-scoped-permission-checks)).
 
 ### Metrics App
 

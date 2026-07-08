@@ -250,7 +250,16 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 
 ### MEMBER
 
-- `MEMBER_PERMS_PROTECTION`
+- `MEMBER_PERMS_PROTECTION` — dict, default `{}` (read with `kind="dict"`, so a
+  DB-backed `Setting` JSON string is honored). Maps a member-assignable
+  permission key → the permission(s) the granter must themselves hold to assign
+  it, gating `GroupMember.set_permissions` / the group-invite path. Empty by
+  default (any group admin holding `manage_group`/`manage_members`/`manage_users`/
+  `manage_groups` may assign arbitrary member keys). Example — require a *global*
+  `manage_jobs` to grant a member `manage_jobs`:
+  `{"manage_jobs": "sys.manage_jobs"}` (the `sys.` prefix escalates the
+  requirement to the granter's global permission). Use it to stop tenant admins
+  from minting high-privilege member grants.
 
 ### METRICS
 
@@ -332,7 +341,15 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 
 ### REQUIRES
 
-- `REQUIRES_PERMS_IS_GROUP`
+- `REQUIRES_PERMS_IS_GROUP` — bool, default `True` (read once at import). When
+  `True`, `@md.requires_perms` falls back to the caller's **group/member**
+  permission (`request.group.user_has_permission(...)`) if their global grant is
+  missing — correct for endpoints scoped to `request.group`. Setting it `False`
+  globally disables that fallback for **every** `requires_perms` endpoint,
+  which breaks legitimate group-scoped admin flows; to disable the fallback for
+  a single platform-global endpoint, decorate it with
+  `@md.requires_global_perms(...)` instead (see
+  [permissions.md](../core/permissions.md#global-vs-group-scoped-permission-checks)).
 
 ### SECRET
 

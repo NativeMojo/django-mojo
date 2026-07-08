@@ -42,8 +42,11 @@ def on_group_invite_member(request):
         raise merrors.PermissionDeniedException()
     ms = request.group.invite(request.DATA.email)
     if "permissions" in request.DATA:
-        ms.on_rest_update_jsonfield("permissions", request.DATA.permissions)
-        ms.save()
+        # Route through set_permissions so can_change_permission /
+        # MEMBER_PERMS_PROTECTION is enforced on the invite path too — a direct
+        # on_rest_update_jsonfield write bypassed it (active_request resolves to
+        # this request via the ACTIVE_REQUEST context var; set_permissions saves).
+        ms.set_permissions(request.DATA.permissions)
     return ms.on_rest_get(request)
 
 

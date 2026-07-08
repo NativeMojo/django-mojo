@@ -91,6 +91,62 @@ def requires_group_perms(*required_perms):
     return decorator
 
 
+def requires_global_perms(*required_perms, allow_api_keys=False):
+    """Like ``requires_perms`` but WITHOUT the group-permission fallback.
+
+    ``requires_perms`` falls back to
+    ``request.group.user_has_permission(request.user, perms)`` using a
+    client-supplied ``group`` param. That is correct for endpoints whose effect
+    is confined to that group, but a cross-tenant privilege escalation for
+    endpoints whose effect is PLATFORM-WIDE (global settings, fleet operations,
+    cross-tenant data): a GroupMember-scoped grant — which any group admin can
+    assign, with arbitrary key names — would otherwise authorize a global
+    action just by naming the caller's own group. Use this decorator for those
+    endpoints; it authorizes on the caller's GLOBAL ``User.permissions`` (or
+    superuser) only, never the member/group fallback.
+
+    A non-User identity (a group-scoped ``ApiKey`` authenticating via
+    ``Authorization: apikey <token>``) is rejected by default — a group
+    credential must not satisfy a platform-global gate. ``is_request_user`` is
+    the framework's canonical "real request User?" marker (``User`` defines it,
+    ``ApiKey`` does not). Pass ``allow_api_keys=True`` ONLY for endpoints that
+    are themselves a federation / machine-ingest surface (e.g. the geoip sync
+    receiver), where an ApiKey holding the perm is the intended caller; the
+    member/group fallback is still never consulted.
+    """
+    perm_set = set(required_perms)
+
+    def decorator(func):
+        func._mojo_requires_perms = True
+        func._mojo_required_permissions = list(required_perms)
+        func._mojo_security_type = "permissions"
+
+        key = f"{func.__module__}.{func.__name__}"
+        SECURITY_REGISTRY[key] = {
+            'type': 'permissions',
+            'permissions': list(required_perms),
+            'function': func,
+            'requires_auth': True,
+            'global_only': True,
+        }
+
+        @wraps(func)
+        def wrapper(request, *args, **kwargs):
+            user = getattr(request, "user", None)
+            if user is None or not getattr(user, "is_authenticated", False):
+                raise mojo.errors.PermissionDeniedException()
+            if not allow_api_keys and not hasattr(user, "is_request_user"):
+                # A group-scoped ApiKey (or any non-User identity) must not
+                # satisfy a platform-global gate.
+                raise mojo.errors.PermissionDeniedException()
+            if not user.has_permission(perm_set):
+                logger.error(f"{getattr(user, 'username', user)} is missing global {perm_set}")
+                raise mojo.errors.PermissionDeniedException()
+            return func(request, *args, **kwargs)
+        return wrapper
+    return decorator
+
+
 def public_endpoint(reason=""):
     """
     Decorator to explicitly mark an endpoint as intentionally public.

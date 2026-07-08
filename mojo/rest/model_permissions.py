@@ -83,7 +83,7 @@ def extract_model_info(model, app_label, verbose=False):
 
 
 @md.GET('models/permissions')
-@md.requires_perms(['view_admin', 'manage_users', 'admin'])
+@md.requires_global_perms('view_admin', 'manage_users', 'admin')
 def rest_model_permissions(request):
     """
     GET /api/models/permissions
@@ -119,7 +119,7 @@ def rest_model_permissions(request):
 
 
 @md.GET('models/permissions/<str:app_label>/<str:model_name>')
-@md.requires_perms(['view_admin', 'manage_users', 'admin'])
+@md.requires_global_perms('view_admin', 'manage_users', 'admin')
 def rest_model_permission_detail(request, app_label, model_name):
     """
     GET /api/models/permissions/{app_label}/{model_name}

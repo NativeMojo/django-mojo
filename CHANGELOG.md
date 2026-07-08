@@ -1,3 +1,36 @@
+## Unreleased
+
+**security** — **Global-effect admin endpoints no longer honor group-scoped permission grants (cross-tenant privilege-escalation fix).**
+`@md.requires_perms(...)` falls back to a caller's group/member permission for
+the group named in the request — correct for group-scoped endpoints, but a
+cross-tenant escalation for endpoints whose effect is platform-wide, because
+`GroupMember` permissions accept arbitrary key names that any group admin can
+assign. A tenant admin could grant a teammate e.g. `manage_jobs` scoped to their
+own group and then, by passing that group id, drive global job/fleet control,
+AWS infrastructure, metrics ACLs, geofence config, incident health, or
+cross-tenant user administration. A new framework decorator
+`@md.requires_global_perms(...)` authorizes on the caller's **global**
+`User.permissions` (or superuser) only — never the group fallback — and is now
+applied to ~45 platform-wide endpoints across the jobs, aws, account, metrics,
+incident, assistant, and geofence (ITEM-017 config plane) surfaces. The same
+permission names are unchanged; only *where* the grant must live changes, so
+deployments that granted admins these perms globally (the intended usage) are
+unaffected — only member/group-scoped grants stop authorizing global actions.
+A group-scoped **ApiKey** is likewise rejected by the global gate (machine
+access to a global endpoint needs a service-account user); the lone
+`allow_api_keys=True` exception is the geoip federation-sync receiver, whose
+intended caller is a fleet-peer key. Genuinely group-scoped endpoints (group/
+member management, per-group webhook secret, ApiKey-federated SMS send) keep the
+group fallback. Also fixed in the same pass: `GET /api/models/permissions`
+(passed a list literal to `requires_perms`, 500-ing before authorizing); the
+group-invite path bypassed `MEMBER_PERMS_PROTECTION` (now routed through
+`set_permissions`); and `MEMBER_PERMS_PROTECTION` is read with `kind="dict"` so
+a DB-backed policy map is honored. Deployment note: any integration that relied
+on a member-scoped grant or an API key to reach these global endpoints must move
+to a global user grant / service account. See
+`docs/django_developer/core/permissions.md` (Global vs Group-Scoped Permission
+Checks).
+
 ## v1.2.42 - July 08, 2026
 
 **feature** — **Geofence config plane: editable system rules, IP allowlist, simulate, and exemption audit.**
