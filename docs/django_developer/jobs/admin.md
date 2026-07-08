@@ -4,6 +4,14 @@ REST endpoints for monitoring and managing the jobs system. All require `view_jo
 
 Base path: `/api/jobs/`
 
+Every endpoint below (health/monitoring, job control, runner management) is
+gated with `@md.requires_global_perms` — job control is platform-wide, so
+only the caller's **global** `User.permissions` (or superuser) satisfy it;
+the usual `requires_perms` group/member fallback does not apply. See
+[Global vs Group-Scoped Permission Checks](../core/permissions.md#global-vs-group-scoped-permission-checks).
+The `job`/`event`/`logs` CRUD endpoints below are the exception — those are
+RestMeta-driven and follow standard model permission rules.
+
 ## Health & Monitoring
 
 ### GET /api/jobs/health

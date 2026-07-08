@@ -496,7 +496,7 @@ The login endpoint applies a layered, bypass-resistant throttle stack. Each tier
 
 ### Admin — releasing a stuck account
 
-When a user is locked out by tier 3, an admin with `manage_users` can clear the counter:
+When a user is locked out by tier 3, an admin with `manage_users` can clear the counter. This endpoint (and `GET /api/auth/manage/throttle`) is gated with `@md.requires_global_perms` — the grant must be global on the User, not a group/member-scoped permission:
 
 ```
 POST /api/auth/manage/clear_rate_limit

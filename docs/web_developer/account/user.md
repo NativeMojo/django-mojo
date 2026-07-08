@@ -358,7 +358,7 @@ Effect: `is_active=True`. Appends a history entry to `disable.history` (FIFO cap
 
 ### Read login throttle status
 
-**GET** `/api/auth/manage/throttle?user_id=42`  (or `?username=alice`) · requires `manage_users`
+**GET** `/api/auth/manage/throttle?user_id=42`  (or `?username=alice`) · requires `manage_users` as a **global** grant (`@md.requires_global_perms` — no group/member fallback)
 
 ```json
 {
@@ -376,7 +376,7 @@ Effect: `is_active=True`. Appends a history entry to `disable.history` (FIFO cap
 
 ### Clear login throttle
 
-**POST** `/api/auth/manage/clear_rate_limit` · requires `manage_users`
+**POST** `/api/auth/manage/clear_rate_limit` · requires `manage_users` as a **global** grant (`@md.requires_global_perms` — no group/member fallback)
 
 ```json
 {"key": "login", "user_id": 42}

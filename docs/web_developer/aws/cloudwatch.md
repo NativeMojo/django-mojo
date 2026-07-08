@@ -10,7 +10,10 @@ Slugs in all responses are **friendly names**, not raw AWS IDs:
 
 Use the `slug` value from the `resources` endpoint when targeting specific instances via the `fetch` endpoint's `slugs` parameter.
 
-**Permission required:** `manage_aws` on all endpoints.
+**Permission required:** `manage_aws` on all endpoints — checked as a
+**global** `User.permissions` grant only (`@md.requires_global_perms`); a
+`manage_aws` permission held only at the group/member level does not
+authorize these endpoints.
 
 ---
 

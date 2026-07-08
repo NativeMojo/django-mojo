@@ -112,3 +112,6 @@ See [Login Events REST Reference](../../web_developer/account/login_events.md) f
 | `GET /api/account/logins/user` | Per-user country/region aggregation |
 
 All endpoints require `manage_users` + `security` + `users` permissions.
+`summary` and `user` are gated with `@md.requires_global_perms` (global grant
+only, no group/member fallback); `logins`/`logins/<pk>` are RestMeta-driven
+and follow normal permission rules.

@@ -178,14 +178,19 @@ This prevents non-admin users from escalating their own access.
 | File management | `GET/POST /api/fileman/manager`, `GET/POST /api/fileman/file` | `files` |
 
 > **Global grants required for platform-wide endpoints.** Job control/status,
-> AWS infrastructure (`/api/aws/*`), metrics permissions, geofence config
+> AWS ops and email admin (`cloudwatch/*`, `s3/bucket`, `email/send`,
+> `email/domain[/<id>/onboard|audit|reconcile]`, `email/mailbox`,
+> `email/template`, `email/incoming`, `email/sent` — these AWS/SES models are
+> platform-global, not per-group), metrics permissions, geofence config
 > (`/api/geo/*`), incident health, and cross-tenant user admin
-> (`/api/auth/manage/*`, device lookup, login-event reads, push send) are gated
-> on the user's **global** permission grant. A permission held only at the
-> group/member level — or an API key — does **not** authorize them (passing a
-> `group` param does not change this). Grant these on the User, not the
-> GroupMember. Group-scoped endpoints (group/member management, per-group
-> webhook secret, SMS send) still accept a group-scoped grant as before.
+> (`/api/auth/manage/*`, device lookup, device location, login-event reads,
+> push send/config-test) are gated on the user's **global** permission grant. A
+> permission held only at the group/member level — **or an API key** — does
+> **not** authorize them (passing a `group` param does not change this, and a
+> group API key cannot substitute a global grant). Grant these on the User, not
+> the GroupMember. Genuinely group-scoped endpoints (group/member management,
+> per-group webhook secret, ApiKey-federated SMS send) still accept a
+> group-scoped grant as before.
 
 ## Secure Settings API (Admin)
 

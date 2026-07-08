@@ -13,6 +13,8 @@ The jobs system provides background task processing with Redis-backed queuing an
 
 Both `view_jobs` and `manage_jobs` grant read access. Write/action endpoints require `manage_jobs` specifically.
 
+> **Global grant required.** Every endpoint below except the `job`/`event`/`logs` CRUD (which follow standard RestMeta permission rules) is gated with `@md.requires_global_perms` — job control is platform-wide, so the permission must be held on the **User** directly. A `view_jobs`/`manage_jobs` grant held only at the group/member level does not authorize them, even if you pass a `group` param.
+
 ---
 
 ## Endpoint Index

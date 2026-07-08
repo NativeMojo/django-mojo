@@ -174,4 +174,10 @@ Users can always see their own metrics. Admins with `metrics` can see anyone's.
 | `/api/metrics/categories` | GET | `check_view_permissions(request, account)` |
 | `/api/metrics/category_slugs` | GET | `check_view_permissions(request, account)` |
 | `/api/metrics/category_delete` | DELETE | `check_write_permissions(request, account)` |
-| `/api/metrics/permissions` | GET/POST/DELETE | `@md.requires_perms("manage_incidents", "metrics", "manage_metrics")` |
+| `/api/metrics/permissions` | GET/POST/DELETE | `@md.requires_global_perms("manage_incidents", "metrics", "manage_metrics")` |
+
+Unlike the account-based checks above, `/api/metrics/permissions` (which
+manages the per-account config every other endpoint reads) is gated with
+`@md.requires_global_perms` — the caller's **global** `User.permissions` (or
+superuser) only, no group/member fallback. See
+[Global vs Group-Scoped Permission Checks](../core/permissions.md#global-vs-group-scoped-permission-checks).

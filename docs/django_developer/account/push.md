@@ -225,6 +225,11 @@ delivery = send_to_device(
 | `GET` | `/api/account/devices/push/stats` | required | Delivery stats for user |
 | `POST` | `/api/account/devices/push/config/<pk>/test` | `manage_push_config` | Test FCM credentials |
 
+`push/send` and `push/config/<pk>/test` are gated with `@md.requires_global_perms`
+— the permission must be a global grant on the User (no group/member fallback).
+The CRUD rows above (`push`, `push/templates`, `push/config`, `push/deliveries`)
+are standard RestMeta endpoints and follow normal model permission rules.
+
 ---
 
 ## See Also

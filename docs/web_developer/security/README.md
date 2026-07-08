@@ -96,7 +96,9 @@ The history shows the full timeline: creation, handler execution, LLM assessment
 
 A single endpoint returns the most recent event for each `system:health:*` category. Use it to render a row of per-subsystem health indicators without making N separate queries.
 
-**Permission:** `view_security` / `security`
+**Permission:** `view_security` / `security` — held as a **global** grant;
+gated with `@md.requires_global_perms`, so a group/member-scoped grant does
+not authorize this endpoint.
 
 ```
 GET /api/incident/health/summary

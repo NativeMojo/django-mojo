@@ -652,7 +652,7 @@ Create a conversation pre-loaded with the full context of any MojoModel instance
 
 ### Endpoint
 
-`POST /api/assistant/context` — requires `view_admin` + the model's own `VIEW_PERMS`.
+`POST /api/assistant/context` — requires `view_admin` + the model's own `VIEW_PERMS`. Like `POST /api/assistant`, this is gated with `@md.requires_global_perms('view_admin', 'assistant')` — the grant must be global on the User, not a group/member-scoped permission.
 
 ```json
 {"model": "incident.Ticket", "pk": 123}

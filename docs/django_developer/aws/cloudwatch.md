@@ -297,7 +297,10 @@ normalize_stat("max")                  # -> "Maximum"
 
 ## REST API
 
-Two endpoints under the `aws` URL prefix, both requiring `manage_aws`:
+Two endpoints under the `aws` URL prefix, both requiring `manage_aws` — gated
+with `@md.requires_global_perms`, so the grant must be on the caller's
+**global** `User.permissions` (no group/member fallback; see
+[Global vs Group-Scoped Permission Checks](../core/permissions.md#global-vs-group-scoped-permission-checks)):
 
 | Method | URL | Description |
 |---|---|---|

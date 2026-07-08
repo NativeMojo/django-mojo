@@ -117,7 +117,10 @@ The body key (`disable` / `reactivate`) IS the action name — the model's
 
 Returns `{count, limit, window, retry_after_seconds}` from the per-account login
 sliding-window in Redis. Pure read — does not modify Redis state. Pairs with
-`POST /api/auth/manage/clear_rate_limit` for the reset operation.
+`POST /api/auth/manage/clear_rate_limit` for the reset operation. Unlike the
+disable/reactivate actions above (RestMeta `SAVE_PERMS`, which allow the usual
+group/member fallback), both throttle endpoints are gated with
+`@md.requires_global_perms` — `manage_users` must be a global grant on the User.
 
 Only `key="login"` is supported in v1. Unsupported keys return 400. Lookup by
 `user_id` or `username`.

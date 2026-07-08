@@ -7,6 +7,7 @@ LLM-powered admin assistant accessed via REST. Send natural language queries abo
 - Feature must be enabled server-side (`LLM_ADMIN_ENABLED = True`)
 - User must have `view_admin` permission to access all endpoints
 - Tool access depends on the user's additional permissions (see [Permission Mapping](#permission-mapping))
+- `POST /api/assistant` and `POST /api/assistant/context` are gated with `@md.requires_global_perms('view_admin', 'assistant')` — the permission must be a **global** grant on the User; a group/member-scoped grant does not authorize these endpoints (individual tool calls were already global-only, since tools check `user.has_permission()` directly)
 
 ## Endpoints
 

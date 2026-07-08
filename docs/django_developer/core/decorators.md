@@ -115,8 +115,30 @@ def on_admin_reset(request):
     ...
 ```
 
+`requires_perms` falls back to the caller's **group/member** permission for
+`request.group` when the global check fails (see `REQUIRES_PERMS_IS_GROUP`).
+Correct for endpoints scoped to that group — but a cross-tenant escalation for
+endpoints whose effect is platform-wide. Use `requires_global_perms` for those.
+
 ### `@md.requires_group_perms(*perms)`
 Like `requires_perms` but forces group-context permission evaluation.
+
+### `@md.requires_global_perms(*perms, allow_api_keys=False)`
+Like `requires_perms` but **without** the group/member fallback — checks the
+caller's global `User.permissions` (or superuser) only. Use this for any
+endpoint whose effect is platform-wide (global settings, fleet/job control,
+cross-tenant data), not confined to `request.group`. Rejects non-`User`
+identities (e.g. an `ApiKey`) by default; pass `allow_api_keys=True` only for
+a federation/machine-ingest endpoint where a key is the intended caller. See
+[permissions.md](permissions.md#global-vs-group-scoped-permission-checks)
+for the full rationale.
+
+```python
+@md.POST('control/clear-queue')
+@md.requires_global_perms("manage_jobs", "jobs")
+def on_clear_queue(request):
+    ...
+```
 
 ### `@md.requires_bearer`
 Validates that a Bearer token is present and valid.

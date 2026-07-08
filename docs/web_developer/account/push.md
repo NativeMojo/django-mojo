@@ -131,7 +131,9 @@ PATCH /api/account/devices/push/42
 
 ## Sending Notifications
 
-> Requires the `send_notifications` permission.
+> Requires the `send_notifications` permission, held as a **global** grant on
+> the User — this endpoint is gated with `@md.requires_global_perms`, so a
+> group/member-scoped grant does not authorize it.
 
 **POST** `/api/account/devices/push/send`
 
@@ -326,7 +328,7 @@ Templates support Python `str.format()` variable substitution.
 
 **POST** `/api/account/devices/push/config/<id>/test`
 
-Test FCM credentials for a config. Optionally provide a real device token to test end-to-end delivery.
+Test FCM credentials for a config. Optionally provide a real device token to test end-to-end delivery. Unlike the config CRUD endpoints above, this action is gated with `@md.requires_global_perms` — `manage_push_config` must be a global grant on the User (no group/member fallback).
 
 ```json
 {

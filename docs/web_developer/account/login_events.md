@@ -4,6 +4,12 @@ Admin-only endpoints for querying login history with geolocation data. Designed 
 
 **Permissions required**: `manage_users` + `security` + `users`
 
+`GET /api/account/logins/summary` and `GET /api/account/logins/user` are
+gated with `@md.requires_global_perms` — a **global** grant on the User is
+required (no group/member fallback). `GET /api/account/logins` and
+`GET /api/account/logins/<id>` are standard RestMeta endpoints and follow
+normal permission rules.
+
 ---
 
 ## List Login Events

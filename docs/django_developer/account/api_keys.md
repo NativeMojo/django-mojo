@@ -19,6 +19,8 @@ Authorization: apikey <raw_token>
 
 From that point forward the request is indistinguishable from a normal group-scoped request — `RestMeta` permission checks, `requires_perms`, and `request.group` filtering all work as-is. This synthetic user is not a request `User`, so any code that touches group membership must be ApiKey-safe: see [`Group.get_member_for_user` / `user_has_permission`](group.md#membership) for the identity guard that makes group permission gates degrade to deny/`None` instead of raising for a non-`User` identity.
 
+**Exception: `@md.requires_global_perms`.** Endpoints gated with this decorator (platform-wide effect — job control, AWS infra, geofence config, etc.) reject an ApiKey identity by default, regardless of its permissions dict — `hasattr(user, "is_request_user")` is `False` for an `ApiKey`, so it never reaches the permission check at all. Pass `allow_api_keys=True` only for an endpoint that is itself a federation/machine-ingest surface. See [permissions.md](../core/permissions.md#global-vs-group-scoped-permission-checks).
+
 ## Permissions
 
 Permissions are stored as a plain JSON dict on the key:
