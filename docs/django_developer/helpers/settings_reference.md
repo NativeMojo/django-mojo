@@ -33,6 +33,17 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 - `API_METRICS`
 - `API_METRICS_GRANULARITY`
 
+### APIKEY
+
+- `APIKEY_PERMS_PROTECTION` — dict, default `{}` (read with `kind="dict"`, so a
+  DB-backed `Setting` JSON string is honored). Maps a permission key → the
+  permission(s) the granter must hold to assign it to an `ApiKey`, gating
+  `ApiKey.set_permissions` on REST write. Empty by default (any group admin with
+  a key-management perm may assign any non-`sys.` key). Mirrors
+  [`MEMBER_PERMS_PROTECTION`](#member); `sys.`-prefixed requirements escalate to
+  a global grant. Stops a group admin from self-minting a key with permissions
+  they aren't entitled to grant.
+
 ### APPLE
 
 - `APPLE_CLIENT_ID`

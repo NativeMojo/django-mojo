@@ -1,5 +1,32 @@
 ## Unreleased
 
+**security** — **A group API key can no longer reach platform-global models (cross-tenant data-exposure fix).**
+An `ApiKey` is a group-scoped credential, but two gaps let a low-trust group
+admin escalate: (1) a key's `permissions` had no assignment gate, so an admin
+could self-mint a key with any permission (e.g. `manage_users`); and (2) the
+model-security layer (`MojoModel._evaluate_permission`) trusted a key's
+self-claimed permission on any `uses_model_security` model that has **no `group`
+foreign key** — there is no group to confine the key to and the list query
+cannot group-filter, so the key read every tenant's rows. Verified end-to-end: a
+group-A key self-claiming `manage_users` read another tenant's user record via
+`GET /api/user`. Fixes: `_evaluate_permission` now **denies an ApiKey by
+default** on a groupless model (opt back in per-model with
+`RestMeta.ALLOW_API_KEY_GLOBAL = True`, default `False`; none do); `Group`'s
+custom view path confines a key to its own group + descendants (list was
+already confined, detail-by-pk now is too); and `ApiKey.set_permissions` /
+`can_change_permission` (mirroring `GroupMember`) gate assignment via a new
+`APIKEY_PERMS_PROTECTION` setting (dict, default `{}`). The exposed set included
+`User`, `GeoLocatedIP`, `UserLoginEvent`, `Job`/`JobEvent`/`JobLog`,
+`ScheduledTask`, bouncer admin models, and `FileRendition`. Legitimate key flows
+are unaffected — group-scoped models (settings, webhook subscriptions, chat,
+files) still work confined to the key's group, and the geoip federation-sync
+receiver (a dedicated `allow_api_keys` endpoint) is untouched. Also hardened: the
+assistant memory tier check no longer 500s on an ApiKey identity.
+**Deployment note:** machine access to platform-global data (e.g. user
+administration) must use a dedicated `allow_api_keys` endpoint or a
+service-account User with a real global grant — not a group API key. See
+`docs/django_developer/account/api_keys.md`.
+
 **security** — **Global-effect admin endpoints no longer honor group-scoped permission grants (cross-tenant privilege-escalation fix).**
 `@md.requires_perms(...)` falls back to a caller's group/member permission for
 the group named in the request — correct for group-scoped endpoints, but a

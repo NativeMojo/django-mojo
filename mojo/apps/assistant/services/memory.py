@@ -143,7 +143,7 @@ def _get_entries(adapter, redis_key):
 
 def _can_read_tier(tier, user, group=None):
     """Check if user can read a memory tier."""
-    if user.is_superuser:
+    if getattr(user, "is_superuser", False):
         return True
     if tier == "global":
         return user.has_permission("assistant")
@@ -160,7 +160,7 @@ def _can_read_tier(tier, user, group=None):
 
 def _can_write_tier(tier, user, group=None):
     """Check if user can write to a memory tier."""
-    if user.is_superuser:
+    if getattr(user, "is_superuser", False):
         return True
     if tier == "global":
         return user.has_permission("assistant")

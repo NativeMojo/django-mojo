@@ -83,6 +83,16 @@ intended caller *is* a fleet-peer key: decorate it
 `@md.requires_global_perms("perm", allow_api_keys=True)` (e.g. the geoip sync
 receiver). The group/member fallback is still never consulted.
 
+The same principle applies at the **model-security layer**, not just the
+decorator: a `uses_model_security` model with **no `group` foreign key** is
+platform-global, so `_evaluate_permission` **denies an ApiKey by default** on it
+(there is no group to confine the key to). A model may opt back in with
+`RestMeta.ALLOW_API_KEY_GLOBAL = True` (default `False`; none do initially).
+Without this, a key self-claiming `manage_users` could read every tenant's
+`User` rows. A key's own `permissions` are additionally gated on assignment by
+`APIKEY_PERMS_PROTECTION` (see [API Keys](../account/api_keys.md)). Net: an
+ApiKey can only ever reach **group-owned** data, confined to its own group.
+
 The security registry records `global_only: True` for these endpoints, so audit
 tooling can tell them apart.
 

@@ -286,6 +286,21 @@ class MojoModel:
                 status=403,
             )
         elif hasattr(request, 'api_key') and request.api_key:
+            # Reaching this branch means the request is NOT confined to a group
+            # (a groupless model, or a null-group instance of a group-FK model).
+            # A group-scoped ApiKey must not get unconfined/cross-tenant access:
+            # on_rest_list cannot group-filter a groupless model, so a
+            # self-claimed permission would read every tenant's rows. Deny by
+            # default; a model may opt in via RestMeta.ALLOW_API_KEY_GLOBAL
+            # (parallel to the requires_global_perms decorator's allow_api_keys).
+            # Group-scoped models take the Branch above (request.group +
+            # hasattr(cls,"group")) and are unaffected.
+            if not cls.get_rest_meta_prop("ALLOW_API_KEY_GLOBAL", False):
+                return False, objict.objict(
+                    branch="api_key.groupless_denied",
+                    event_type="user_permission_denied",
+                    status=403,
+                )
             allowed = request.api_key.has_permission(perms)
             if allowed:
                 return True, None

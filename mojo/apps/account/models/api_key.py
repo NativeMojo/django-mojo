@@ -4,6 +4,14 @@ from django.db import models
 from mojo.models import MojoModel
 from mojo.models.secrets import MojoSecrets
 from mojo.helpers import crypto, dates
+from mojo.helpers.settings import settings
+from mojo import errors as merrors
+
+
+def _apikey_perms_protection():
+    # kind="dict" so a DB-backed Setting (stored as a JSON string) parses into a
+    # dict — otherwise `perm in <str>` would silently degrade to substring matching.
+    return settings.get("APIKEY_PERMS_PROTECTION", {}, kind="dict") or {}
 
 
 class ApiKey(MojoSecrets, MojoModel):
@@ -120,6 +128,54 @@ class ApiKey(MojoSecrets, MojoModel):
         if perm_key in ["all", "authenticated", "member"]:
             return True
         return bool(self._get_permissions_dict().get(perm_key, False))
+
+    def can_change_permission(self, perm, value, request):
+        """Whether `request.user` may assign `perm` to this key.
+
+        Mirrors GroupMember.can_change_permission: a global manage_groups/
+        manage_users holder may assign anything; otherwise the requester must be
+        a member of this key's group and hold either the perm required by
+        APIKEY_PERMS_PROTECTION (if the perm is listed) or a key-management perm.
+        Prevents a group admin from self-minting a key with arbitrary powerful
+        permissions.
+        """
+        user = getattr(request, "user", None)
+        if user is None:
+            return False
+        if user.has_permission(["manage_groups", "manage_users"]):
+            return True
+        # On REST create the group FK is auto-stamped AFTER the field loop, so
+        # self.group may still be None while set_permissions runs — fall back to
+        # the request's group (set by the dispatcher from the group param).
+        group = self.group if self.group_id else getattr(request, "group", None)
+        if group is None:
+            return False
+        req_member = group.get_member_for_user(user, check_parents=True)
+        if req_member is not None:
+            protection = _apikey_perms_protection()
+            if perm in protection:
+                return req_member.has_permission(protection[perm])
+            return req_member.has_permission(
+                ["manage_group", "manage_members", "manage_users", "manage_groups"])
+        return False
+
+    def set_permissions(self, value):
+        """REST setter for `permissions` — gates each key through
+        can_change_permission so a group admin cannot assign perms they aren't
+        entitled to grant. (create_for_group assigns `permissions` directly and
+        is not affected — it is a trusted internal call.)"""
+        if not isinstance(value, dict):
+            return
+        request = self.active_request
+        for perm, perm_value in value.items():
+            if not self.can_change_permission(perm, perm_value, request):
+                raise merrors.PermissionDeniedException()
+            if not isinstance(self.permissions, dict):
+                self.permissions = {}
+            if bool(perm_value):
+                self.permissions[perm] = perm_value
+            else:
+                self.permissions.pop(perm, None)
 
     def is_group_allowed(self, group):
         """

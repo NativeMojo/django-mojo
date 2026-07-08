@@ -562,6 +562,13 @@ class Group(MojoSecrets, MojoModel):
         )
 
     def check_view_permission(self, perms, request):
+        # A group-scoped ApiKey may view ONLY its own group (and descendants) —
+        # it must not satisfy the global perm grant below, or a key self-claiming
+        # `groups` could read any tenant's group by pk. (The list path is already
+        # confined via ApiKey.get_groups in on_rest_handle_list.)
+        api_key = getattr(request, "api_key", None)
+        if api_key is not None:
+            return api_key.is_group_allowed(self)
         # check if the user is a member of the group
         if request.user.has_permission(perms):
             return True
