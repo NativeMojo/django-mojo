@@ -101,14 +101,27 @@ is UNPLANNED and /build MUST refuse it. Delete this comment when the plan is com
 
 ## Notes
 
-- **VERIFIED end-to-end (2026-07-08).** A throwaway probe (group-A `ApiKey` with
-  `{"manage_users": true}`, `Authorization: apikey <token>`, `GET /api/user`)
-  returned **HTTP 200 with users the key's group does not own** — cross-tenant
-  read confirmed through the real middleware → dispatcher → `on_rest_request` →
-  `_evaluate_permission` stack (not a mock). `/api/user`
-  (`uses_model_security(User)`, groupless) was NOT touched by ITEM-018, so it is
-  live. This is the reproduction to convert into a regression (assert 403 after
-  the fix — do NOT keep a bug-confirmation test).
+- **VERIFIED end-to-end with a control (2026-07-08).** Two group-A `ApiKey`s,
+  identical except for permissions: key WITH `{"manage_users": true}` vs control
+  WITH only `{"view_data": true}`. Against `/api/user`
+  (`uses_model_security(User)`, groupless, NOT touched by ITEM-018), through the
+  real middleware → dispatcher → `on_rest_request` stack:
+  - WITH `manage_users`: **HTTP 200**, response body contained a victim user's
+    real `email`/`username` (a user with no relationship to the key's group).
+  - Control (no `manage_users`): **HTTP 403**.
+  - Targeted `GET /api/user?email=<victim>`: WITH → returns the victim; control
+    → 403.
+  So it is real cross-tenant data exposure, gated precisely by the key's
+  self-claimed permission — not an empty-list-on-no-perm artifact (the
+  no-perm control is denied outright). An attacker can also target any specific
+  account via the `?email=`/field filters, independent of pagination. This is
+  the reproduction to convert into a regression (assert 403 after the fix — do
+  NOT keep a bug-confirmation test).
+  - Note: this testproject denies the no-perm list with 403
+    (`MOJO_REST_LIST_PERM_DENY` path, `mojo/models/rest.py:495-503`); a
+    deployment with that setting off returns an empty 200 there instead
+    (`rest.py:504` `.none()`) — but that changes only the *no-permission* case,
+    not the WITH-permission exposure proven above.
 - **Why the "ApiKey is group-scoped" design doesn't catch this:** the model's
   only system-permission guard is the `sys.` prefix (`api_key.py:118-119`) —
   real admin perms (`manage_users`, `manage_aws`, `security`) are not
