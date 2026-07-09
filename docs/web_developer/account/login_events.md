@@ -238,7 +238,14 @@ These metrics are recorded automatically on each login and available via the met
 | `login:new_country` | `logins` | Count of first-time-country logins |
 | `login:new_region` | `logins` | Count of first-time-region logins |
 
-Query these via `GET /api/metrics/query?slug=login:country:US&granularity=days&range=30d`.
+Query these via the metrics API — e.g. a daily series for a date range:
+
+```
+GET /api/metrics/fetch?slug=login:country:US&granularity=days&dr_start=2026-06-01&dr_end=2026-06-30&with_labels=true
+```
+
+See [Metrics](../metrics/metrics.md) for the full parameter reference
+(multiple slugs, categories, accounts, `with_delta` for KPI tiles).
 
 ---
 
