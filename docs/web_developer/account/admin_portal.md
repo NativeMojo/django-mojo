@@ -218,7 +218,9 @@ The secure settings API is intended for admin portals and configuration consoles
 Enforcement-bearing keys registered with a write validator (all `GEOFENCE_*`
 keys, plus app-registered keys) reject malformed values with a readable `400`
 and are global-only — a group-scoped row for such a key is refused with
-`"...is a global-only setting"`. Other keys accept arbitrary values as before.
+`"...is a global-only setting"`, and `is_secret: true` is refused too (a
+validated setting cannot be masked). Other keys accept arbitrary values as
+before.
 
 ### Create a global setting
 

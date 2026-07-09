@@ -7,7 +7,9 @@ only rules/allowlist/strict): `GEOFENCE_ENABLED`, `GEOFENCE_FAIL_CLOSED`,
 (non-negative integer), `GEOFENCE_FAIL_CLOSED_SCOPES` (list of non-empty
 strings) — rejected with a readable 400 via `POST /api/settings` AND raised on
 `Setting.set()`/shell writes (validation now also runs in `save()`, closing
-the programmatic back door). The per-key mechanism is a public registry —
+the programmatic back door). Registered keys also refuse `is_secret` rows —
+the secret flag previously skipped validation entirely AND masked the value
+(`******`) from other admins. The per-key mechanism is a public registry —
 `Setting.register_validator(key, func, global_only=True)` — so downstream
 apps can protect their own enforcement-bearing keys (e.g. mverify's
 `PAYMENTS_GEOFENCE_RULES`). Posture-key writes now also invalidate the

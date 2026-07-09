@@ -102,9 +102,11 @@ class Setting(MojoSecrets, MojoModel):
 
         func(key, parsed_value) raises ValueError on a bad value; parsed_value
         is the JSON-decoded value (a registered key's value must be valid
-        JSON). global_only keys reject group-scoped rows. Downstream apps
-        register their own enforcement-bearing keys at import time (e.g.
-        mverify's PAYMENTS_GEOFENCE_RULES).
+        JSON). global_only keys reject group-scoped rows. Registered keys also
+        reject is_secret rows (validators need plaintext; a masked value would
+        hide enforcement config). Downstream apps register their own
+        enforcement-bearing keys at import time (e.g. mverify's
+        PAYMENTS_GEOFENCE_RULES).
         """
         cls.VALIDATORS[key] = {"func": func, "global_only": global_only}
 
@@ -131,7 +133,11 @@ class Setting(MojoSecrets, MojoModel):
             raise merrors.ValueException(
                 f"{self.key} is a global-only setting; group-scoped rows are not supported")
         if self.is_secret:
-            return
+            # A validated key can never be secret: validators need the
+            # plaintext, and is_secret would both skip validation and mask the
+            # enforcement value ("******") from every other admin.
+            raise merrors.ValueException(
+                f"{self.key} is a validated setting and cannot be secret")
         parsed = self.value
         if isinstance(parsed, str):
             if not parsed.strip():

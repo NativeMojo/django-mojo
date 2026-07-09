@@ -14,12 +14,15 @@ def _django_ready():
 def _warn_coercion(name, value, kind, default):
     """A present-but-uncoercible value degrades to the declared default —
     loudly, so 'someone wrote garbage' is distinguishable from 'unset'.
+    The raw value is deliberately NOT logged: DB-backed reads return decrypted
+    plaintext for is_secret rows, and a log line must never leak one.
     logit is imported lazily: this module loads before almost everything."""
     from mojo.helpers import logit
     shown = None if default is UNKNOWN else default
     logit.warning(
         "settings",
-        f"setting {name!r}: cannot coerce {value!r} to {kind}; using default {shown!r}")
+        f"setting {name!r}: cannot coerce {type(value).__name__} value to "
+        f"{kind}; using default {shown!r}")
 
 def load_settings_profile(context):
     from mojo.helpers import modules, paths

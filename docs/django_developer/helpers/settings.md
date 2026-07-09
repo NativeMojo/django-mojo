@@ -110,7 +110,9 @@ Setting.register_validator("MYAPP_RULES", _validate_my_rules)  # global_only=Tru
 A registered key is validated on **every** write path — the generic
 `POST /api/settings` REST (readable `400`) and `Setting.set()` / direct
 `.save()` (raises `ValueException`). The value must be valid JSON;
-`global_only=True` (the default) also rejects group-scoped rows. All
+`global_only=True` (the default) also rejects group-scoped rows, and
+registered keys refuse `is_secret` rows (validators need the plaintext, and a
+masked value would hide enforcement config from admins). All
 `GEOFENCE_*` keys are registered this way (see
 [Geofencing](../account/geofence.md)); downstream apps register their own keys
 at import time (e.g. mverify's `PAYMENTS_GEOFENCE_RULES`).

@@ -115,8 +115,9 @@ it off (the default) behavior is bit-for-bit unchanged.
 
 **Global**: `GEOFENCE_STRICT_POSTURE` (bool Setting, default `False`,
 global-only — group-scoped rows are rejected 400; writes via `/api/settings`
-must be a JSON boolean, anything else is rejected because `kind="bool"` would
-coerce garbage strings truthy).
+must be a JSON boolean, anything else is rejected at write time so a posture
+flag can never be ambiguous — see *Settings Reference* below for the full
+write-validation contract).
 
 **Per-group override**: `Group.metadata["geofence_strict"]` — tri-state:
 absent/`null` inherits the global, `true`/`false` overrides in either

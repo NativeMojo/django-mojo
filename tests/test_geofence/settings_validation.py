@@ -125,6 +125,41 @@ def test_backdoor_group_scoped_rejected(opts):
         opts.client.logout()
 
 
+@th.django_unit_test("settings: is_secret cannot bypass validation on registered keys")
+def test_secret_flag_rejected_for_registered_keys(opts):
+    from mojo import errors as merrors
+    from mojo.apps.account.models.setting import Setting
+    _login(opts)
+    try:
+        # The bypass vector: is_secret used to short-circuit validation, so
+        # garbage could persist (masked as ****** to boot).
+        resp = opts.client.post(
+            "/api/settings",
+            {"key": "GEOFENCE_ENABLED", "value": "garbage", "is_secret": True})
+        assert resp.status_code == 400, (
+            f"is_secret garbage write to a registered key must 400, "
+            f"got {resp.status_code}: {opts.client.last_response.body}"
+        )
+        assert _row("GEOFENCE_ENABLED") is None, \
+            "is_secret bypass write must not persist a row"
+        # Even a VALID value can't be secret on a registered key.
+        resp = opts.client.post(
+            "/api/settings",
+            {"key": "GEOFENCE_ENABLED", "value": "true", "is_secret": True})
+        assert resp.status_code == 400, \
+            f"registered keys must reject is_secret entirely, got {resp.status_code}"
+
+        raised = False
+        try:
+            Setting.set("GEOFENCE_FAIL_CLOSED", False, is_secret=True)
+        except merrors.ValueException:
+            raised = True
+        assert raised, "Setting.set(is_secret=True) on a registered key must raise"
+    finally:
+        _cleanup_settings()
+        opts.client.logout()
+
+
 @th.django_unit_test("settings: shell/programmatic writes are validated too (save-level hook)")
 def test_shell_write_validated(opts):
     from mojo import errors as merrors
