@@ -156,3 +156,33 @@ grants plus superusers (who hold every permission implicitly).
 (`capped: true` when truncated). The response deliberately carries
 id/username only — `email`/`display_name` are "users"-category data and are
 not exposed through a geofence-only permission.
+
+---
+
+## Metrics
+
+Geofence enforcement records aggregate counters (category `geofence`,
+counted for **every** occurrence — the hourly event dedupe does not apply to
+metrics):
+
+| Slug | Counts | Accounts |
+|---|---|---|
+| `geofence:blocks` | every blocked request | `global` + `group-<id>` |
+| `geofence:blocks:country:{CC}` | blocks by country | `global` only |
+| `geofence:blocks:region:{ISO-3166-2}` | blocks by region | `global` only |
+| `geofence:exempt` | allowlisted passes that would have blocked | `global` + `group-<id>` |
+
+When the blocked/exempted request carries a group (`group` / `group_uuid`
+param — e.g. white-label auth pages), the base slugs are also recorded under
+that group's metrics account, so a tenant dashboard can chart its own
+geofence activity:
+
+```
+GET /api/metrics/fetch?slug=geofence:blocks&account=group-42&granularity=days&with_labels=true
+```
+
+Reading a `group-<id>` account requires `view_metrics`/`metrics` — a
+group-member grant is enough (see [Metrics](../metrics/metrics.md)). The
+country/region breakdown is deliberately global-only (a per-group geographic
+cross-product would explode the Redis key space); chart those from the
+`global` account, which needs a global metrics grant.

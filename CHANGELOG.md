@@ -1,3 +1,17 @@
+## Unreleased
+
+**metrics** — **Geofence evidence metrics are now recorded per-tenant (`account=group-<id>`) alongside global.**
+When a geofenced request carries a group (`group`/`group_uuid` param — e.g.
+white-label auth pages), the base evidence slugs `geofence:blocks` and
+`geofence:exempt` are dual-written to that group's metrics account
+(`group-<id>`, the platform's per-tenant convention) in addition to `global`,
+so consumer portals can chart per-tenant geofence activity through the
+existing `GET /api/metrics/fetch` group-account permission gate
+(`view_metrics`/`metrics`, member grant suffices). No-group requests record
+exactly as before, and the per-country/per-region breakdown slugs stay
+global-only — a per-group geographic cross-product would explode the Redis
+key space (monthly/yearly counter keys never expire). (ITEM-020)
+
 ## v1.2.44 - July 08, 2026
 
 **security** — **Dependency floors raised to patched versions (fleet-wide vulnerability remediation).**

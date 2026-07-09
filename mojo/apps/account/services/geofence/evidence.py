@@ -41,7 +41,7 @@ def report_block(request, decision, scope=None):
 def _report_block(request, decision, scope):
     blocked = decision.allowed is False
     if blocked:
-        _record_block_metrics(decision)
+        _record_block_metrics(decision, getattr(request, "group", None))
     if not _dedupe_wins(decision.ip, decision.reason):
         return
     from mojo.apps.incident import reporter
@@ -67,6 +67,10 @@ def report_exempt(request, decision, scope=None):
     try:
         # every occurrence counts, deduped or not
         metrics.record("geofence:exempt", category="geofence")
+        group = getattr(request, "group", None)
+        if group is not None:
+            metrics.record("geofence:exempt", category="geofence",
+                           account=f"group-{group.pk}")
         if not _dedupe_wins(decision.ip, decision.reason):
             return
         from mojo.apps.incident import reporter
@@ -151,7 +155,7 @@ def _dedupe_wins(ip, reason):
         return True
 
 
-def _record_block_metrics(decision):
+def _record_block_metrics(decision, group=None):
     """Aggregate counters — recorded for EVERY block, including deduped ones.
     Mirrors the firewall:blocks pattern (geolocated_ip.block)."""
     try:
@@ -162,5 +166,9 @@ def _record_block_metrics(decision):
         rc = decision.get("region_code")  # ISO 3166-2, already country-prefixed (US-WA)
         if rc:
             metrics.record(f"geofence:blocks:region:{rc}", category="geofence")
+        if group is not None:
+            # base slug only — per-group country/region would cross-product keys
+            metrics.record("geofence:blocks", category="geofence",
+                           account=f"group-{group.pk}")
     except Exception as exc:
         logit.error("geofence", f"block metrics failed: {exc}")

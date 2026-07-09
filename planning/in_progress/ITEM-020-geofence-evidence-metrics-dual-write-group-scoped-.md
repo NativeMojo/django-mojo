@@ -287,6 +287,11 @@ None.
 
 ## Notes
 
+- **Baseline (2026-07-08, pre-edit)**: `bin/run_tests --agent` GREEN —
+  total 2330 / passed 2274 / failed 0 / skipped 56 (opt-in `test_incident` 243
+  + `test_security` 82 skipped as usual; smaller in-module skips are
+  environmental). No pre-existing failures; anything red after this build is
+  attributable to it.
 - Consumer rider: mverify_portal ITEM-014 (scoped) ships its charts with
   `account:'global'` and a note to flip/augment to the active group's
   account once this lands — a one-line widget change portal-side, plus an

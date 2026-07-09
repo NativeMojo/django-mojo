@@ -27,7 +27,7 @@ def _events(category, **filters):
     return Event.objects.filter(category=category, **filters)
 
 
-def _login_attempt(opts, **header_kwargs):
+def _login_attempt(opts, extra=None, **header_kwargs):
     # Clear ip AND muid login buckets (mirrors testit client.login()) — this
     # module issues many direct login posts, and the muid tier allows only 10
     # per 300s per _muid session cookie.
@@ -36,18 +36,24 @@ def _login_attempt(opts, **header_kwargs):
     muid = opts.client.session.cookies.get("_muid")
     if muid:
         clear_rate_limits(key="login", muid=muid)
-    return opts.client.post(
-        "/api/auth/login",
-        {"username": opts.test_email, "password": opts.test_password},
-        headers=headers(**header_kwargs))
+    payload = {"username": opts.test_email, "password": opts.test_password}
+    if extra:
+        payload.update(extra)
+    return opts.client.post("/api/auth/login", payload,
+                            headers=headers(**header_kwargs))
 
 
 def _blocks_metric():
     """Current-hour geofence:blocks counter via the metrics reader."""
+    return _metric_value("geofence:blocks")
+
+
+def _metric_value(slug, account="global", granularity="hours"):
+    """Current-bucket counter for one slug on one account via the metrics reader."""
     from mojo.apps import metrics
-    resp = metrics.fetch_values(["geofence:blocks"], granularity="hours")
+    resp = metrics.fetch_values([slug], granularity=granularity, account=account)
     try:
-        return int((resp.get("data") or {}).get("geofence:blocks") or 0)
+        return int((resp.get("data") or {}).get(slug) or 0)
     except (TypeError, ValueError):
         return 0
 
@@ -214,6 +220,69 @@ def test_block_metrics_count_deduped(opts):
     after = _blocks_metric()
     assert after >= before + 2, \
         f"geofence:blocks must count BOTH blocks (deduped too): before={before} after={after}"
+
+
+@th.django_unit_test("evidence: group-scoped block dual-writes the group-<id> base metric")
+def test_block_metrics_group_account(opts):
+    from mojo.apps.account.models import Group
+    from mojo.apps.account.services.geofence import cache as gf_cache
+    _clear_evt("region_not_allowed")
+    grp = Group.objects.create(
+        name=f"Geofence Evidence {_uuid.uuid4().hex[:8]}", is_active=True)
+    grp.get_uuid()  # Group.uuid is lazily assigned — populate it
+    try:
+        # fresh per-run group → its metrics account starts empty, exact asserts
+        # are safe; days granularity dodges hour-boundary splits.
+        account = f"group-{grp.pk}"
+        rule = {"country": {"in": ["US"]}, "region": {"in": ["US-FL"]}}
+        global_before = _blocks_metric()
+
+        resp = _login_attempt(opts, extra={"group_uuid": str(grp.uuid)},
+                              geo=GEO_US, system_rules=rule)
+        assert resp.status_code == 403, \
+            f"group-scoped block must 403, got {resp.status_code}: {opts.client.last_response.body}"
+        assert _metric_value("geofence:blocks", account=account, granularity="days") == 1, \
+            "a block with request.group must dual-write geofence:blocks to the group account"
+        assert _blocks_metric() >= global_before + 1, \
+            "global geofence:blocks must still be recorded for a group-scoped block"
+        assert _metric_value("geofence:blocks:country:US", account=account, granularity="days") == 0, \
+            "country-suffixed slugs must stay global-only (cardinality guard)"
+
+        resp = _login_attempt(opts, geo=GEO_US, system_rules=rule)  # no group
+        assert resp.status_code == 403, \
+            f"no-group block must still 403, got {resp.status_code}"
+        assert _metric_value("geofence:blocks", account=account, granularity="days") == 1, \
+            "a block WITHOUT request.group must not touch the group account"
+    finally:
+        gf_cache.invalidate_group(grp.pk)
+        grp.delete()
+
+
+@th.django_unit_test("evidence: group-scoped exemption dual-writes the group-<id> exempt metric")
+def test_exempt_metrics_group_account(opts):
+    from mojo.apps.account.models import Group
+    from mojo.apps.account.services.geofence import cache as gf_cache
+    _clear_evt("ip_allowlisted")
+    grp = Group.objects.create(
+        name=f"Geofence Evidence {_uuid.uuid4().hex[:8]}", is_active=True)
+    grp.get_uuid()  # Group.uuid is lazily assigned — populate it
+    try:
+        account = f"group-{grp.pk}"
+        allow = [f"{IP}/32"]
+        rule = {"country": {"in": ["US"]}}
+        global_before = _metric_value("geofence:exempt")
+
+        resp = _login_attempt(opts, extra={"group_uuid": str(grp.uuid)},
+                              geo=GEO_RU, system_rules=rule, allowlist=allow)
+        assert resp.status_code == 200, \
+            f"allowlisted group-scoped login must succeed, got {resp.status_code}: {opts.client.last_response.body}"
+        assert _metric_value("geofence:exempt", account=account, granularity="days") == 1, \
+            "an exemption with request.group must dual-write geofence:exempt to the group account"
+        assert _metric_value("geofence:exempt") >= global_before + 1, \
+            "global geofence:exempt must still be recorded for a group-scoped exemption"
+    finally:
+        gf_cache.invalidate_group(grp.pk)
+        grp.delete()
 
 
 @th.django_unit_test("evidence: expired whitelist stops suppressing firewall blocks")
