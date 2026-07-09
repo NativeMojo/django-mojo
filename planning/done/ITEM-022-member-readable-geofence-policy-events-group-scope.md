@@ -395,3 +395,17 @@ filed in that repo, not here.)
   that item is about WHERE metrics are recorded; this item is about WHO can
   read policy/events for their own group. Both are needed for a fully
   group-scoped experience.
+- **Post-build review results (2026-07-09)**: test-runner GREEN (2361/2305/0
+  failed — baseline +7, exactly the new module). security-review PASSED (no
+  critical/warning findings; INFO follow-ups applied: unknown-group_uuid
+  anti-enumeration regression test + parent-grant doc precision; the numeric
+  `group=` dispatcher existence-oracle INFO is pre-existing framework-wide
+  behavior, adjacent to the `dispatcher-group-param-is-active-asymmetry`
+  inbox item). docs-updater: README index descriptions + security README
+  group-scoping note.
+
+## Resolution
+- closed: 2026-07-09
+- branch: main
+- files changed: CHANGELOG.md,docs/django_developer/account/README.md,docs/django_developer/account/geofence.md,docs/django_developer/account/geoip.md,docs/django_developer/core/permissions.md,docs/django_developer/helpers/settings_reference.md,docs/django_developer/logging/incidents.md,docs/django_developer/security/README.md,docs/django_developer/testit/Overview.md,docs/web_developer/account/README.md,docs/web_developer/account/geofence.md,docs/web_developer/account/geoip.md,docs/web_developer/account/login_events.md,docs/web_developer/security/README.md,memory.md,mojo/__init__.py,mojo/apps/account/models/group.py,mojo/apps/account/models/setting.py,mojo/apps/account/rest/geofence.py,mojo/apps/account/services/geofence/engine.py,mojo/apps/account/services/geofence/evidence.py,mojo/apps/incident/asyncjobs.py,mojo/apps/incident/cronjobs.py,mojo/apps/incident/migrations/0031_alter_ipset_source.py,mojo/apps/incident/models/ipset.py,mojo/helpers/geoip/detection.py,mojo/helpers/geoip/threat_intel.py,mojo/rest/info.py,planning/.next_id,planning/done/ITEM-020-geofence-evidence-metrics-dual-write-group-scoped-.md,planning/done/ITEM-021-geofence-hardening-opt-in-strict-compliance-enforc.md,planning/in_progress/ITEM-022-member-readable-geofence-policy-events-group-scope.md,planning/inbox/dispatcher-group-param-is-active-asymmetry.md,planning/inbox/geofence-hardening.md,pyproject.toml,tests/test_geofence/_helpers.py,tests/test_geofence/evidence_plane.py,tests/test_geofence/member_visibility.py,tests/test_geofence/strict_posture.py,tests/test_geofence/threat_cache.py,uv.lock
+- tests added: tests/test_geofence/member_visibility.py — test_policy_member_own_group (narrow payload, anti-leak key list, strict tri-state), test_policy_cross_tenant_denied (A→B + B→A 403, unknown group_uuid 403 anti-enumeration), test_policy_no_grant_denied (grantless member, member without group param, global view_geofence rejected), test_policy_group_required (global holder without group param → 400), test_policy_global_grant_ok (global view_security reads A+B, same narrow shape), test_config_plane_still_global_only (member grant still 403 on geo/rules), test_events_member_scoped (member feed scoped to own group with per-row group_id check + groupless exclusion; global narrowed by group param; grantless denied)
