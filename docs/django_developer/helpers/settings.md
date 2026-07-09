@@ -63,6 +63,58 @@ Then access via:
 settings.get("MY_APP_API_KEY", "")
 ```
 
+## `kind=` Coercion
+
+`settings.get(name, default, kind=...)` coerces the resolved value (`"int"`,
+`"float"`, `"bool"`, `"dict"`, `"list"`):
+
+```python
+enabled = settings.get("MY_FLAG", False, kind="bool")
+scopes = settings.get("MY_SCOPES", [], kind="list")   # JSON list or "a, b" CSV
+rules = settings.get("MY_RULES", {}, kind="dict")     # JSON object
+```
+
+**A present-but-uncoercible value degrades to the DECLARED default and logs a
+`settings` warning** (`logit.warning("settings", ...)`) — garbage is treated as
+*unset-but-loud*, never silently absorbed:
+
+- An unrecognized `bool` string (not one of `true/1/yes/on/y` /
+  `false/0/no/off/n/""`) returns the declared default — it does **not**
+  truthy-coerce to `True` (the old behavior failed open for allow-flavored
+  flags).
+- An unparsable `dict` returns the declared default (or `{}`).
+- A bracket-wrapped but unparsable `list` (e.g. `'["payments",]'`) returns the
+  declared default — it is **not** comma-split into nonsense entries. Plain
+  comma strings (`"a, b"`) still split.
+- Garbage `int`/`float` returns the declared default.
+
+Because the default is what a garbage value degrades to, pass the same default
+at every read site of a key (the framework's geofence reads already do).
+
+## Write-Time Validation (Registered Keys)
+
+Enforcement-bearing DB settings should be **validated at write time** so
+garbage can never persist. Register a validator on the `Setting` model:
+
+```python
+from mojo.apps.account.models.setting import Setting
+
+def _validate_my_rules(key, parsed):
+    # parsed is the JSON-decoded value; raise ValueError on a bad one
+    if not isinstance(parsed, dict):
+        raise ValueError(f"{key} must be a JSON object")
+
+Setting.register_validator("MYAPP_RULES", _validate_my_rules)  # global_only=True
+```
+
+A registered key is validated on **every** write path — the generic
+`POST /api/settings` REST (readable `400`) and `Setting.set()` / direct
+`.save()` (raises `ValueException`). The value must be valid JSON;
+`global_only=True` (the default) also rejects group-scoped rows. All
+`GEOFENCE_*` keys are registered this way (see
+[Geofencing](../account/geofence.md)); downstream apps register their own keys
+at import time (e.g. mverify's `PAYMENTS_GEOFENCE_RULES`).
+
 ## Notes
 
 - Always use `settings.get()` rather than importing directly from `django.conf` — it provides defaults and avoids `AttributeError` on missing keys.

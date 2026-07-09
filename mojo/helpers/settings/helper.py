@@ -10,6 +10,17 @@ def _django_ready():
     except Exception:
         return False
 
+
+def _warn_coercion(name, value, kind, default):
+    """A present-but-uncoercible value degrades to the declared default —
+    loudly, so 'someone wrote garbage' is distinguishable from 'unset'.
+    logit is imported lazily: this module loads before almost everything."""
+    from mojo.helpers import logit
+    shown = None if default is UNKNOWN else default
+    logit.warning(
+        "settings",
+        f"setting {name!r}: cannot coerce {value!r} to {kind}; using default {shown!r}")
+
 def load_settings_profile(context):
     from mojo.helpers import modules, paths
     # Set default profile
@@ -66,7 +77,7 @@ class SettingsHelper:
         self._app_cache[key] = SettingsHelper(self.get(key, {}), app_defaults)
         return self._app_cache[key]
 
-    def _convert_value(self, value, kind, default=UNKNOWN):
+    def _convert_value(self, value, kind, default=UNKNOWN, name=None):
         if not kind:
             return value
 
@@ -74,12 +85,14 @@ class SettingsHelper:
             try:
                 return int(value)
             except (TypeError, ValueError):
+                _warn_coercion(name, value, kind, default)
                 return int(default) if default is not UNKNOWN else 0
 
         if kind == "float":
             try:
                 return float(value)
             except (TypeError, ValueError):
+                _warn_coercion(name, value, kind, default)
                 return float(default) if default is not UNKNOWN else 0.0
 
         if kind == "bool":
@@ -91,15 +104,26 @@ class SettingsHelper:
                     return True
                 if normalized in ["false", "0", "no", "off", "n", ""]:
                     return False
+                # An unrecognized string is garbage, not truthy — degrade to
+                # the DECLARED default (unset-but-loud). bool(value) here
+                # silently failed OPEN for allow-flavored flags.
+                _warn_coercion(name, value, kind, default)
+                return bool(default) if default is not UNKNOWN else False
             return bool(value)
 
         if kind == "dict":
             if isinstance(value, dict):
                 return value
             if isinstance(value, str):
-                parsed = objict.from_json(value, ignore_errors=True)
+                # No ignore_errors: it swallows parse errors by returning an
+                # EMPTY objict, indistinguishable from a legit "{}".
+                try:
+                    parsed = objict.from_json(value)
+                except Exception:
+                    parsed = None
                 if isinstance(parsed, dict):
                     return parsed
+            _warn_coercion(name, value, kind, default)
             if isinstance(default, dict):
                 return default
             return {}
@@ -109,10 +133,18 @@ class SettingsHelper:
                 return value
             if isinstance(value, str):
                 if value.startswith("[") and value.endswith("]"):
-                    parsed = objict.from_json(value, ignore_errors=True)
+                    try:
+                        parsed = objict.from_json(value)
+                    except Exception:
+                        parsed = None
                     if isinstance(parsed, list):
                         return parsed
+                    # Bracket-wrapped but unparsable: comma-splitting would
+                    # manufacture nonsense entries (e.g. '["payments"', ']').
+                    _warn_coercion(name, value, kind, default)
+                    return default if isinstance(default, list) else []
                 return [x.strip() for x in value.split(",") if x.strip()]
+            _warn_coercion(name, value, kind, default)
             if isinstance(default, list):
                 return default
             return []
@@ -125,7 +157,7 @@ class SettingsHelper:
         if self.root is not None and isinstance(self.root, dict):
             value = self.root.get(name, UNKNOWN)
             if value is not UNKNOWN and kind:
-                return self._convert_value(value, kind, default)
+                return self._convert_value(value, kind, default, name=name)
             return value if value is not UNKNOWN else self.get_default(name, default)
 
         if _django_ready():
@@ -133,13 +165,13 @@ class SettingsHelper:
             db_value = self._get_db_setting(name, group)
             if db_value is not UNKNOWN:
                 if kind:
-                    return self._convert_value(db_value, kind, default)
+                    return self._convert_value(db_value, kind, default, name=name)
                 return db_value
 
         # Fallback: live Django settings (file-based)
         value = getattr(self._live_django_settings(), name, UNKNOWN)
         if value is not UNKNOWN and kind:
-            return self._convert_value(value, kind, default)
+            return self._convert_value(value, kind, default, name=name)
         return value if value is not UNKNOWN else self.get_default(name, default)
 
     def get_static(self, name, default=None, kind=None):
@@ -154,12 +186,12 @@ class SettingsHelper:
         if self.root is not None and isinstance(self.root, dict):
             value = self.root.get(name, UNKNOWN)
             if value is not UNKNOWN and kind:
-                return self._convert_value(value, kind, default)
+                return self._convert_value(value, kind, default, name=name)
             return value if value is not UNKNOWN else self.get_default(name, default)
 
         value = getattr(self._live_django_settings(), name, UNKNOWN)
         if value is not UNKNOWN and kind:
-            return self._convert_value(value, kind, default)
+            return self._convert_value(value, kind, default, name=name)
         return value if value is not UNKNOWN else self.get_default(name, default)
 
 

@@ -1,5 +1,24 @@
 ## Unreleased
 
+**security** — **Geofence-adjacent Settings can no longer be written as garbage; `kind=` coercion is loud and fail-safe.**
+Write-time validation now covers every geofence-consumed Setting (previously
+only rules/allowlist/strict): `GEOFENCE_ENABLED`, `GEOFENCE_FAIL_CLOSED`,
+`GEOFENCE_ALLOW_PRIVATE_IPS` (JSON boolean), `GEOFENCE_CACHE_TTL`
+(non-negative integer), `GEOFENCE_FAIL_CLOSED_SCOPES` (list of non-empty
+strings) — rejected with a readable 400 via `POST /api/settings` AND raised on
+`Setting.set()`/shell writes (validation now also runs in `save()`, closing
+the programmatic back door). The per-key mechanism is a public registry —
+`Setting.register_validator(key, func, global_only=True)` — so downstream
+apps can protect their own enforcement-bearing keys (e.g. mverify's
+`PAYMENTS_GEOFENCE_RULES`). Posture-key writes now also invalidate the
+geofence decision cache (an `ALLOW_PRIVATE_IPS` flip previously left stale
+cached `private_ip` allows for up to `GEOFENCE_CACHE_TTL`). On the read side,
+`settings.get(kind=...)` no longer silently absorbs garbage: a
+present-but-uncoercible value returns the DECLARED default and logs a
+`settings` warning; an unrecognized bool string no longer truthy-coerces to
+`True` (allow-flavored flags previously failed open); a bracket-wrapped
+unparsable list no longer comma-splits into nonsense entries. (ITEM-023)
+
 **security** — **Member-readable geofence policy + events (group-scoped).**
 New `GET /api/geo/policy`: a brand's own admin holding a group-member
 `view_security`/`security` grant (or any global holder) can read the

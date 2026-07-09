@@ -373,6 +373,18 @@ traffic is the system *working*, not an incident.
 | `GEOFENCE_STRICT_POSTURE` | `False` | Opt-in compliance posture: fail-closed on lookup failure + deny private IPs + deny when no rules are configured. Per-group override: `Group.metadata["geofence_strict"]` (tri-state). Global-only key; writes must be a JSON boolean. |
 | `GEOFENCE_TEST_OVERRIDE` | `None` | Dict that substitutes the geoip lookup. Use in tests or local dev to simulate specific countries/flags. |
 
+**All `GEOFENCE_*` keys above (except the conf-file-only
+`GEOFENCE_TEST_OVERRIDE`) are write-validated, global-only DB settings**: a
+malformed value is rejected on every write path (`POST /api/settings` → readable
+`400`; `Setting.set()`/shell → `ValueException`), group-scoped rows are refused,
+and every write invalidates the geofence decision cache (so e.g. an
+`ALLOW_PRIVATE_IPS` flip cannot leave stale cached `private_ip` allows).
+Booleans must be JSON `true`/`false` (an unrecognized string no longer
+truthy-coerces at read time), `GEOFENCE_CACHE_TTL` a non-negative JSON integer,
+`GEOFENCE_FAIL_CLOSED_SCOPES` a JSON list of non-empty strings. Validators are
+registered per-key via `Setting.register_validator` — see
+[settings helper](../helpers/settings.md) to register app-specific keys.
+
 ### Test override example
 
 ```python

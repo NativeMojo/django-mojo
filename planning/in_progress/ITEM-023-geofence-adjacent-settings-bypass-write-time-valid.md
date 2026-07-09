@@ -452,6 +452,9 @@ None. (mverify-side registration of `PAYMENTS_GEOFENCE_RULES` and any
 
 ## Notes
 
+- **Build baseline (2026-07-09)**: GREEN — total 2361, passed 2305, failed 0,
+  skipped 56 (default suite). No pre-existing failures: every post-change
+  failure is attributable to this build.
 - Origin: mverify_api `planning/done/MVERIFY-API-014-*.md` (security-review
   WARNING; app-side fix landed there same day, commit 7a825ee).
 - Sequencing hint: the validator-registry shape would let downstream apps

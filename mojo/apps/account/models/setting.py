@@ -80,11 +80,33 @@ class Setting(MojoSecrets, MojoModel):
     # REST hooks
     # ------------------------------------------------------------------
 
-    # Global settings the geofence engine consumes. Writes must be validated
-    # (a typo'd rule otherwise surfaces as a request-time rule_invalid deny)
-    # and must invalidate the geofence decision cache immediately.
-    GEOFENCE_KEYS = ("GEOFENCE_SYSTEM_RULES", "GEOFENCE_ALLOWLIST",
-                     "GEOFENCE_STRICT_POSTURE")
+    # Per-key write validation. A registered key is validated on EVERY write
+    # path — the generic /api/settings REST (on_rest_pre_save, readable 400)
+    # AND Django save() (Setting.set, shell) — so a typo'd value can never
+    # persist and surface only at request time (a geofence rule_invalid deny,
+    # a truthy-coerced posture flag, nonsense fail-closed scopes).
+    # key -> {"func": callable(key, parsed) raising ValueError, "global_only": bool}
+    VALIDATORS = {}
+
+    # Global settings the geofence engine consumes. The family tuple wires the
+    # decision-cache invalidation on save/delete for every key; the per-key
+    # validators are registered at the bottom of this module.
+    GEOFENCE_KEYS = (
+        "GEOFENCE_SYSTEM_RULES", "GEOFENCE_ALLOWLIST", "GEOFENCE_STRICT_POSTURE",
+        "GEOFENCE_ENABLED", "GEOFENCE_FAIL_CLOSED", "GEOFENCE_FAIL_CLOSED_SCOPES",
+        "GEOFENCE_ALLOW_PRIVATE_IPS", "GEOFENCE_CACHE_TTL")
+
+    @classmethod
+    def register_validator(cls, key, func, global_only=True):
+        """Register a write-time validator for a Setting key.
+
+        func(key, parsed_value) raises ValueError on a bad value; parsed_value
+        is the JSON-decoded value (a registered key's value must be valid
+        JSON). global_only keys reject group-scoped rows. Downstream apps
+        register their own enforcement-bearing keys at import time (e.g.
+        mverify's PAYMENTS_GEOFENCE_RULES).
+        """
+        cls.VALIDATORS[key] = {"func": func, "global_only": global_only}
 
     def on_rest_pre_save(self, changed_fields, created):
         """Encrypt secret values before saving via REST."""
@@ -92,19 +114,20 @@ class Setting(MojoSecrets, MojoModel):
             raw = self.value
             self.value = ""
             self.set_secret("value", raw)
-        self._validate_geofence_value()
+        self._validate_value()
 
-    def _validate_geofence_value(self):
-        """400 on a malformed geofence rule/allowlist written via the generic
-        /api/settings REST — the dedicated /api/geo endpoints validate too, so
-        there is no unvalidated write path."""
-        if self.key not in self.GEOFENCE_KEYS:
+    def _validate_value(self):
+        """Reject a malformed value for any registered key. Runs in the REST
+        pre-save hook (readable 400 before side effects) AND in save() (so
+        Setting.set / programmatic / shell writes have no unvalidated path)."""
+        entry = self.VALIDATORS.get(self.key)
+        if entry is None:
             return
         from mojo import errors as merrors
-        if self.group_id is not None:
-            # The engine only ever resolves these keys globally — a group-scoped
-            # row would be dead, unvalidated config. Reject loudly instead of
-            # silently accepting it.
+        if entry["global_only"] and self.group_id is not None:
+            # The consumers only ever resolve these keys globally — a group-
+            # scoped row would be dead, unvalidated config. Reject loudly
+            # instead of silently accepting it.
             raise merrors.ValueException(
                 f"{self.key} is a global-only setting; group-scoped rows are not supported")
         if self.is_secret:
@@ -118,18 +141,7 @@ class Setting(MojoSecrets, MojoModel):
             except (json.JSONDecodeError, TypeError):
                 raise merrors.ValueException(f"{self.key} must be valid JSON")
         try:
-            if self.key == "GEOFENCE_SYSTEM_RULES":
-                from mojo.apps.account.services.geofence.dsl import validate_rule
-                validate_rule(parsed)
-            elif self.key == "GEOFENCE_STRICT_POSTURE":
-                # Strict parse only — kind="bool" coerces any unrecognized
-                # string truthy at read time, so garbage must be rejected here.
-                if not isinstance(parsed, bool):
-                    raise ValueError(
-                        f"{self.key} must be a JSON boolean (true/false)")
-            else:
-                from mojo.apps.account.services.geofence.engine import validate_allowlist
-                validate_allowlist(parsed)
+            entry["func"](self.key, parsed)
         except ValueError as exc:
             raise merrors.ValueException(str(exc))
 
@@ -293,6 +305,7 @@ class Setting(MojoSecrets, MojoModel):
     # ------------------------------------------------------------------
 
     def save(self, *args, **kwargs):
+        self._validate_value()
         super().save(*args, **kwargs)
         self.push_to_cache()
         self._invalidate_geofence_decisions()
@@ -303,9 +316,11 @@ class Setting(MojoSecrets, MojoModel):
         super().delete(*args, **kwargs)
 
     def _invalidate_geofence_decisions(self):
-        """A geofence rule/allowlist edit must take effect immediately — a
-        stale cached allow must not outlive an emergency block. Hooked at the
-        model layer so Setting.set(), REST saves, and shell writes all count."""
+        """A geofence rule/allowlist/posture edit must take effect immediately —
+        a stale cached allow must not outlive an emergency block (e.g. a
+        cached private_ip allow after an ALLOW_PRIVATE_IPS flip). Hooked at
+        the model layer so Setting.set(), REST saves, and shell writes all
+        count."""
         if self.group_id is not None or self.key not in self.GEOFENCE_KEYS:
             return
         try:
@@ -313,3 +328,48 @@ class Setting(MojoSecrets, MojoModel):
             gf_cache.invalidate_all()
         except Exception as exc:
             logit.error("geofence", f"decision-cache invalidation failed: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# Built-in validators — the geofence-consumed keys. A typo'd value otherwise
+# surfaces only at request time (rule_invalid denies, truthy-coerced posture
+# booleans, nonsense fail-closed scopes). Heavy validators import lazily.
+# ---------------------------------------------------------------------------
+
+def _validate_geofence_rule(key, parsed):
+    from mojo.apps.account.services.geofence.dsl import validate_rule
+    validate_rule(parsed)
+
+
+def _validate_geofence_allowlist(key, parsed):
+    from mojo.apps.account.services.geofence.engine import validate_allowlist
+    validate_allowlist(parsed)
+
+
+def _validate_json_bool(key, parsed):
+    # Strict parse only — kind="bool" would otherwise absorb an unrecognized
+    # string at read time, and a posture flag must never be ambiguous.
+    if not isinstance(parsed, bool):
+        raise ValueError(f"{key} must be a JSON boolean (true/false)")
+
+
+def _validate_cache_ttl(key, parsed):
+    # NB: isinstance(True, int) is True — exclude bools explicitly.
+    if isinstance(parsed, bool) or not isinstance(parsed, int) or parsed < 0:
+        raise ValueError(f"{key} must be a non-negative JSON integer")
+
+
+def _validate_scope_list(key, parsed):
+    if not isinstance(parsed, list) or not all(
+            isinstance(s, str) and s.strip() for s in parsed):
+        raise ValueError(f"{key} must be a JSON list of non-empty strings")
+
+
+Setting.register_validator("GEOFENCE_SYSTEM_RULES", _validate_geofence_rule)
+Setting.register_validator("GEOFENCE_ALLOWLIST", _validate_geofence_allowlist)
+Setting.register_validator("GEOFENCE_STRICT_POSTURE", _validate_json_bool)
+Setting.register_validator("GEOFENCE_ENABLED", _validate_json_bool)
+Setting.register_validator("GEOFENCE_FAIL_CLOSED", _validate_json_bool)
+Setting.register_validator("GEOFENCE_ALLOW_PRIVATE_IPS", _validate_json_bool)
+Setting.register_validator("GEOFENCE_CACHE_TTL", _validate_cache_ttl)
+Setting.register_validator("GEOFENCE_FAIL_CLOSED_SCOPES", _validate_scope_list)
