@@ -459,3 +459,22 @@ None. (mverify-side registration of `PAYMENTS_GEOFENCE_RULES` and any
   WARNING; app-side fix landed there same day, commit 7a825ee).
 - Sequencing hint: the validator-registry shape would let downstream apps
   stop hand-rolling raw-read guards like geo_gate's `_payments_rules()`.
+- **Post-build review results (2026-07-09)**: regression-first build — 9
+  failing tests confirmed pre-fix (bonus finding: `ignore_errors=True` masked
+  dict parse errors as an EMPTY objict, so garbage read as `{}` not even the
+  declared default). test-runner GREEN (2372/2316/0 — baseline +11).
+  security-review: no criticals; two WARNINGs FIXED in 57332b6 (`is_secret`
+  bypassed validation on registered keys → now rejected outright + regression
+  test; `_warn_coercion` logged raw values which can be decrypted secrets →
+  now logs type only). INFO deferred: `json.loads` RecursionError on
+  pathologically deep JSON escapes as 500 not 400 — pre-existing, generic,
+  admin-perm-gated. docs-updater fixed one stale claim (strict-posture doc's
+  "kind=bool would coerce garbage truthy" rationale). mverify follow-ups
+  (register `PAYMENTS_GEOFENCE_RULES`, optional `get_strict`) live in that
+  repo.
+
+## Resolution
+- closed: 2026-07-09
+- branch: main
+- files changed: CHANGELOG.md,docs/django_developer/account/README.md,docs/django_developer/account/geofence.md,docs/django_developer/account/geoip.md,docs/django_developer/core/permissions.md,docs/django_developer/helpers/settings.md,docs/django_developer/helpers/settings_reference.md,docs/django_developer/logging/incidents.md,docs/django_developer/security/README.md,docs/django_developer/testit/Overview.md,docs/web_developer/account/README.md,docs/web_developer/account/admin_portal.md,docs/web_developer/account/geofence.md,docs/web_developer/account/geoip.md,docs/web_developer/account/login_events.md,docs/web_developer/security/README.md,memory.md,mojo/__init__.py,mojo/apps/account/models/group.py,mojo/apps/account/models/setting.py,mojo/apps/account/rest/geofence.py,mojo/apps/account/services/geofence/engine.py,mojo/apps/account/services/geofence/evidence.py,mojo/apps/incident/asyncjobs.py,mojo/apps/incident/cronjobs.py,mojo/apps/incident/migrations/0031_alter_ipset_source.py,mojo/apps/incident/models/ipset.py,mojo/helpers/geoip/detection.py,mojo/helpers/geoip/threat_intel.py,mojo/helpers/settings/helper.py,mojo/rest/info.py,planning/.next_id,planning/done/ITEM-020-geofence-evidence-metrics-dual-write-group-scoped-.md,planning/done/ITEM-021-geofence-hardening-opt-in-strict-compliance-enforc.md,planning/done/ITEM-022-member-readable-geofence-policy-events-group-scope.md,planning/in_progress/ITEM-023-geofence-adjacent-settings-bypass-write-time-valid.md,planning/inbox/dispatcher-group-param-is-active-asymmetry.md,planning/inbox/geofence-hardening.md,planning/inbox/geofence-settings-write-validation-gap.md,pyproject.toml,tests/test_geofence/_helpers.py,tests/test_geofence/evidence_plane.py,tests/test_geofence/member_visibility.py,tests/test_geofence/settings_validation.py,tests/test_geofence/strict_posture.py,tests/test_geofence/threat_cache.py,tests/test_helpers/settings_coercion.py,uv.lock
+- tests added: tests/test_geofence/settings_validation.py — test_backdoor_garbage_rejected (5 posture keys × garbage payloads → 400 + no row), test_backdoor_valid_accepted (default-equal values persist), test_backdoor_group_scoped_rejected (global-only), test_secret_flag_rejected_for_registered_keys (is_secret bypass closed, REST + Setting.set), test_shell_write_validated (save()-level hook), test_validator_registry (register/reject/accept + unregistered keys unaffected), test_posture_write_invalidates_decision_cache; tests/test_helpers/settings_coercion.py — test_bool_garbage_returns_declared_default (both default directions + valid strings), test_dict_garbage_returns_default, test_list_bracket_garbage_returns_default (no comma-split nonsense; CSV still works), test_int_garbage_returns_default, test_geofence_read_path_planted_garbage (pre-existing garbage degrades to declared default)
