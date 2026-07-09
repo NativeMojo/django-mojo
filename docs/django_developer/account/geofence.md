@@ -263,7 +263,9 @@ flood the stream. Metrics count **every** block including deduped ones:
 group (`request.group`, resolved from the `group`/`group_uuid` params), the
 base slugs `geofence:blocks` and `geofence:exempt` are **also** recorded under
 `account="group-<id>"` (the platform's per-tenant account convention, e.g.
-`member_activity_day`) so tenant dashboards can chart their own blocks. The
+`member_activity_day`) so tenant dashboards can chart their own blocks —
+attribution is the client-supplied `group`/`group_uuid` param, so per-group
+counters are reported activity, not verified counts. The
 country/region breakdown slugs stay global-only — per-group geographic
 accounts would cross-product groups × countries × regions in Redis, and the
 monthly/yearly counter keys never expire. Escalation of level-3/5/6

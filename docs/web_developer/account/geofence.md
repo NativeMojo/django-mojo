@@ -186,3 +186,9 @@ group-member grant is enough (see [Metrics](../metrics/metrics.md)). The
 country/region breakdown is deliberately global-only (a per-group geographic
 cross-product would explode the Redis key space); chart those from the
 `global` account, which needs a global metrics grant.
+
+Attribution comes from the `group`/`group_uuid` param the blocked/exempted
+request itself supplied — on a public auth surface there is no membership
+check on that param — so read a group's counters as **reported activity on
+that tenant's auth surface**, not a verified count. Reads stay
+permission-gated regardless.

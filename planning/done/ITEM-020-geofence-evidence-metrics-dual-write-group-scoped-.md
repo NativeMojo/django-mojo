@@ -299,3 +299,25 @@ None.
 - Same convention as the rest of the platform's metrics
   (`account='group-<id>'`, e.g. VerifyDashboardPage) — no new account
   naming scheme.
+- Build gotcha: `Group.objects.create()` leaves `uuid=None` (lazily assigned
+  by `get_uuid()`); the first test round failed because the dispatcher's
+  `group_uuid` resolution silently no-ops on a None uuid. Tests must call
+  `grp.get_uuid()` (config_plane already did).
+- Post-build agents (commit ae08e94): **test-runner** — full default suite
+  2332/2276 passed/0 failed/56 skipped (baseline +2, both new tests).
+  **docs-updater** — no gaps in either track; flagged an unrelated
+  pre-existing wrong endpoint in `web_developer/account/login_events.md`
+  (spun off as a background task). **security-review** — acceptable as-is;
+  one WARNING: group attribution is the client-supplied `group`/`group_uuid`
+  param (no membership check on public auth surfaces), so per-group counters
+  are poisonable-by-attribution though bounded (+1 blind increments, real
+  groups only, reads still permission-gated) → caveat added to both doc
+  tracks ("reported activity, not verified counts"); the pre-existing
+  numeric-`group=` `is_active` asymmetry in `mojo/decorators/http.py` filed
+  as `planning/inbox/dispatcher-group-param-is-active-asymmetry.md`.
+
+## Resolution
+- closed: 2026-07-08
+- branch: main
+- files changed: CHANGELOG.md,docs/django_developer/account/geofence.md,docs/web_developer/account/geofence.md,mojo/__init__.py,mojo/apps/account/services/geofence/evidence.py,planning/.next_id,planning/confirmed/ITEM-021-geofence-hardening-opt-in-strict-compliance-enforc.md,planning/in_progress/ITEM-020-geofence-evidence-metrics-dual-write-group-scoped-.md,planning/inbox/geofence-hardening.md,planning/inbox/geofence-member-visibility-group-scoped-policy-events.md,pyproject.toml,tests/test_geofence/evidence_plane.py,uv.lock
+- tests added: tests/test_geofence/evidence_plane.py — test_block_metrics_group_account (group-scoped block writes exactly 1 to the group account, global still increments, country-suffixed slug stays off the group account, a no-group block doesn't touch it), test_exempt_metrics_group_account (group-scoped exemption dual-writes geofence:exempt to the group account + global)
