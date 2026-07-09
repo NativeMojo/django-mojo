@@ -11,6 +11,15 @@ Two permissions control all security-related access:
 | `view_security` | Read-only: incidents, events, history, tickets, rules, firewall status |
 | `manage_security` | Full: edit incidents, manage tickets, create rules, block IPs, merge incidents |
 
+Both permissions can be granted **globally** (platform-wide) or as a
+**GroupMember-scoped** grant on a single group (assignable by that group's
+own admin). Models that carry a `group` field — events, incidents, tickets,
+and incident history — automatically confine a group-scoped grant to that
+group's rows (the framework's group-scoped list fallback), so a member
+`view_security` grant reads only their own group's events/incidents/tickets.
+RuleSets, IPSets, and platform-wide summaries (e.g. Health Summary below)
+have no group field and require a **global** grant.
+
 ## The Security Pipeline
 
 ```

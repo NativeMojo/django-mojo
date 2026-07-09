@@ -27,7 +27,8 @@ are recorded as `geofence_config` incident events (queryable via
 
 **Brand admins (member grants)** — a `view_security`/`security` permission
 granted on a GroupMember (assignable by that group's admin) opens exactly
-two group-scoped reads, both confined to the member's own group:
+two group-scoped reads, both confined to the member's own group (a grant on
+a parent group extends to its child groups):
 
 - `GET /api/geo/policy` — that group's effective policy, deliberately narrowed
 - `GET /api/incident/event?category=geofence_block|geofence_exempt` — that

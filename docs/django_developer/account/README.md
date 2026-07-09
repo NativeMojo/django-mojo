@@ -14,7 +14,7 @@
 - [Webhook Subscriptions](webhook_subscriptions.md) — Per-Group subscription registry, async fan-out dispatcher, signed delivery via the existing webhook primitive
 - [Notifications](notifications.md) — User inbox, WebSocket + push delivery, expiry
 - [GeoIP](geoip.md) — IP geolocation, threat intelligence, time lookup
-- [Geofencing](geofence.md) — Policy-based geographic access control: rule DSL, system+group rules, decorator + per-scope fail posture, editable config plane (`/api/geo/rules`, allowlist, simulate), IP allowlist exemptions, evidence plane (incident events + metrics), bypass permission
+- [Geofencing](geofence.md) — Policy-based geographic access control: rule DSL, system+group rules, decorator + per-scope fail posture, editable config plane (`/api/geo/rules`, allowlist, simulate), member plane (`/api/geo/policy` — group-scoped policy read), IP allowlist exemptions, evidence plane (incident events + metrics), bypass permission
 - [Login Events](login_events.md) — UserLoginEvent model, geo tracking, anomaly flags, metrics
 - [Inactive User/Group Sweep](inactive_sweep.md) — Auto-warn and disable inactive users and groups; feature flags, exemptions, email templates, incident events
 - [Disable Lifecycle](disable_lifecycle.md) — Unified disable/reactivate state for User and Group: `metadata.protected.disable.*` schema, REST POST_SAVE_ACTIONS, throttle-read endpoint, service API

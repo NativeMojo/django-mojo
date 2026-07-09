@@ -135,6 +135,11 @@ def test_policy_cross_tenant_denied(opts):
     resp = opts.client.get("/api/geo/policy", params={"group_uuid": opts.group_a_uuid})
     assert resp.status_code == 403, \
         f"B-member must not read A's policy, got {resp.status_code}: {resp.body}"
+    # Anti-enumeration: an unknown group_uuid must look exactly like a
+    # known-but-unauthorized one — same default 403, no existence oracle.
+    resp = opts.client.get("/api/geo/policy", params={"group_uuid": _uuid.uuid4().hex})
+    assert resp.status_code == 403, \
+        f"unknown group_uuid must 403 identically to an unauthorized one, got {resp.status_code}: {resp.body}"
 
 
 @th.django_unit_test("member: geo/policy denies members without the grant and geofence-only globals")

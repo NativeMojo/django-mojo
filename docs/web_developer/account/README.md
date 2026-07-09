@@ -41,6 +41,6 @@
 - [Custom Auth Models](custom_auth_models.md) — JWT, OAuth, and passkeys for non-User models (e.g. game.Player)
 - [Notifications](notifications.md) — Inbox, mark read, WebSocket delivery
 - [GeoIP & Geofencing](geoip.md) — IP geolocation, time lookup, and geofence pre-flight check (`GET /api/geo/check`)
-- [Geofence Admin](geofence.md) — Editable system rules, IP allowlist, what-if simulate, and exemption audit (`/api/geo/rules`, `/api/geo/allowlist`, `/api/geo/simulate`, `/api/geo/bypass_holders`)
+- [Geofence Admin](geofence.md) — Editable system rules, IP allowlist, what-if simulate, and exemption audit (`/api/geo/rules`, `/api/geo/allowlist`, `/api/geo/simulate`, `/api/geo/bypass_holders`); also the member-readable, group-scoped policy read `GET /api/geo/policy`
 - [Login Events](login_events.md) — Login history with geolocation, aggregation for maps, anomaly detection
 - [Public Messages](public_messages.md) — Bouncer-gated contact / support form and admin endpoint

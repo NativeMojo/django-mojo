@@ -289,9 +289,11 @@ The config plane is platform-staff only; the **member plane** is its
 group-scoped, read-only counterpart for a brand's own admin. One endpoint:
 `GET /api/geo/policy`, gated by `@md.requires_perms("view_security",
 "security")` — a **global** grant reads any group, a **member** grant reads
-exactly the group it is granted in (the decorator checks the grant against
-`request.group`, and the response is built solely from `request.group`, so
-cross-tenant reads are structurally impossible). The keys deliberately match
+the group it is granted in (a grant on a parent group also covers its child
+groups — the framework's standard `check_parents` membership convention).
+The decorator checks the grant against `request.group`, and the response is
+built solely from `request.group`, so cross-tenant reads are structurally
+impossible. The keys deliberately match
 `Event.VIEW_PERMS`, so one member grant lights up both the policy read and
 the group's event feed; the config-plane keys
 (`view_geofence`/`manage_geofence`) remain global-only and do NOT open this
