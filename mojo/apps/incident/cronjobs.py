@@ -51,6 +51,16 @@ def refresh_ipsets(force=False, verbose=False, now=None):
         payload={})
 
 
+# Every 6h — refresh the cache-only threat lists (tor_exits, blocklist_de)
+# used by geoip detection. refresh_from_source() ONLY — never sync(): these
+# rows are is_enabled=False and must never reach the kernel firewall.
+@schedule(minutes="30", hours="*/6")
+def refresh_threat_lists(force=False, verbose=False, now=None):
+    jobs.publish(
+        func="mojo.apps.incident.asyncjobs.refresh_threat_lists",
+        payload={})
+
+
 # Twice a day — triage any new incidents that haven't been LLM-assessed yet
 @schedule(hours="9,18")
 def triage_new_incidents(force=False, verbose=False, now=None):

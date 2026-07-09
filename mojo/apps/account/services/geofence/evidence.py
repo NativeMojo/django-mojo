@@ -12,7 +12,8 @@ incident Event (mojo.apps.incident):
 Event levels (INCIDENT_LEVEL_THRESHOLD default 7 auto-creates an Incident):
   7  rule_invalid at evaluation      — a broken rule is denying traffic; pages
   6  lookup failure while fail-open  — enforcement silently not happening
-  5  abuse-flag block, or a block on a fail-closed scope (money endpoints)
+  5  abuse-flag block, a block on a fail-closed scope (money endpoints), or
+     any block under strict posture (compliance-grade denial)
   3  ordinary jurisdiction block / exemption-used / config change
 
 Block and exempt events are deduped per (ip, reason) per hour so a blocked
@@ -129,7 +130,8 @@ def _block_level(request, decision, scope):
         return 7
     if decision.reason == "lookup_failed" and decision.allowed:
         return 6
-    if decision.reason in _ABUSE_REASONS or _scope_fails_closed(request, scope):
+    if (decision.reason in _ABUSE_REASONS or decision.get("strict_posture")
+            or _scope_fails_closed(request, scope)):
         return 5
     return 3
 

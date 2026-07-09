@@ -4,7 +4,7 @@ internal incident data.
 """
 import requests
 from mojo.helpers.settings import settings
-from mojo.helpers import dates
+from mojo.helpers import dates, logit
 
 # Threat checking settings
 ENABLE_BLOCKLIST_CHECK = settings.get_static('GEOLOCATION_ENABLE_BLOCKLIST_CHECK', True)
@@ -104,7 +104,7 @@ def check_internal_threats(ip_address):
         }
 
     except Exception as e:
-        print(f"[Threat Intel] Error checking internal threats for {ip_address}: {e}")
+        logit.error("geoip", f"Error checking internal threats for {ip_address}: {e}")
         return {
             'is_known_attacker': False,
             'is_known_abuser': False,
@@ -155,22 +155,30 @@ def check_abuseipdb(ip_address):
                 'domain': data.get('domain'),
             }
     except Exception as e:
-        print(f"[Threat Intel] AbuseIPDB check failed for {ip_address}: {e}")
+        logit.error("geoip", f"AbuseIPDB check failed for {ip_address}: {e}")
 
     return None
 
 
 def check_blocklist_de(ip_address):
     """
-    Check IP against blocklist.de
-    This is a simple text file check - in production you'd cache this list.
+    Check IP against blocklist.de — the IPSet-backed cache when it exists
+    (refreshed every 6h by the incident app's refresh_threat_lists cron),
+    else a live fetch of the list.
     """
     config = _get_blocklist_config()['blocklist_de']
     if not config['enabled']:
         return None
 
+    from .detection import _cached_ip_set
+    cached = _cached_ip_set("blocklist_de")
+    if cached is not None:
+        return {
+            'source': 'blocklist.de',
+            'is_listed': ip_address in cached
+        }
+
     try:
-        # Note: In production, cache this list and refresh periodically
         response = requests.get(config['url'], timeout=5)
         if response.status_code == 200:
             blocklist = response.text.split('\n')
@@ -181,7 +189,7 @@ def check_blocklist_de(ip_address):
                 'is_listed': is_listed
             }
     except Exception as e:
-        print(f"[Threat Intel] Blocklist.de check failed for {ip_address}: {e}")
+        logit.error("geoip", f"Blocklist.de check failed for {ip_address}: {e}")
 
     return None
 

@@ -38,20 +38,33 @@ Query params: `group_uuid` (optional) — include that group's rule.
                "modified": "2026-07-08T14:11:02+00:00"},
     "posture": {"enabled": true, "fail_closed": false,
                 "fail_closed_scopes": ["payments"],
-                "allow_private_ips": true, "cache_ttl": 300},
+                "allow_private_ips": true, "strict_posture": false,
+                "cache_ttl": 300},
     "allowlist_summary": {"setting_entries": 2, "geoip_active": 3},
     "evaluation_order": ["system", "group"],
     "enforced_endpoints": [
       {"endpoint": "mojo.apps.account.rest.user.on_user_login", "scope": "auth"}
     ],
     "group": {"id": 4, "uuid": "…", "is_active": true,
-              "rule": {"country": {"in": ["US"]}}}
+              "rule": {"country": {"in": ["US"]}},
+              "strict_posture": null,
+              "strict_posture_effective": false}
   }
 }
 ```
 
 `system.source` is `"setting"` (DB row, editable), `"conf"` (deploy file), or
 `"none"`.
+
+`posture.strict_posture` is the global compliance switch (fail-closed on
+lookup failure + deny private IPs + deny when no rules are configured).
+`group.strict_posture` is that group's raw override — `null` inherits the
+global, `true`/`false` overrides it — and `group.strict_posture_effective` is
+the resolved outcome. Set the override by writing the group's metadata:
+`POST /api/group/<pk>` with `{"metadata": {"geofence_strict": true}}`
+(non-boolean values are rejected 400; write `null` to go back to inherit).
+Requests denied because a strict deployment has no rules configured return
+the 403 reason `no_rules_strict`.
 
 ## `POST /api/geo/rules` — Replace System Rules
 

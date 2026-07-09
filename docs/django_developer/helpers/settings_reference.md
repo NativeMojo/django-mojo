@@ -126,6 +126,7 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 - `GEOFENCE_ENABLED`
 - `GEOFENCE_FAIL_CLOSED`
 - `GEOFENCE_FAIL_CLOSED_SCOPES`
+- `GEOFENCE_STRICT_POSTURE`
 - `GEOFENCE_SYSTEM_RULES`
 - `GEOFENCE_TEST_OVERRIDE`
 

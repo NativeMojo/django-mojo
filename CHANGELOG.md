@@ -1,5 +1,25 @@
 ## Unreleased
 
+**security** — **Opt-in strict/compliance geofence posture + cached threat lists.**
+New `GEOFENCE_STRICT_POSTURE` setting (default `False` — existing fail-open
+deployments are untouched): when on, the engine fails **closed** on geo-lookup
+failure (ORs with `GEOFENCE_FAIL_CLOSED` and the per-scope map), **denies**
+private/reserved IPs, and **denies** when geofencing has no rules configured
+(new reason `no_rules_strict` — no silent allow-all). Settable per-group via
+the tri-state `Group.metadata["geofence_strict"]` override (null = inherit;
+validated on REST write), so some tenants can run strict while others stay
+permissive. The IP allowlist still exempts under strict (with
+`would_block_reason` evidence), blocks under strict report as level-5
+compliance events, and posture flips invalidate cached decisions
+automatically. `GET /api/geo/rules` now surfaces `posture.strict_posture`
+plus the group override and its resolved value. Separately, the Tor exit
+list and blocklist.de are now cached in two **cache-only** incident `IPSet`
+rows (`tor_exits`, `blocklist_de`; created `is_enabled=False` — never
+firewall-synced) refreshed 6-hourly by a new `refresh_threat_lists` cron;
+`detect_tor` / `check_blocklist_de` read the cache and fall back to the old
+live fetch until it warms, removing the per-lookup download of the full
+lists from the geolocation path. (ITEM-021)
+
 **metrics** — **Geofence evidence metrics are now recorded per-tenant (`account=group-<id>`) alongside global.**
 When a geofenced request carries a group (`group`/`group_uuid` param — e.g.
 white-label auth pages), the base evidence slugs `geofence:blocks` and

@@ -144,6 +144,7 @@ def on_geo_rules_get(request):
             "fail_closed": settings.get("GEOFENCE_FAIL_CLOSED", False, kind="bool"),
             "fail_closed_scopes": settings.get("GEOFENCE_FAIL_CLOSED_SCOPES", [], kind="list"),
             "allow_private_ips": settings.get("GEOFENCE_ALLOW_PRIVATE_IPS", True, kind="bool"),
+            "strict_posture": settings.get("GEOFENCE_STRICT_POSTURE", False, kind="bool"),
             "cache_ttl": settings.get("GEOFENCE_CACHE_TTL", 300, kind="int"),
         },
         "allowlist_summary": _allowlist_summary(),
@@ -152,11 +153,17 @@ def on_geo_rules_get(request):
     }
     group = _resolve_group_param(request)
     if group is not None:
+        gf_strict = (group.metadata or {}).get("geofence_strict")
         data["group"] = {
             "id": group.pk,
             "uuid": group.get_uuid(),
             "is_active": group.is_active,
             "rule": (group.metadata or {}).get("geofence") or {},
+            # raw tri-state override (null = inherit) + the resolved outcome
+            "strict_posture": gf_strict,
+            "strict_posture_effective": (
+                bool(gf_strict) if gf_strict is not None
+                else data["posture"]["strict_posture"]),
         }
     return {"status": True, "data": data}
 

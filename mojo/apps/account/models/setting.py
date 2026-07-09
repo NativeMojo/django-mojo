@@ -83,7 +83,8 @@ class Setting(MojoSecrets, MojoModel):
     # Global settings the geofence engine consumes. Writes must be validated
     # (a typo'd rule otherwise surfaces as a request-time rule_invalid deny)
     # and must invalidate the geofence decision cache immediately.
-    GEOFENCE_KEYS = ("GEOFENCE_SYSTEM_RULES", "GEOFENCE_ALLOWLIST")
+    GEOFENCE_KEYS = ("GEOFENCE_SYSTEM_RULES", "GEOFENCE_ALLOWLIST",
+                     "GEOFENCE_STRICT_POSTURE")
 
     def on_rest_pre_save(self, changed_fields, created):
         """Encrypt secret values before saving via REST."""
@@ -120,6 +121,12 @@ class Setting(MojoSecrets, MojoModel):
             if self.key == "GEOFENCE_SYSTEM_RULES":
                 from mojo.apps.account.services.geofence.dsl import validate_rule
                 validate_rule(parsed)
+            elif self.key == "GEOFENCE_STRICT_POSTURE":
+                # Strict parse only — kind="bool" coerces any unrecognized
+                # string truthy at read time, so garbage must be rejected here.
+                if not isinstance(parsed, bool):
+                    raise ValueError(
+                        f"{self.key} must be a JSON boolean (true/false)")
             else:
                 from mojo.apps.account.services.geofence.engine import validate_allowlist
                 validate_allowlist(parsed)

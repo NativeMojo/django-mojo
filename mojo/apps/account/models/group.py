@@ -648,6 +648,15 @@ class Group(MojoSecrets, MojoModel):
                 validate_rule(gf_rule)
             except ValueError as exc:
                 raise merrors.ValueException(f"Invalid geofence rule: {exc}")
+        # geofence_strict is the per-group strict-posture override: tri-state
+        # (absent/null = inherit the global GEOFENCE_STRICT_POSTURE). Anything
+        # non-boolean must 400 here, not silently coerce at decision time.
+        gf_strict = (self.metadata or {}).get("geofence_strict")
+        if gf_strict is not None and not isinstance(gf_strict, bool):
+            from mojo import errors as merrors
+            raise merrors.ValueException(
+                "metadata.geofence_strict must be a boolean (true/false) "
+                "or null to inherit the global posture")
 
     def on_rest_created(self):
         metrics.set_value("total_groups", Group.objects.filter(is_active=True).count(), account="global")

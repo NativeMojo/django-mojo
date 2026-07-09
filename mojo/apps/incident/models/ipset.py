@@ -13,8 +13,27 @@ KIND_CHOICES = [
 SOURCE_CHOICES = [
     ("ipdeny", "ipdeny.com"),
     ("abuseipdb", "AbuseIPDB"),
+    ("tor", "Tor Exit List"),
+    ("blocklist_de", "blocklist.de"),
     ("manual", "Manual"),
 ]
+
+BLOCKLIST_DE_URL = "https://lists.blocklist.de/lists/all.txt"
+
+
+def _parse_tor_exit_list(text):
+    """Extract exit-node IPs from the Tor Project exit list.
+
+    Format: blocks of metadata lines; the address lines look like
+    `ExitAddress 1.2.3.4 2026-07-08 12:00:00`.
+    """
+    ips = []
+    for line in text.splitlines():
+        if line.startswith("ExitAddress "):
+            parts = line.split()
+            if len(parts) >= 2:
+                ips.append(parts[1])
+    return ips
 
 
 class IPSet(models.Model, MojoModel):
@@ -136,6 +155,10 @@ class IPSet(models.Model, MojoModel):
                 data = self._fetch_ipdeny()
             elif self.source == "abuseipdb":
                 data = self._fetch_abuseipdb()
+            elif self.source == "tor":
+                data = self._fetch_tor()
+            elif self.source == "blocklist_de":
+                data = self._fetch_blocklist_de()
             else:
                 return False
 
@@ -188,6 +211,53 @@ class IPSet(models.Model, MojoModel):
         resp.raise_for_status()
         lines = [line.strip() for line in resp.text.splitlines() if line.strip()]
         return lines
+
+    def _fetch_tor(self):
+        """Fetch the Tor Project exit-node list (ExitAddress lines → bare IPs)."""
+        import requests
+        url = self.source_url
+        if not url:
+            from mojo.helpers.geoip.config import TOR_EXIT_NODE_LIST_URL
+            url = TOR_EXIT_NODE_LIST_URL
+        resp = requests.get(url, timeout=30)
+        resp.raise_for_status()
+        return _parse_tor_exit_list(resp.text)
+
+    def _fetch_blocklist_de(self):
+        """Fetch the blocklist.de aggregate list (one IP per line)."""
+        import requests
+        resp = requests.get(self.source_url or BLOCKLIST_DE_URL, timeout=30)
+        resp.raise_for_status()
+        return [line.strip() for line in resp.text.splitlines()
+                if line.strip() and not line.startswith("#")]
+
+    # Cache-only threat lists consumed by mojo.helpers.geoip detection —
+    # refreshed by the refresh_threat_lists cron via refresh_from_source()
+    # ONLY. is_enabled stays False so they are excluded from the weekly
+    # refresh_ipsets cron and sync() (kernel firewall) stays a no-op.
+    THREAT_CACHE_SETS = {
+        "tor_exits": {"kind": "abuse", "source": "tor"},
+        "blocklist_de": {"kind": "abuse", "source": "blocklist_de"},
+    }
+
+    @classmethod
+    def ensure_threat_caches(cls):
+        """Idempotently create the cache-only threat-list rows (disabled)."""
+        rows = []
+        for name, defaults in cls.THREAT_CACHE_SETS.items():
+            row, _ = cls.objects.get_or_create(
+                name=name,
+                defaults={
+                    **defaults,
+                    "is_enabled": False,
+                    "description": (
+                        "Cache-only list for geoip detection — do NOT enable; "
+                        "enabling would kernel-block every listed IP fleet-wide."
+                    ),
+                },
+            )
+            rows.append(row)
+        return rows
 
     @classmethod
     def create_country(cls, country_code, enabled=True):

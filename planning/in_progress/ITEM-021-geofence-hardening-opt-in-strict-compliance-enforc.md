@@ -614,6 +614,14 @@ the decorator 403 contract is untouched); general settings-coercion
 observability (owned by `geofence-settings-write-validation-gap` in inbox).
 
 ## Notes
+- **Baseline (2026-07-08, `bin/run_tests --agent`)**: status passed — total 2332,
+  passed 2276, failed 0, skipped 56 (plus test_incident/test_security modules
+  skipped entirely: "requires --extra slow"). All green; no pre-existing
+  failures. (`testproject/var/test_failures.json`)
+- **Plan deviation (build, 2026-07-08)**: threat-cache tests go in
+  `tests/test_geofence/threat_cache.py`, NOT `tests/test_incident/` as planned —
+  test_incident is an opt-in module skipped by the default suite, so tests
+  there would never run in routine work.
 - **Overlap resolution (2026-07-07, ITEM-017 scope):** ITEM-017 (geofence config
   + evidence plane) builds **(D) bypass visibility** (`GET /api/geo/bypass_holders`)
   and the **per-scope fail posture map** (`GEOFENCE_FAIL_CLOSED_SCOPES`, decorator

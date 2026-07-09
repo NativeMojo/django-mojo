@@ -293,6 +293,23 @@ def refresh_ipsets(job):
         job.add_log(f"Refreshed {len(refreshed)} IPSets: {refreshed}")
 
 
+def refresh_threat_lists(job):
+    """
+    Cron job (every 6h): refreshes the cache-only threat lists (tor_exits,
+    blocklist_de) consumed by mojo.helpers.geoip detection.
+
+    refresh_from_source() ONLY — never sync(). These rows are is_enabled=False
+    by design and must never be pushed to the kernel firewall.
+    """
+    from mojo.apps.incident.models import IPSet
+
+    for ipset in IPSet.ensure_threat_caches():
+        if ipset.refresh_from_source():
+            job.add_log(f"Refreshed threat cache {ipset.name} ({ipset.cidr_count} entries)")
+        else:
+            job.add_log(f"Threat cache {ipset.name} refresh failed: {ipset.sync_error}")
+
+
 def check_system_health(job):
     """
     Cron job (every 3 min): checks system health across all runners.

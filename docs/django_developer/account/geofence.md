@@ -96,6 +96,46 @@ Every group save also invalidates that group's cached decisions.
 
 ---
 
+## Strict / Compliance Posture (opt-in)
+
+The engine defaults **fail-open** (a resilience choice). Deployments that
+require geofencing for jurisdictional compliance — where "can't verify
+location" must mean deny, not allow — opt into the strict posture. One bundled
+switch that, when on:
+
+1. **Fails closed on lookup failure** — composes with the existing flags:
+   `fail_closed = GEOFENCE_FAIL_CLOSED OR scope ∈ GEOFENCE_FAIL_CLOSED_SCOPES OR strict`
+2. **Denies private/reserved IPs** (`allow_private = GEOFENCE_ALLOW_PRIVATE_IPS AND NOT strict`)
+3. **Denies when geofencing has no rules configured** — reason
+   `no_rules_strict`; no silent allow-all on an enabled-but-unconfigured
+   deployment.
+
+Strict only ever **tightens**; it never loosens the granular flags, and with
+it off (the default) behavior is bit-for-bit unchanged.
+
+**Global**: `GEOFENCE_STRICT_POSTURE` (bool Setting, default `False`,
+global-only — group-scoped rows are rejected 400; writes via `/api/settings`
+must be a JSON boolean, anything else is rejected because `kind="bool"` would
+coerce garbage strings truthy).
+
+**Per-group override**: `Group.metadata["geofence_strict"]` — tri-state:
+absent/`null` inherits the global, `true`/`false` overrides in either
+direction (some groups strict, others permissive). Validated on REST write
+(non-boolean → 400); a flat sibling of `metadata["geofence"]` (which remains
+the raw rule dict).
+
+The **IP allowlist still wins** under strict (bypass → allowlist → rules): an
+allowlisted office IP gets in even on a strict no-rules deployment, with the
+exemption evidence recording `would_block_reason: "no_rules_strict"`. Blocks
+under strict posture are compliance-grade — evidence level **5**. Posture
+flips invalidate cached decisions automatically (Setting hook / group save
+hook); strict `lookup_failed` denials are never cached, so a transient
+provider outage recovers on the next successful lookup.
+
+Test header (test-mode gate only): `X-Mojo-Test-Geofence-Strict: 0|1`.
+
+---
+
 ## GeoDecision Shape
 
 The result of a geofence evaluation is a `GeoDecision` dict:
@@ -103,7 +143,7 @@ The result of a geofence evaluation is a `GeoDecision` dict:
 | Field | Type | Description |
 |---|---|---|
 | `allowed` | bool | `True` if all rules passed |
-| `reason` | str | One of: `no_rules`, `disabled`, `bypass`, `ip_allowlisted`, `passed`, `lookup_failed`, `private_ip`, `country_not_allowed`, `region_not_allowed`, `tor_detected`, `vpn_detected`, `proxy_detected`, `datacenter_detected`, `rule_invalid`, `group_inactive` |
+| `reason` | str | One of: `no_rules`, `no_rules_strict`, `disabled`, `bypass`, `ip_allowlisted`, `passed`, `lookup_failed`, `private_ip`, `country_not_allowed`, `region_not_allowed`, `tor_detected`, `vpn_detected`, `proxy_detected`, `datacenter_detected`, `rule_invalid`, `group_inactive` |
 | `detail` | str | Human-readable explanation |
 | `ip` | str | Evaluated IP address |
 | `country` / `country_code` | str | ISO 3166-1 alpha-2 code |
@@ -111,6 +151,7 @@ The result of a geofence evaluation is a `GeoDecision` dict:
 | `abuse` | dict | `{tor, vpn, datacenter, proxy}` booleans |
 | `checked_at` | str | ISO 8601 timestamp |
 | `rule_level` | str | `"system"` or `"group"` — which level caused a block |
+| `strict_posture` | bool | `True` when the decision was evaluated under strict posture (see below) |
 
 `ip_allowlisted` decisions additionally carry `allowlist_source`
 (`"setting"` or `"geoip"`), `allowlist_reason`, `allowlist_until`, and the
@@ -218,7 +259,7 @@ group-scoped rows are rejected with a 400 at write time.
 
 | Endpoint | Perms | Purpose |
 |---|---|---|
-| `GET /api/geo/rules` | view | Effective config: system rule + source (`setting`/`conf`/`none`) + modified stamp, posture (enabled, fail modes, scopes, cache TTL), allowlist summary, evaluation order, and every `@requires_geofence` endpoint with its scope. Pass `group_uuid` to include a group's rule. |
+| `GET /api/geo/rules` | view | Effective config: system rule + source (`setting`/`conf`/`none`) + modified stamp, posture (enabled, fail modes, scopes, strict posture, cache TTL), allowlist summary, evaluation order, and every `@requires_geofence` endpoint with its scope. Pass `group_uuid` to include a group's rule plus its `strict_posture` override (raw tri-state) and `strict_posture_effective` (resolved). |
 | `POST /api/geo/rules` | manage | Full-replace the system rule (`{"rule": {...}}`). Validated → readable 400. Persists as the global `Setting` row. |
 | `DELETE /api/geo/rules` | manage | Drop the DB override (falls back to django.conf). |
 | `POST /api/geo/simulate` | view | Uncached what-if: `{"ip": ...}` or `{"geo": {...}}` + optional `group_uuid`/`scope` → full `GeoDecision` (evaluates even while `GEOFENCE_ENABLED` is off; consults the allowlist when `ip` is given; emits nothing). |
@@ -249,7 +290,7 @@ are advisory and emit nothing.
 |---|---|---|
 | `geofence_block` | `rule_invalid` at evaluation (broken rule denying traffic — pages via `INCIDENT_LEVEL_THRESHOLD` default 7) | 7 |
 | `geofence_block` | lookup failure while failing OPEN (enforcement silently off) | 6 |
-| `geofence_block` | abuse-flag block, or any block on a scope in `GEOFENCE_FAIL_CLOSED_SCOPES` | 5 |
+| `geofence_block` | abuse-flag block, any block on a scope in `GEOFENCE_FAIL_CLOSED_SCOPES`, or any block under strict posture | 5 |
 | `geofence_block` | ordinary jurisdiction block | 3 |
 | `geofence_exempt` | allowlisted pass that would otherwise have blocked | 3 |
 | `geofence_config` | any rules/allowlist/whitelist change | 3 |
@@ -285,6 +326,7 @@ traffic is the system *working*, not an incident.
 | `GEOFENCE_FAIL_CLOSED` | `False` | If `True`, deny access when the geoip lookup fails. If `False`, allow on failure. |
 | `GEOFENCE_FAIL_CLOSED_SCOPES` | `[]` | Decorator scopes that fail CLOSED on lookup failure (e.g. `["payments"]`) while everything else stays fail-open. |
 | `GEOFENCE_ALLOW_PRIVATE_IPS` | `True` | Private/reserved IPs (localhost, RFC 1918) are always allowed when `True`. |
+| `GEOFENCE_STRICT_POSTURE` | `False` | Opt-in compliance posture: fail-closed on lookup failure + deny private IPs + deny when no rules are configured. Per-group override: `Group.metadata["geofence_strict"]` (tri-state). Global-only key; writes must be a JSON boolean. |
 | `GEOFENCE_TEST_OVERRIDE` | `None` | Dict that substitutes the geoip lookup. Use in tests or local dev to simulate specific countries/flags. |
 
 ### Test override example

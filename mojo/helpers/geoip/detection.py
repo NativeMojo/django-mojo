@@ -2,6 +2,7 @@
 Detection logic for Tor, VPN, Proxy, Cloud services, and Mobile carriers.
 """
 import requests
+from mojo.helpers import logit
 from .config import (
     ENABLE_TOR_DETECTION,
     ENABLE_VPN_DETECTION,
@@ -15,10 +16,28 @@ from .config import (
 )
 
 
+def _cached_ip_set(name):
+    """IPs from the IPSet-backed threat cache (incident app), or None when the
+    row is missing/empty — callers fall back to their live fetch. Lazy app
+    import so geoip keeps working without the incident app (precedent:
+    threat_intel.check_internal_threats)."""
+    try:
+        from mojo.apps.incident.models.ipset import IPSet
+        row = IPSet.objects.filter(name=name).first()
+        if row is not None and row.data:
+            return set(row.cidrs)
+    except Exception:
+        return None
+    return None
+
+
 def detect_tor(ip_address):
     """
     Check if the IP is a known Tor exit node.
-    Uses the Tor Project's exit node list.
+
+    Reads the IPSet-backed cache (refreshed every 6h by the incident app's
+    refresh_threat_lists cron); falls back to a live fetch of the Tor
+    Project's exit list when the cache doesn't exist yet.
 
     Args:
         ip_address: The IP address to check
@@ -28,6 +47,10 @@ def detect_tor(ip_address):
     """
     if not ENABLE_TOR_DETECTION:
         return False
+
+    cached = _cached_ip_set("tor_exits")
+    if cached is not None:
+        return ip_address in cached
 
     try:
         # Check against Tor Project's exit list
@@ -41,7 +64,7 @@ def detect_tor(ip_address):
                         exit_nodes.append(parts[1])
             return ip_address in exit_nodes
     except Exception as e:
-        print(f"[Tor Detection Error] Failed to check Tor status for {ip_address}: {e}")
+        logit.error("geoip", f"Tor exit-list check failed for {ip_address}: {e}")
 
     return False
 

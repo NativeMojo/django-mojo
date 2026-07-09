@@ -324,6 +324,26 @@ GET /api/system/geoip/time
 
 Built-in providers: `ipinfo`, `ipstack`, `ip-api`, `maxmind`, `mojo`.
 
+### Threat-List Caches (Tor exit list, blocklist.de)
+
+`detect_tor()` and `check_blocklist_de()` read from two **cache-only**
+incident `IPSet` rows — `tor_exits` and `blocklist_de` — instead of
+downloading the full lists on every call. The rows are created and refreshed
+every 6 hours by the incident app's `refresh_threat_lists` cron
+(`refresh_from_source()` only). When a row is missing or not yet warmed
+(fresh deploy before the first cron tick, or incident app not installed), the
+readers fall back to the original live fetch — no flag day.
+
+**Do NOT enable these rows.** They are created with `is_enabled=False` on
+purpose: enabling an `IPSet` puts it into the weekly `refresh_ipsets`
+firewall-sync path, which would kernel-block every Tor exit node and
+blocklist.de-listed IP fleet-wide. The rows carry this warning in their
+`description`. Detection remains policy-neutral — whether Tor/blocklisted
+traffic is *blocked* stays a geofence-rule / firewall decision.
+
+The Tor row honors `source_url` (falling back to the `TOR_EXIT_NODE_LIST_URL`
+setting); blocklist.de defaults to `https://lists.blocklist.de/lists/all.txt`.
+
 ### `mojo` Provider
 
 Use another django-mojo instance as a GeoIP data source. The downstream instance calls the upstream's `GET /api/system/geoip/lookup?graph=detailed` with an ApiKey token and caches the result locally.

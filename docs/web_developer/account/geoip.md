@@ -55,7 +55,7 @@ When `allowed` is `false`, `rule_level` indicates which level caused the block (
 | Field | Description |
 |---|---|
 | `allowed` | `true` if all geofence rules passed |
-| `reason` | One of `no_rules`, `disabled`, `bypass`, `ip_allowlisted`, `passed`, `lookup_failed`, `private_ip`, `country_not_allowed`, `region_not_allowed`, `tor_detected`, `vpn_detected`, `proxy_detected`, `datacenter_detected`, `rule_invalid`, `group_inactive` — see the django-developer [GeoDecision Shape](../../django_developer/account/geofence.md#geodecision-shape) reference |
+| `reason` | One of `no_rules`, `no_rules_strict`, `disabled`, `bypass`, `ip_allowlisted`, `passed`, `lookup_failed`, `private_ip`, `country_not_allowed`, `region_not_allowed`, `tor_detected`, `vpn_detected`, `proxy_detected`, `datacenter_detected`, `rule_invalid`, `group_inactive` — see the django-developer [GeoDecision Shape](../../django_developer/account/geofence.md#geodecision-shape) reference. `no_rules_strict` means the deployment (or the requested group) runs the opt-in strict posture and geofencing has no rules configured — access is denied instead of silently allowed. |
 | `detail` | Human-readable explanation of the decision |
 | `rule_level` | `"system"` or `"group"` when blocked; `null` when allowed |
 | `abuse` | Connection-type flags from the IP intelligence lookup |

@@ -3,22 +3,34 @@
 Decision flow:
   1. GEOFENCE_ENABLED=False    → allowed=True, reason="disabled"
   2. user has bypass_geofence  → allowed=True, reason="bypass", NO cache write
-  3. No rules at any level     → allowed=True, reason="no_rules", NO geoip lookup
+  3. No rules at any level     → allowed=True, reason="no_rules", NO geoip lookup.
+      Under STRICT posture this fast path is skipped — evaluation continues so
+      the allowlist still applies, then step 4c denies with "no_rules_strict".
   4. Cache hit                 → return cached decision
   4b. IP allowlisted           → allowed=True, reason="ip_allowlisted" — full
       exemption (jurisdiction + abuse flags). The rules still run in shadow so
       evidence can record would_block / would_block_reason.
+  4c. Strict + no rules        → allowed=False, reason="no_rules_strict"
+      (geofencing is required but nothing is configured — no silent allow-all).
   5. Resolve geo (GEOFENCE_TEST_OVERRIDE wins if set, else GeoLocatedIP.geolocate)
   6. Lookup failure            → allowed=(not fail-closed), reason="lookup_failed".
-      Fail-closed when GEOFENCE_FAIL_CLOSED or scope ∈ GEOFENCE_FAIL_CLOSED_SCOPES.
+      Fail-closed when GEOFENCE_FAIL_CLOSED or scope ∈ GEOFENCE_FAIL_CLOSED_SCOPES
+      or strict posture.
       NEVER cached — scope isn't in the cache key, so a fail-open allow must not
       be replayed to a fail-closed scope.
   7. Private/reserved IP       → allowed=GEOFENCE_ALLOW_PRIVATE_IPS, reason="private_ip"
+      (strict posture forces deny).
   8. System rule blocks        → rule_level="system"
   9. Group rule blocks         → rule_level="group"
  10. Else                      → allowed=True, reason="passed"
 
-Steps 4b and 7-10 cache the decision under (ip, group_id) for GEOFENCE_CACHE_TTL.
+STRICT POSTURE — opt-in compliance stance, one bundled switch: fail-closed on
+lookup failure + deny private IPs + deny when no rules are configured. Global
+GEOFENCE_STRICT_POSTURE (default False); per-group tri-state override at
+Group.metadata["geofence_strict"] (absent/None = inherit global, true/false =
+explicit). Strict only ever tightens — it never loosens the granular flags.
+
+Steps 4b, 4c and 7-10 cache the decision under (ip, group_id) for GEOFENCE_CACHE_TTL.
 
 TEST MODE — when the test-mode gate passes (see mojo.helpers.test_mode for the
 defense-in-depth checks: env var + loopback-only + no proxy chain), the engine
@@ -32,6 +44,7 @@ reloads:
     X-Mojo-Test-Geofence-Fail-Closed : "0" or "1", overrides GEOFENCE_FAIL_CLOSED
     X-Mojo-Test-Geofence-Fail-Closed-Scopes : comma list, overrides GEOFENCE_FAIL_CLOSED_SCOPES
     X-Mojo-Test-Geofence-Allow-Private : "0" or "1", overrides GEOFENCE_ALLOW_PRIVATE_IPS
+    X-Mojo-Test-Geofence-Strict   : "0" or "1", overrides GEOFENCE_STRICT_POSTURE
     X-Mojo-Test-Geofence-Cache-Ttl : int seconds; <=0 disables cache for this request
 The gate is closed by default; production never satisfies all four conditions.
 """
@@ -111,6 +124,19 @@ def _group_rules(group):
         return {}
     md = getattr(group, "metadata", None) or {}
     return md.get("geofence") or {}
+
+
+def _strict_posture(request, group):
+    """Effective strict posture: the group's metadata.geofence_strict override
+    wins when present (tri-state — None means inherit), else the global
+    GEOFENCE_STRICT_POSTURE setting."""
+    if group is not None:
+        md = getattr(group, "metadata", None) or {}
+        override = md.get("geofence_strict")
+        if override is not None:
+            return bool(override)
+    return _bool_setting_with_header(
+        request, "X-Mojo-Test-Geofence-Strict", "GEOFENCE_STRICT_POSTURE", False)
 
 
 def _both_empty(system, group_rules):
@@ -272,7 +298,8 @@ def _resolve_geo(ip, request=None):
         return None
 
 
-def _build_decision(allowed, reason, *, ip, geo=None, rule_level=None, detail=None):
+def _build_decision(allowed, reason, *, ip, geo=None, rule_level=None, detail=None,
+                    strict=False):
     abuse = {
         "tor": bool((geo or {}).get("is_tor", False)),
         "vpn": bool((geo or {}).get("is_vpn", False)),
@@ -291,6 +318,7 @@ def _build_decision(allowed, reason, *, ip, geo=None, rule_level=None, detail=No
         abuse=abuse,
         checked_at=dates.utcnow().isoformat(),
         rule_level=rule_level,
+        strict_posture=bool(strict),
     )
 
 
@@ -299,6 +327,7 @@ _DETAIL_MAP = {
     "disabled":            "Geofencing is disabled.",
     "bypass":              "Bypass permission granted.",
     "ip_allowlisted":      "IP is allowlisted; geofence exemption applied.",
+    "no_rules_strict":     "Geofencing is required but no rules are configured; access denied.",
     "passed":              "Allowed.",
     "lookup_failed":       "Geolocation lookup failed.",
     "private_ip":          "Private or reserved IP.",
@@ -328,7 +357,8 @@ def _allowlisted_decision(ip, exempt, shadow):
     """Assemble the allowed ip_allowlisted decision, carrying the shadow
     evaluation's geo signals and would-block outcome for evidence/simulate."""
     dec = _build_decision(True, "ip_allowlisted", ip=ip)
-    for field in ("country", "country_code", "region", "region_code", "abuse"):
+    for field in ("country", "country_code", "region", "region_code", "abuse",
+                  "strict_posture"):
         dec[field] = shadow.get(field)
     dec.allowlist_source = exempt.source
     dec.allowlist_reason = exempt.reason
@@ -370,9 +400,12 @@ class GeoFenceEngine:
         system = _system_rules(request)
         group_r = _group_rules(group)
         group_id = getattr(group, "pk", None)
+        strict = _strict_posture(request, group)
 
-        # 3. Zero-cost fast path
-        if _both_empty(system, group_r):
+        # 3. Zero-cost fast path — skipped under strict posture: no rules must
+        # DENY (no_rules_strict, step 4c in _evaluate), and the allowlist must
+        # still get its chance first, so evaluation continues.
+        if _both_empty(system, group_r) and not strict:
             return _build_decision(True, "no_rules", ip=ip)
 
         ttl = _int_setting_with_header(
@@ -390,13 +423,15 @@ class GeoFenceEngine:
         # what would have happened.
         exempt = _ip_allowlisted(request, ip)
         if exempt is not None:
-            shadow = cls._evaluate(request, ip, system, group_r, scope=scope)
+            shadow = cls._evaluate(request, ip, system, group_r, scope=scope,
+                                   strict=strict)
             dec = _allowlisted_decision(ip, exempt, shadow)
             _maybe_cache(ip, group_id, dec, ttl)
             return dec
 
         # 5-10. Resolve geo and evaluate rules.
-        dec = cls._evaluate(request, ip, system, group_r, scope=scope)
+        dec = cls._evaluate(request, ip, system, group_r, scope=scope,
+                            strict=strict)
         # lookup_failed is never cached: scope isn't part of the cache key, so
         # a fail-open allow from one scope must not be replayed to a
         # fail-closed scope — and caching transient failures prolongs outages.
@@ -422,21 +457,30 @@ class GeoFenceEngine:
             request, "X-Mojo-Test-Geofence-Enabled", "GEOFENCE_ENABLED", True)
         system = _system_rules(request)
         group_r = _group_rules(group)
+        strict = _strict_posture(request, group)
 
-        if _both_empty(system, group_r):
+        if _both_empty(system, group_r) and not strict:
             dec = _build_decision(True, "no_rules", ip=ip)
         else:
             exempt = _ip_allowlisted(request, ip) if ip else None
             shadow = cls._evaluate(request, ip, system, group_r, scope=scope,
-                                   geo=geo if geo is not None else _UNSET)
+                                   geo=geo if geo is not None else _UNSET,
+                                   strict=strict)
             dec = _allowlisted_decision(ip, exempt, shadow) if exempt else shadow
         dec.enabled = enabled
         return dec
 
     @classmethod
-    def _evaluate(cls, request, ip, system, group_r, scope=None, geo=_UNSET):
-        """Steps 5-10: resolve geo and evaluate rules. Never caches — the
+    def _evaluate(cls, request, ip, system, group_r, scope=None, geo=_UNSET,
+                  strict=False):
+        """Steps 4c-10: resolve geo and evaluate rules. Never caches — the
         caller decides (check() skips lookup_failed; simulate() never caches)."""
+        # 4c. Strict + no rules — deny before any geo lookup (cheap). Lives
+        # here, AFTER check()'s allowlist step, so an allowlisted IP still gets
+        # in and its shadow evaluation records would_block="no_rules_strict".
+        if strict and _both_empty(system, group_r):
+            return _build_decision(False, "no_rules_strict", ip=ip, strict=True)
+
         if geo is _UNSET:
             geo = _resolve_geo(ip, request)
 
@@ -449,13 +493,17 @@ class GeoFenceEngine:
                     request, "X-Mojo-Test-Geofence-Fail-Closed-Scopes",
                     "GEOFENCE_FAIL_CLOSED_SCOPES", [])
                 fail_closed = scope in scopes
-            return _build_decision(not fail_closed, "lookup_failed", ip=ip)
+            fail_closed = fail_closed or strict
+            return _build_decision(not fail_closed, "lookup_failed", ip=ip,
+                                   strict=strict)
 
         # 7. Private/reserved IP — no country code
         if not geo.get("country_code"):
             allow_priv = _bool_setting_with_header(
                 request, "X-Mojo-Test-Geofence-Allow-Private", "GEOFENCE_ALLOW_PRIVATE_IPS", True)
-            return _build_decision(allow_priv, "private_ip", ip=ip, geo=geo)
+            allow_priv = allow_priv and not strict
+            return _build_decision(allow_priv, "private_ip", ip=ip, geo=geo,
+                                   strict=strict)
 
         # 8 + 9. Evaluate rules. System first (hard floor).
         for level, rule in (("system", system), ("group", group_r)):
@@ -466,13 +514,15 @@ class GeoFenceEngine:
             except ValueError as exc:
                 logit.error("geofence", f"{level}-level rule invalid: {exc}")
                 return _build_decision(False, "rule_invalid", ip=ip, geo=geo,
-                                       rule_level=level, detail=str(exc))
+                                       rule_level=level, detail=str(exc),
+                                       strict=strict)
             ok, reason = evaluate_rule(rule, geo)
             if not ok:
-                return _build_decision(False, reason, ip=ip, geo=geo, rule_level=level)
+                return _build_decision(False, reason, ip=ip, geo=geo,
+                                       rule_level=level, strict=strict)
 
         # 10. Passed
-        return _build_decision(True, "passed", ip=ip, geo=geo)
+        return _build_decision(True, "passed", ip=ip, geo=geo, strict=strict)
 
 
 def _maybe_cache(ip, group_id, decision, ttl):
