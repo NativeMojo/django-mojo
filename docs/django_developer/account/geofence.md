@@ -122,7 +122,11 @@ coerce garbage strings truthy).
 absent/`null` inherits the global, `true`/`false` overrides in either
 direction (some groups strict, others permissive). Validated on REST write
 (non-boolean → 400); a flat sibling of `metadata["geofence"]` (which remains
-the raw rule dict).
+the raw rule dict). **Changing it requires the global `manage_geofence` (or
+`security`) permission** — the same trust level as the global switch; a
+tenant admin who can merely edit the group gets a 403 and cannot opt their
+group out of a platform-mandated posture. Every flip is recorded as a
+`geofence_config` incident event (`target: "group:<id>"`, old/new/actor).
 
 The **IP allowlist still wins** under strict (bypass → allowlist → rules): an
 allowlisted office IP gets in even on a strict no-rules deployment, with the

@@ -63,6 +63,9 @@ global, `true`/`false` overrides it — and `group.strict_posture_effective` is
 the resolved outcome. Set the override by writing the group's metadata:
 `POST /api/group/<pk>` with `{"metadata": {"geofence_strict": true}}`
 (non-boolean values are rejected 400; write `null` to go back to inherit).
+Changing it requires the **global** `manage_geofence` (or `security`)
+permission — group-scoped admin rights return 403 — and every change is
+recorded as a `geofence_config` incident event.
 Requests denied because a strict deployment has no rules configured return
 the 403 reason `no_rules_strict`.
 

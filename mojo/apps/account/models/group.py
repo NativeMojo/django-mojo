@@ -657,6 +657,26 @@ class Group(MojoSecrets, MojoModel):
             raise merrors.ValueException(
                 "metadata.geofence_strict must be a boolean (true/false) "
                 "or null to inherit the global posture")
+        # Changing the override is a compliance-posture change: it requires the
+        # same GLOBAL trust level as the global switch (a tenant admin who can
+        # merely edit the group must not opt their group out of a
+        # platform-mandated strict posture). Detected by DB comparison — REST
+        # JSONField merges don't register in changed_fields.
+        old_strict = None
+        if not created and self.pk:
+            old_md = type(self).objects.filter(
+                pk=self.pk).values_list("metadata", flat=True).first()
+            old_strict = (old_md or {}).get("geofence_strict")
+        if gf_strict != old_strict:
+            from mojo import errors as merrors
+            actor = getattr(self, "active_user", None)
+            if actor is None or not actor.has_permission(
+                    ["manage_geofence", "security"]):
+                raise merrors.PermissionDeniedException(
+                    "Changing metadata.geofence_strict requires the global "
+                    "manage_geofence (or security) permission")
+            # emit the config-change evidence after the save lands
+            self._geofence_strict_change = (old_strict, gf_strict)
 
     def on_rest_created(self):
         metrics.set_value("total_groups", Group.objects.filter(is_active=True).count(), account="global")
@@ -671,6 +691,19 @@ class Group(MojoSecrets, MojoModel):
         # not serve stale allows for up to GEOFENCE_CACHE_TTL. Bounded scan.
         if not created:
             self._invalidate_geofence_decisions()
+        # A strict-posture flip is compliance evidence (change detected and
+        # stashed in on_rest_pre_save).
+        change = getattr(self, "_geofence_strict_change", None)
+        if change is not None:
+            self._geofence_strict_change = None
+            try:
+                from mojo.apps.account.services.geofence import evidence
+                evidence.report_config_change(
+                    f"group:{self.pk}", old=change[0], new=change[1],
+                    request=getattr(self, "active_request", None),
+                    user=getattr(self, "active_user", None))
+            except Exception:
+                pass
 
     def _invalidate_geofence_decisions(self):
         try:

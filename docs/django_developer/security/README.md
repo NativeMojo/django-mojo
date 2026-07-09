@@ -604,6 +604,15 @@ ipset = IPSet.objects.create(
 
 The `refresh_ipsets` cron fetches CIDRs from source URLs weekly and syncs to all servers.
 
+**Cache-only rows:** `tor_exits` and `blocklist_de` are `IPSet` rows created with
+`is_enabled=False` — they exist purely as a geoip-detection cache (see
+[account/geoip.md](../account/geoip.md#threat-list-caches-tor-exit-list-blocklistde))
+and are excluded from `refresh_ipsets`/`sync_firewall`. They're kept warm by the
+separate `refresh_threat_lists` cron and can never be enabled: the REST `enable`
+action rejects them (400) and `sync()` hard no-ops for them even if the flag is
+force-set — otherwise the full Tor exit list / blocklist.de list would be pushed
+into the kernel firewall fleet-wide.
+
 ### Firewall Reconciliation (`sync_firewall`)
 
 `sync_firewall` runs hourly and is also the startup recovery path — it restores all ipsets after a server reboot (iptables/ipset state is lost on restart).
@@ -744,6 +753,7 @@ Default health rules are auto-created on first health check run. They send notif
 | `sweep_expired_blocks` | Every 5 minutes | Unblocks IPs where `blocked_until` has passed |
 | `sync_firewall` | Hourly | Restores all ipsets from DB truth; skips unchanged sets; startup recovery after reboot |
 | `refresh_ipsets` | Weekly (Sunday 3 AM) | Re-fetches IPSet source URLs and syncs CIDRs to fleet |
+| `refresh_threat_lists` | Every 6 hours | Refreshes the cache-only `tor_exits`/`blocklist_de` IPSet rows (`refresh_from_source()` only — never synced to the firewall); see [account/geoip.md](../account/geoip.md#threat-list-caches-tor-exit-list-blocklistde) |
 | `check_system_health` | Every 3 minutes | Checks runner health, system metrics (if `HEALTH_MONITORING_ENABLED`) |
 
 ### Async Jobs (Broadcast)

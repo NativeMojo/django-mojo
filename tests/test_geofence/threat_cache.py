@@ -128,6 +128,35 @@ def test_cached_ip_set_fallback_signal(opts):
         "populated row must return the IP set"
 
 
+@th.django_unit_test("threat cache: enable action rejected + sync() hard breaker")
+def test_cache_only_never_syncs(opts):
+    rows = _ensure_rows()
+    row = rows["tor_exits"]
+    assert row.is_cache_only is True, "tor_exits must report cache-only"
+    row.last_synced = None
+    row.save(update_fields=["last_synced"])
+
+    raised = False
+    try:
+        row.on_action_enable(None)
+    except Exception as e:
+        raised = True
+        assert "cache-only" in str(e), f"rejection must explain itself: {e}"
+    assert raised, "enable action must be rejected for cache-only rows"
+    row.refresh_from_db()
+    assert row.is_enabled is False, "rejected enable must not flip the flag"
+
+    # Even a force-set flag must not reach the firewall: sync() no-ops.
+    row.is_enabled = True
+    row.save(update_fields=["is_enabled"])
+    row.sync()
+    row.refresh_from_db()
+    assert row.last_synced is None, \
+        "sync() must be a hard no-op for cache-only rows (kernel-firewall breaker)"
+    row.is_enabled = False
+    row.save(update_fields=["is_enabled"])
+
+
 @th.django_unit_test("threat cache: excluded from the weekly refresh_ipsets selection")
 def test_weekly_cron_excludes_threat_caches(opts):
     from mojo.apps.incident.models import IPSet

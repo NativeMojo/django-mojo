@@ -145,7 +145,7 @@ The `IPSet` model manages ipset-based bulk IP blocking for entire countries, dat
 |---|---|
 | `name` | Unique ipset name (e.g., `country_cn`, `abuse_abuseipdb`) |
 | `kind` | Type of set: `country`, `datacenter`, `abuse`, `custom` |
-| `source` | Data source: `ipdeny`, `abuseipdb`, `manual` |
+| `source` | Data source: `ipdeny`, `abuseipdb`, `tor`, `blocklist_de`, `manual` |
 | `source_url` | URL to fetch CIDR data from (auto-populated for known sources) |
 | `source_key` | API key or identifier for the source (e.g., country code, API key) |
 | `data` | TextField containing the CIDR list (one per line) |
@@ -196,6 +196,22 @@ IPSet.create_abuse_list("your-api-key-here")
 
 A weekly cron job (Sunday 3:00 AM) calls `refresh_ipsets`, which iterates all enabled IPSet records, re-fetches data from their configured sources, updates the `data` field, and syncs the updated sets fleet-wide.
 
+### Cron: Threat List Cache Refresh (`tor_exits`, `blocklist_de`)
+
+A separate 6-hourly cron, `refresh_threat_lists`, keeps two **cache-only**
+IPSet rows warm — `tor_exits` (source `tor`) and `blocklist_de` (source
+`blocklist_de`). They are created with `is_enabled=False` and refreshed via
+`refresh_from_source()` only — never `sync()` — so they are excluded from
+`refresh_ipsets`/`sync_firewall` and never reach the kernel firewall. They
+exist purely so `mojo.helpers.geoip.detection.detect_tor()` and
+`check_blocklist_de()` can read from the DB cache instead of downloading the
+full list on every lookup. See
+[account/geoip.md](../account/geoip.md#threat-list-caches-tor-exit-list-blocklistde)
+for the reader side. **These rows cannot be enabled** — the REST `enable`
+action rejects them and `sync()` no-ops for them even if the flag is
+force-set, so the entire Tor exit list / blocklist.de list can never be
+pushed into the fleet-wide firewall.
+
 ### Async Jobs
 
 | Job | Type | Description |
@@ -203,6 +219,7 @@ A weekly cron job (Sunday 3:00 AM) calls `refresh_ipsets`, which iterates all en
 | `broadcast_sync_ipset` | Broadcast | Loads ipset data on the local instance (creates ipset, loads CIDRs, adds iptables rule). Receives plain dict: `{"name": ..., "cidrs": [...]}` |
 | `broadcast_remove_ipset` | Broadcast | Removes an ipset and its iptables rule from the local instance. Receives plain dict: `{"name": ...}` |
 | `refresh_ipsets` | Cron (weekly, Sunday 3:00 AM) | Re-fetches source data for all enabled IPSets and syncs fleet-wide |
+| `refresh_threat_lists` | Cron (every 6 hours) | `refresh_from_source()` only, for the cache-only `tor_exits`/`blocklist_de` IPSet rows — never syncs to the firewall |
 
 ---
 

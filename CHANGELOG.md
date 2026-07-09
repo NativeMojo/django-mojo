@@ -11,11 +11,16 @@ validated on REST write), so some tenants can run strict while others stay
 permissive. The IP allowlist still exempts under strict (with
 `would_block_reason` evidence), blocks under strict report as level-5
 compliance events, and posture flips invalidate cached decisions
-automatically. `GET /api/geo/rules` now surfaces `posture.strict_posture`
+automatically. Changing the per-group override requires the **global**
+`manage_geofence`/`security` permission (a tenant admin who can merely edit
+the group cannot opt out of a platform-mandated posture — 403) and every
+flip is recorded as a `geofence_config` incident event. `GET /api/geo/rules`
+now surfaces `posture.strict_posture`
 plus the group override and its resolved value. Separately, the Tor exit
 list and blocklist.de are now cached in two **cache-only** incident `IPSet`
-rows (`tor_exits`, `blocklist_de`; created `is_enabled=False` — never
-firewall-synced) refreshed 6-hourly by a new `refresh_threat_lists` cron;
+rows (`tor_exits`, `blocklist_de`; created `is_enabled=False`, the REST
+`enable` action rejects them, and `sync()` hard no-ops for them — they can
+never reach the kernel firewall) refreshed 6-hourly by a new `refresh_threat_lists` cron;
 `detect_tor` / `check_blocklist_de` read the cache and fall back to the old
 live fetch until it warms, removing the per-lookup download of the full
 lists from the geolocation path. (ITEM-021)

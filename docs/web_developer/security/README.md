@@ -610,7 +610,7 @@ IPSets are the primary mechanism for blocking entire countries, datacenters, or 
 | `name` | string | Yes | Unique ipset name, e.g. `country_cn`, `abuse_ips`. Used as the kernel ipset identifier — no spaces or special characters. |
 | `kind` | string | Yes | Type: `country`, `datacenter`, `abuse`, `custom` |
 | `description` | string | Yes | Human-readable label |
-| `source` | string | Yes | Data source: `ipdeny`, `abuseipdb`, `manual` |
+| `source` | string | Yes | Data source: `ipdeny`, `abuseipdb`, `tor`, `blocklist_de`, `manual` |
 | `source_url` | string | Yes | URL to fetch CIDR data from (auto-populated for ipdeny country sets) |
 | `source_key` | string | Yes (write-only) | API key or identifier for the source. For AbuseIPDB this is the API key. Never returned in any response graph. |
 | `is_enabled` | bool | Yes | Whether this set is active in iptables on all instances |
@@ -621,6 +621,12 @@ IPSets are the primary mechanism for blocking entire countries, datacenters, or 
 | `modified` | datetime | No | Last modification timestamp |
 
 > **Note**: The `data` field (raw CIDR list) is excluded from the default response graph. Use `?graph=detailed` to include it.
+
+> **Note**: Listing IPSets may show two system-managed, `is_enabled: false` rows —
+> `tor_exits` and `blocklist_de`. These are cache-only lookups consumed
+> internally by geoip Tor/blocklist.de detection and are refreshed automatically
+> by a background cron. The `enable` action returns 400 for them — pushing the
+> full list into the fleet-wide firewall is not permitted.
 
 ### Graphs
 

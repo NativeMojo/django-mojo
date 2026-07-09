@@ -247,6 +247,92 @@ def test_group_strict_write_validation(opts):
         grp.delete()
 
 
+@th.django_unit_test("strict: group-scoped admin cannot flip geofence_strict (global perm required)")
+def test_group_strict_requires_global_perm(opts):
+    """SECURITY: a tenant admin who can edit the group must NOT be able to opt
+    their group out of (or into) a platform compliance posture — changing
+    geofence_strict needs the global manage_geofence/security trust level."""
+    from mojo.apps.account.models import User
+    from mojo.apps.account.models.group import Group
+    from mojo.apps.account.models.member import GroupMember
+    from mojo.decorators.limits import clear_rate_limits
+    suffix = _uuid.uuid4().hex[:8]
+    email = f"gf_tenant_{suffix}@geofence.test"
+    password = "Geo##tenant99"
+    user = User.objects.create_user(username=email, email=email, password=password)
+    user.is_email_verified = True
+    user.requires_mfa = False
+    user.save()
+    grp = Group.objects.create(name=f"GF TenantStrict {suffix}", is_active=True)
+    grp.add_member(user)
+    member = GroupMember.objects.get(group=grp, user=user)
+    member.add_permission("manage_group")
+    member.save()
+    try:
+        clear_rate_limits(ip=IP, key="login")
+        ok = opts.client.login(email, password)
+        assert ok, f"tenant login failed: {opts.client.last_response.body}"
+
+        # sanity: the member CAN edit ordinary group metadata
+        resp = opts.client.post(
+            f"/api/group/{grp.pk}", {"metadata": {"motto": "we ship"}})
+        assert resp.status_code == 200, \
+            f"tenant admin must still edit normal metadata, got {resp.status_code}: " \
+            f"{opts.client.last_response.body}"
+
+        resp = opts.client.post(
+            f"/api/group/{grp.pk}", {"metadata": {"geofence_strict": False}})
+        assert resp.status_code == 403, \
+            f"tenant admin must NOT flip geofence_strict, got {resp.status_code}"
+        grp.refresh_from_db()
+        assert (grp.metadata or {}).get("geofence_strict") is None, \
+            "denied flip must not persist"
+
+        # no-op writes that leave geofence_strict untouched stay allowed
+        grp.metadata["geofence_strict"] = True
+        grp.save()
+        resp = opts.client.post(
+            f"/api/group/{grp.pk}", {"metadata": {"motto": "still shipping"}})
+        assert resp.status_code == 200, \
+            f"unrelated metadata edit must not trip the gate, got {resp.status_code}: " \
+            f"{opts.client.last_response.body}"
+    finally:
+        opts.client.logout()
+        member.delete()
+        grp.delete()
+        user.delete()
+
+
+@th.django_unit_test("strict: geofence_strict flip emits geofence_config evidence")
+def test_group_strict_flip_audited(opts):
+    from mojo.apps.incident.models import Event
+    grp = _make_group("GF StrictAudit")
+    _admin_login(opts)
+    try:
+        qs = Event.objects.filter(
+            category="geofence_config", metadata__target=f"group:{grp.pk}")
+        before = qs.count()
+        resp = opts.client.post(
+            f"/api/group/{grp.pk}", {"metadata": {"geofence_strict": True}})
+        assert resp.status_code == 200, f"flip failed: {resp.status_code}"
+        assert qs.count() == before + 1, \
+            "geofence_strict flip must emit a geofence_config event"
+        ev = qs.order_by("-id").first()
+        assert ev.metadata.get("new") is True and ev.metadata.get("old") is None, \
+            f"event must carry old/new, got {dict(ev.metadata)}"
+        assert ev.metadata.get("changed_by") == opts.admin_email, \
+            f"event must attribute the actor, got {ev.metadata.get('changed_by')!r}"
+
+        # unchanged writes must NOT spam the evidence stream
+        resp = opts.client.post(
+            f"/api/group/{grp.pk}", {"metadata": {"geofence_strict": True}})
+        assert resp.status_code == 200, f"no-op write failed: {resp.status_code}"
+        assert qs.count() == before + 1, "no-change write must not emit an event"
+    finally:
+        opts.client.logout()
+        grp.delete()
+
+
 @th.django_unit_test("strict: /api/settings write path validates GEOFENCE_STRICT_POSTURE")
 def test_setting_write_validation(opts):
     from mojo.apps.account.models.setting import Setting

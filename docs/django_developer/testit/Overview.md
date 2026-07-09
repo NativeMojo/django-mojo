@@ -434,6 +434,7 @@ Several framework hooks (geofence engine, account extension handlers, bouncer de
 | `X-Mojo-Test-Geofence-Fail-Closed` (`0`/`1`) | `GEOFENCE_FAIL_CLOSED` | same |
 | `X-Mojo-Test-Geofence-Fail-Closed-Scopes` (comma list) | `GEOFENCE_FAIL_CLOSED_SCOPES` | same |
 | `X-Mojo-Test-Geofence-Allow-Private` (`0`/`1`) | `GEOFENCE_ALLOW_PRIVATE_IPS` | same |
+| `X-Mojo-Test-Geofence-Strict` (`0`/`1`) | `GEOFENCE_STRICT_POSTURE` | same |
 | `X-Mojo-Test-Geofence-Cache-Ttl` (int) | `GEOFENCE_CACHE_TTL` | same |
 | `X-Mojo-Test-Pre-Register-Validator` (dotted path) | `PRE_REGISTER_VALIDATOR` | `mojo.apps.account.services.extensions` |
 | `X-Mojo-Test-User-Registered-Handler` (dotted path) | `USER_REGISTERED_HANDLER` | same |

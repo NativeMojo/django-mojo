@@ -92,6 +92,12 @@ class IPSet(models.Model, MojoModel):
         return f"{self.name} ({self.kind}, {self.cidr_count} CIDRs, {status})"
 
     @property
+    def is_cache_only(self):
+        """True for the geoip threat-list caches — rows that must never be
+        synced into the kernel firewall (see THREAT_CACHE_SETS)."""
+        return self.name in self.THREAT_CACHE_SETS
+
+    @property
     def cidrs(self):
         """Returns the CIDR list as a list of strings."""
         if not self.data:
@@ -108,6 +114,12 @@ class IPSet(models.Model, MojoModel):
         self.sync()
 
     def on_action_enable(self, value):
+        if self.is_cache_only:
+            from mojo import errors as merrors
+            raise merrors.ValueException(
+                f"'{self.name}' is a cache-only threat list for geoip "
+                f"detection — enabling it would kernel-block every listed IP "
+                f"fleet-wide and is not permitted")
         self.is_enabled = True
         self.save(update_fields=["is_enabled"])
         self.sync()
@@ -129,7 +141,10 @@ class IPSet(models.Model, MojoModel):
 
     def sync(self):
         """Broadcast this ipset to all instances."""
-        if not self.is_enabled:
+        # Hard circuit breaker: the cache-only threat lists must never reach
+        # the kernel firewall, even if is_enabled was force-set via a generic
+        # field save (the enable action also rejects them with a 400).
+        if not self.is_enabled or self.is_cache_only:
             return
         from mojo.apps import jobs
         jobs.broadcast_execute(

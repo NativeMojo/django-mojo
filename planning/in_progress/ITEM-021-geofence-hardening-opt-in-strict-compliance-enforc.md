@@ -622,6 +622,24 @@ observability (owned by `geofence-settings-write-validation-gap` in inbox).
   `tests/test_geofence/threat_cache.py`, NOT `tests/test_incident/` as planned —
   test_incident is an opt-in module skipped by the default suite, so tests
   there would never run in routine work.
+- **Build outcome (2026-07-08/09)**: implemented in commit `3aff6c0`; post-build
+  hardening in a follow-up commit. Full default suite after all changes:
+  2354 total / 2298 passed / **0 failed** / 56 skipped — baseline invariant
+  held (green → green). One unrelated flake observed once in
+  test_verification (token-TTL timing); passed on rerun.
+- **Post-build security review (2026-07-08)**: no CRITICAL. One WARNING
+  fixed per owner ruling ("platform admins only"): changing
+  `metadata.geofence_strict` now requires the global `manage_geofence`/
+  `security` permission (Group.on_rest_pre_save compares against the DB
+  value — JSONField merges don't populate changed_fields — and 403s
+  otherwise) + regression test. Two INFO items also fixed: geofence_strict
+  flips now emit `geofence_config` evidence (target `group:<id>`), and the
+  cache-only IPSet rows got a hard code breaker (`is_cache_only`: enable
+  action 400s, `sync()` no-ops even if the flag is force-set). Deferred
+  (INFO, pre-existing pattern): SSRF-hardening helper for the `_fetch_*`
+  source_url fetchers — worth a future chore; `no_rules_strict`/
+  `strict_posture` visibility on public geo/check 403s accepted (consistent
+  with the documented reason/detail exposure policy).
 - **Overlap resolution (2026-07-07, ITEM-017 scope):** ITEM-017 (geofence config
   + evidence plane) builds **(D) bypass visibility** (`GET /api/geo/bypass_holders`)
   and the **per-scope fail posture map** (`GEOFENCE_FAIL_CLOSED_SCOPES`, decorator
@@ -634,4 +652,16 @@ observability (owned by `geofence-settings-write-validation-gap` in inbox).
 - closed: YYYY-MM-DD
 - branch:
 - files changed:
-- tests added:
+- tests added: tests/test_geofence/strict_posture.py (15 tests — strict
+  no-rules/lookup-failure/private-IP denials + opt-in defaults, allowlist
+  exemption with no_rules_strict shadow, strict_posture decision flag,
+  per-group tri-state override (tighten + loosen), level-5 evidence, group
+  metadata write validation, global-perm gate on geofence_strict (tenant
+  admin 403), flip audit event + no-op dedupe, /api/settings JSON-boolean +
+  global-only validation, group posture-flip cache invalidation, geo/rules
+  posture fields, simulate strict) and tests/test_geofence/threat_cache.py
+  (7 tests — ensure_threat_caches disabled/idempotent/operator-safe,
+  ExitAddress parser, detect_tor + check_blocklist_de cached reads without
+  network, missing/empty-row fallback signal, enable-action rejection +
+  sync() hard breaker, weekly-cron exclusion);
+  tests/test_geofence/_helpers.py extended (strict header)
