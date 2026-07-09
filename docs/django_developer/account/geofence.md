@@ -283,6 +283,44 @@ and the acting user. Query `/api/incident/event?category=geofence_config`
 
 ---
 
+## Member Plane — Group-Scoped Visibility
+
+The config plane is platform-staff only; the **member plane** is its
+group-scoped, read-only counterpart for a brand's own admin. One endpoint:
+`GET /api/geo/policy`, gated by `@md.requires_perms("view_security",
+"security")` — a **global** grant reads any group, a **member** grant reads
+exactly the group it is granted in (the decorator checks the grant against
+`request.group`, and the response is built solely from `request.group`, so
+cross-tenant reads are structurally impossible). The keys deliberately match
+`Event.VIEW_PERMS`, so one member grant lights up both the policy read and
+the group's event feed; the config-plane keys
+(`view_geofence`/`manage_geofence`) remain global-only and do NOT open this
+endpoint.
+
+The payload is deliberately narrow — the policy that applies to that group's
+traffic (`enabled`, `system_rule` baseline, `group_rule`, `strict_posture`
+tri-state + `strict_posture_effective`, `evaluation_order`) and never the
+config plane's operational detail (`enforced_endpoints`, allowlist
+internals, fail-closed scopes, cache TTL, config source/modified). It reads
+persisted config (settings + `Group.metadata`) like `geo/rules` does — not
+the engine's test-header overlays. A `group`/`group_uuid` param is required:
+members without one 403 at the decorator; global holders get a 400. The
+dispatcher resolves `group_uuid` for **active** groups only — inspecting an
+inactive group stays a `geo/rules` (admin) affordance.
+
+**Events — no new mechanics.** `Event.VIEW_PERMS = ["view_security",
+"security"]` plus the framework's group-scoped list fallback
+(`mojo/models/rest.py::on_rest_handle_list`) already confine a member grant
+to `group__in=<their groups>`, and groupless rows are excluded. Geofence
+events carry a group only when the enforced request itself supplied
+`group`/`group_uuid` (the incident reporter falls back to `request.group`;
+attribution is client-reported — ITEM-020), so members see group-attributed
+activity, not verified totals. `geofence_config` events are effectively
+always groupless (platform config history) and stay platform-only.
+Regression tests: `tests/test_geofence/member_visibility.py`.
+
+---
+
 ## Evidence Plane — Incident Events + Metrics
 
 Every enforcement outcome that matters to an auditor becomes an incident

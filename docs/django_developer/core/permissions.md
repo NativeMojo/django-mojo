@@ -184,7 +184,7 @@ Use these when you need read-only access or scoped access within a domain:
 | BouncerSignal | manage_users, view_security, manage_security, **security**, **users** | (read-only) | Audit trail |
 | BotSignature | manage_users, view_security, manage_security, **security**, **users** | manage_users, manage_security, **security**, **users** | |
 
-**REST endpoints (non-RestMeta):** The geofence config-plane endpoints in `account/rest/geofence.py` (`geo/rules`, `geo/simulate`, `geo/allowlist`, `geo/bypass_holders`) accept `view_geofence`/`manage_geofence`/`security`, not RestMeta perms.
+**REST endpoints (non-RestMeta):** The geofence config-plane endpoints in `account/rest/geofence.py` (`geo/rules`, `geo/simulate`, `geo/allowlist`, `geo/bypass_holders`) accept `view_geofence`/`manage_geofence`/`security` as **global-only** grants, not RestMeta perms. The member-plane read `GET geo/policy` instead accepts `view_security`/`security` — global **or** granted on a GroupMember for the requested group (the response is confined to that group; see the geofence doc's Member Plane section).
 
 ### Incident App
 

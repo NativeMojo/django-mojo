@@ -2,12 +2,15 @@
 
 The geofence **config plane**: editable system rules, IP allowlist, what-if
 simulation, and exemption audit endpoints — the backend for an admin-portal
-geofencing section maintained by legal/business staff. For the public
-pre-flight check (`GET /api/geo/check`) see [GeoIP & Geofencing](geoip.md);
-for rule semantics see the django-developer
-[Geofencing reference](../../django_developer/account/geofence.md).
+geofencing section maintained by legal/business staff. Also the **member
+plane**: `GET /api/geo/policy` (below), the group-scoped policy read for a
+brand's own admin. For the public pre-flight check (`GET /api/geo/check`)
+see [GeoIP & Geofencing](geoip.md); for rule semantics see the
+django-developer [Geofencing reference](../../django_developer/account/geofence.md).
 
-## Permissions
+## Permissions — Two Audiences
+
+**Platform staff (global grants)** — the config plane:
 
 | Permission | Grants |
 |---|---|
@@ -15,12 +18,80 @@ for rule semantics see the django-developer
 | `manage_geofence` | Everything, including writes |
 | `security` | Domain category — grants all of the above |
 
-All endpoints return `403` without a matching permission. **Permissions must
-be global user grants** — group-scoped (member) permissions do NOT apply,
-because these endpoints manage platform-wide config; passing a `group` param
-does not change that. Writes are recorded as `geofence_config` incident
-events (queryable via `GET /api/incident/event?category=geofence_config`,
-needs `view_security`) — that stream is the change history.
+Config-plane permissions must be **global user grants** — group-scoped
+(member) permissions do NOT apply, because these endpoints manage
+platform-wide config; passing a `group` param does not change that. Writes
+are recorded as `geofence_config` incident events (queryable via
+`GET /api/incident/event?category=geofence_config`, needs global
+`view_security`) — that stream is the change history.
+
+**Brand admins (member grants)** — a `view_security`/`security` permission
+granted on a GroupMember (assignable by that group's admin) opens exactly
+two group-scoped reads, both confined to the member's own group:
+
+- `GET /api/geo/policy` — that group's effective policy, deliberately narrowed
+- `GET /api/incident/event?category=geofence_block|geofence_exempt` — that
+  group's enforcement events (see "Member event feed" below)
+
+Everything else returns `403` without a matching permission.
+
+---
+
+## `GET /api/geo/policy` — Member-Readable Effective Policy
+
+The group-scoped read for a brand's own admin: the geofencing policy that
+actually applies to **their** group — nothing platform-wide.
+
+Query params: `group_uuid` (or numeric `group`) — **required**, and must be
+a group the caller holds a member `view_security`/`security` grant in
+(global holders may read any group). Without a group param members get
+`403` and global holders get `400`. An inactive group's uuid does not
+resolve here — inspecting inactive groups stays a `GET geo/rules` (admin)
+affordance.
+
+```json
+{
+  "status": true,
+  "data": {
+    "group": {"id": 4, "uuid": "…", "name": "Acme", "is_active": true},
+    "enabled": true,
+    "evaluation_order": ["system", "group"],
+    "system_rule": {"country": {"in": ["US", "CA"]}},
+    "group_rule": {"country": {"in": ["US"]}},
+    "strict_posture": null,
+    "strict_posture_effective": false
+  }
+}
+```
+
+`system_rule` is the platform baseline that applies to all traffic including
+this group's; `group_rule` is the group's own rule (evaluated after the
+baseline — either can block). `strict_posture` is the group's raw tri-state
+override (`null` = inherit) and `strict_posture_effective` the resolved
+outcome; **changing** the override still requires global `manage_geofence`.
+
+The payload is **deliberately narrower** than `GET geo/rules`: no
+`enforced_endpoints`, no `allowlist_summary`, no cache TTL / fail-closed
+scopes / config provenance — operational detail stays platform-staff only,
+and new `geo/rules` fields do not automatically appear here.
+
+### Member event feed
+
+The same member grant scopes `GET /api/incident/event` to the member's own
+group, so a brand dashboard can list its enforcement history:
+
+```
+GET /api/incident/event?category=geofence_block
+GET /api/incident/event?category=geofence_exempt
+```
+
+Only **group-attributed** events appear: an enforcement event carries a
+group when the blocked/exempted request itself supplied `group`/`group_uuid`
+(e.g. white-label auth pages). Requests without group context are recorded
+globally and are not member-visible — read the feed as reported activity on
+your auth surface, not a verified total (same caveat as the per-group
+metrics below). `geofence_config` events are platform config history and
+effectively always global-only.
 
 ---
 

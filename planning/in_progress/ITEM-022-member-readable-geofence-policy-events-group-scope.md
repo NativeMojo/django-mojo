@@ -370,6 +370,9 @@ filed in that repo, not here.)
 
 ## Notes
 
+- **Build baseline (2026-07-09)**: GREEN — total 2354, passed 2298, failed 0,
+  skipped 56 (default suite; opt-in modules excluded). No pre-existing failures:
+  every post-change failure is attributable to this build.
 - **Not urgent / not blocking**: the platform-admin surface (ITEM-017 +
   mverify_portal ITEM-014) already fully serves the compliance-evidence use
   case (Coinflow, etc.). This is a distinct audience/capability, not a fix.

@@ -1,7 +1,11 @@
-"""Geofence REST — public pre-flight check + the perm-gated config plane.
+"""Geofence REST — public pre-flight check, the member policy read, and the
+perm-gated config plane.
 
 Public (rate-limited):
     GET  /api/geo/check           — full GeoDecision for the calling IP
+
+Member plane (group-scoped read; global OR member `view_security`/`security`):
+    GET  /api/geo/policy          — narrow effective policy for ONE group
 
 Config plane (new perms `view_geofence` / `manage_geofence`; `security` is the
 domain category — legal/business staff manage jurisdiction rules WITHOUT
@@ -22,7 +26,11 @@ the Setting model hooks.
 SECURITY: config-plane permissions are checked against the user's GLOBAL
 grants only (@md.requires_global_perms) — a GroupMember-scoped permission,
 which any tenant/group admin can hand out, must never authorize reading or
-writing platform-wide enforcement config.
+writing platform-wide enforcement config. The ONE deliberate member-scoped
+read is GET /api/geo/policy: @requires_perms accepts a member grant checked
+against request.group itself, and the response is confined to that group
+with a deliberately narrowed payload (no enforced_endpoints / allowlist /
+posture internals / config provenance).
 """
 from mojo import decorators as md
 from mojo import errors as merrors
@@ -78,6 +86,43 @@ def on_geo_check(request):
     decision = GeoFenceEngine.check(
         request, group=group, user=getattr(request, "user", None), scope=scope)
     return JsonResponse({"status": True, "data": dict(decision)})
+
+
+@md.GET("geo/policy")
+@md.requires_perms("view_security", "security")
+def on_geo_policy(request):
+    """Member-readable effective geofence policy for ONE group (the caller's).
+
+    The group-scoped counterpart to GET geo/rules for a brand's own admin:
+    baseline + the group's own rule + effective strict posture — the policy
+    that actually applies to their traffic. Deliberately narrow: never
+    includes platform operational detail (enforced_endpoints, allowlist
+    internals, fail-closed scopes, cache TTL, config provenance).
+
+    Auth: global view_security/security OR a member grant on request.group.
+    @requires_perms verifies the member grant against request.group itself
+    (resolved by the dispatcher from group/group_uuid — active groups only
+    for group_uuid), and the response is built solely from request.group, so
+    a member can never read another group's policy. Requires a group param:
+    without one, members 403 at the decorator and global holders get a 400.
+    """
+    group = request.group
+    if group is None:
+        raise merrors.ValueException("group required")
+    strict_global = settings.get("GEOFENCE_STRICT_POSTURE", False, kind="bool")
+    gf_strict = (group.metadata or {}).get("geofence_strict")
+    data = {
+        "group": {"id": group.pk, "uuid": group.get_uuid(),
+                  "name": group.name, "is_active": group.is_active},
+        "enabled": settings.get("GEOFENCE_ENABLED", True, kind="bool"),
+        "evaluation_order": ["system", "group"],
+        "system_rule": settings.get(SYSTEM_RULES_KEY, {}, kind="dict") or {},
+        "group_rule": (group.metadata or {}).get("geofence") or {},
+        "strict_posture": gf_strict,
+        "strict_posture_effective": (bool(gf_strict) if gf_strict is not None
+                                     else strict_global),
+    }
+    return {"status": True, "data": data}
 
 
 # ---------------------------------------------------------------------------

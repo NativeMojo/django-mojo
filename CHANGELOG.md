@@ -1,5 +1,19 @@
 ## Unreleased
 
+**security** — **Member-readable geofence policy + events (group-scoped).**
+New `GET /api/geo/policy`: a brand's own admin holding a group-member
+`view_security`/`security` grant (or any global holder) can read the
+effective geofence policy for **their own group** — baseline + group rule +
+strict posture — through a deliberately narrow payload that never includes
+the config plane's operational detail (enforced endpoints, allowlist
+internals, cache TTL, fail-closed scopes, config provenance). The same
+member grant already scopes `GET /api/incident/event` to the member's own
+group via the framework group fallback, giving them their group-attributed
+`geofence_block`/`geofence_exempt` history (attribution caveat documented;
+`geofence_config` stays platform-only) — now locked by regression tests
+(`tests/test_geofence/member_visibility.py`). The config plane (`geo/rules`
+etc.) remains global-only and unchanged. (ITEM-022)
+
 **api** — **Info endpoints open to any authenticated user (no `INFO_KEY` needed).**
 `GET /api/versions`, `GET /api/sysinfo/detailed`, and
 `GET /api/sysinfo/network/tcp/summary` now accept any authenticated session
