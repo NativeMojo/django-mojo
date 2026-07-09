@@ -87,7 +87,7 @@ effective geofence policy for their own group via a new, deliberately narrow
 Event REST surface — with zero cross-tenant or platform-internals leakage and the
 global config plane unchanged.
 
-### Context — what exists (verified 2026-07-08, HEAD 55d9d1f — re-verify line refs at build time; ITEM-021 is touching geofence files)
+### Context — what exists (verified 2026-07-08/09; ITEM-021 has landed — geofence.py/group.py refs match current HEAD; engine.py/evidence.py refs may sit ± a few lines)
 
 **Config plane is global-only by design.** Every `geo/*` admin endpoint in
 `mojo/apps/account/rest/geofence.py` uses `@md.requires_global_perms(...)` (no member
@@ -285,10 +285,13 @@ to `geo/rules` or any other existing endpoint.
 - **Member undercount on events** (attribution caveat): docs must set expectations —
   members see group-attributed activity, not verified totals (mirror the Metrics
   caveat wording already in `docs/web_developer/account/geofence.md`).
-- **ITEM-021 is in_progress in this working tree** (strict posture + threat cache;
-  geofence.py/engine.py/tests are being modified). Build this AFTER ITEM-021 closes
-  (WIP=1 enforces it) and re-verify the line refs above; the strict-posture fields
-  cited already exist in `geo/rules` at HEAD 55d9d1f.
+- **ITEM-021 landed (closed 2026-07-09)** — the strict-posture fields cited above are
+  committed in `geo/rules`. Owner ruling from its review: **writing**
+  `metadata.geofence_strict` requires the global `manage_geofence`/`security` perm
+  (tenant admins must not opt out of a platform posture; enforced in
+  `Group.save` validation, ~group.py:648+). This item exposes strict posture to
+  members **read-only** — consistent with that ruling; do not add any member write
+  path for it.
 
 ### Tests
 
@@ -302,7 +305,10 @@ config_plane.py` setup idioms (unique-suffix emails/group names,
 member-grant + event-visibility pattern. Hygiene (from project memory): call
 `grp.get_uuid()` right after creating groups (uuid is lazily assigned); this module
 makes no `geo/check` calls so it never writes the shared decision cache; setup deletes
-its own Events/users/groups before creating (long-lived DB).
+its own Events/users/groups before creating (long-lived DB); never persist a global
+strict=true `Setting` row (ITEM-021 hygiene — parallel unheadered requests would all
+403 `no_rules_strict`) — if asserting `strict_posture_effective`, set the tri-state on
+the test-owned group only.
 
 Setup (`@th.django_unit_setup()`): groups `gfmv-a`, `gfmv-b` (unique-suffixed names);
 `group_a.metadata = {"geofence": {"country": {"in": ["US"]}}}` via direct model save
