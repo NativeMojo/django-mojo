@@ -649,9 +649,9 @@ observability (owned by `geofence-settings-write-validation-gap` in inbox).
   OR strict posture OR scope ∈ fail-closed scopes) — don't replace it.
 
 ## Resolution
-- closed: YYYY-MM-DD
-- branch:
-- files changed:
+- closed: 2026-07-09
+- branch: main
+- files changed: CHANGELOG.md,docs/django_developer/account/geofence.md,docs/django_developer/account/geoip.md,docs/django_developer/helpers/settings_reference.md,docs/django_developer/logging/incidents.md,docs/django_developer/security/README.md,docs/django_developer/testit/Overview.md,docs/web_developer/account/geofence.md,docs/web_developer/account/geoip.md,docs/web_developer/account/login_events.md,docs/web_developer/security/README.md,memory.md,mojo/__init__.py,mojo/apps/account/models/group.py,mojo/apps/account/models/setting.py,mojo/apps/account/rest/geofence.py,mojo/apps/account/services/geofence/engine.py,mojo/apps/account/services/geofence/evidence.py,mojo/apps/incident/asyncjobs.py,mojo/apps/incident/cronjobs.py,mojo/apps/incident/migrations/0031_alter_ipset_source.py,mojo/apps/incident/models/ipset.py,mojo/helpers/geoip/detection.py,mojo/helpers/geoip/threat_intel.py,planning/.next_id,planning/done/ITEM-020-geofence-evidence-metrics-dual-write-group-scoped-.md,planning/in_progress/ITEM-021-geofence-hardening-opt-in-strict-compliance-enforc.md,planning/inbox/dispatcher-group-param-is-active-asymmetry.md,planning/inbox/geofence-hardening.md,planning/inbox/geofence-member-visibility-group-scoped-policy-events.md,pyproject.toml,tests/test_geofence/_helpers.py,tests/test_geofence/evidence_plane.py,tests/test_geofence/strict_posture.py,tests/test_geofence/threat_cache.py,uv.lock
 - tests added: tests/test_geofence/strict_posture.py (15 tests — strict
   no-rules/lookup-failure/private-IP denials + opt-in defaults, allowlist
   exemption with no_rules_strict shadow, strict_posture decision flag,
