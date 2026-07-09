@@ -1,5 +1,11 @@
 ## Unreleased
 
+**api** — **Info endpoints open to any authenticated user (no `INFO_KEY` needed).**
+`GET /api/versions`, `GET /api/sysinfo/detailed`, and
+`GET /api/sysinfo/network/tcp/summary` now accept any authenticated session
+without the `key` parameter; unauthenticated callers still require
+`key=<INFO_KEY>` (default `MOJO`) exactly as before.
+
 **security** — **Opt-in strict/compliance geofence posture + cached threat lists.**
 New `GEOFENCE_STRICT_POSTURE` setting (default `False` — existing fail-open
 deployments are untouched): when on, the engine fails **closed** on geo-lookup

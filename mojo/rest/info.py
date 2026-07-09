@@ -14,9 +14,8 @@ def rest_version(request):
 
 @md.GET('versions')
 @md.public_endpoint()
-@md.requires_params("key")
 def rest_versions(request):
-    if request.DATA.key != settings.get("INFO_KEY", "MOJO"):
+    if not request.user.is_authenticated and request.DATA.key != settings.get("INFO_KEY", "MOJO"):
         return JsonResponse(dict(status=False, error="permission denied"))
     import sys
     return JsonResponse(dict(status=True, version={
@@ -41,18 +40,16 @@ def rest_my_ip_detailed(request):
 
 
 @md.GET('sysinfo/detailed')
-@md.custom_security("Secured by required 'key' parameter")
-@md.requires_params("key")
+@md.custom_security("Secured by 'key' parameter; authenticated users exempt")
 def rest_sysinfo_detailed(request):
-    if request.DATA.key != settings.get("INFO_KEY", "MOJO"):
+    if not request.user.is_authenticated and request.DATA.key != settings.get("INFO_KEY", "MOJO"):
         return JsonResponse(dict(status=False, error="permission denied"))
     return JsonResponse(dict(status=True, data=sysinfo.get_host_info()))
 
 
 @md.GET('sysinfo/network/tcp/summary')
-@md.custom_security("Secured by required 'key' parameter")
-@md.requires_params("key")
+@md.custom_security("Secured by 'key' parameter; authenticated users exempt")
 def rest_sysinfo(request):
-    if request.DATA.key != settings.get("INFO_KEY", "MOJO"):
+    if not request.user.is_authenticated and request.DATA.key != settings.get("INFO_KEY", "MOJO"):
         return JsonResponse(dict(status=False, error="permission denied"))
     return JsonResponse(dict(status=True, data=sysinfo.get_tcp_established_summary()))
