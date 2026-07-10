@@ -71,7 +71,9 @@ methods.
 ```
 
 Use `login.methods` and `registration.methods` to decide which buttons to
-render. Use `theme` to apply branding.
+render. Available login tokens: `password`, `sms`, `passkey`, `magic`,
+`google`, `apple`, `github`; registration tokens: `password`, `google`,
+`apple`, `github`. Use `theme` to apply branding.
 
 `registration.extra_fields` is the list of non-canonical fields the group has
 configured (promo codes, referral tokens, etc.). An empty list means no extra
@@ -108,7 +110,7 @@ Affected endpoints:
 - `POST /api/auth/login`
 - `POST /api/auth/register`
 - `POST /api/auth/phone/register/start`
-- `POST /api/oauth/login/google`, `POST /api/oauth/login/apple`
+- `GET /api/auth/oauth/<provider>/begin` (`google`, `apple`, `github`)
 - `POST /api/account/passkeys/authenticate/begin`
 
 ---

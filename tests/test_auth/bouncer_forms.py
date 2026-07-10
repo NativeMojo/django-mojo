@@ -101,6 +101,35 @@ def test_register_form_groupuuid_empty_without_group(opts):
     )
 
 
+@th.django_unit_test("register.html renders the GitHub button by default (github is default-on)")
+def test_register_github_default_on(opts):
+    html = _render('account/register.html', group=None)
+    assert_true(
+        'id="btn-github"' in html,
+        "github is in REGISTRATION_METHODS, so the default config must render "
+        "the GitHub button on the hosted register page")
+
+
+@th.django_unit_test("register.html omits the GitHub button when the group disables github registration")
+def test_register_no_github_when_disabled(opts):
+    opts.group.metadata = {"auth_config": {
+        "registration": {"methods": ["password"]}}}
+    opts.group.save(update_fields=["metadata"])
+    try:
+        html = _render('account/register.html', group=opts.group)
+        assert_true(
+            'id="btn-github"' not in html,
+            "a group whose explicit registration.methods omits github must NOT "
+            "render the GitHub button on the register page")
+        assert_true(
+            'id="btn-google"' not in html,
+            "a group whose explicit registration.methods omits google must NOT "
+            "render the Google button on the register page")
+    finally:
+        opts.group.metadata = {}
+        opts.group.save(update_fields=["metadata"])
+
+
 # ---------------------------------------------------------------------------
 # login.html
 # ---------------------------------------------------------------------------

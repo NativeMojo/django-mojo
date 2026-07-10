@@ -404,6 +404,10 @@ FIRST, then per-module during work.
   resolved by owner 2026-07-10 (default-on, full parity).
 
 ## Notes
+- **Baseline (2026-07-10, before any edit):** `bin/run_tests --agent` → status
+  passed, total 2395, passed 2339, failed 0, skipped 56 (opt-in modules
+  test_incident/test_security + env-gated skips). All green — any later
+  failure is attributable to this build.
 - Filed from chat 2026-07-10: "i don't think our api bouncer gated logic page
   allows for github login oauth. I thought we support this?" — confirmed by
   exploration: provider + REST flow exist and are documented as supported

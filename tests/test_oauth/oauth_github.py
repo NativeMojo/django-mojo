@@ -90,6 +90,90 @@ def test_github_fetch_primary_email(opts):
     )
 
 
+@th.django_unit_test("github oauth: begin is gated by the group's login.methods (403 when disabled)")
+def test_github_begin_group_gate(opts):
+    from mojo.apps.account.models import Group
+
+    gate_uuid = "ghg1234567890abcdef01234567890ab"
+    open_uuid = "gho1234567890abcdef01234567890ab"
+    Group.objects.filter(uuid__in=[gate_uuid, open_uuid]).delete()
+    gated = Group.objects.create(
+        name="test-gh-begin-gated", uuid=gate_uuid, is_active=True,
+        metadata={"auth_config": {"login": {"methods": ["password"]}}})
+    open_group = Group.objects.create(
+        name="test-gh-begin-open", uuid=open_uuid, is_active=True)
+
+    try:
+        resp = opts.client.get(
+            f"/api/auth/oauth/{PROVIDER}/begin?group_uuid={gate_uuid}")
+        assert resp.status_code == 403, (
+            f"begin must 403 when the group's login.methods excludes github, "
+            f"got {resp.status_code}: {resp.response}")
+
+        resp = opts.client.get(
+            f"/api/auth/oauth/{PROVIDER}/begin?group_uuid={open_uuid}")
+        assert resp.status_code == 200, (
+            f"begin must succeed for a default-config group (github is "
+            f"default-on), got {resp.status_code}: {resp.response}")
+        assert resp.response.data.auth_url, "Missing auth_url for default-config group"
+
+        # No group context -> no restriction (UX-only gate).
+        resp = opts.client.get(f"/api/auth/oauth/{PROVIDER}/begin")
+        assert resp.status_code == 200, (
+            f"begin without group_uuid must stay ungated, "
+            f"got {resp.status_code}: {resp.response}")
+    finally:
+        gated.delete()
+        open_group.delete()
+
+
+@th.django_unit_test("github oauth: new-user signup honors the group's registration.methods gate")
+def test_github_registration_group_gate(opts):
+    from mojo.apps.account.models import User, Group
+    from mojo.apps.account.rest.oauth import _find_or_create_user
+    from mojo import errors as merrors
+
+    reg_uuid = "ghr1234567890abcdef01234567890ab"
+    blocked_email = "github_reg_gate_blocked@example.com"
+    User.objects.filter(email=blocked_email).delete()
+    Group.objects.filter(uuid=reg_uuid).delete()
+    group = Group.objects.create(
+        name="test-gh-reg-gated", uuid=reg_uuid, is_active=True,
+        metadata={"auth_config": {"registration": {"methods": ["password"]}}})
+
+    profile = {
+        "uid": "github_uid_reg_gate_1",
+        "email": blocked_email,
+        "display_name": "Gated GitHub User",
+    }
+    created_user = None
+    try:
+        raised = False
+        try:
+            _find_or_create_user(PROVIDER, profile,
+                                 state_data={"group_uuid": reg_uuid})
+        except merrors.PermissionDeniedException:
+            raised = True
+        assert raised, (
+            "new-user github signup must raise PermissionDeniedException when "
+            "the state group's registration.methods excludes github")
+        assert not User.objects.filter(email=blocked_email).exists(), (
+            "no user row may be created when the registration gate blocks the signup")
+
+        # Same signup with the gate lifted (default methods) must create.
+        group.metadata = {}
+        group.save(update_fields=["metadata"])
+        created_user, conn, created = _find_or_create_user(
+            PROVIDER, profile, state_data={"group_uuid": reg_uuid})
+        assert created is True, "signup must succeed once the group allows github registration"
+        assert conn.provider == PROVIDER, f"connection provider must be github, got {conn.provider}"
+    finally:
+        if created_user is not None:
+            created_user.delete()
+        User.objects.filter(email=blocked_email).delete()
+        group.delete()
+
+
 @th.django_unit_test("github oauth: auto-link creates connection for github provider")
 def test_github_autolink(opts):
     from mojo.apps.account.models import User

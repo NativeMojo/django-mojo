@@ -71,6 +71,7 @@
         function hasMethod(m) { return LOGIN_METHODS.indexOf(m) !== -1; }
         var ENABLE_GOOGLE = hasMethod("google");
         var ENABLE_APPLE = hasMethod("apple");
+        var ENABLE_GITHUB = hasMethod("github");
         var ENABLE_PASSKEYS = hasMethod("passkey");
 
         var params = new URLSearchParams(location.search);
@@ -92,6 +93,7 @@
             passkeyUrl: PASSKEY_URL,
             enableGoogle: ENABLE_GOOGLE,
             enableApple: ENABLE_APPLE,
+            enableGithub: ENABLE_GITHUB,
             enablePasskeys: ENABLE_PASSKEYS,
             loginMethods: LOGIN_METHODS,
             passkeyPrompt: PASSKEY_PROMPT,
@@ -205,7 +207,7 @@
         if (params.get("code") && params.get("state")) {
             var provider = sessionStorage.getItem("oauth_provider") || "google";
             sessionStorage.removeItem("oauth_provider");
-            var oauthBtn = $(provider === "apple" ? "btn-apple" : "btn-google");
+            var oauthBtn = $("btn-" + provider);
             if (oauthBtn) window._mat.setLoading(oauthBtn, true);
             window._mat.showMessage("Completing sign-in\u2026", "info");
             MojoAuth.completeOAuthLogin(provider)
@@ -235,11 +237,12 @@
         // Hide disabled OAuth buttons
         if (!ENABLE_GOOGLE) { var g = $("btn-google"); if (g) g.style.display = "none"; }
         if (!ENABLE_APPLE) { var a = $("btn-apple"); if (a) a.style.display = "none"; }
+        if (!ENABLE_GITHUB) { var gh = $("btn-github"); if (gh) gh.style.display = "none"; }
         var passkeysVisible = ENABLE_PASSKEYS && MojoAuth.isPasskeySupported();
         if (passkeysVisible) { var pk = $("btn-passkey"); if (pk) pk.style.display = ""; }
 
         // Hide entire OAuth section if no providers are enabled
-        if (!ENABLE_GOOGLE && !ENABLE_APPLE && !passkeysVisible) {
+        if (!ENABLE_GOOGLE && !ENABLE_APPLE && !ENABLE_GITHUB && !passkeysVisible) {
             document.querySelectorAll(".mat-divider").forEach(function (el) { el.style.display = "none"; });
             document.querySelectorAll(".mat-oauth-row").forEach(function (el) { el.style.display = "none"; });
         }

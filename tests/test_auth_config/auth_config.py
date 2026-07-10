@@ -20,7 +20,7 @@ AC_PARENT_UUID = 'ac99234567890abcdef01234567890ab'
 AC_ADMIN_USER = 'ac_admin'
 AC_ADMIN_PWORD = 'ac##admin99'
 
-ALL_LOGIN_METHODS = ["password", "sms", "passkey", "magic", "google", "apple"]
+ALL_LOGIN_METHODS = ["password", "sms", "passkey", "magic", "google", "apple", "github"]
 
 
 @th.django_unit_setup()
@@ -75,7 +75,7 @@ def test_resolve_defaults(opts):
     assert cfg.registration.enabled is True, \
         "registration must be enabled by default"
     assert_eq(sorted(cfg.login.methods), sorted(ALL_LOGIN_METHODS),
-              f"default login.methods must be all six methods, got {cfg.login.methods}")
+              f"default login.methods must be every LOGIN_METHODS token, got {cfg.login.methods}")
 
 
 @th.django_unit_test("resolve_auth_config: group metadata.auth_config overrides defaults")

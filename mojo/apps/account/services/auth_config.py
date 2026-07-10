@@ -36,10 +36,10 @@ from mojo.helpers.settings import settings
 
 
 # Every login method the group config can toggle on/off.
-LOGIN_METHODS = ("password", "sms", "passkey", "magic", "google", "apple")
+LOGIN_METHODS = ("password", "sms", "passkey", "magic", "google", "apple", "github")
 # Registration methods. Passkey-at-signup is `passkey_prompt`, not a method;
 # SMS-verified phone signup is the `password` method with a phone identity.
-REGISTRATION_METHODS = ("password", "google", "apple")
+REGISTRATION_METHODS = ("password", "google", "apple", "github")
 PASSKEY_PROMPTS = ("off", "optional", "required")
 LAYOUTS = ("card", "fullscreen")
 

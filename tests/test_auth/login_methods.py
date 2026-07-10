@@ -23,6 +23,8 @@ LM_PHONE = '+15558675309'
 LM_GROUP_A_UUID = 'lma1234567890abcdef01234567890ab'
 # only password offered — sms + passkey disabled
 LM_GROUP_B_UUID = 'lmb1234567890abcdef01234567890ab'
+# only github offered — exercises the OAuth-row render for a github-only config
+LM_GROUP_C_UUID = 'lmc1234567890abcdef01234567890ab'
 
 
 @th.django_unit_setup()
@@ -32,7 +34,8 @@ def setup_login_methods(opts):
     clear_rate_limits(ip='127.0.0.1', key='login')
 
     User.objects.filter(username=LM_USER).delete()
-    Group.objects.filter(uuid__in=[LM_GROUP_A_UUID, LM_GROUP_B_UUID]).delete()
+    Group.objects.filter(uuid__in=[
+        LM_GROUP_A_UUID, LM_GROUP_B_UUID, LM_GROUP_C_UUID]).delete()
 
     user = User(username=LM_USER, email=f'{LM_USER}@test.com')
     user.save()
@@ -49,6 +52,9 @@ def setup_login_methods(opts):
     opts.group_b = Group.objects.create(
         name='test-lm-group-b', uuid=LM_GROUP_B_UUID, is_active=True,
         metadata={"auth_config": {"login": {"methods": ["password"]}}})
+    opts.group_c = Group.objects.create(
+        name='test-lm-group-c', uuid=LM_GROUP_C_UUID, is_active=True,
+        metadata={"auth_config": {"login": {"methods": ["github"]}}})
 
 
 # ---------------------------------------------------------------------------
@@ -171,6 +177,34 @@ def test_login_html_default_signin_primary(opts):
                 "footer link, when sms is among the login methods")
     assert_true('id="link-sms"' not in html,
                 "the old footer 'link-sms' must be gone — SMS is now a real button")
+
+
+@th.django_unit_test("login.html renders the GitHub button by default (github is default-on)")
+def test_login_html_github_default_on(opts):
+    html = _render_login(group=None)
+    assert_true('id="btn-github"' in html,
+                "github is in LOGIN_METHODS, so the default config must render "
+                "the GitHub button on the hosted login page")
+
+
+@th.django_unit_test("login.html renders the GitHub button for a github-only group")
+def test_login_html_github_only_group(opts):
+    html = _render_login(group=opts.group_c)
+    assert_true('id="btn-github"' in html,
+                "a group with login.methods=['github'] must render the GitHub "
+                "button (OAuth row must not be dropped for a github-only config)")
+    assert_true('id="btn-google"' not in html,
+                "google must NOT render for a github-only group")
+    assert_true('id="signin-password"' not in html,
+                "password input must NOT render for a github-only group")
+
+
+@th.django_unit_test("login.html omits the GitHub button when the group disables github")
+def test_login_html_no_github_when_disabled(opts):
+    html = _render_login(group=opts.group_b)  # methods: ["password"] only
+    assert_true('id="btn-github"' not in html,
+                "a group whose explicit login.methods omits github must NOT "
+                "render the GitHub button")
 
 
 # ---------------------------------------------------------------------------

@@ -6,6 +6,12 @@ OAuth2 social login is built into the framework. The full flow — CSRF state ma
 
 **Current providers:** `google`, `apple`, `github`
 
+All three are toggleable auth-config methods (`LOGIN_METHODS` /
+`REGISTRATION_METHODS` in `services/auth_config.py`): enabled by default,
+disable per group via `login.methods` / `registration.methods`, and the hosted
+auth pages render a button for each enabled provider — see
+[Auth Pages](auth_pages.md).
+
 ---
 
 ## Architecture

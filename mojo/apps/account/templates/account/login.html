@@ -28,7 +28,7 @@
     {% endif %}
 
     {% if login_primary == 'signin' %}
-    {% if 'sms' in login_methods or 'passkey' in login_methods or 'google' in login_methods or 'apple' in login_methods %}
+    {% if 'sms' in login_methods or 'passkey' in login_methods or 'google' in login_methods or 'apple' in login_methods or 'github' in login_methods %}
     {% if 'password' in login_methods %}<div class="mat-divider">or continue with</div>{% endif %}
 
     <div class="mat-oauth-row">
@@ -161,7 +161,7 @@
         <span class="mat-footer-link">New here? <a href="{{ register_url|default:'/register' }}">Create an account</a></span>
     </div>
     {% if login_primary == 'sms' %}
-    {% if 'passkey' in login_methods or 'google' in login_methods or 'apple' in login_methods %}
+    {% if 'passkey' in login_methods or 'google' in login_methods or 'apple' in login_methods or 'github' in login_methods %}
     <div class="mat-divider">or</div>
     <div class="mat-oauth-row">
         {% include "account/_login_method_buttons.html" %}
@@ -288,6 +288,11 @@
     on("btn-apple", "click", function () {
         m.setLoading($("btn-apple"), true);
         MojoAuth.startAppleLogin().catch(function (err) { m.setLoading($("btn-apple"), false); m.showMessage(MojoAuth.getError(err) || "Could not start Apple sign-in.", "error"); });
+    });
+
+    on("btn-github", "click", function () {
+        m.setLoading($("btn-github"), true);
+        MojoAuth.startGitHubLogin().catch(function (err) { m.setLoading($("btn-github"), false); m.showMessage(MojoAuth.getError(err) || "Could not start GitHub sign-in.", "error"); });
     });
 
     on("btn-passkey", "click", function () {

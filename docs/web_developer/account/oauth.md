@@ -4,6 +4,12 @@ OAuth allows users to log in with a third-party provider (Google, etc.) without 
 
 **Supported providers:** `google`, `apple`, `github`
 
+All three are group-toggleable auth-config methods: a group can disable a
+provider for login (`auth_config.login.methods`) or new-user signup
+(`auth_config.registration.methods`), and the hosted `/auth` and `/register`
+pages render a button for each enabled provider. See
+[Auth Config](auth_config.md).
+
 > **Trusted second factor.** OAuth is treated as a strong, trusted authentication event. Completing an OAuth login automatically confirms the user's email address and bypasses any local MFA requirement — see [Security Behaviour](#security-behaviour) below.
 
 ---

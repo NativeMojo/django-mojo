@@ -139,7 +139,8 @@ def _find_or_create_user(provider_name, profile, state_data=None, request=None):
             raise merrors.PermissionDeniedException("Account registration via OAuth is not permitted")
         # Per-group registration method gate — a group can disable signup via
         # a given OAuth provider in its auth config. Only applies to the
-        # toggleable providers (google/apple) and when a group is resolved.
+        # toggleable providers (google/apple/github) and when a group is
+        # resolved.
         if provider_name in auth_config.REGISTRATION_METHODS:
             _reg_group = _resolve_state_group(state_data)
             if _reg_group is not None:
@@ -211,8 +212,9 @@ def on_oauth_begin(request, provider):
     except ValueError:
         raise merrors.ValueException(f"Unknown provider: {provider}")
 
-    # UX-only per-group method gate — only google/apple are toggleable
-    # login methods; other providers (e.g. github) are never gated here.
+    # UX-only per-group method gate — applies to any provider that is a
+    # toggleable login method (google/apple/github); providers outside
+    # LOGIN_METHODS are never gated here.
     if provider in auth_config.LOGIN_METHODS:
         auth_config.assert_login_method(
             provider, auth_config.resolve_group_from_request(request))

@@ -1,5 +1,25 @@
 ## Unreleased
 
+**feature** — **GitHub OAuth is now a hosted-page login/registration method.**
+`github` joins `LOGIN_METHODS` / `REGISTRATION_METHODS` in
+`services/auth_config.py`, so the bouncer-hosted `/auth` and `/register` pages
+render a "GitHub" button with the same wiring as Google/Apple (generic
+`begin → callback → complete` flow; `MojoAuth.startGitHubLogin()` added to
+`mojo-auth.js`). The provider itself (`GITHUB_CLIENT_ID` /
+`GITHUB_CLIENT_SECRET` / `GITHUB_SCOPES`) already existed — this exposes it on
+the hosted pages and makes it group-toggleable.
+
+Two visible effects on upgrade: (a) groups **without** an explicit
+`login.methods` / `registration.methods` list get the GitHub button by default
+(all method tokens are default-on) — disable it with an explicit methods list,
+and configure the GitHub credentials before relying on it; (b) github OAuth
+begin and new-user signup are now **gated by group auth config** like
+google/apple — a request carrying a `group_uuid` whose config excludes github
+gets 403 (requests with no group context remain ungated). Also fixed the
+auth-pages doc to use the real provider setting names (`GOOGLE_CLIENT_ID`,
+`APPLE_CLIENT_ID`, … — the previous `GOOGLE_OAUTH_*`/`APPLE_OAUTH_*` names were
+never read by the code). (ITEM-026)
+
 **security** — **Group REST writes now require `SAVE_PERMS`, not mere membership — closing an any-member write to top-level Group fields.**
 `POST`/`PUT`/`DELETE` on `/api/group/<pk>` (and Group's `POST_SAVE_ACTIONS`) was
 effectively gated by the *view* check. `MojoModel._evaluate_permission`

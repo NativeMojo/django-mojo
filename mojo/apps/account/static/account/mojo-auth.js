@@ -638,8 +638,8 @@
         /**
          * Start an OAuth login flow for any provider.
          * Stores the provider in sessionStorage so the callback page knows which provider to complete.
-         * @param {string} provider     - e.g. 'google', 'apple'
-         * @param {string} [callbackUrl] - URL Google/Apple should redirect back to.
+         * @param {string} provider     - e.g. 'google', 'apple', 'github'
+         * @param {string} [callbackUrl] - URL the provider should redirect back to.
          *                                 Defaults to the current page URL (strip query/hash).
          *                                 Must be registered in the provider's console AND
          *                                 allowed by the backend (ALLOWED_REDIRECT_URLS or per-group).
@@ -663,6 +663,10 @@
 
         startAppleLogin: function (callbackUrl) {
             return MojoAuth.startOAuthLogin('apple', callbackUrl);
+        },
+
+        startGitHubLogin: function (callbackUrl) {
+            return MojoAuth.startOAuthLogin('github', callbackUrl);
         },
 
         /**

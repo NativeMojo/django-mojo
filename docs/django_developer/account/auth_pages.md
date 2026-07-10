@@ -104,33 +104,43 @@ includes `<link rel="icon" href="...">` when this key is non-empty.
 
 ### 3. OAuth Setup
 
-Enable Google/Apple by configuring their provider credentials. The login
-methods must also be included in `AUTH_CONFIG.login.methods` (or the group's
-`metadata.auth_config.login.methods`):
+Enable Google/Apple/GitHub by configuring their provider credentials. The
+login methods must also be included in `AUTH_CONFIG.login.methods` (or the
+group's `metadata.auth_config.login.methods`) — all three are included by
+default when no explicit list is set:
 
 ```python
 # Google OAuth
-GOOGLE_OAUTH_CLIENT_ID     = 'your-client-id'
-GOOGLE_OAUTH_CLIENT_SECRET = 'your-client-secret'
+GOOGLE_CLIENT_ID     = 'your-client-id'
+GOOGLE_CLIENT_SECRET = 'your-client-secret'
 
 # Apple OAuth
-APPLE_OAUTH_CLIENT_ID = 'your-service-id'
-APPLE_OAUTH_TEAM_ID   = 'your-team-id'
-APPLE_OAUTH_KEY_ID    = 'your-key-id'
+APPLE_CLIENT_ID = 'your-service-id'
+APPLE_TEAM_ID   = 'your-team-id'
+APPLE_KEY_ID    = 'your-key-id'
 # Place your .p8 key in var/keys/
+
+# GitHub OAuth
+GITHUB_CLIENT_ID     = 'your-client-id'
+GITHUB_CLIENT_SECRET = 'your-client-secret'
+GITHUB_SCOPES        = 'read:user user:email'  # default
 ```
 
 ```python
 # AUTH_CONFIG must include the provider in login.methods:
 AUTH_CONFIG = {
-    "login": {"methods": ["password", "google", "apple"]},
+    "login": {"methods": ["password", "google", "apple", "github"]},
     ...
 }
 ```
 
+A provider button renders whenever its method token is enabled — configure the
+credentials before enabling a provider, or its button dead-ends on the
+provider's error page.
+
 The OAuth callback URL is the auth page itself (`/auth?code=xxx&state=yyy`).
 The `mbp` pass cookie uses `SameSite=Lax` so it is included on the OAuth
-redirect back from Google/Apple.
+redirect back from the provider.
 
 ---
 
@@ -262,12 +272,13 @@ as absolute URLs and bypass the `/api/` prefix.
 
 Methods rendered are those listed in the resolved auth config's
 `login.methods`. Available tokens: `password`, `sms`, `passkey`, `magic`,
-`google`, `apple`.
+`google`, `apple`, `github`.
 
 - `password` — email/password sign in
 - `sms` — phone number + 6-digit SMS code sign in
 - `google` — Google OAuth redirect flow
 - `apple` — Apple OAuth redirect flow
+- `github` — GitHub OAuth redirect flow
 - `passkey` — WebAuthn discoverable credential flow
 - `magic` — send a one-click sign-in email
 - Forgot password (code or link method; auto-routes via SMS when identity is phone)
@@ -285,7 +296,8 @@ guarantee depends on the uniform response.
 
 The page leads with the **primary credential**: when `password` is in
 `login.methods` the sign-in form is the landing view and every other method
-(SMS, passkey, Google, Apple) is a button below an "or continue with" divider.
+(SMS, passkey, Google, Apple, GitHub) is a button below an "or continue with"
+divider.
 When `password` is **not** a method but `sms` is (a passwordless config), the
 page opens directly on the SMS phone-entry form, with passkey/OAuth as
 secondary buttons — so SMS login is never buried.
@@ -296,7 +308,7 @@ secondary buttons — so SMS login is never buried.
 ### Registration page (`/register`)
 
 - Fields and identity field driven by `registration.fields` / `registration.identity_field`
-- Methods rendered from `registration.methods`: `password`, `google`, `apple`
+- Methods rendered from `registration.methods`: `password`, `google`, `apple`, `github`
 - Terms & conditions checkbox (when `theme.terms_url` is set)
 - When `registration.passkey_prompt` is `"optional"` or `"required"`, redirects
   to `/passkey` after signup
