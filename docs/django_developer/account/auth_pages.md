@@ -1,8 +1,8 @@
 # Auth Pages — Django Developer Reference
 
 Django-served login and registration pages with bouncer bot detection,
-OAuth (Google, Apple), passkeys, SMS login, password reset, and magic link
-support. All branding and feature configuration is controlled through the
+OAuth (Google, Apple, GitHub), passkeys, SMS login, password reset, and magic
+link support. All branding and feature configuration is controlled through the
 [auth config](auth_config.md).
 
 ---

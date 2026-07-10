@@ -58,17 +58,17 @@ rather than appending to it.
 | `extra_fields` | list | `[]` | Per-group non-canonical fields (promo/ref/tracking). Each entry: `{"name", "label"?, "required"?}`. Names colliding with canonical fields are rejected. Default empty — no extra inputs, no behavior change for other tenants. |
 | `identity_field` | string | `""` | `"email"` or `"phone"` (empty → auto-pick) |
 | `min_age` | int\|null | `null` | Minimum age gate (years) applied when `dob` is a field |
-| `methods` | list | `["password","google","apple"]` | Offered signup methods |
+| `methods` | list | `["password","google","apple","github"]` | Offered signup methods |
 | `passkey_prompt` | string | `"off"` | `"off"`, `"optional"`, or `"required"` — passkey enrollment after signup |
 
 ### `login`
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `methods` | list | `["password","sms","passkey","magic","google","apple"]` | Offered login methods |
+| `methods` | list | `["password","sms","passkey","magic","google","apple","github"]` | Offered login methods |
 
-Valid login method tokens: `password`, `sms`, `passkey`, `magic`, `google`, `apple`.
-Valid registration method tokens: `password`, `google`, `apple`.
+Valid login method tokens: `password`, `sms`, `passkey`, `magic`, `google`, `apple`, `github`.
+Valid registration method tokens: `password`, `google`, `apple`, `github`.
 
 ---
 
@@ -211,8 +211,8 @@ guardrail only** — it is not enforced when `group_uuid` is absent. Callers
 that omit `group_uuid` are not restricted.
 
 Endpoints that enforce this:
-- `POST /api/auth/login` (password, SMS, passkey, magic, Google, Apple)
-- `POST /api/auth/register` (password, Google, Apple)
+- `POST /api/auth/login` (password, SMS, passkey, magic, Google, Apple, GitHub)
+- `POST /api/auth/register` (password, Google, Apple, GitHub)
 
 ---
 

@@ -27,12 +27,13 @@ receive an HttpOnly pass cookie that skips the challenge on subsequent visits.
 ## Login Page (`/auth`)
 
 Which methods are shown depends on the resolved auth config's `login.methods`.
-Default set: `password`, `sms`, `passkey`, `magic`, `google`, `apple`.
+Default set: `password`, `sms`, `passkey`, `magic`, `google`, `apple`, `github`.
 
 - **password** — email/password sign in
 - **sms** — phone number + 6-digit SMS code sign in
 - **google** — redirects to Google, returns to `/auth?code=...&state=...`
 - **apple** — same flow
+- **github** — same flow
 - **passkey** — WebAuthn discoverable credential flow
 - **magic** — sends a one-click sign-in email
 - Forgot password (code or link; auto-routes via SMS when identity is phone)
@@ -42,7 +43,7 @@ When `password` is not among `login.methods` but `sms` is (a passwordless
 config), the page opens directly on the SMS phone-entry form rather than a
 sign-in form — so SMS sign-in is the first thing the user sees. With
 `password` present, the sign-in form leads and "Sign in with a code" is a
-button alongside passkey/Google/Apple.
+button alongside passkey/Google/Apple/GitHub.
 
 **Anti-enumeration UX.** SMS sign-in never reveals whether a phone number has an
 account — `POST /api/auth/sms/login` returns the same generic success for known
@@ -137,7 +138,7 @@ submits as ISO `yyyy-mm-dd`.
 `"required"`, the page redirects to `/passkey` instead of straight to
 `success_redirect`.
 
-Also supports Google/Apple OAuth sign-up (same buttons, same flow).
+Also supports Google/Apple/GitHub OAuth sign-up (same buttons, same flow).
 
 ---
 
@@ -159,8 +160,8 @@ and runs the WebAuthn registration round-trip.
 
 ## OAuth Flow
 
-1. User clicks "Google" or "Apple" button
-2. `MojoAuth.startGoogleLogin()` / `MojoAuth.startAppleLogin()` redirects to provider
+1. User clicks "Google", "Apple", or "GitHub" button
+2. `MojoAuth.startGoogleLogin()` / `MojoAuth.startAppleLogin()` / `MojoAuth.startGitHubLogin()` redirects to provider
 3. Provider redirects back to `/auth?code=xxx&state=yyy`
 4. The page JS detects the `code` + `state` params and calls `MojoAuth.completeOAuthLogin()`
 5. Backend exchanges code for tokens, creates/links user

@@ -304,8 +304,8 @@ automatically applies that group's branding and settings to the auth pages.
 
 ### OAuth round-trip
 
-The `group_uuid` is embedded in OAuth state so branding survives the Google/
-Apple redirect. After the provider callback, the page receives
+The `group_uuid` is embedded in OAuth state so branding survives the provider
+redirect. After the provider callback, the page receives
 `?code=...&state=...&group_uuid=<uuid>`, which `mojo-auth.js` picks up
 automatically via `window._matConfig.groupUuid`.
 

@@ -85,7 +85,7 @@ detect identity rotation (same server cookie, different client claim = suspiciou
 | `_msid` | Yes | Yes (`DEBUG=False`) | Lax | Session (no expiry) |
 
 Both use `SameSite=Lax` so they're sent on top-level navigations from external sites
-(OAuth redirects from Google/Apple, email links). `Secure` is only set when
+(OAuth redirects from Google/Apple/GitHub, email links). `Secure` is only set when
 `DEBUG=False` so cookies work over HTTP during local development.
 
 ### How identity connects pre-auth and post-auth

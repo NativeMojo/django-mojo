@@ -143,7 +143,7 @@ share one auth domain.
 ```
 
 The `group_uuid` param is preserved through navigation (login ↔ register
-switcher), the OAuth round-trip (Google/Apple callback), and the
+switcher), the OAuth round-trip (Google/Apple/GitHub callback), and the
 login → passkey enrollment redirect.
 
 ---
