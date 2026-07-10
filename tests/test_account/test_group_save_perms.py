@@ -154,3 +154,35 @@ def test_confined_apikey_with_perm_can_save_group(opts):
     finally:
         opts.client.logout()
         ApiKey.objects.filter(name__startswith="grpsave_key_").delete()
+
+
+@th.django_unit_test("ITEM-027: ApiKey confined to its group CANNOT write a DIFFERENT group (403)")
+def test_confined_apikey_cannot_write_other_group(opts):
+    """The confinement half of check_edit_permission's ApiKey branch: holding
+    manage_group does NOT let a key scoped to group A write group B. Directly
+    asserts is_group_allowed on the write path (the read-side cross-tenant case
+    lives in test_global_perms/apikey_groupless.py)."""
+    from mojo.apps.account.models import Group, ApiKey
+    grp_a = Group.objects.get(pk=opts.grp_id)
+    _, token = ApiKey.create_for_group(
+        group=grp_a, name=f"grpsave_key_{_uuid.uuid4().hex[:6]}",
+        permissions={"manage_group": True})
+    grp_b = Group.objects.create(
+        name=f"grpsave_grp_other_{_uuid.uuid4().hex[:8]}",
+        kind="organization", is_active=True, metadata={})
+    original_b_name = grp_b.name
+    try:
+        opts.client.logout()
+        opts.client.bearer = "apikey"
+        opts.client.access_token = token
+        opts.client.is_authenticated = True
+        resp = opts.client.post(f"/api/group/{grp_b.pk}", {"name": "cross-tenant-hack"})
+        assert resp.status_code in (401, 403, 404), \
+            f"key confined to group A must NOT write group B, got {resp.status_code}: {opts.client.last_response.body}"
+        grp_b.refresh_from_db()
+        assert grp_b.name == original_b_name, \
+            f"SECURITY: cross-tenant key renamed group B to {grp_b.name!r}"
+    finally:
+        opts.client.logout()
+        ApiKey.objects.filter(name__startswith="grpsave_key_").delete()
+        grp_b.delete()
