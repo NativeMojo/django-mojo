@@ -573,13 +573,13 @@ class Group(MojoSecrets, MojoModel):
         )
 
     def check_view_permission(self, perms, request):
-        # A group-scoped ApiKey may act ONLY on its own group (and descendants)
-        # AND only if it actually holds the required permission — this override
-        # gates SAVE as well as VIEW (on_rest_handle_save passes VIEW_PERMS in
-        # the list), so `is_group_allowed` alone would let a zero-permission key
-        # write its own group's auth_config/geofence. Require both confinement
-        # and the perm, matching the group-scoped ApiKey branch in
-        # MojoModel._evaluate_permission.
+        # READ gate (GET, and the FK attach-by-pk VIEW check). Writes route to
+        # check_edit_permission instead — this hook's any-member fallthrough
+        # (basic-graph downgrade at the end) is a read affordance and must never
+        # authorize a save. A group-scoped ApiKey may read its own group (and
+        # descendants) ONLY if it also holds the perm; the same confine-AND-perm
+        # bar is enforced for writes in check_edit_permission and in the
+        # group-scoped ApiKey branch of MojoModel._evaluate_permission.
         api_key = getattr(request, "api_key", None)
         if api_key is not None:
             return api_key.is_group_allowed(self) and api_key.has_permission(perms)
@@ -595,6 +595,20 @@ class Group(MojoSecrets, MojoModel):
         # but we limit the fields they can see
         request.DATA.set("graph", "basic")
         return True
+
+    def check_edit_permission(self, perms, request):
+        # WRITE gate for POST/PUT/DELETE on /api/group/<pk> and its
+        # POST_SAVE_ACTIONS (the save handler is the only permission gate in
+        # front of on_action_*). Unlike check_view_permission there is NO
+        # any-member fallthrough and no graph downgrade: a write demands an
+        # actual SAVE_PERMS grant. ApiKey: confined to its own group tree AND
+        # holds the perm (same bar as check_view_permission and
+        # _evaluate_permission). Users: global grant OR member-level grant, via
+        # user_has_permission (global-or-member, parent-aware).
+        api_key = getattr(request, "api_key", None)
+        if api_key is not None:
+            return api_key.is_group_allowed(self) and api_key.has_permission(perms)
+        return self.user_has_permission(request.user, perms)
 
     def on_action_realtime_message(self, value):
         # send a realtime message to the group

@@ -243,19 +243,29 @@ class MojoModel:
             return True, None
 
         if instance is not None:
-            is_view = isinstance(permission_keys, list) and "VIEW_PERMS" in permission_keys
-            if not is_view and isinstance(permission_keys, str):
-                is_view = permission_keys == "VIEW_PERMS"
-            if is_view:
-                if hasattr(instance, "check_view_permission"):
-                    allowed = instance.check_view_permission(perms, request)
-                    if allowed:
-                        return True, None
-                    return False, objict.objict(
-                        branch="instance.check_view_permission",
-                        event_type="view_permission_denied",
-                        status=403,
-                    )
+            # Classify the operation from the permission keys: a WRITE carries a
+            # write perm-key (CREATE/SAVE/DELETE_PERMS); a read carries only
+            # VIEW_PERMS. A read prefers the instance's view hook. A write MUST
+            # skip it — otherwise a read affordance (e.g. Group.check_view_permission
+            # admits ANY active member with a basic-graph downgrade) would
+            # authorize the write. A write is gated by check_edit_permission when
+            # the instance defines one, else it falls through to the
+            # owner/group/flat branches below.
+            WRITE_KEYS = ("CREATE_PERMS", "SAVE_PERMS", "DELETE_PERMS")
+            if isinstance(permission_keys, str):
+                is_write = permission_keys in WRITE_KEYS
+            else:
+                is_write = any(k in WRITE_KEYS for k in permission_keys)
+
+            if not is_write and hasattr(instance, "check_view_permission"):
+                allowed = instance.check_view_permission(perms, request)
+                if allowed:
+                    return True, None
+                return False, objict.objict(
+                    branch="instance.check_view_permission",
+                    event_type="view_permission_denied",
+                    status=403,
+                )
 
             if hasattr(instance, "check_edit_permission"):
                 allowed = instance.check_edit_permission(perms, request)

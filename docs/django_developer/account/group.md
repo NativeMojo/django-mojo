@@ -88,8 +88,8 @@ group is detected. This preserves the default branding for the default flow.
 class RestMeta:
     LOG_CHANGES = True
     LOG_META_CHANGES = True          # logs key-level changes to metadata
-    VIEW_PERMS = ["view_groups", "manage_groups", "manage_group"]
-    SAVE_PERMS = ["manage_groups", "manage_group"]
+    VIEW_PERMS = ["view_groups", "manage_groups", "manage_group", "groups"]
+    SAVE_PERMS = ["manage_groups", "manage_group", "groups"]
     PROTECTED_JSON_PERMS = ["manage_groups"]  # required to write metadata["protected"]
     POST_SAVE_ACTIONS = ['realtime_message', 'disable', 'reactivate']
     SEARCH_FIELDS = ["name"]
@@ -218,6 +218,19 @@ n = group.member_count
 > way via `ApiKey.get_groups`). It does **not** get the "any member sees a
 > basic-graph view" fallback that applies to a real `User`. See
 > [API Keys — Group Scoping](api_keys.md#group-scoping).
+>
+> **`check_edit_permission` gates writes — membership alone is not enough.**
+> `POST`/`PUT`/`DELETE` on `/api/group/<pk>` (and its `POST_SAVE_ACTIONS`) route
+> to `check_edit_permission`, **not** the view hook: the "any member sees a
+> basic-graph view" fallthrough above is a *read* affordance and never
+> authorizes a save. A write requires an actual `SAVE_PERMS` grant — global
+> (`manage_groups`/`groups`) or member-level (`manage_group`) — or, for an
+> ApiKey, confinement to its own group tree **and** the perm. So a plain member
+> can read their group (downgraded) but cannot rename it or edit its
+> `metadata`/`auth_domain`/`kind` without `manage_group`. The generic
+> permission layer decides read-vs-write from the RestMeta keys of the call
+> (a write carries `CREATE`/`SAVE`/`DELETE_PERMS`); see
+> [Core → Permissions](../core/permissions.md#instance-level-permission-hooks).
 
 ## GroupMember Model
 

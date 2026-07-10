@@ -52,6 +52,31 @@ member-scoped requests are denied).
 
 `member_count` is the count of active direct members of the group (does not include descendant groups). Available on the `default` graph only — `basic` stays minimal. List endpoints use `default` by default, so the field appears without needing `?graph=`.
 
+> **Reads are downgraded for plain members.** A member without
+> `view_group`/`manage_group` still gets a `200` on `GET /api/group/<id>`, but
+> the response is the minimal `basic` graph (no `metadata`, `auth_domain`, or
+> `parent`). Grant `view_group` (or higher) to see the full `default` graph.
+
+## Update Group
+
+**POST/PUT** `/api/group/<id>`
+
+Updates top-level Group fields (`name`, `kind`, `auth_domain`, `metadata`, …).
+**Requires a write grant** — `manage_group` (member-level), or a global
+`manage_groups`/`groups`. Being a plain member is **not** sufficient: a member
+without one of these perms receives a `403` (they can still read the group, see
+above). An API key must be scoped to the group **and** hold the perm.
+
+```json
+POST /api/group/7
+{ "name": "Acme Holdings", "metadata": {"timezone": "America/New_York"} }
+```
+
+Note: `metadata.geofence_strict` (compliance posture) is additionally gated by
+the **global** `manage_geofence`/`security` perm — a tenant admin with
+`manage_group` cannot flip it. The member-reachable `realtime_message`
+POST_SAVE_ACTION also requires `manage_group`.
+
 ## List Groups
 
 Requires `view_groups` or `manage_groups` permission.

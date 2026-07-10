@@ -74,6 +74,33 @@ def on_group_webhook_secret(request): ...   # touches request.group only
 def on_clear_queue(request): ...            # clears the global job queue
 ```
 
+## Instance-Level Permission Hooks
+
+A model may override two per-instance hooks that the generic permission layer
+(`MojoModel._evaluate_permission`) consults for **detail** operations (GET /
+POST / PUT / DELETE on a pk):
+
+| Hook | Signature | Governs |
+|---|---|---|
+| `check_view_permission(perms, request)` | returns `bool` | **reads** (GET, and the FK attach-by-pk VIEW check) |
+| `check_edit_permission(perms, request)` | returns `bool` | **writes** (POST/PUT/DELETE and `POST_SAVE_ACTIONS`) |
+
+The layer classifies each call **by its RestMeta keys**: a request carrying a
+write key (`CREATE`/`SAVE`/`DELETE_PERMS`) is a **write** and uses
+`check_edit_permission`, **skipping** `check_view_permission` — a read affordance
+inside the view hook (e.g. a "members may read, downgraded" fallthrough) must
+never authorize a save. A read carries only `VIEW_PERMS` and prefers
+`check_view_permission`. A model that defines **only** `check_edit_permission`
+(e.g. `User`) uses it for reads too, since there is no view hook to prefer. If a
+hook isn't defined for the classified operation, evaluation falls through to the
+owner match, the group-membership check, and finally `user.has_permission`.
+
+`Group` is the canonical example: `check_view_permission` lets any active member
+read their group with a downgraded (`basic`) graph, while `check_edit_permission`
+requires an actual `SAVE_PERMS` grant (global `manage_groups`/`groups`, or
+member-level `manage_group`; an ApiKey must be confined to its own group tree
+**and** hold the perm). See [Account → Group](../account/group.md).
+
 **API keys.** An `ApiKey` (`Authorization: apikey <token>`) is a *group-scoped*
 credential, so `requires_global_perms` **rejects it by default** — letting a key
 satisfy a platform-global gate would recreate the escalation through a machine

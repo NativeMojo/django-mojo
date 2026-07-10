@@ -1,5 +1,32 @@
 ## Unreleased
 
+**security** — **Group REST writes now require `SAVE_PERMS`, not mere membership — closing an any-member write to top-level Group fields.**
+`POST`/`PUT`/`DELETE` on `/api/group/<pk>` (and Group's `POST_SAVE_ACTIONS`) was
+effectively gated by the *view* check. `MojoModel._evaluate_permission`
+classified every operation as a read (`VIEW_PERMS` is present in every caller's
+permission keys), so `Group.check_view_permission` — whose fallthrough admits
+ANY active member with a basic-graph downgrade — authorized writes too. A plain
+member with zero permissions could rename the group, change
+`kind`/`auth_domain`/`metadata`, and reach `on_action_realtime_message`
+(publishing to `group:<id>:*` realtime topics).
+
+The permission layer now classifies an operation by its keys: a **write** carries
+a write perm-key (`CREATE`/`SAVE`/`DELETE_PERMS`) and **skips** the instance's
+view hook, gating on `check_edit_permission` instead; a **read** still prefers the
+view hook. `Group` gains a `check_edit_permission` that requires an actual
+SAVE_PERMS grant — global (`manage_groups`/`groups`) **or** member-level
+(`manage_group`), with an ApiKey confined to its own group tree **and** holding
+the perm. Reads are unchanged: a plain member still `GET`s their group with the
+basic-graph downgrade. The FK **attach-by-pk** path (`{"group": <id>}` on rows a
+member creates) is a read check and keeps working; the FK **dict-save** path
+(`{"group": {...}}`, which rewrites Group fields inline) tightens with the rest.
+
+**Behavior change**: a plain member's Group rename/edit now returns 403 (needs
+`manage_group` at the member level or a global grant); Group's member-reachable
+`realtime_message` save-action likewise now needs `manage_group`. `User` (whose
+`check_edit_permission` also gates VIEW-by-pk) and all hookless models are
+unaffected. Regression coverage in `tests/test_account/test_group_save_perms.py`.
+
 ## v1.2.45 - July 10, 2026
 
 **security** — **`GROUP_FIELD` now scopes detail and list permissions, not just the `?group=` filter — closing cross-tenant reads on group-scoped models without a direct `group` FK.**

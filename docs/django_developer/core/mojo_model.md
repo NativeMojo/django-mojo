@@ -321,9 +321,12 @@ def on_publish(request):
 
 1. If `"all"` in perms → allow unauthenticated
 2. If user is not authenticated → return False
-3. If instance provided and has `check_view_permission` or `check_edit_permission` → delegate
-4. If `"owner"` in perms and `instance.user.id == request.user.id` → allow
-5. If `request.group` set and model has `group` field → check group membership perms
+3. If an instance is provided, the operation is classified from the RestMeta keys of the call — a **write** carries a write key (`CREATE`/`SAVE`/`DELETE_PERMS`), a **read** carries only `VIEW_PERMS`:
+   - **read** → if the instance defines `check_view_permission`, delegate to it (else fall through)
+   - **write** → **skip** the view hook (a read affordance must not authorize a write); if the instance defines `check_edit_permission`, delegate to it (else fall through)
+   - a model with only `check_edit_permission` (e.g. `User`) uses it for reads too — there is no view hook to prefer
+4. If `"owner"` in perms and `instance.{OWNER_FIELD}.id == request.user.id` → allow
+5. If `request.group` set and the model is group-scoped (direct `group` FK **or** a `RestMeta.GROUP_FIELD`) → check group membership perms
 6. Otherwise → check `request.user.has_permission(perms)`
 
 Use `rest_check_permission` directly when you need a boolean test with no action on denial (for example, list fallbacks that return a scoped result instead of a 403).
