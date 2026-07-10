@@ -14,7 +14,7 @@ ANONYMOUS_USER = objict(
     username="anonymous",
     email="anonymous@example.com",
     is_authenticated=False,
-    has_permission=lambda: False)
+    has_permission=lambda *a, **kw: False)
 
 # Cookie TTL for _muid: 2 years in seconds
 _MUID_MAX_AGE = 63072000

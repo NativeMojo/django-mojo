@@ -34,9 +34,22 @@ def on_group_member(request, pk=None):
 
 
 @md.POST('group/member/invite')
+@md.requires_auth()
 @md.requires_params('email', 'group')
 @md.custom_security("securted by group security")
 def on_group_invite_member(request):
+    # An unauthenticated caller is rejected by @md.requires_auth() above (clean
+    # 403) before reaching here. Guard a missing/unresolved group too: the
+    # dispatcher resolves a client-supplied `group` via Group.get_active(), so an
+    # inactive or nonexistent id leaves request.group None — fail closed with a
+    # generic 403 (no inactive-vs-nonexistent oracle) rather than AttributeError.
+    if request.group is None:
+        raise merrors.PermissionDeniedException(
+            reason="permission denied: Group",
+            model_name="Group",
+            branch="group_invite_unknown_group",
+            event_type="user_permission_denied",
+        )
     perms = ["manage_users", "manage_members", "manage_group", "manage_groups"]
     if not request.group.user_has_permission(request.user, perms):
         raise merrors.PermissionDeniedException()

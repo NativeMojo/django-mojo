@@ -1,5 +1,22 @@
 ## v1.2.45 - July 10, 2026
 
+**bug** — **`POST /api/group/member/invite` now fail-closes with a clean 403 instead of a raw HTTP 500 for unauthenticated (and unresolved-group) callers.**
+The handler was gated only by `@md.custom_security` (a no-op marker) plus an
+in-view group-permission check, so an anonymous request reached
+`request.group.user_has_permission(request.user, …)` with `request.user` the
+`ANONYMOUS_USER` sentinel — whose `has_permission` was a **zero-argument** lambda,
+so calling it with a perm raised `TypeError`, surfaced as a 500 leaking the
+interpreter message. The endpoint now carries `@md.requires_auth()` (anonymous →
+clean 403 before the body runs) and guards a `None` `request.group` (an inactive
+or nonexistent `group` id → generic 403, no inactive-vs-nonexistent oracle; was an
+`AttributeError` 500). Separately, the `ANONYMOUS_USER.has_permission` sentinel now
+tolerates arguments (`lambda *a, **kw: False`), fail-closing the same latent arity
+crash at the other ungated permission-check sites (`chat` room admin/moderator
+checks, `member.can_change_permission`) — no grant changes, since it always returns
+False. No membership was ever created (the crash preceded `invite()`), so this is a
+robustness / API-hygiene fix; matters for API consumers (e.g. maestro workspaces)
+that expect a clean rejection. (ITEM-028)
+
 **feature** — **GitHub OAuth is now a hosted-page login/registration method.**
 `github` joins `LOGIN_METHODS` / `REGISTRATION_METHODS` in
 `services/auth_config.py`, so the bouncer-hosted `/auth` and `/register` pages

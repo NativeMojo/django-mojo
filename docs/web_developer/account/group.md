@@ -120,6 +120,8 @@ Returns `{"id": -1, "permissions": []}` if not a member.
 
 Requires `manage_users`, `manage_members`, `manage_group`, `manage_groups`, or `groups` permission within the group.
 
+Requires authentication: an unauthenticated request receives a clean `403` (`{"error": "Permission Denied", "code": 403, "status": false}`), never a `500`. A `group` that does not resolve to an active group is likewise rejected with a generic `403` (not distinguished from a permission denial).
+
 ```json
 {
   "email": "bob@example.com",
