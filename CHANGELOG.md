@@ -1,4 +1,4 @@
-## Unreleased
+## v1.2.45 - July 10, 2026
 
 **feature** — **GitHub OAuth is now a hosted-page login/registration method.**
 `github` joins `LOGIN_METHODS` / `REGISTRATION_METHODS` in
@@ -46,8 +46,6 @@ member creates) is a read check and keeps working; the FK **dict-save** path
 `realtime_message` save-action likewise now needs `manage_group`. `User` (whose
 `check_edit_permission` also gates VIEW-by-pk) and all hookless models are
 unaffected. Regression coverage in `tests/test_account/test_group_save_perms.py`.
-
-## v1.2.45 - July 10, 2026
 
 **security** — **`GROUP_FIELD` now scopes detail and list permissions, not just the `?group=` filter — closing cross-tenant reads on group-scoped models without a direct `group` FK.**
 A model can declare `RestMeta.GROUP_FIELD` (optionally a related path, e.g.
