@@ -3733,13 +3733,41 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#permissions" class="md-nav__link">
+  <a href="#permissions-two-audiences" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Permissions
+        Permissions — Two Audiences
       
     </span>
   </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#get-apigeopolicy-member-readable-effective-policy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GET /api/geo/policy — Member-Readable Effective Policy
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="GET /api/geo/policy — Member-Readable Effective Policy">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#member-event-feed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Member event feed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -3820,6 +3848,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Metrics
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -3843,11 +3882,13 @@
 <h1 id="geofence-admin-rest-api-reference">Geofence Admin — REST API Reference<a class="headerlink" href="#geofence-admin-rest-api-reference" title="Permanent link">&para;</a></h1>
 <p>The geofence <strong>config plane</strong>: editable system rules, IP allowlist, what-if
 simulation, and exemption audit endpoints — the backend for an admin-portal
-geofencing section maintained by legal/business staff. For the public
-pre-flight check (<code>GET /api/geo/check</code>) see <a href="../geoip/">GeoIP &amp; Geofencing</a>;
-for rule semantics see the django-developer
-<a href="../../../django_developer/account/geofence/">Geofencing reference</a>.</p>
-<h2 id="permissions">Permissions<a class="headerlink" href="#permissions" title="Permanent link">&para;</a></h2>
+geofencing section maintained by legal/business staff. Also the <strong>member
+plane</strong>: <code>GET /api/geo/policy</code> (below), the group-scoped policy read for a
+brand's own admin. For the public pre-flight check (<code>GET /api/geo/check</code>)
+see <a href="../geoip/">GeoIP &amp; Geofencing</a>; for rule semantics see the
+django-developer <a href="../../../django_developer/account/geofence/">Geofencing reference</a>.</p>
+<h2 id="permissions-two-audiences">Permissions — Two Audiences<a class="headerlink" href="#permissions-two-audiences" title="Permanent link">&para;</a></h2>
+<p><strong>Platform staff (global grants)</strong> — the config plane:</p>
 <table>
 <thead>
 <tr>
@@ -3870,40 +3911,110 @@ for rule semantics see the django-developer
 </tr>
 </tbody>
 </table>
-<p>All endpoints return <code>403</code> without a matching permission. <strong>Permissions must
-be global user grants</strong> — group-scoped (member) permissions do NOT apply,
-because these endpoints manage platform-wide config; passing a <code>group</code> param
-does not change that. Writes are recorded as <code>geofence_config</code> incident
-events (queryable via <code>GET /api/incident/event?category=geofence_config</code>,
-needs <code>view_security</code>) — that stream is the change history.</p>
+<p>Config-plane permissions must be <strong>global user grants</strong> — group-scoped
+(member) permissions do NOT apply, because these endpoints manage
+platform-wide config; passing a <code>group</code> param does not change that. Writes
+are recorded as <code>geofence_config</code> incident events (queryable via
+<code>GET /api/incident/event?category=geofence_config</code>, needs global
+<code>view_security</code>) — that stream is the change history.</p>
+<p><strong>Brand admins (member grants)</strong> — a <code>view_security</code>/<code>security</code> permission
+granted on a GroupMember (assignable by that group's admin) opens exactly
+two group-scoped reads, both confined to the member's own group (a grant on
+a parent group extends to its child groups):</p>
+<ul>
+<li><code>GET /api/geo/policy</code> — that group's effective policy, deliberately narrowed</li>
+<li><code>GET /api/incident/event?category=geofence_block|geofence_exempt</code> — that
+  group's enforcement events (see "Member event feed" below)</li>
+</ul>
+<p>Everything else returns <code>403</code> without a matching permission.</p>
+<hr />
+<h2 id="get-apigeopolicy-member-readable-effective-policy"><code>GET /api/geo/policy</code> — Member-Readable Effective Policy<a class="headerlink" href="#get-apigeopolicy-member-readable-effective-policy" title="Permanent link">&para;</a></h2>
+<p>The group-scoped read for a brand's own admin: the geofencing policy that
+actually applies to <strong>their</strong> group — nothing platform-wide.</p>
+<p>Query params: <code>group_uuid</code> (or numeric <code>group</code>) — <strong>required</strong>, and must be
+a group the caller holds a member <code>view_security</code>/<code>security</code> grant in
+(global holders may read any group). Without a group param members get
+<code>403</code> and global holders get <code>400</code>. An inactive group's uuid or numeric id
+does not resolve here — inspecting inactive groups stays a <code>GET geo/rules</code>
+(admin) affordance.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="p">{</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">    </span><span class="nt">&quot;group&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;uuid&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;…&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Acme&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;is_active&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">},</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">    </span><span class="nt">&quot;enabled&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">    </span><span class="nt">&quot;evaluation_order&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;system&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;group&quot;</span><span class="p">],</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">    </span><span class="nt">&quot;system_rule&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;country&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;in&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;US&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;CA&quot;</span><span class="p">]}},</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">    </span><span class="nt">&quot;group_rule&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;country&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;in&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;US&quot;</span><span class="p">]}},</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">    </span><span class="nt">&quot;strict_posture&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">    </span><span class="nt">&quot;strict_posture_effective&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="p">}</span>
+</code></pre></div>
+<p><code>system_rule</code> is the platform baseline that applies to all traffic including
+this group's; <code>group_rule</code> is the group's own rule (evaluated after the
+baseline — either can block). <code>strict_posture</code> is the group's raw tri-state
+override (<code>null</code> = inherit) and <code>strict_posture_effective</code> the resolved
+outcome; <strong>changing</strong> the override still requires global <code>manage_geofence</code>.</p>
+<p>The payload is <strong>deliberately narrower</strong> than <code>GET geo/rules</code>: no
+<code>enforced_endpoints</code>, no <code>allowlist_summary</code>, no cache TTL / fail-closed
+scopes / config provenance — operational detail stays platform-staff only,
+and new <code>geo/rules</code> fields do not automatically appear here.</p>
+<h3 id="member-event-feed">Member event feed<a class="headerlink" href="#member-event-feed" title="Permanent link">&para;</a></h3>
+<p>The same member grant scopes <code>GET /api/incident/event</code> to the member's own
+group, so a brand dashboard can list its enforcement history:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>GET /api/incident/event?category=geofence_block
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>GET /api/incident/event?category=geofence_exempt
+</code></pre></div>
+<p>Only <strong>group-attributed</strong> events appear: an enforcement event carries a
+group when the blocked/exempted request itself supplied <code>group</code>/<code>group_uuid</code>
+(e.g. white-label auth pages). Requests without group context are recorded
+globally and are not member-visible — read the feed as reported activity on
+your auth surface, not a verified total (same caveat as the per-group
+metrics below). <code>geofence_config</code> events are platform config history and
+effectively always global-only.</p>
 <hr />
 <h2 id="get-apigeorules-effective-configuration"><code>GET /api/geo/rules</code> — Effective Configuration<a class="headerlink" href="#get-apigeorules-effective-configuration" title="Permanent link">&para;</a></h2>
 <p>The machine-readable "rules in an active state" artifact.</p>
 <p>Query params: <code>group_uuid</code> (optional) — include that group's rule.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="p">{</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">    </span><span class="nt">&quot;system&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;rule&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;country&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;in&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;US&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;CA&quot;</span><span class="p">]}},</span><span class="w"> </span><span class="nt">&quot;source&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;setting&quot;</span><span class="p">,</span>
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">               </span><span class="nt">&quot;modified&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-07-08T14:11:02+00:00&quot;</span><span class="p">},</span>
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">    </span><span class="nt">&quot;posture&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;enabled&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;fail_closed&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">                </span><span class="nt">&quot;fail_closed_scopes&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;payments&quot;</span><span class="p">],</span>
-<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">                </span><span class="nt">&quot;allow_private_ips&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;cache_ttl&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">300</span><span class="p">},</span>
-<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">    </span><span class="nt">&quot;allowlist_summary&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;setting_entries&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;geoip_active&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">},</span>
-<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">    </span><span class="nt">&quot;evaluation_order&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;system&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;group&quot;</span><span class="p">],</span>
-<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">    </span><span class="nt">&quot;enforced_endpoints&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">      </span><span class="p">{</span><span class="nt">&quot;endpoint&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;mojo.apps.account.rest.user.on_user_login&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;scope&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;auth&quot;</span><span class="p">}</span>
-<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">    </span><span class="p">],</span>
-<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">    </span><span class="nt">&quot;group&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;uuid&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;…&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;is_active&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="w">              </span><span class="nt">&quot;rule&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;country&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;in&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;US&quot;</span><span class="p">]}}}</span>
-<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="w">  </span><span class="p">}</span>
-<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span><span class="nt">&quot;system&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;rule&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;country&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;in&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;US&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;CA&quot;</span><span class="p">]}},</span><span class="w"> </span><span class="nt">&quot;source&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;setting&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">               </span><span class="nt">&quot;modified&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-07-08T14:11:02+00:00&quot;</span><span class="p">},</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">    </span><span class="nt">&quot;posture&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;enabled&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;fail_closed&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">                </span><span class="nt">&quot;fail_closed_scopes&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;payments&quot;</span><span class="p">],</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">                </span><span class="nt">&quot;allow_private_ips&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;strict_posture&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">                </span><span class="nt">&quot;cache_ttl&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">300</span><span class="p">},</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">    </span><span class="nt">&quot;allowlist_summary&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;setting_entries&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;geoip_active&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">},</span>
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="w">    </span><span class="nt">&quot;evaluation_order&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;system&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;group&quot;</span><span class="p">],</span>
+<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="w">    </span><span class="nt">&quot;enforced_endpoints&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="w">      </span><span class="p">{</span><span class="nt">&quot;endpoint&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;mojo.apps.account.rest.user.on_user_login&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;scope&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;auth&quot;</span><span class="p">}</span>
+<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a><span class="w">    </span><span class="p">],</span>
+<a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a><span class="w">    </span><span class="nt">&quot;group&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;uuid&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;…&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;is_active&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a><span class="w">              </span><span class="nt">&quot;rule&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;country&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;in&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;US&quot;</span><span class="p">]}},</span>
+<a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a><span class="w">              </span><span class="nt">&quot;strict_posture&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span>
+<a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a><span class="w">              </span><span class="nt">&quot;strict_posture_effective&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">}</span>
+<a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-2-20" name="__codelineno-2-20" href="#__codelineno-2-20"></a><span class="p">}</span>
 </code></pre></div>
 <p><code>system.source</code> is <code>"setting"</code> (DB row, editable), <code>"conf"</code> (deploy file), or
 <code>"none"</code>.</p>
+<p><code>posture.strict_posture</code> is the global compliance switch (fail-closed on
+lookup failure + deny private IPs + deny when no rules are configured).
+<code>group.strict_posture</code> is that group's raw override — <code>null</code> inherits the
+global, <code>true</code>/<code>false</code> overrides it — and <code>group.strict_posture_effective</code> is
+the resolved outcome. Set the override by writing the group's metadata:
+<code>POST /api/group/&lt;pk&gt;</code> with <code>{"metadata": {"geofence_strict": true}}</code>
+(non-boolean values are rejected 400; write <code>null</code> to go back to inherit).
+Changing it requires the <strong>global</strong> <code>manage_geofence</code> (or <code>security</code>)
+permission — group-scoped admin rights return 403 — and every change is
+recorded as a <code>geofence_config</code> incident event.
+Requests denied because a strict deployment has no rules configured return
+the 403 reason <code>no_rules_strict</code>.</p>
 <h2 id="post-apigeorules-replace-system-rules"><code>POST /api/geo/rules</code> — Replace System Rules<a class="headerlink" href="#post-apigeorules-replace-system-rules" title="Permanent link">&para;</a></h2>
 <p>Body: <code>{"rule": {…}}</code> — the full rule object (replace, never merge). Invalid
 rules are rejected with a readable message:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;geofence rule: &#39;country&#39; has unknown operator &#39;bogus&#39;; valid operators are [&#39;eq&#39;, &#39;in&#39;, &#39;not_in&#39;]&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">400</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;geofence rule: &#39;country&#39; has unknown operator &#39;bogus&#39;; valid operators are [&#39;eq&#39;, &#39;in&#39;, &#39;not_in&#39;]&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">400</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">}</span>
 </code></pre></div>
 <p>On success the rule is live immediately (cached decisions are invalidated
 automatically). Response: <code>{"rule": …, "source": "setting", "modified": …}</code>.</p>
@@ -3951,17 +4062,17 @@ with <code>allowlist_source</code>, <code>allowlist_reason</code>, and the shado
 <p>The auditor's "who is exempt" list (IP/CIDR side — user grants are
 <code>bypass_holders</code>). Expired entries are listed with <code>active: false</code>, not
 hidden.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span><span class="nt">&quot;setting&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">      </span><span class="p">{</span><span class="nt">&quot;cidr&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;198.51.100.0/24&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;office egress&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;until&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;active&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">}</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">    </span><span class="p">],</span>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">    </span><span class="nt">&quot;geoip&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">      </span><span class="p">{</span><span class="nt">&quot;ip&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;203.0.113.7&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;dev box&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;until&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-08-01T00:00:00+00:00&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;active&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">}</span>
-<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">    </span><span class="p">]</span>
-<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">  </span><span class="p">}</span>
-<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">    </span><span class="nt">&quot;setting&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">      </span><span class="p">{</span><span class="nt">&quot;cidr&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;198.51.100.0/24&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;office egress&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;until&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;active&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">}</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">    </span><span class="p">],</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">    </span><span class="nt">&quot;geoip&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">      </span><span class="p">{</span><span class="nt">&quot;ip&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;203.0.113.7&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;dev box&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;until&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-08-01T00:00:00+00:00&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;active&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">}</span>
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">    </span><span class="p">]</span>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="p">}</span>
 </code></pre></div>
 <h2 id="post-apigeoallowlist-replace-the-cidr-allowlist"><code>POST /api/geo/allowlist</code> — Replace the CIDR Allowlist<a class="headerlink" href="#post-apigeoallowlist-replace-the-cidr-allowlist" title="Permanent link">&para;</a></h2>
 <p>Body: <code>{"entries": […]}</code> — full replace; an empty list clears it. Entries are
@@ -3980,22 +4091,74 @@ works; <code>{"unwhitelist": 1}</code> removes it). See <a href="../geoip/">GeoI
 <h2 id="get-apigeobypass_holders-user-exemptions"><code>GET /api/geo/bypass_holders</code> — User Exemptions<a class="headerlink" href="#get-apigeobypass_holders-user-exemptions" title="Permanent link">&para;</a></h2>
 <p>Users who bypass geofencing entirely: explicit <code>bypass_geofence</code> permission
 grants plus superusers (who hold every permission implicitly).</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">    </span><span class="nt">&quot;holders&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">      </span><span class="p">{</span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;username&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;dev@example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;is_active&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">       </span><span class="nt">&quot;source&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;permission&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">}</span>
-<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">    </span><span class="p">],</span>
-<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">    </span><span class="nt">&quot;count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
-<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">    </span><span class="nt">&quot;capped&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
-<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="w">  </span><span class="p">}</span>
-<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">    </span><span class="nt">&quot;holders&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">      </span><span class="p">{</span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;username&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;dev@example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;is_active&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">       </span><span class="nt">&quot;source&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;permission&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">}</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">    </span><span class="p">],</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">    </span><span class="nt">&quot;count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">    </span><span class="nt">&quot;capped&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="p">}</span>
 </code></pre></div>
 <p><code>source</code> is <code>"permission"</code> or <code>"superuser"</code>. The list is capped at 200 rows
 (<code>capped: true</code> when truncated). The response deliberately carries
 id/username only — <code>email</code>/<code>display_name</code> are "users"-category data and are
 not exposed through a geofence-only permission.</p>
+<hr />
+<h2 id="metrics">Metrics<a class="headerlink" href="#metrics" title="Permanent link">&para;</a></h2>
+<p>Geofence enforcement records aggregate counters (category <code>geofence</code>,
+counted for <strong>every</strong> occurrence — the hourly event dedupe does not apply to
+metrics):</p>
+<table>
+<thead>
+<tr>
+<th>Slug</th>
+<th>Counts</th>
+<th>Accounts</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>geofence:blocks</code></td>
+<td>every blocked request</td>
+<td><code>global</code> + <code>group-&lt;id&gt;</code></td>
+</tr>
+<tr>
+<td><code>geofence:blocks:country:{CC}</code></td>
+<td>blocks by country</td>
+<td><code>global</code> only</td>
+</tr>
+<tr>
+<td><code>geofence:blocks:region:{ISO-3166-2}</code></td>
+<td>blocks by region</td>
+<td><code>global</code> only</td>
+</tr>
+<tr>
+<td><code>geofence:exempt</code></td>
+<td>allowlisted passes that would have blocked</td>
+<td><code>global</code> + <code>group-&lt;id&gt;</code></td>
+</tr>
+</tbody>
+</table>
+<p>When the blocked/exempted request carries a group (<code>group</code> / <code>group_uuid</code>
+param — e.g. white-label auth pages), the base slugs are also recorded under
+that group's metrics account, so a tenant dashboard can chart its own
+geofence activity:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>GET /api/metrics/fetch?slug=geofence:blocks&amp;account=group-42&amp;granularity=days&amp;with_labels=true
+</code></pre></div>
+<p>Reading a <code>group-&lt;id&gt;</code> account requires <code>view_metrics</code>/<code>metrics</code> — a
+group-member grant is enough (see <a href="../../metrics/metrics/">Metrics</a>). The
+country/region breakdown is deliberately global-only (a per-group geographic
+cross-product would explode the Redis key space); chart those from the
+<code>global</code> account, which needs a global metrics grant.</p>
+<p>Attribution comes from the <code>group</code>/<code>group_uuid</code> param the blocked/exempted
+request itself supplied — on a public auth surface there is no membership
+check on that param — so read a group's counters as <strong>reported activity on
+that tenant's auth surface</strong>, not a verified count. Reads stay
+permission-gated regardless.</p>
 
 
 

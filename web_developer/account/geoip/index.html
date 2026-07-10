@@ -4023,7 +4023,7 @@
 </tr>
 <tr>
 <td><code>reason</code></td>
-<td>One of <code>no_rules</code>, <code>disabled</code>, <code>bypass</code>, <code>ip_allowlisted</code>, <code>passed</code>, <code>lookup_failed</code>, <code>private_ip</code>, <code>country_not_allowed</code>, <code>region_not_allowed</code>, <code>tor_detected</code>, <code>vpn_detected</code>, <code>proxy_detected</code>, <code>datacenter_detected</code>, <code>rule_invalid</code>, <code>group_inactive</code> — see the django-developer <a href="../../../django_developer/account/geofence/#geodecision-shape">GeoDecision Shape</a> reference</td>
+<td>One of <code>no_rules</code>, <code>no_rules_strict</code>, <code>disabled</code>, <code>bypass</code>, <code>ip_allowlisted</code>, <code>passed</code>, <code>lookup_failed</code>, <code>private_ip</code>, <code>country_not_allowed</code>, <code>region_not_allowed</code>, <code>tor_detected</code>, <code>vpn_detected</code>, <code>proxy_detected</code>, <code>datacenter_detected</code>, <code>rule_invalid</code>, <code>group_inactive</code> — see the django-developer <a href="../../../django_developer/account/geofence/#geodecision-shape">GeoDecision Shape</a> reference. <code>no_rules_strict</code> means the deployment (or the requested group) runs the opt-in strict posture and geofencing has no rules configured — access is denied instead of silently allowed.</td>
 </tr>
 <tr>
 <td><code>detail</code></td>

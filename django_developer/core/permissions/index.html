@@ -3783,6 +3783,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#instance-level-permission-hooks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Instance-Level Permission Hooks
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#permission-names" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4115,6 +4126,45 @@ grant never authorizes a global action.</p>
 <a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="nd">@md</span><span class="o">.</span><span class="n">requires_global_perms</span><span class="p">(</span><span class="s2">&quot;manage_jobs&quot;</span><span class="p">,</span> <span class="s2">&quot;jobs&quot;</span><span class="p">)</span>
 <a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_clear_queue</span><span class="p">(</span><span class="n">request</span><span class="p">):</span> <span class="o">...</span>            <span class="c1"># clears the global job queue</span>
 </code></pre></div>
+<h2 id="instance-level-permission-hooks">Instance-Level Permission Hooks<a class="headerlink" href="#instance-level-permission-hooks" title="Permanent link">&para;</a></h2>
+<p>A model may override two per-instance hooks that the generic permission layer
+(<code>MojoModel._evaluate_permission</code>) consults for <strong>detail</strong> operations (GET /
+POST / PUT / DELETE on a pk):</p>
+<table>
+<thead>
+<tr>
+<th>Hook</th>
+<th>Signature</th>
+<th>Governs</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>check_view_permission(perms, request)</code></td>
+<td>returns <code>bool</code></td>
+<td><strong>reads</strong> (GET, and the FK attach-by-pk VIEW check)</td>
+</tr>
+<tr>
+<td><code>check_edit_permission(perms, request)</code></td>
+<td>returns <code>bool</code></td>
+<td><strong>writes</strong> (POST/PUT/DELETE and <code>POST_SAVE_ACTIONS</code>)</td>
+</tr>
+</tbody>
+</table>
+<p>The layer classifies each call <strong>by its RestMeta keys</strong>: a request carrying a
+write key (<code>CREATE</code>/<code>SAVE</code>/<code>DELETE_PERMS</code>) is a <strong>write</strong> and uses
+<code>check_edit_permission</code>, <strong>skipping</strong> <code>check_view_permission</code> — a read affordance
+inside the view hook (e.g. a "members may read, downgraded" fallthrough) must
+never authorize a save. A read carries only <code>VIEW_PERMS</code> and prefers
+<code>check_view_permission</code>. A model that defines <strong>only</strong> <code>check_edit_permission</code>
+(e.g. <code>User</code>) uses it for reads too, since there is no view hook to prefer. If a
+hook isn't defined for the classified operation, evaluation falls through to the
+owner match, the group-membership check, and finally <code>user.has_permission</code>.</p>
+<p><code>Group</code> is the canonical example: <code>check_view_permission</code> lets any active member
+read their group with a downgraded (<code>basic</code>) graph, while <code>check_edit_permission</code>
+requires an actual <code>SAVE_PERMS</code> grant (global <code>manage_groups</code>/<code>groups</code>, or
+member-level <code>manage_group</code>; an ApiKey must be confined to its own group tree
+<strong>and</strong> hold the perm). See <a href="../../account/group/">Account → Group</a>.</p>
 <p><strong>API keys.</strong> An <code>ApiKey</code> (<code>Authorization: apikey &lt;token&gt;</code>) is a <em>group-scoped</em>
 credential, so <code>requires_global_perms</code> <strong>rejects it by default</strong> — letting a key
 satisfy a platform-global gate would recreate the escalation through a machine
@@ -4507,7 +4557,7 @@ tooling can tell them apart.</p>
 </tr>
 </tbody>
 </table>
-<p><strong>REST endpoints (non-RestMeta):</strong> The geofence config-plane endpoints in <code>account/rest/geofence.py</code> (<code>geo/rules</code>, <code>geo/simulate</code>, <code>geo/allowlist</code>, <code>geo/bypass_holders</code>) accept <code>view_geofence</code>/<code>manage_geofence</code>/<code>security</code>, not RestMeta perms.</p>
+<p><strong>REST endpoints (non-RestMeta):</strong> The geofence config-plane endpoints in <code>account/rest/geofence.py</code> (<code>geo/rules</code>, <code>geo/simulate</code>, <code>geo/allowlist</code>, <code>geo/bypass_holders</code>) accept <code>view_geofence</code>/<code>manage_geofence</code>/<code>security</code> as <strong>global-only</strong> grants, not RestMeta perms. The member-plane read <code>GET geo/policy</code> instead accepts <code>view_security</code>/<code>security</code> — global <strong>or</strong> granted on a GroupMember for the requested group (the response is confined to that group; see the geofence doc's Member Plane section).</p>
 <h3 id="incident-app">Incident App<a class="headerlink" href="#incident-app" title="Permanent link">&para;</a></h3>
 <table>
 <thead>

@@ -4094,7 +4094,12 @@
 <li><strong>JSON body</strong> for POST/PUT: <code>Content-Type: application/json</code></li>
 <li><strong>Form data</strong> for POST: <code>Content-Type: application/x-www-form-urlencoded</code></li>
 </ul>
-<p>All three are merged and treated identically by the server.</p>
+<p>All three are merged into a single payload. If the same key appears in more
+than one source, the later source wins, replacing the value whole: <strong>query
+string &lt; form body &lt; JSON body</strong>. So a JSON body key always beats the same key
+in the query string (e.g. <code>POST /api/thread/1?group=5</code> with body
+<code>{"group": 7}</code> resolves <code>group</code> to <code>7</code>). Repeating a key <em>within</em> the query
+string (<code>?tag=a&amp;tag=b</code>) still produces an array.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># GET with query params</span>
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>curl<span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer &lt;token&gt;&quot;</span><span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">     </span><span class="s2">&quot;https://api.example.com/api/myapp/book?status=published&quot;</span>

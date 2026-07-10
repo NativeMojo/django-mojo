@@ -3833,6 +3833,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#strict-compliance-posture-opt-in" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Strict / Compliance Posture (opt-in)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#geodecision-shape" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3898,6 +3909,17 @@
     <span class="md-ellipsis">
       
         Config Plane — REST + Permissions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#member-plane-group-scoped-visibility" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Member Plane — Group-Scoped Visibility
       
     </span>
   </a>
@@ -4050,6 +4072,44 @@ request-time <code>rule_invalid</code> deny). Note REST JSON fields <strong>merg
 send <code>{"geofence": {..., "__replace": true}}</code> to replace the rule wholesale.
 Every group save also invalidates that group's cached decisions.</p>
 <hr />
+<h2 id="strict-compliance-posture-opt-in">Strict / Compliance Posture (opt-in)<a class="headerlink" href="#strict-compliance-posture-opt-in" title="Permanent link">&para;</a></h2>
+<p>The engine defaults <strong>fail-open</strong> (a resilience choice). Deployments that
+require geofencing for jurisdictional compliance — where "can't verify
+location" must mean deny, not allow — opt into the strict posture. One bundled
+switch that, when on:</p>
+<ol>
+<li><strong>Fails closed on lookup failure</strong> — composes with the existing flags:
+   <code>fail_closed = GEOFENCE_FAIL_CLOSED OR scope ∈ GEOFENCE_FAIL_CLOSED_SCOPES OR strict</code></li>
+<li><strong>Denies private/reserved IPs</strong> (<code>allow_private = GEOFENCE_ALLOW_PRIVATE_IPS AND NOT strict</code>)</li>
+<li><strong>Denies when geofencing has no rules configured</strong> — reason
+   <code>no_rules_strict</code>; no silent allow-all on an enabled-but-unconfigured
+   deployment.</li>
+</ol>
+<p>Strict only ever <strong>tightens</strong>; it never loosens the granular flags, and with
+it off (the default) behavior is bit-for-bit unchanged.</p>
+<p><strong>Global</strong>: <code>GEOFENCE_STRICT_POSTURE</code> (bool Setting, default <code>False</code>,
+global-only — group-scoped rows are rejected 400; writes via <code>/api/settings</code>
+must be a JSON boolean, anything else is rejected at write time so a posture
+flag can never be ambiguous — see <em>Settings Reference</em> below for the full
+write-validation contract).</p>
+<p><strong>Per-group override</strong>: <code>Group.metadata["geofence_strict"]</code> — tri-state:
+absent/<code>null</code> inherits the global, <code>true</code>/<code>false</code> overrides in either
+direction (some groups strict, others permissive). Validated on REST write
+(non-boolean → 400); a flat sibling of <code>metadata["geofence"]</code> (which remains
+the raw rule dict). <strong>Changing it requires the global <code>manage_geofence</code> (or
+<code>security</code>) permission</strong> — the same trust level as the global switch; a
+tenant admin who can merely edit the group gets a 403 and cannot opt their
+group out of a platform-mandated posture. Every flip is recorded as a
+<code>geofence_config</code> incident event (<code>target: "group:&lt;id&gt;"</code>, old/new/actor).</p>
+<p>The <strong>IP allowlist still wins</strong> under strict (bypass → allowlist → rules): an
+allowlisted office IP gets in even on a strict no-rules deployment, with the
+exemption evidence recording <code>would_block_reason: "no_rules_strict"</code>. Blocks
+under strict posture are compliance-grade — evidence level <strong>5</strong>. Posture
+flips invalidate cached decisions automatically (Setting hook / group save
+hook); strict <code>lookup_failed</code> denials are never cached, so a transient
+provider outage recovers on the next successful lookup.</p>
+<p>Test header (test-mode gate only): <code>X-Mojo-Test-Geofence-Strict: 0|1</code>.</p>
+<hr />
 <h2 id="geodecision-shape">GeoDecision Shape<a class="headerlink" href="#geodecision-shape" title="Permanent link">&para;</a></h2>
 <p>The result of a geofence evaluation is a <code>GeoDecision</code> dict:</p>
 <table>
@@ -4069,7 +4129,7 @@ Every group save also invalidates that group's cached decisions.</p>
 <tr>
 <td><code>reason</code></td>
 <td>str</td>
-<td>One of: <code>no_rules</code>, <code>disabled</code>, <code>bypass</code>, <code>ip_allowlisted</code>, <code>passed</code>, <code>lookup_failed</code>, <code>private_ip</code>, <code>country_not_allowed</code>, <code>region_not_allowed</code>, <code>tor_detected</code>, <code>vpn_detected</code>, <code>proxy_detected</code>, <code>datacenter_detected</code>, <code>rule_invalid</code>, <code>group_inactive</code></td>
+<td>One of: <code>no_rules</code>, <code>no_rules_strict</code>, <code>disabled</code>, <code>bypass</code>, <code>ip_allowlisted</code>, <code>passed</code>, <code>lookup_failed</code>, <code>private_ip</code>, <code>country_not_allowed</code>, <code>region_not_allowed</code>, <code>tor_detected</code>, <code>vpn_detected</code>, <code>proxy_detected</code>, <code>datacenter_detected</code>, <code>rule_invalid</code>, <code>group_inactive</code></td>
 </tr>
 <tr>
 <td><code>detail</code></td>
@@ -4105,6 +4165,11 @@ Every group save also invalidates that group's cached decisions.</p>
 <td><code>rule_level</code></td>
 <td>str</td>
 <td><code>"system"</code> or <code>"group"</code> — which level caused a block</td>
+</tr>
+<tr>
+<td><code>strict_posture</code></td>
+<td>bool</td>
+<td><code>True</code> when the decision was evaluated under strict posture (see below)</td>
 </tr>
 </tbody>
 </table>
@@ -4198,7 +4263,7 @@ group-scoped rows are rejected with a 400 at write time.</p>
 <tr>
 <td><code>GET /api/geo/rules</code></td>
 <td>view</td>
-<td>Effective config: system rule + source (<code>setting</code>/<code>conf</code>/<code>none</code>) + modified stamp, posture (enabled, fail modes, scopes, cache TTL), allowlist summary, evaluation order, and every <code>@requires_geofence</code> endpoint with its scope. Pass <code>group_uuid</code> to include a group's rule.</td>
+<td>Effective config: system rule + source (<code>setting</code>/<code>conf</code>/<code>none</code>) + modified stamp, posture (enabled, fail modes, scopes, strict posture, cache TTL), allowlist summary, evaluation order, and every <code>@requires_geofence</code> endpoint with its scope. Pass <code>group_uuid</code> to include a group's rule plus its <code>strict_posture</code> override (raw tri-state) and <code>strict_posture_effective</code> (resolved).</td>
 </tr>
 <tr>
 <td><code>POST /api/geo/rules</code></td>
@@ -4241,6 +4306,41 @@ event carrying <code>target</code> (<code>system</code> / <code>allowlist</code>
 and the acting user. Query <code>/api/incident/event?category=geofence_config</code>
 (needs <code>view_security</code>).</p>
 <hr />
+<h2 id="member-plane-group-scoped-visibility">Member Plane — Group-Scoped Visibility<a class="headerlink" href="#member-plane-group-scoped-visibility" title="Permanent link">&para;</a></h2>
+<p>The config plane is platform-staff only; the <strong>member plane</strong> is its
+group-scoped, read-only counterpart for a brand's own admin. One endpoint:
+<code>GET /api/geo/policy</code>, gated by <code>@md.requires_perms("view_security",
+"security")</code> — a <strong>global</strong> grant reads any group, a <strong>member</strong> grant reads
+the group it is granted in (a grant on a parent group also covers its child
+groups — the framework's standard <code>check_parents</code> membership convention).
+The decorator checks the grant against <code>request.group</code>, and the response is
+built solely from <code>request.group</code>, so cross-tenant reads are structurally
+impossible. The keys deliberately match
+<code>Event.VIEW_PERMS</code>, so one member grant lights up both the policy read and
+the group's event feed; the config-plane keys
+(<code>view_geofence</code>/<code>manage_geofence</code>) remain global-only and do NOT open this
+endpoint.</p>
+<p>The payload is deliberately narrow — the policy that applies to that group's
+traffic (<code>enabled</code>, <code>system_rule</code> baseline, <code>group_rule</code>, <code>strict_posture</code>
+tri-state + <code>strict_posture_effective</code>, <code>evaluation_order</code>) and never the
+config plane's operational detail (<code>enforced_endpoints</code>, allowlist
+internals, fail-closed scopes, cache TTL, config source/modified). It reads
+persisted config (settings + <code>Group.metadata</code>) like <code>geo/rules</code> does — not
+the engine's test-header overlays. A <code>group</code>/<code>group_uuid</code> param is required:
+members without one 403 at the decorator; global holders get a 400. The
+dispatcher resolves both <code>group</code> and <code>group_uuid</code> for <strong>active</strong> groups only —
+inspecting an inactive group stays a <code>geo/rules</code> (admin) affordance.</p>
+<p><strong>Events — no new mechanics.</strong> <code>Event.VIEW_PERMS = ["view_security",
+"security"]</code> plus the framework's group-scoped list fallback
+(<code>mojo/models/rest.py::on_rest_handle_list</code>) already confine a member grant
+to <code>group__in=&lt;their groups&gt;</code>, and groupless rows are excluded. Geofence
+events carry a group only when the enforced request itself supplied
+<code>group</code>/<code>group_uuid</code> (the incident reporter falls back to <code>request.group</code>;
+attribution is client-reported — ITEM-020), so members see group-attributed
+activity, not verified totals. <code>geofence_config</code> events are effectively
+always groupless (platform config history) and stay platform-only.
+Regression tests: <code>tests/test_geofence/member_visibility.py</code>.</p>
+<hr />
 <h2 id="evidence-plane-incident-events-metrics">Evidence Plane — Incident Events + Metrics<a class="headerlink" href="#evidence-plane-incident-events-metrics" title="Permanent link">&para;</a></h2>
 <p>Every enforcement outcome that matters to an auditor becomes an incident
 Event (<code>mojo.apps.incident</code>); blocks also record metrics. Emission happens at
@@ -4267,7 +4367,7 @@ are advisory and emit nothing.</p>
 </tr>
 <tr>
 <td><code>geofence_block</code></td>
-<td>abuse-flag block, or any block on a scope in <code>GEOFENCE_FAIL_CLOSED_SCOPES</code></td>
+<td>abuse-flag block, any block on a scope in <code>GEOFENCE_FAIL_CLOSED_SCOPES</code>, or any block under strict posture</td>
 <td>5</td>
 </tr>
 <tr>
@@ -4292,7 +4392,16 @@ are advisory and emit nothing.</p>
 flood the stream. Metrics count <strong>every</strong> block including deduped ones:
 <code>geofence:blocks</code>, <code>geofence:blocks:country:{cc}</code>,
 <code>geofence:blocks:region:{iso-3166-2}</code>, plus <code>geofence:exempt</code> — all under the
-<code>geofence</code> category (mirrors <code>firewall:blocks</code>). Escalation of level-3/5/6
+<code>geofence</code> category (mirrors <code>firewall:blocks</code>). When the request carries a
+group (<code>request.group</code>, resolved from the <code>group</code>/<code>group_uuid</code> params), the
+base slugs <code>geofence:blocks</code> and <code>geofence:exempt</code> are <strong>also</strong> recorded under
+<code>account="group-&lt;id&gt;"</code> (the platform's per-tenant account convention, e.g.
+<code>member_activity_day</code>) so tenant dashboards can chart their own blocks —
+attribution is the client-supplied <code>group</code>/<code>group_uuid</code> param, so per-group
+counters are reported activity, not verified counts. The
+country/region breakdown slugs stay global-only — per-group geographic
+accounts would cross-product groups × countries × regions in Redis, and the
+monthly/yearly counter keys never expire. Escalation of level-3/5/6
 events stays with incident RuleSet bundling — blocked-jurisdiction login
 traffic is the system <em>working</em>, not an incident.</p>
 <hr />
@@ -4342,12 +4451,28 @@ traffic is the system <em>working</em>, not an incident.</p>
 <td>Private/reserved IPs (localhost, RFC 1918) are always allowed when <code>True</code>.</td>
 </tr>
 <tr>
+<td><code>GEOFENCE_STRICT_POSTURE</code></td>
+<td><code>False</code></td>
+<td>Opt-in compliance posture: fail-closed on lookup failure + deny private IPs + deny when no rules are configured. Per-group override: <code>Group.metadata["geofence_strict"]</code> (tri-state). Global-only key; writes must be a JSON boolean.</td>
+</tr>
+<tr>
 <td><code>GEOFENCE_TEST_OVERRIDE</code></td>
 <td><code>None</code></td>
 <td>Dict that substitutes the geoip lookup. Use in tests or local dev to simulate specific countries/flags.</td>
 </tr>
 </tbody>
 </table>
+<p><strong>All <code>GEOFENCE_*</code> keys above (except the conf-file-only
+<code>GEOFENCE_TEST_OVERRIDE</code>) are write-validated, global-only DB settings</strong>: a
+malformed value is rejected on every write path (<code>POST /api/settings</code> → readable
+<code>400</code>; <code>Setting.set()</code>/shell → <code>ValueException</code>), group-scoped rows are refused,
+and every write invalidates the geofence decision cache (so e.g. an
+<code>ALLOW_PRIVATE_IPS</code> flip cannot leave stale cached <code>private_ip</code> allows).
+Booleans must be JSON <code>true</code>/<code>false</code> (an unrecognized string no longer
+truthy-coerces at read time), <code>GEOFENCE_CACHE_TTL</code> a non-negative JSON integer,
+<code>GEOFENCE_FAIL_CLOSED_SCOPES</code> a JSON list of non-empty strings. Validators are
+registered per-key via <code>Setting.register_validator</code> — see
+<a href="../../helpers/settings/">settings helper</a> to register app-specific keys.</p>
 <h3 id="test-override-example">Test override example<a class="headerlink" href="#test-override-example" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="n">GEOFENCE_TEST_OVERRIDE</span> <span class="o">=</span> <span class="p">{</span>
 <a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>    <span class="s2">&quot;country_code&quot;</span><span class="p">:</span> <span class="s2">&quot;CN&quot;</span><span class="p">,</span>

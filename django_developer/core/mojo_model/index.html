@@ -5037,7 +5037,7 @@
 <td><code>GROUP_FIELD</code></td>
 <td>str</td>
 <td><code>"group"</code></td>
-<td>Field name for group scoping</td>
+<td>Field name (or related path, e.g. <code>"agent__project"</code>) for group scoping — governs detail, list, and <code>?group=</code> permission checks</td>
 </tr>
 <tr>
 <td><code>CREATED_BY_OWNER_FIELD</code></td>
@@ -5414,9 +5414,12 @@ ceilings.</p>
 <ol>
 <li>If <code>"all"</code> in perms → allow unauthenticated</li>
 <li>If user is not authenticated → return False</li>
-<li>If instance provided and has <code>check_view_permission</code> or <code>check_edit_permission</code> → delegate</li>
-<li>If <code>"owner"</code> in perms and <code>instance.user.id == request.user.id</code> → allow</li>
-<li>If <code>request.group</code> set and model has <code>group</code> field → check group membership perms</li>
+<li>If an instance is provided, the operation is classified from the RestMeta keys of the call — a <strong>write</strong> carries a write key (<code>CREATE</code>/<code>SAVE</code>/<code>DELETE_PERMS</code>), a <strong>read</strong> carries only <code>VIEW_PERMS</code>:</li>
+<li><strong>read</strong> → if the instance defines <code>check_view_permission</code>, delegate to it (else fall through)</li>
+<li><strong>write</strong> → <strong>skip</strong> the view hook (a read affordance must not authorize a write); if the instance defines <code>check_edit_permission</code>, delegate to it (else fall through)</li>
+<li>a model with only <code>check_edit_permission</code> (e.g. <code>User</code>) uses it for reads too — there is no view hook to prefer</li>
+<li>If <code>"owner"</code> in perms and <code>instance.{OWNER_FIELD}.id == request.user.id</code> → allow</li>
+<li>If <code>request.group</code> set and the model is group-scoped (direct <code>group</code> FK <strong>or</strong> a <code>RestMeta.GROUP_FIELD</code>) → check group membership perms</li>
 <li>Otherwise → check <code>request.user.has_permission(perms)</code></li>
 </ol>
 <p>Use <code>rest_check_permission</code> directly when you need a boolean test with no action on denial (for example, list fallbacks that return a scoped result instead of a 403).</p>

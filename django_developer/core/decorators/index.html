@@ -4464,7 +4464,11 @@
 <p><code>requires_perms</code> falls back to the caller's <strong>group/member</strong> permission for
 <code>request.group</code> when the global check fails (see <code>REQUIRES_PERMS_IS_GROUP</code>).
 Correct for endpoints scoped to that group — but a cross-tenant escalation for
-endpoints whose effect is platform-wide. Use <code>requires_global_perms</code> for those.</p>
+endpoints whose effect is platform-wide. Use <code>requires_global_perms</code> for those.
+The fallback resolves <strong>active</strong> groups only (<code>Group.get_active</code>): an inactive
+or unusable <code>group</code> param yields no group context and the check fails closed
+(<code>PermissionDeniedException</code>) — a member grant in a deactivated group never
+authorizes.</p>
 <h3 id="mdrequires_group_permsperms"><code>@md.requires_group_perms(*perms)</code><a class="headerlink" href="#mdrequires_group_permsperms" title="Permanent link">&para;</a></h3>
 <p>Like <code>requires_perms</code> but forces group-context permission evaluation.</p>
 <h3 id="mdrequires_global_permsperms-allow_api_keysfalse"><code>@md.requires_global_perms(*perms, allow_api_keys=False)</code><a class="headerlink" href="#mdrequires_global_permsperms-allow_api_keysfalse" title="Permanent link">&para;</a></h3>

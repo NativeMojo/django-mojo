@@ -3955,12 +3955,13 @@ receive an HttpOnly pass cookie that skips the challenge on subsequent visits.</
 <hr />
 <h2 id="login-page-auth">Login Page (<code>/auth</code>)<a class="headerlink" href="#login-page-auth" title="Permanent link">&para;</a></h2>
 <p>Which methods are shown depends on the resolved auth config's <code>login.methods</code>.
-Default set: <code>password</code>, <code>sms</code>, <code>passkey</code>, <code>magic</code>, <code>google</code>, <code>apple</code>.</p>
+Default set: <code>password</code>, <code>sms</code>, <code>passkey</code>, <code>magic</code>, <code>google</code>, <code>apple</code>, <code>github</code>.</p>
 <ul>
 <li><strong>password</strong> — email/password sign in</li>
 <li><strong>sms</strong> — phone number + 6-digit SMS code sign in</li>
 <li><strong>google</strong> — redirects to Google, returns to <code>/auth?code=...&amp;state=...</code></li>
 <li><strong>apple</strong> — same flow</li>
+<li><strong>github</strong> — same flow</li>
 <li><strong>passkey</strong> — WebAuthn discoverable credential flow</li>
 <li><strong>magic</strong> — sends a one-click sign-in email</li>
 <li>Forgot password (code or link; auto-routes via SMS when identity is phone)</li>
@@ -3970,7 +3971,7 @@ Default set: <code>password</code>, <code>sms</code>, <code>passkey</code>, <cod
 config), the page opens directly on the SMS phone-entry form rather than a
 sign-in form — so SMS sign-in is the first thing the user sees. With
 <code>password</code> present, the sign-in form leads and "Sign in with a code" is a
-button alongside passkey/Google/Apple.</p>
+button alongside passkey/Google/Apple/GitHub.</p>
 <p><strong>Anti-enumeration UX.</strong> SMS sign-in never reveals whether a phone number has an
 account — <code>POST /api/auth/sms/login</code> returns the same generic success for known
 and unknown numbers, and a code is only actually sent to a real account. So the
@@ -4098,7 +4099,7 @@ submits as ISO <code>yyyy-mm-dd</code>.</p>
 <p><strong>After registration</strong> — when <code>registration.passkey_prompt</code> is <code>"optional"</code> or
 <code>"required"</code>, the page redirects to <code>/passkey</code> instead of straight to
 <code>success_redirect</code>.</p>
-<p>Also supports Google/Apple OAuth sign-up (same buttons, same flow).</p>
+<p>Also supports Google/Apple/GitHub OAuth sign-up (same buttons, same flow).</p>
 <hr />
 <h2 id="passkey-enrollment-page-passkey">Passkey Enrollment Page (<code>/passkey</code>)<a class="headerlink" href="#passkey-enrollment-page-passkey" title="Permanent link">&para;</a></h2>
 <p>A standalone, themeable passkey enrollment page. Not bouncer-gated — the
@@ -4113,8 +4114,8 @@ and runs the WebAuthn registration round-trip.</p>
 <hr />
 <h2 id="oauth-flow">OAuth Flow<a class="headerlink" href="#oauth-flow" title="Permanent link">&para;</a></h2>
 <ol>
-<li>User clicks "Google" or "Apple" button</li>
-<li><code>MojoAuth.startGoogleLogin()</code> / <code>MojoAuth.startAppleLogin()</code> redirects to provider</li>
+<li>User clicks "Google", "Apple", or "GitHub" button</li>
+<li><code>MojoAuth.startGoogleLogin()</code> / <code>MojoAuth.startAppleLogin()</code> / <code>MojoAuth.startGitHubLogin()</code> redirects to provider</li>
 <li>Provider redirects back to <code>/auth?code=xxx&amp;state=yyy</code></li>
 <li>The page JS detects the <code>code</code> + <code>state</code> params and calls <code>MojoAuth.completeOAuthLogin()</code></li>
 <li>Backend exchanges code for tokens, creates/links user</li>

@@ -944,6 +944,28 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#kind-coercion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        kind= Coercion
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#write-time-validation-registered-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Write-Time Validation (Registered Keys)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#notes" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3970,6 +3992,28 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#kind-coercion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        kind= Coercion
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#write-time-validation-registered-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Write-Time Validation (Registered Keys)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#notes" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4052,6 +4096,50 @@
 <p>Then access via:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="n">settings</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;MY_APP_API_KEY&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
 </code></pre></div>
+<h2 id="kind-coercion"><code>kind=</code> Coercion<a class="headerlink" href="#kind-coercion" title="Permanent link">&para;</a></h2>
+<p><code>settings.get(name, default, kind=...)</code> coerces the resolved value (<code>"int"</code>,
+<code>"float"</code>, <code>"bool"</code>, <code>"dict"</code>, <code>"list"</code>):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="n">enabled</span> <span class="o">=</span> <span class="n">settings</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;MY_FLAG&quot;</span><span class="p">,</span> <span class="kc">False</span><span class="p">,</span> <span class="n">kind</span><span class="o">=</span><span class="s2">&quot;bool&quot;</span><span class="p">)</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="n">scopes</span> <span class="o">=</span> <span class="n">settings</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;MY_SCOPES&quot;</span><span class="p">,</span> <span class="p">[],</span> <span class="n">kind</span><span class="o">=</span><span class="s2">&quot;list&quot;</span><span class="p">)</span>   <span class="c1"># JSON list or &quot;a, b&quot; CSV</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="n">rules</span> <span class="o">=</span> <span class="n">settings</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;MY_RULES&quot;</span><span class="p">,</span> <span class="p">{},</span> <span class="n">kind</span><span class="o">=</span><span class="s2">&quot;dict&quot;</span><span class="p">)</span>     <span class="c1"># JSON object</span>
+</code></pre></div>
+<p><strong>A present-but-uncoercible value degrades to the DECLARED default and logs a
+<code>settings</code> warning</strong> (<code>logit.warning("settings", ...)</code>) — garbage is treated as
+<em>unset-but-loud</em>, never silently absorbed:</p>
+<ul>
+<li>An unrecognized <code>bool</code> string (not one of <code>true/1/yes/on/y</code> /
+  <code>false/0/no/off/n/""</code>) returns the declared default — it does <strong>not</strong>
+  truthy-coerce to <code>True</code> (the old behavior failed open for allow-flavored
+  flags).</li>
+<li>An unparsable <code>dict</code> returns the declared default (or <code>{}</code>).</li>
+<li>A bracket-wrapped but unparsable <code>list</code> (e.g. <code>'["payments",]'</code>) returns the
+  declared default — it is <strong>not</strong> comma-split into nonsense entries. Plain
+  comma strings (<code>"a, b"</code>) still split.</li>
+<li>Garbage <code>int</code>/<code>float</code> returns the declared default.</li>
+</ul>
+<p>Because the default is what a garbage value degrades to, pass the same default
+at every read site of a key (the framework's geofence reads already do).</p>
+<h2 id="write-time-validation-registered-keys">Write-Time Validation (Registered Keys)<a class="headerlink" href="#write-time-validation-registered-keys" title="Permanent link">&para;</a></h2>
+<p>Enforcement-bearing DB settings should be <strong>validated at write time</strong> so
+garbage can never persist. Register a validator on the <code>Setting</code> model:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.models.setting</span><span class="w"> </span><span class="kn">import</span> <span class="n">Setting</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="k">def</span><span class="w"> </span><span class="nf">_validate_my_rules</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">parsed</span><span class="p">):</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>    <span class="c1"># parsed is the JSON-decoded value; raise ValueError on a bad one</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>    <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">parsed</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">key</span><span class="si">}</span><span class="s2"> must be a JSON object&quot;</span><span class="p">)</span>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="n">Setting</span><span class="o">.</span><span class="n">register_validator</span><span class="p">(</span><span class="s2">&quot;MYAPP_RULES&quot;</span><span class="p">,</span> <span class="n">_validate_my_rules</span><span class="p">)</span>  <span class="c1"># global_only=True</span>
+</code></pre></div>
+<p>A registered key is validated on <strong>every</strong> write path — the generic
+<code>POST /api/settings</code> REST (readable <code>400</code>) and <code>Setting.set()</code> / direct
+<code>.save()</code> (raises <code>ValueException</code>). The value must be valid JSON;
+<code>global_only=True</code> (the default) also rejects group-scoped rows, and
+registered keys refuse <code>is_secret</code> rows (validators need the plaintext, and a
+masked value would hide enforcement config from admins). All
+<code>GEOFENCE_*</code> keys are registered this way (see
+<a href="../../account/geofence/">Geofencing</a>); downstream apps register their own keys
+at import time (e.g. mverify's <code>PAYMENTS_GEOFENCE_RULES</code>).</p>
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Always use <code>settings.get()</code> rather than importing directly from <code>django.conf</code> — it provides defaults and avoids <code>AttributeError</code> on missing keys.</li>

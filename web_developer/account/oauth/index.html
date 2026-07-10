@@ -4011,6 +4011,11 @@
 <h1 id="oauth-social-login-rest-api-reference">OAuth / Social Login — REST API Reference<a class="headerlink" href="#oauth-social-login-rest-api-reference" title="Permanent link">&para;</a></h1>
 <p>OAuth allows users to log in with a third-party provider (Google, etc.) without a password. The server handles the token exchange — your frontend only needs to redirect the user and handle the callback.</p>
 <p><strong>Supported providers:</strong> <code>google</code>, <code>apple</code>, <code>github</code></p>
+<p>All three are group-toggleable auth-config methods: a group can disable a
+provider for login (<code>auth_config.login.methods</code>) or new-user signup
+(<code>auth_config.registration.methods</code>), and the hosted <code>/auth</code> and <code>/register</code>
+pages render a button for each enabled provider. See
+<a href="../auth_config/">Auth Config</a>.</p>
 <blockquote>
 <p><strong>Trusted second factor.</strong> OAuth is treated as a strong, trusted authentication event. Completing an OAuth login automatically confirms the user's email address and bypasses any local MFA requirement — see <a href="#security-behaviour">Security Behaviour</a> below.</p>
 </blockquote>

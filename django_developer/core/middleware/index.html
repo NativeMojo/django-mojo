@@ -4162,7 +4162,7 @@ detect identity rotation (same server cookie, different client claim = suspiciou
 </tbody>
 </table>
 <p>Both use <code>SameSite=Lax</code> so they're sent on top-level navigations from external sites
-(OAuth redirects from Google/Apple, email links). <code>Secure</code> is only set when
+(OAuth redirects from Google/Apple/GitHub, email links). <code>Secure</code> is only set when
 <code>DEBUG=False</code> so cookies work over HTTP during local development.</p>
 <h3 id="how-identity-connects-pre-auth-and-post-auth">How identity connects pre-auth and post-auth<a class="headerlink" href="#how-identity-connects-pre-auth-and-post-auth" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>Before login:
@@ -4193,7 +4193,7 @@ webhook validation key like Coinflow's <code>Authorization: &lt;key&gt;</code>) 
 <code>request.auth_token</code> (prefix <code>"raw"</code>, <code>request.auth_token.token</code> = the value) for a
 downstream/public endpoint to validate; an empty or 3+-part value is ignored.</p>
 <p><strong>Custom bearer handlers</strong> can be registered via settings to support API keys, service tokens, etc.</p>
-<p><strong><code>request.group</code></strong> is auto-populated if the request includes a <code>group</code> param that matches a group the user belongs to.</p>
+<p><strong><code>request.group</code></strong> is auto-populated if the request includes a <code>group</code> param that matches a group the user belongs to. Only <strong>active</strong> groups resolve — an inactive group's id (or uuid) behaves exactly like a nonexistent one: <code>request.group</code> stays <code>None</code>, and nothing (including the group's activity timestamps) is written.</p>
 <hr />
 <h2 id="corsmiddleware">CORSMiddleware<a class="headerlink" href="#corsmiddleware" title="Permanent link">&para;</a></h2>
 <p><strong>File:</strong> <code>mojo/middleware/cors.py</code></p>
@@ -4245,6 +4245,17 @@ downstream/public endpoint to validate; an empty or 3+-part value is ignored.</p
 <a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="n">request</span><span class="o">.</span><span class="n">DATA</span><span class="o">.</span><span class="n">user</span><span class="o">.</span><span class="n">name</span>  <span class="c1"># → &quot;Alice&quot;</span>
 </code></pre></div>
 <p><strong>Array notation</strong> (<code>tags[]</code> or <code>tags[0]</code>) is automatically converted to a list.</p>
+<p><strong>Duplicate keys / precedence</strong> — sources are processed in order (query string,
+then form body, then JSON body) and a later source <strong>replaces</strong> an earlier
+value for the same key, whole:</p>
+<ul>
+<li><code>?group=5</code> + JSON body <code>{"group": 7}</code> → <code>request.DATA.group == 7</code> (the JSON
+  value, with its JSON type — never a merged list)</li>
+<li>Nested values replace whole too: <code>?user.name=John</code> + <code>{"user": {"name": "Jane"}}</code>
+  → <code>request.DATA.user == {"name": "Jane"}</code> (no deep-merge)</li>
+<li>Multi-value keys <em>within one source</em> still produce lists: <code>?tag=a&amp;tag=b</code> →
+  <code>["a", "b"]</code>; a JSON list value arrives intact</li>
+</ul>
 <hr />
 <h2 id="active_request-contextvar">ACTIVE_REQUEST ContextVar<a class="headerlink" href="#active_request-contextvar" title="Permanent link">&para;</a></h2>
 <p>The current request is stored in a <code>ContextVar</code> accessible anywhere in the call stack:</p>

@@ -4028,6 +4028,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#threat-list-caches-tor-exit-list-blocklistde" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Threat-List Caches (Tor exit list, blocklist.de)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#mojo-provider" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4668,6 +4679,24 @@ even if its <code>permissions</code> dict includes <code>manage_users</code> (<c
 <h2 id="geoip-providers">GeoIP Providers<a class="headerlink" href="#geoip-providers" title="Permanent link">&para;</a></h2>
 <p><code>geolocate_ip()</code> queries the configured primary provider, with an optional fallback. Set the provider name via <code>GEOIP_PRIMARY_PROVIDER</code> (or <code>GEOIP_FALLBACK_PROVIDER</code>).</p>
 <p>Built-in providers: <code>ipinfo</code>, <code>ipstack</code>, <code>ip-api</code>, <code>maxmind</code>, <code>mojo</code>.</p>
+<h3 id="threat-list-caches-tor-exit-list-blocklistde">Threat-List Caches (Tor exit list, blocklist.de)<a class="headerlink" href="#threat-list-caches-tor-exit-list-blocklistde" title="Permanent link">&para;</a></h3>
+<p><code>detect_tor()</code> and <code>check_blocklist_de()</code> read from two <strong>cache-only</strong>
+incident <code>IPSet</code> rows — <code>tor_exits</code> and <code>blocklist_de</code> — instead of
+downloading the full lists on every call. The rows are created and refreshed
+every 6 hours by the incident app's <code>refresh_threat_lists</code> cron
+(<code>refresh_from_source()</code> only). When a row is missing or not yet warmed
+(fresh deploy before the first cron tick, or incident app not installed), the
+readers fall back to the original live fetch — no flag day.</p>
+<p><strong>These rows can never reach the firewall.</strong> They are created with
+<code>is_enabled=False</code>, the REST <code>enable</code> action rejects them with a 400, and
+<code>sync()</code> is a hard no-op for them even if the flag is force-set — enabling an
+ordinary <code>IPSet</code> puts it into the weekly <code>refresh_ipsets</code> firewall-sync path,
+which for these lists would kernel-block every Tor exit node and
+blocklist.de-listed IP fleet-wide. Detection remains policy-neutral — whether
+Tor/blocklisted traffic is <em>blocked</em> stays a geofence-rule / firewall
+decision.</p>
+<p>The Tor row honors <code>source_url</code> (falling back to the <code>TOR_EXIT_NODE_LIST_URL</code>
+setting); blocklist.de defaults to <code>https://lists.blocklist.de/lists/all.txt</code>.</p>
 <h3 id="mojo-provider"><code>mojo</code> Provider<a class="headerlink" href="#mojo-provider" title="Permanent link">&para;</a></h3>
 <p>Use another django-mojo instance as a GeoIP data source. The downstream instance calls the upstream's <code>GET /api/system/geoip/lookup?graph=detailed</code> with an ApiKey token and caches the result locally.</p>
 <p><strong>Configuration:</strong></p>

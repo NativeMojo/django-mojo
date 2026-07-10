@@ -4690,6 +4690,12 @@ front. See <a href="../api_keys/">API Keys</a>.</p>
 </tr>
 </tbody>
 </table>
+<p>Enforcement-bearing keys registered with a write validator (all <code>GEOFENCE_*</code>
+keys, plus app-registered keys) reject malformed values with a readable <code>400</code>
+and are global-only — a group-scoped row for such a key is refused with
+<code>"...is a global-only setting"</code>, and <code>is_secret: true</code> is refused too (a
+validated setting cannot be masked). Other keys accept arbitrary values as
+before.</p>
 <h3 id="create-a-global-setting">Create a global setting<a class="headerlink" href="#create-a-global-setting" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="err">POST</span><span class="w"> </span><span class="err">/api/se</span><span class="kc">tt</span><span class="err">i</span><span class="kc">n</span><span class="err">gs</span>
 <a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="p">{</span>

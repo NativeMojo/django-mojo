@@ -4056,7 +4056,7 @@ rather than appending to it.</p>
 <tr>
 <td><code>methods</code></td>
 <td>list</td>
-<td><code>["password","google","apple"]</code></td>
+<td><code>["password","google","apple","github"]</code></td>
 <td>Offered signup methods</td>
 </tr>
 <tr>
@@ -4081,13 +4081,13 @@ rather than appending to it.</p>
 <tr>
 <td><code>methods</code></td>
 <td>list</td>
-<td><code>["password","sms","passkey","magic","google","apple"]</code></td>
+<td><code>["password","sms","passkey","magic","google","apple","github"]</code></td>
 <td>Offered login methods</td>
 </tr>
 </tbody>
 </table>
-<p>Valid login method tokens: <code>password</code>, <code>sms</code>, <code>passkey</code>, <code>magic</code>, <code>google</code>, <code>apple</code>.
-Valid registration method tokens: <code>password</code>, <code>google</code>, <code>apple</code>.</p>
+<p>Valid login method tokens: <code>password</code>, <code>sms</code>, <code>passkey</code>, <code>magic</code>, <code>google</code>, <code>apple</code>, <code>github</code>.
+Valid registration method tokens: <code>password</code>, <code>google</code>, <code>apple</code>, <code>github</code>.</p>
 <hr />
 <h2 id="deployment-wide-default-auth_config">Deployment-Wide Default — <code>AUTH_CONFIG</code><a class="headerlink" href="#deployment-wide-default-auth_config" title="Permanent link">&para;</a></h2>
 <p>Set a JSON object in <code>settings.py</code> to apply to all groups before per-group
@@ -4203,8 +4203,8 @@ Disabled methods return a 403 with a human-readable message. This is a <strong>U
 guardrail only</strong> — it is not enforced when <code>group_uuid</code> is absent. Callers
 that omit <code>group_uuid</code> are not restricted.</p>
 <p>Endpoints that enforce this:
-- <code>POST /api/auth/login</code> (password, SMS, passkey, magic, Google, Apple)
-- <code>POST /api/auth/register</code> (password, Google, Apple)</p>
+- <code>POST /api/auth/login</code> (password, SMS, passkey, magic, Google, Apple, GitHub)
+- <code>POST /api/auth/register</code> (password, Google, Apple, GitHub)</p>
 <hr />
 <h2 id="passkey-enrollment-page">Passkey Enrollment Page<a class="headerlink" href="#passkey-enrollment-page" title="Permanent link">&para;</a></h2>
 <p>A reusable passkey enrollment page is served at <code>/{BOUNCER_PASSKEY_PATH}</code>

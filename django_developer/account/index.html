@@ -3806,7 +3806,7 @@
 <li><a href="webhook_subscriptions/">Webhook Subscriptions</a> — Per-Group subscription registry, async fan-out dispatcher, signed delivery via the existing webhook primitive</li>
 <li><a href="notifications/">Notifications</a> — User inbox, WebSocket + push delivery, expiry</li>
 <li><a href="geoip/">GeoIP</a> — IP geolocation, threat intelligence, time lookup</li>
-<li><a href="geofence/">Geofencing</a> — Policy-based geographic access control: rule DSL, system+group rules, decorator + per-scope fail posture, editable config plane (<code>/api/geo/rules</code>, allowlist, simulate), IP allowlist exemptions, evidence plane (incident events + metrics), bypass permission</li>
+<li><a href="geofence/">Geofencing</a> — Policy-based geographic access control: rule DSL, system+group rules, decorator + per-scope fail posture, editable config plane (<code>/api/geo/rules</code>, allowlist, simulate), member plane (<code>/api/geo/policy</code> — group-scoped policy read), IP allowlist exemptions, evidence plane (incident events + metrics), bypass permission</li>
 <li><a href="login_events/">Login Events</a> — UserLoginEvent model, geo tracking, anomaly flags, metrics</li>
 <li><a href="inactive_sweep/">Inactive User/Group Sweep</a> — Auto-warn and disable inactive users and groups; feature flags, exemptions, email templates, incident events</li>
 <li><a href="disable_lifecycle/">Disable Lifecycle</a> — Unified disable/reactivate state for User and Group: <code>metadata.protected.disable.*</code> schema, REST POST_SAVE_ACTIONS, throttle-read endpoint, service API</li>

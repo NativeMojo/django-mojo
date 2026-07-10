@@ -4205,6 +4205,14 @@
 </tr>
 </tbody>
 </table>
+<p>Both permissions can be granted <strong>globally</strong> (platform-wide) or as a
+<strong>GroupMember-scoped</strong> grant on a single group (assignable by that group's
+own admin). Models that carry a <code>group</code> field — events, incidents, tickets,
+and incident history — automatically confine a group-scoped grant to that
+group's rows (the framework's group-scoped list fallback), so a member
+<code>view_security</code> grant reads only their own group's events/incidents/tickets.
+RuleSets, IPSets, and platform-wide summaries (e.g. Health Summary below)
+have no group field and require a <strong>global</strong> grant.</p>
 <h2 id="the-security-pipeline">The Security Pipeline<a class="headerlink" href="#the-security-pipeline" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>Detection → Event → Rules → Incident → Handlers → Enforcement
 </code></pre></div>
@@ -5364,7 +5372,7 @@ not authorize this endpoint.</p>
 <td><code>source</code></td>
 <td>string</td>
 <td>Yes</td>
-<td>Data source: <code>ipdeny</code>, <code>abuseipdb</code>, <code>manual</code></td>
+<td>Data source: <code>ipdeny</code>, <code>abuseipdb</code>, <code>tor</code>, <code>blocklist_de</code>, <code>manual</code></td>
 </tr>
 <tr>
 <td><code>source_url</code></td>
@@ -5418,6 +5426,11 @@ not authorize this endpoint.</p>
 </table>
 <blockquote>
 <p><strong>Note</strong>: The <code>data</code> field (raw CIDR list) is excluded from the default response graph. Use <code>?graph=detailed</code> to include it.</p>
+<p><strong>Note</strong>: Listing IPSets may show two system-managed, <code>is_enabled: false</code> rows —
+<code>tor_exits</code> and <code>blocklist_de</code>. These are cache-only lookups consumed
+internally by geoip Tor/blocklist.de detection and are refreshed automatically
+by a background cron. The <code>enable</code> action returns 400 for them — pushing the
+full list into the fleet-wide firewall is not permitted.</p>
 </blockquote>
 <h3 id="graphs">Graphs<a class="headerlink" href="#graphs" title="Permanent link">&para;</a></h3>
 <table>

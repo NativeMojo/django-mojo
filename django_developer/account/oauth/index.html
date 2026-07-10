@@ -4006,6 +4006,11 @@
 <h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
 <p>OAuth2 social login is built into the framework. The full flow — CSRF state management, provider token exchange, user resolution, and JWT issuance — is handled by the framework. Your project only needs to configure credentials and (optionally) register additional providers.</p>
 <p><strong>Current providers:</strong> <code>google</code>, <code>apple</code>, <code>github</code></p>
+<p>All three are toggleable auth-config methods (<code>LOGIN_METHODS</code> /
+<code>REGISTRATION_METHODS</code> in <code>services/auth_config.py</code>): enabled by default,
+disable per group via <code>login.methods</code> / <code>registration.methods</code>, and the hosted
+auth pages render a button for each enabled provider — see
+<a href="../auth_pages/">Auth Pages</a>.</p>
 <hr />
 <h2 id="architecture">Architecture<a class="headerlink" href="#architecture" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>GET  /api/auth/oauth/&lt;provider&gt;/begin    -&gt;  OAuthProvider.create_state()

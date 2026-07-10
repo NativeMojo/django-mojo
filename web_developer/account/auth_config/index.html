@@ -3888,7 +3888,9 @@ methods.</p>
 <a id="__codelineno-0-32" name="__codelineno-0-32" href="#__codelineno-0-32"></a><span class="p">}</span>
 </code></pre></div>
 <p>Use <code>login.methods</code> and <code>registration.methods</code> to decide which buttons to
-render. Use <code>theme</code> to apply branding.</p>
+render. Available login tokens: <code>password</code>, <code>sms</code>, <code>passkey</code>, <code>magic</code>,
+<code>google</code>, <code>apple</code>, <code>github</code>; registration tokens: <code>password</code>, <code>google</code>,
+<code>apple</code>, <code>github</code>. Use <code>theme</code> to apply branding.</p>
 <p><code>registration.extra_fields</code> is the list of non-canonical fields the group has
 configured (promo codes, referral tokens, etc.). An empty list means no extra
 fields. SPAs building a custom registration form should include any declared
@@ -3916,7 +3918,7 @@ first and only offer buttons for the methods listed.</p>
 - <code>POST /api/auth/login</code>
 - <code>POST /api/auth/register</code>
 - <code>POST /api/auth/phone/register/start</code>
-- <code>POST /api/oauth/login/google</code>, <code>POST /api/oauth/login/apple</code>
+- <code>GET /api/auth/oauth/&lt;provider&gt;/begin</code> (<code>google</code>, <code>apple</code>, <code>github</code>)
 - <code>POST /api/account/passkeys/authenticate/begin</code></p>
 <hr />
 <h2 id="passkey-enrollment-page-passkey">Passkey Enrollment Page (<code>/passkey</code>)<a class="headerlink" href="#passkey-enrollment-page-passkey" title="Permanent link">&para;</a></h2>
@@ -3938,7 +3940,7 @@ share one auth domain.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">&lt;</span><span class="nt">a</span> <span class="na">href</span><span class="o">=</span><span class="s">&quot;/auth?group_uuid=abc123uuid&quot;</span><span class="p">&gt;</span>Sign In to Client Brand<span class="p">&lt;/</span><span class="nt">a</span><span class="p">&gt;</span>
 </code></pre></div>
 <p>The <code>group_uuid</code> param is preserved through navigation (login ↔ register
-switcher), the OAuth round-trip (Google/Apple callback), and the
+switcher), the OAuth round-trip (Google/Apple/GitHub callback), and the
 login → passkey enrollment redirect.</p>
 <hr />
 <h2 id="mojo-authjs-helpers"><code>mojo-auth.js</code> Helpers<a class="headerlink" href="#mojo-authjs-helpers" title="Permanent link">&para;</a></h2>

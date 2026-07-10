@@ -4244,7 +4244,11 @@ normal permission rules.</p>
 </tr>
 </tbody>
 </table>
-<p>Query these via <code>GET /api/metrics/query?slug=login:country:US&amp;granularity=days&amp;range=30d</code>.</p>
+<p>Query these via the metrics API — e.g. a daily series for a date range:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>GET /api/metrics/fetch?slug=login:country:US&amp;granularity=days&amp;dr_start=2026-06-01&amp;dr_end=2026-06-30&amp;with_labels=true
+</code></pre></div>
+<p>See <a href="../../metrics/metrics/">Metrics</a> for the full parameter reference
+(multiple slugs, categories, accounts, <code>with_delta</code> for KPI tiles).</p>
 <hr />
 <h2 id="settings">Settings<a class="headerlink" href="#settings" title="Permanent link">&para;</a></h2>
 <p>These settings are read at startup. Changes require a server restart.</p>

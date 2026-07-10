@@ -4026,8 +4026,8 @@
 
 <h1 id="auth-pages-django-developer-reference">Auth Pages — Django Developer Reference<a class="headerlink" href="#auth-pages-django-developer-reference" title="Permanent link">&para;</a></h1>
 <p>Django-served login and registration pages with bouncer bot detection,
-OAuth (Google, Apple), passkeys, SMS login, password reset, and magic link
-support. All branding and feature configuration is controlled through the
+OAuth (Google, Apple, GitHub), passkeys, SMS login, password reset, and magic
+link support. All branding and feature configuration is controlled through the
 <a href="../auth_config/">auth config</a>.</p>
 <hr />
 <h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
@@ -4108,28 +4108,37 @@ can intercept and serve directly for better performance:</p>
 <p>Set <code>theme.favicon_url</code> in <code>AUTH_CONFIG</code> to your favicon path — the template
 includes <code>&lt;link rel="icon" href="..."&gt;</code> when this key is non-empty.</p>
 <h3 id="3-oauth-setup">3. OAuth Setup<a class="headerlink" href="#3-oauth-setup" title="Permanent link">&para;</a></h3>
-<p>Enable Google/Apple by configuring their provider credentials. The login
-methods must also be included in <code>AUTH_CONFIG.login.methods</code> (or the group's
-<code>metadata.auth_config.login.methods</code>):</p>
+<p>Enable Google/Apple/GitHub by configuring their provider credentials. The
+login methods must also be included in <code>AUTH_CONFIG.login.methods</code> (or the
+group's <code>metadata.auth_config.login.methods</code>) — all three are included by
+default when no explicit list is set:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># Google OAuth</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="n">GOOGLE_OAUTH_CLIENT_ID</span>     <span class="o">=</span> <span class="s1">&#39;your-client-id&#39;</span>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="n">GOOGLE_OAUTH_CLIENT_SECRET</span> <span class="o">=</span> <span class="s1">&#39;your-client-secret&#39;</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="n">GOOGLE_CLIENT_ID</span>     <span class="o">=</span> <span class="s1">&#39;your-client-id&#39;</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="n">GOOGLE_CLIENT_SECRET</span> <span class="o">=</span> <span class="s1">&#39;your-client-secret&#39;</span>
 <a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>
 <a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="c1"># Apple OAuth</span>
-<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="n">APPLE_OAUTH_CLIENT_ID</span> <span class="o">=</span> <span class="s1">&#39;your-service-id&#39;</span>
-<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="n">APPLE_OAUTH_TEAM_ID</span>   <span class="o">=</span> <span class="s1">&#39;your-team-id&#39;</span>
-<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="n">APPLE_OAUTH_KEY_ID</span>    <span class="o">=</span> <span class="s1">&#39;your-key-id&#39;</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="n">APPLE_CLIENT_ID</span> <span class="o">=</span> <span class="s1">&#39;your-service-id&#39;</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="n">APPLE_TEAM_ID</span>   <span class="o">=</span> <span class="s1">&#39;your-team-id&#39;</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="n">APPLE_KEY_ID</span>    <span class="o">=</span> <span class="s1">&#39;your-key-id&#39;</span>
 <a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="c1"># Place your .p8 key in var/keys/</span>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="c1"># GitHub OAuth</span>
+<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a><span class="n">GITHUB_CLIENT_ID</span>     <span class="o">=</span> <span class="s1">&#39;your-client-id&#39;</span>
+<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="n">GITHUB_CLIENT_SECRET</span> <span class="o">=</span> <span class="s1">&#39;your-client-secret&#39;</span>
+<a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a><span class="n">GITHUB_SCOPES</span>        <span class="o">=</span> <span class="s1">&#39;read:user user:email&#39;</span>  <span class="c1"># default</span>
 </code></pre></div>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># AUTH_CONFIG must include the provider in login.methods:</span>
 <a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="n">AUTH_CONFIG</span> <span class="o">=</span> <span class="p">{</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>    <span class="s2">&quot;login&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;methods&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;password&quot;</span><span class="p">,</span> <span class="s2">&quot;google&quot;</span><span class="p">,</span> <span class="s2">&quot;apple&quot;</span><span class="p">]},</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>    <span class="s2">&quot;login&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;methods&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;password&quot;</span><span class="p">,</span> <span class="s2">&quot;google&quot;</span><span class="p">,</span> <span class="s2">&quot;apple&quot;</span><span class="p">,</span> <span class="s2">&quot;github&quot;</span><span class="p">]},</span>
 <a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>    <span class="o">...</span>
 <a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="p">}</span>
 </code></pre></div>
+<p>A provider button renders whenever its method token is enabled — configure the
+credentials before enabling a provider, or its button dead-ends on the
+provider's error page.</p>
 <p>The OAuth callback URL is the auth page itself (<code>/auth?code=xxx&amp;state=yyy</code>).
 The <code>mbp</code> pass cookie uses <code>SameSite=Lax</code> so it is included on the OAuth
-redirect back from Google/Apple.</p>
+redirect back from the provider.</p>
 <hr />
 <h2 id="templates">Templates<a class="headerlink" href="#templates" title="Permanent link">&para;</a></h2>
 <p>All templates live in <code>account/templates/account/</code> and can be overridden by
@@ -4382,12 +4391,13 @@ as absolute URLs and bypass the <code>/api/</code> prefix.</p>
 <h3 id="login-page-auth">Login page (<code>/auth</code>)<a class="headerlink" href="#login-page-auth" title="Permanent link">&para;</a></h3>
 <p>Methods rendered are those listed in the resolved auth config's
 <code>login.methods</code>. Available tokens: <code>password</code>, <code>sms</code>, <code>passkey</code>, <code>magic</code>,
-<code>google</code>, <code>apple</code>.</p>
+<code>google</code>, <code>apple</code>, <code>github</code>.</p>
 <ul>
 <li><code>password</code> — email/password sign in</li>
 <li><code>sms</code> — phone number + 6-digit SMS code sign in</li>
 <li><code>google</code> — Google OAuth redirect flow</li>
 <li><code>apple</code> — Apple OAuth redirect flow</li>
+<li><code>github</code> — GitHub OAuth redirect flow</li>
 <li><code>passkey</code> — WebAuthn discoverable credential flow</li>
 <li><code>magic</code> — send a one-click sign-in email</li>
 <li>Forgot password (code or link method; auto-routes via SMS when identity is phone)</li>
@@ -4404,7 +4414,8 @@ Do not change <code>on_sms_login</code> to branch on account existence — the p
 guarantee depends on the uniform response.</p>
 <p>The page leads with the <strong>primary credential</strong>: when <code>password</code> is in
 <code>login.methods</code> the sign-in form is the landing view and every other method
-(SMS, passkey, Google, Apple) is a button below an "or continue with" divider.
+(SMS, passkey, Google, Apple, GitHub) is a button below an "or continue with"
+divider.
 When <code>password</code> is <strong>not</strong> a method but <code>sms</code> is (a passwordless config), the
 page opens directly on the SMS phone-entry form, with passkey/OAuth as
 secondary buttons — so SMS login is never buried.
@@ -4414,7 +4425,7 @@ secondary buttons — so SMS login is never buried.
 <h3 id="registration-page-register">Registration page (<code>/register</code>)<a class="headerlink" href="#registration-page-register" title="Permanent link">&para;</a></h3>
 <ul>
 <li>Fields and identity field driven by <code>registration.fields</code> / <code>registration.identity_field</code></li>
-<li>Methods rendered from <code>registration.methods</code>: <code>password</code>, <code>google</code>, <code>apple</code></li>
+<li>Methods rendered from <code>registration.methods</code>: <code>password</code>, <code>google</code>, <code>apple</code>, <code>github</code></li>
 <li>Terms &amp; conditions checkbox (when <code>theme.terms_url</code> is set)</li>
 <li>When <code>registration.passkey_prompt</code> is <code>"optional"</code> or <code>"required"</code>, redirects
   to <code>/passkey</code> after signup</li>

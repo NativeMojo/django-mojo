@@ -1594,6 +1594,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#cron-threat-list-cache-refresh-tor_exits-blocklist_de" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cron: Threat List Cache Refresh (tor_exits, blocklist_de)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#async-jobs_1" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4741,6 +4752,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#cron-threat-list-cache-refresh-tor_exits-blocklist_de" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cron: Threat List Cache Refresh (tor_exits, blocklist_de)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#async-jobs_1" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -5488,7 +5510,7 @@
 </tr>
 <tr>
 <td><code>source</code></td>
-<td>Data source: <code>ipdeny</code>, <code>abuseipdb</code>, <code>manual</code></td>
+<td>Data source: <code>ipdeny</code>, <code>abuseipdb</code>, <code>tor</code>, <code>blocklist_de</code>, <code>manual</code></td>
 </tr>
 <tr>
 <td><code>source_url</code></td>
@@ -5585,6 +5607,20 @@
 </code></pre></div>
 <h3 id="cron-weekly-refresh">Cron: Weekly Refresh<a class="headerlink" href="#cron-weekly-refresh" title="Permanent link">&para;</a></h3>
 <p>A weekly cron job (Sunday 3:00 AM) calls <code>refresh_ipsets</code>, which iterates all enabled IPSet records, re-fetches data from their configured sources, updates the <code>data</code> field, and syncs the updated sets fleet-wide.</p>
+<h3 id="cron-threat-list-cache-refresh-tor_exits-blocklist_de">Cron: Threat List Cache Refresh (<code>tor_exits</code>, <code>blocklist_de</code>)<a class="headerlink" href="#cron-threat-list-cache-refresh-tor_exits-blocklist_de" title="Permanent link">&para;</a></h3>
+<p>A separate 6-hourly cron, <code>refresh_threat_lists</code>, keeps two <strong>cache-only</strong>
+IPSet rows warm — <code>tor_exits</code> (source <code>tor</code>) and <code>blocklist_de</code> (source
+<code>blocklist_de</code>). They are created with <code>is_enabled=False</code> and refreshed via
+<code>refresh_from_source()</code> only — never <code>sync()</code> — so they are excluded from
+<code>refresh_ipsets</code>/<code>sync_firewall</code> and never reach the kernel firewall. They
+exist purely so <code>mojo.helpers.geoip.detection.detect_tor()</code> and
+<code>check_blocklist_de()</code> can read from the DB cache instead of downloading the
+full list on every lookup. See
+<a href="../../account/geoip/#threat-list-caches-tor-exit-list-blocklistde">account/geoip.md</a>
+for the reader side. <strong>These rows cannot be enabled</strong> — the REST <code>enable</code>
+action rejects them and <code>sync()</code> no-ops for them even if the flag is
+force-set, so the entire Tor exit list / blocklist.de list can never be
+pushed into the fleet-wide firewall.</p>
 <h3 id="async-jobs_1">Async Jobs<a class="headerlink" href="#async-jobs_1" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
@@ -5609,6 +5645,11 @@
 <td><code>refresh_ipsets</code></td>
 <td>Cron (weekly, Sunday 3:00 AM)</td>
 <td>Re-fetches source data for all enabled IPSets and syncs fleet-wide</td>
+</tr>
+<tr>
+<td><code>refresh_threat_lists</code></td>
+<td>Cron (every 6 hours)</td>
+<td><code>refresh_from_source()</code> only, for the cache-only <code>tor_exits</code>/<code>blocklist_de</code> IPSet rows — never syncs to the firewall</td>
 </tr>
 </tbody>
 </table>

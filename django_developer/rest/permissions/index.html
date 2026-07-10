@@ -3924,6 +3924,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Group-Scoped Permissions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#group_field-naming-a-non-group-or-indirect-owning-fk" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GROUP_FIELD — naming a non-group or indirect owning FK
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4073,7 +4090,7 @@
 <tr>
 <td><code>GROUP_FIELD</code></td>
 <td><code>"group"</code></td>
-<td>FK field name pointing to the owning group.</td>
+<td>FK field name pointing to the owning group. May be a related path (e.g. <code>"original_file__group"</code>, <code>"agent__project"</code>). Governs detail + list + <code>?group=</code> scoping and create-time auto-assign — see <a href="#group-scoped-permissions">Group-Scoped Permissions</a>.</td>
 </tr>
 <tr>
 <td><code>CREATED_BY_OWNER_FIELD</code></td>
@@ -4251,7 +4268,7 @@
 1. Try system-level perm check (e.g., does user have <code>"view_admin"</code>?)
 2. If YES → <code>on_rest_list(request)</code> with <strong>all</strong> objects (admin sees everything)
 3. If NO and <code>"owner"</code> in VIEW_PERMS → <code>on_rest_list(request, filtered_queryset)</code> with <strong>owner's objects only</strong>
-4. If NO and model has <code>group</code> field → check group-level permissions, filter by groups
+4. If NO and the model is group-scoped (a direct <code>group</code> FK <strong>or</strong> a <code>RestMeta.GROUP_FIELD</code>) → check group-level permissions, filter by <code>{GROUP_FIELD}__in=&lt;groups where the user holds the perm&gt;</code>
 5. Otherwise → 403 or empty list</p>
 <h3 id="example-owner-scoped-with-admin-override">Example: Owner-scoped with admin override<a class="headerlink" href="#example-owner-scoped-with-admin-override" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">Conversation</span><span class="p">(</span><span class="n">models</span><span class="o">.</span><span class="n">Model</span><span class="p">,</span> <span class="n">MojoModel</span><span class="p">):</span>
@@ -4281,11 +4298,48 @@
 <li>No admin override</li>
 </ul>
 <h2 id="group-scoped-permissions">Group-Scoped Permissions<a class="headerlink" href="#group-scoped-permissions" title="Permanent link">&para;</a></h2>
-<p>When a model has a <code>group</code> FK and the user doesn't have system-level permissions, the framework checks if the user has the required permissions within any group:</p>
+<p>A model is <strong>group-scoped</strong> when it has a direct <code>group</code> FK <strong>or</strong> it declares
+<code>RestMeta.GROUP_FIELD</code>. When the user lacks system-level permissions, the
+framework checks whether they hold the required permission within any group and
+filters to those tenants:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="n">groups_with_perms</span> <span class="o">=</span> <span class="n">request</span><span class="o">.</span><span class="n">user</span><span class="o">.</span><span class="n">get_groups_with_permission</span><span class="p">(</span><span class="n">perms</span><span class="p">)</span>
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="n">queryset</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">group__in</span><span class="o">=</span><span class="n">groups_with_perms</span><span class="p">)</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="n">group_field</span> <span class="o">=</span> <span class="bp">cls</span><span class="o">.</span><span class="n">get_rest_meta_prop</span><span class="p">(</span><span class="s2">&quot;GROUP_FIELD&quot;</span><span class="p">,</span> <span class="s2">&quot;group&quot;</span><span class="p">)</span>   <span class="c1"># may be a related path</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="n">queryset</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="o">**</span><span class="p">{</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">group_field</span><span class="si">}</span><span class="s2">__in&quot;</span><span class="p">:</span> <span class="n">groups_with_perms</span><span class="p">})</span>
 </code></pre></div>
-<p>The <code>request.group</code> context is set automatically when an instance has a <code>group</code> attribute.</p>
+<p>This governs <strong>all three</strong> access paths consistently — the bare-list member
+fallback (above), the <code>?group=</code> narrower (<code>on_rest_list</code>), and detail
+permission checks. For detail (GET/POST/DELETE on a pk), the framework resolves
+the <strong>instance's</strong> owning group by traversing <code>GROUP_FIELD</code> and checks
+membership against that group — so a caller cannot read another tenant's row by
+passing their own <code>?group=</code>. <code>request.group</code> is set automatically to the
+resolved instance group.</p>
+<h3 id="group_field-naming-a-non-group-or-indirect-owning-fk"><code>GROUP_FIELD</code> — naming a non-<code>group</code> or indirect owning FK<a class="headerlink" href="#group_field-naming-a-non-group-or-indirect-owning-fk" title="Permanent link">&para;</a></h3>
+<p><code>GROUP_FIELD</code> defaults to <code>"group"</code>. Set it when the owning-group FK has a
+different name, or when the tenant is reached through a related path:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">FileRendition</span><span class="p">(</span><span class="n">models</span><span class="o">.</span><span class="n">Model</span><span class="p">,</span> <span class="n">MojoModel</span><span class="p">):</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>    <span class="n">original_file</span> <span class="o">=</span> <span class="n">models</span><span class="o">.</span><span class="n">ForeignKey</span><span class="p">(</span><span class="s2">&quot;fileman.File&quot;</span><span class="p">,</span> <span class="o">...</span><span class="p">)</span>   <span class="c1"># File has the group FK</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>    <span class="k">class</span><span class="w"> </span><span class="nc">RestMeta</span><span class="p">:</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>        <span class="n">VIEW_PERMS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;view_fileman&quot;</span><span class="p">,</span> <span class="s2">&quot;manage_files&quot;</span><span class="p">,</span> <span class="s2">&quot;files&quot;</span><span class="p">]</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>        <span class="n">GROUP_FIELD</span> <span class="o">=</span> <span class="s2">&quot;original_file__group&quot;</span>    <span class="c1"># related path — traversed to the Group</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">AgentTask</span><span class="p">(</span><span class="n">models</span><span class="o">.</span><span class="n">Model</span><span class="p">,</span> <span class="n">MojoModel</span><span class="p">):</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>    <span class="n">agent</span> <span class="o">=</span> <span class="n">models</span><span class="o">.</span><span class="n">ForeignKey</span><span class="p">(</span><span class="s2">&quot;maestro.Agent&quot;</span><span class="p">,</span> <span class="o">...</span><span class="p">)</span>          <span class="c1"># Agent.project is the tenant Group</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>    <span class="k">class</span><span class="w"> </span><span class="nc">RestMeta</span><span class="p">:</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>        <span class="n">GROUP_FIELD</span> <span class="o">=</span> <span class="s2">&quot;agent__project&quot;</span>          <span class="c1"># FK named &quot;project&quot;, reached via &quot;agent&quot;</span>
+</code></pre></div>
+<p>Notes:
+- The path is traversed null-safe hop-by-hop; a null link along the way yields
+  "no group" (fail-closed — the flat user/superuser check still applies).
+- <strong>Create-time auto-assign</strong> stamps a <strong>direct</strong>-FK <code>GROUP_FIELD</code> from
+  <code>request.group</code> when the body omits it (body wins), mirroring the historical
+  <code>group</code> behavior. A <strong>related-path</strong> <code>GROUP_FIELD</code> has no local field to
+  stamp — its tenant is derived from the FK the body provides, which is itself
+  gated by the FK-attach VIEW check (attaching a foreign-tenant FK is denied).
+- A model scoped only via <code>GROUP_FIELD</code> (no direct <code>group</code> attribute) is still
+  correctly confined for <code>ApiKey</code> callers; a <em>truly</em> groupless model (no <code>group</code>
+  FK and no <code>GROUP_FIELD</code>) denies keys by default (see <code>ALLOW_API_KEY_GLOBAL</code>).</p>
 <h2 id="delete-gating">Delete Gating<a class="headerlink" href="#delete-gating" title="Permanent link">&para;</a></h2>
 <p>DELETE requires two checks:
 1. <code>CAN_DELETE = True</code> (model-level gate — without this, DELETE always returns 403)
@@ -4294,31 +4348,31 @@
 <h2 id="no_rest_save">NO_REST_SAVE<a class="headerlink" href="#no_rest_save" title="Permanent link">&para;</a></h2>
 <p>When <code>NO_REST_SAVE = True</code>, POST/PUT are blocked. This is for models where mutations happen through service functions (not direct REST save). GET (list/detail) and DELETE (if <code>CAN_DELETE = True</code>) still work normally.</p>
 <h2 id="standard-crud-endpoint-pattern">Standard CRUD Endpoint Pattern<a class="headerlink" href="#standard-crud-endpoint-pattern" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo</span><span class="w"> </span><span class="kn">import</span> <span class="n">decorators</span> <span class="k">as</span> <span class="n">md</span>
-<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">myapp.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">MyModel</span>
-<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>
-<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;mymodel&#39;</span><span class="p">)</span>
-<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;mymodel/&lt;int:pk&gt;&#39;</span><span class="p">)</span>
-<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="nd">@md</span><span class="o">.</span><span class="n">uses_model_security</span><span class="p">(</span><span class="n">MyModel</span><span class="p">)</span>
-<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_mymodel</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">pk</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
-<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a>    <span class="k">return</span> <span class="n">MyModel</span><span class="o">.</span><span class="n">on_rest_request</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">pk</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo</span><span class="w"> </span><span class="kn">import</span> <span class="n">decorators</span> <span class="k">as</span> <span class="n">md</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">myapp.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">MyModel</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;mymodel&#39;</span><span class="p">)</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;mymodel/&lt;int:pk&gt;&#39;</span><span class="p">)</span>
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="nd">@md</span><span class="o">.</span><span class="n">uses_model_security</span><span class="p">(</span><span class="n">MyModel</span><span class="p">)</span>
+<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_mymodel</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">pk</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a>    <span class="k">return</span> <span class="n">MyModel</span><span class="o">.</span><span class="n">on_rest_request</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">pk</span><span class="p">)</span>
 </code></pre></div>
 <p><code>@md.uses_model_security(Model)</code> is required — it sets up the permission context. Do NOT add <code>@md.requires_auth()</code> alongside it (VIEW_PERMS handles auth).</p>
 <h2 id="graphs">Graphs<a class="headerlink" href="#graphs" title="Permanent link">&para;</a></h2>
 <p>Graphs control serialization — what fields are included in the response.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="n">GRAPHS</span> <span class="o">=</span> <span class="p">{</span>
-<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>    <span class="s2">&quot;default&quot;</span><span class="p">:</span> <span class="p">{</span>
-<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>        <span class="s2">&quot;fields&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;id&quot;</span><span class="p">,</span> <span class="s2">&quot;title&quot;</span><span class="p">,</span> <span class="s2">&quot;created&quot;</span><span class="p">],</span>
-<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>    <span class="p">},</span>
-<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>    <span class="s2">&quot;detail&quot;</span><span class="p">:</span> <span class="p">{</span>
-<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>        <span class="s2">&quot;fields&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;id&quot;</span><span class="p">,</span> <span class="s2">&quot;title&quot;</span><span class="p">,</span> <span class="s2">&quot;metadata&quot;</span><span class="p">,</span> <span class="s2">&quot;created&quot;</span><span class="p">,</span> <span class="s2">&quot;modified&quot;</span><span class="p">],</span>
-<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a>        <span class="s2">&quot;extra&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;computed_field&quot;</span><span class="p">],</span>        <span class="c1"># @property on the model</span>
-<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a>        <span class="s2">&quot;graphs&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;user&quot;</span><span class="p">:</span> <span class="s2">&quot;basic&quot;</span><span class="p">},</span>        <span class="c1"># serialize user FK with &quot;basic&quot; graph</span>
-<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a>    <span class="p">},</span>
-<a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a>    <span class="s2">&quot;list&quot;</span><span class="p">:</span> <span class="p">{</span>
-<a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a>        <span class="s2">&quot;fields&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;id&quot;</span><span class="p">,</span> <span class="s2">&quot;title&quot;</span><span class="p">],</span>
-<a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a>    <span class="p">},</span>
-<a id="__codelineno-10-13" name="__codelineno-10-13" href="#__codelineno-10-13"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="n">GRAPHS</span> <span class="o">=</span> <span class="p">{</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>    <span class="s2">&quot;default&quot;</span><span class="p">:</span> <span class="p">{</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>        <span class="s2">&quot;fields&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;id&quot;</span><span class="p">,</span> <span class="s2">&quot;title&quot;</span><span class="p">,</span> <span class="s2">&quot;created&quot;</span><span class="p">],</span>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>    <span class="p">},</span>
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>    <span class="s2">&quot;detail&quot;</span><span class="p">:</span> <span class="p">{</span>
+<a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a>        <span class="s2">&quot;fields&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;id&quot;</span><span class="p">,</span> <span class="s2">&quot;title&quot;</span><span class="p">,</span> <span class="s2">&quot;metadata&quot;</span><span class="p">,</span> <span class="s2">&quot;created&quot;</span><span class="p">,</span> <span class="s2">&quot;modified&quot;</span><span class="p">],</span>
+<a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a>        <span class="s2">&quot;extra&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;computed_field&quot;</span><span class="p">],</span>        <span class="c1"># @property on the model</span>
+<a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a>        <span class="s2">&quot;graphs&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;user&quot;</span><span class="p">:</span> <span class="s2">&quot;basic&quot;</span><span class="p">},</span>        <span class="c1"># serialize user FK with &quot;basic&quot; graph</span>
+<a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a>    <span class="p">},</span>
+<a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a>    <span class="s2">&quot;list&quot;</span><span class="p">:</span> <span class="p">{</span>
+<a id="__codelineno-12-11" name="__codelineno-12-11" href="#__codelineno-12-11"></a>        <span class="s2">&quot;fields&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;id&quot;</span><span class="p">,</span> <span class="s2">&quot;title&quot;</span><span class="p">],</span>
+<a id="__codelineno-12-12" name="__codelineno-12-12" href="#__codelineno-12-12"></a>    <span class="p">},</span>
+<a id="__codelineno-12-13" name="__codelineno-12-13" href="#__codelineno-12-13"></a><span class="p">}</span>
 </code></pre></div>
 <ul>
 <li><code>"fields"</code> — model fields to include</li>

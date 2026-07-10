@@ -2818,6 +2818,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#update-group" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Update Group
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#list-groups" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4012,6 +4023,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#update-group" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Update Group
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#list-groups" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4236,7 +4258,9 @@
 <p>When working with group-scoped resources, pass the group ID as a parameter:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>?group=&lt;id&gt;
 </code></pre></div>
-<p>This scopes all requests to that group.</p>
+<p>This scopes all requests to that group. Only <strong>active</strong> groups resolve — a
+deactivated group's id behaves exactly like an unknown one (no group context;
+member-scoped requests are denied).</p>
 <h2 id="get-group">Get Group<a class="headerlink" href="#get-group" title="Permanent link">&para;</a></h2>
 <p><strong>GET</strong> <code>/api/group/7</code></p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span>
@@ -4256,9 +4280,29 @@
 <a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="p">}</span>
 </code></pre></div>
 <p><code>member_count</code> is the count of active direct members of the group (does not include descendant groups). Available on the <code>default</code> graph only — <code>basic</code> stays minimal. List endpoints use <code>default</code> by default, so the field appears without needing <code>?graph=</code>.</p>
+<blockquote>
+<p><strong>Reads are downgraded for plain members.</strong> A member without
+<code>view_group</code>/<code>manage_group</code> still gets a <code>200</code> on <code>GET /api/group/&lt;id&gt;</code>, but
+the response is the minimal <code>basic</code> graph (no <code>metadata</code>, <code>auth_domain</code>, or
+<code>parent</code>). Grant <code>view_group</code> (or higher) to see the full <code>default</code> graph.</p>
+</blockquote>
+<h2 id="update-group">Update Group<a class="headerlink" href="#update-group" title="Permanent link">&para;</a></h2>
+<p><strong>POST/PUT</strong> <code>/api/group/&lt;id&gt;</code></p>
+<p>Updates top-level Group fields (<code>name</code>, <code>kind</code>, <code>auth_domain</code>, <code>metadata</code>, …).
+<strong>Requires a write grant</strong> — <code>manage_group</code> (member-level), or a global
+<code>manage_groups</code>/<code>groups</code>. Being a plain member is <strong>not</strong> sufficient: a member
+without one of these perms receives a <code>403</code> (they can still read the group, see
+above). An API key must be scoped to the group <strong>and</strong> hold the perm.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="err">POST</span><span class="w"> </span><span class="err">/api/group/</span><span class="mi">7</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Acme Holdings&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;metadata&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;timezone&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;America/New_York&quot;</span><span class="p">}</span><span class="w"> </span><span class="p">}</span>
+</code></pre></div>
+<p>Note: <code>metadata.geofence_strict</code> (compliance posture) is additionally gated by
+the <strong>global</strong> <code>manage_geofence</code>/<code>security</code> perm — a tenant admin with
+<code>manage_group</code> cannot flip it. The member-reachable <code>realtime_message</code>
+POST_SAVE_ACTION also requires <code>manage_group</code>.</p>
 <h2 id="list-groups">List Groups<a class="headerlink" href="#list-groups" title="Permanent link">&para;</a></h2>
 <p>Requires <code>view_groups</code> or <code>manage_groups</code> permission.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>GET /api/group?kind=organization&amp;sort=name
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>GET /api/group?kind=organization&amp;sort=name
 </code></pre></div>
 <h2 id="available-graphs">Available Graphs<a class="headerlink" href="#available-graphs" title="Permanent link">&para;</a></h2>
 <table>
@@ -4287,52 +4331,52 @@
 <h3 id="get-my-membership">Get My Membership<a class="headerlink" href="#get-my-membership" title="Permanent link">&para;</a></h3>
 <p><strong>GET</strong> <code>/api/group/&lt;id&gt;/member</code></p>
 <p>Returns the authenticated user's membership record in the specified group.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">    </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">15</span><span class="p">,</span>
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">    </span><span class="nt">&quot;permissions&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;manage_content&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">},</span>
-<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">    </span><span class="nt">&quot;is_active&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
-<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">  </span><span class="p">}</span>
-<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">    </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">15</span><span class="p">,</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">    </span><span class="nt">&quot;permissions&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;manage_content&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">},</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">    </span><span class="nt">&quot;is_active&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="p">}</span>
 </code></pre></div>
 <p>Returns <code>{"id": -1, "permissions": []}</code> if not a member.</p>
 <h3 id="invite-a-user">Invite a User<a class="headerlink" href="#invite-a-user" title="Permanent link">&para;</a></h3>
 <p><strong>POST</strong> <code>/api/group/member/invite</code></p>
 <p>Requires <code>manage_users</code>, <code>manage_members</code>, <code>manage_group</code>, <code>manage_groups</code>, or <code>groups</code> permission within the group.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">&quot;email&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;bob@example.com&quot;</span><span class="p">,</span>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span><span class="nt">&quot;group&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">7</span><span class="p">,</span>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span><span class="nt">&quot;permissions&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;files&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;comms&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">}</span>
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">&quot;email&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;bob@example.com&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="nt">&quot;group&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">7</span><span class="p">,</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span><span class="nt">&quot;permissions&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;files&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;comms&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">}</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="p">}</span>
 </code></pre></div>
 <p>Use <a href="../admin_portal/#category-permissions-use-these-in-your-ui">category permissions</a> (<code>users</code>, <code>groups</code>, <code>security</code>, <code>comms</code>, <code>jobs</code>, <code>metrics</code>, <code>files</code>) for simplicity. Fine-grained permissions are also supported.</p>
 <h3 id="update-member-permissions">Update Member Permissions<a class="headerlink" href="#update-member-permissions" title="Permanent link">&para;</a></h3>
 <p><strong>POST</strong> <code>/api/group/member/&lt;id&gt;</code></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">&quot;permissions&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">    </span><span class="nt">&quot;files&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">    </span><span class="nt">&quot;security&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">    </span><span class="nt">&quot;comms&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
-<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">  </span><span class="p">}</span>
-<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">&quot;permissions&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">    </span><span class="nt">&quot;files&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">    </span><span class="nt">&quot;security&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">    </span><span class="nt">&quot;comms&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="p">}</span>
 </code></pre></div>
 <h2 id="hierarchical-groups">Hierarchical Groups<a class="headerlink" href="#hierarchical-groups" title="Permanent link">&para;</a></h2>
 <p>Groups can have a parent group. Child groups inherit parent-level permissions for members. Use <code>parent=&lt;id&gt;</code> to filter by parent:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>GET /api/group?parent=7
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>GET /api/group?parent=7
 </code></pre></div>
 <hr />
 <h2 id="disable-lifecycle">Disable Lifecycle<a class="headerlink" href="#disable-lifecycle" title="Permanent link">&para;</a></h2>
 <p>Admins manage group <code>is_active</code> state through two named POST_SAVE_ACTIONS. Writing the bare <code>is_active</code> field directly still works but does not populate the disable namespace or emit audit events. The actions below are the recommended path for any new code. Requires <code>manage_groups</code> — stricter than the rest of the Group <code>SAVE_PERMS</code> since disable is destructive.</p>
 <h3 id="disable-a-group">Disable a group<a class="headerlink" href="#disable-a-group" title="Permanent link">&para;</a></h3>
 <p><strong>POST</strong> <code>/api/group/&lt;id&gt;</code></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span><span class="nt">&quot;disable&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;archived&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;note&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Project sunset 2026 Q2&quot;</span><span class="p">}}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p">{</span><span class="nt">&quot;disable&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;archived&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;note&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Project sunset 2026 Q2&quot;</span><span class="p">}}</span>
 </code></pre></div>
 <p><code>reason</code> must be one of: <code>admin</code>, <code>abuse</code>, <code>archived</code>. Server-set reasons (<code>inactive</code>) are rejected from REST.</p>
 <p>Effect: <code>is_active=False</code>, populates <code>metadata.protected.disable</code> with <code>{reason, at, by_user_id, by_username, note}</code>. Members are unaffected — <code>GroupMember.is_active</code> does not cascade.</p>
 <h3 id="reactivate-a-group">Reactivate a group<a class="headerlink" href="#reactivate-a-group" title="Permanent link">&para;</a></h3>
 <p><strong>POST</strong> <code>/api/group/&lt;id&gt;</code></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p">{</span><span class="nt">&quot;reactivate&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;note&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Project resumed&quot;</span><span class="p">}}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="p">{</span><span class="nt">&quot;reactivate&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;note&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Project resumed&quot;</span><span class="p">}}</span>
 </code></pre></div>
 <p>Effect: <code>is_active=True</code>. Appends a history entry to <code>disable.history</code> (FIFO cap 20) with the prior disable context and <code>reactivated_*</code> fields.</p>
 <h3 id="read-disable-state">Read disable state<a class="headerlink" href="#read-disable-state" title="Permanent link">&para;</a></h3>
