@@ -222,6 +222,15 @@ class MojoModel:
         if perms is None or len(perms) == 0:
             return True, None
 
+        # A model is group-scoped when it has a direct `group` FK OR declares a
+        # RestMeta.GROUP_FIELD (which may be a related path, e.g.
+        # "original_file__group" or "agent__project"). Both forms must gate the
+        # group-membership branch below and the instance-group resolution —
+        # otherwise a GROUP_FIELD-only model falls through to a flat, tenantless
+        # user.has_permission check and leaks every tenant's rows.
+        GROUP_FIELD = cls.get_rest_meta_prop("GROUP_FIELD", None)
+        is_group_scoped = bool(GROUP_FIELD) or hasattr(cls, "group")
+
         if "all" not in perms:
             if request.user is None or not request.user.is_authenticated:
                 return False, objict.objict(
@@ -264,10 +273,18 @@ class MojoModel:
                 if hasattr(request.user, "is_request_user"):
                     if owner is not None and owner.id == request.user.id:
                         return True, None
-            if hasattr(instance, "group"):
+            # Bind request.group to the INSTANCE's owning group so the
+            # membership check runs against the row's true tenant, not a
+            # caller-supplied ?group=. GROUP_FIELD wins (and may be a related
+            # path); a direct `.group` attribute is the legacy fallback.
+            if GROUP_FIELD:
+                inst_group = cls._resolve_group_from_instance(instance, GROUP_FIELD)
+                if inst_group is not None:
+                    request.group = inst_group
+            elif hasattr(instance, "group"):
                 request.group = getattr(instance, "group", None)
 
-        if request.group and hasattr(cls, "group"):
+        if request.group and is_group_scoped:
             if hasattr(request, 'api_key') and request.api_key:
                 allowed = request.api_key.has_permission(perms)
                 if allowed:
@@ -485,14 +502,16 @@ class MojoModel:
                 q = {owner_field: request.user}
             return cls.on_rest_list(request, cls.objects.filter(**q))
 
-        # Check if model has a group field and user might have group-level permissions
-        if request.user.is_authenticated and hasattr(cls, "group"):
+        # Check if the model is group-scoped (direct `group` FK OR a
+        # RestMeta.GROUP_FIELD path) and the user might have group-level
+        # permissions on some tenant even without a system-level grant.
+        group_field = cls.get_rest_meta_prop("GROUP_FIELD", None)
+        if request.user.is_authenticated and (group_field or hasattr(cls, "group")):
             # User doesn't have system-level permissions, but might have group-level permissions
             groups_with_perms = request.user.get_groups_with_permission(perms)
             if groups_with_perms.exists():
                 # Filter queryset to only include objects from groups where user has permission
-                group_field = cls.get_rest_meta_prop("GROUP_FIELD", "group")
-                q = {f"{group_field}__in": groups_with_perms}
+                q = {f"{group_field or 'group'}__in": groups_with_perms}
                 return cls.on_rest_list(request, cls.objects.filter(**q))
 
         if not request.user.is_authenticated:
@@ -1258,9 +1277,20 @@ class MojoModel:
                     # CREATED_BY_OWNER_FIELD = None and re-stamp in on_rest_pre_save.
                     if getattr(self, owner_field, None) is None:
                         setattr(self, owner_field, request.user)
-                if request.group and self.get_model_field("group"):
-                    if getattr(self, "group", None) is None:
-                        self.group = request.group
+                if request.group:
+                    # Auto-assign the group-scoping FK on create when the body
+                    # omitted it (body wins), mirroring the historical `group`
+                    # behavior. Honors a RestMeta.GROUP_FIELD that names a
+                    # DIRECT FK; a related path (e.g. "agent__project") has no
+                    # local field to assign — its tenant is derived from the
+                    # FK the body provides.
+                    gf = self.get_rest_meta_prop("GROUP_FIELD", None)
+                    if gf and "__" not in gf and self.get_model_field(gf):
+                        if getattr(self, gf, None) is None:
+                            setattr(self, gf, request.group)
+                    elif self.get_model_field("group"):
+                        if getattr(self, "group", None) is None:
+                            self.group = request.group
             else:
                 owner_field = self.get_rest_meta_prop("UPDATED_BY_OWNER_FIELD", "modified_by")
                 if request.user.is_authenticated and self.get_model_field(owner_field):
@@ -1703,3 +1733,22 @@ class MojoModel:
     @classmethod
     def has_field(cls, field_name):
         return cls.get_model_field(field_name) is not None
+
+    @classmethod
+    def _resolve_group_from_instance(cls, instance, group_field):
+        """Resolve the owning Group for an instance given a GROUP_FIELD name.
+
+        ``group_field`` may be a Django related path (e.g. "original_file__group"
+        or "agent__project"); each hop is traversed with getattr, returning None
+        if any link along the path is null. A plain field name (e.g. "group" or
+        "project") is a single getattr. Used by the permission layer to scope
+        detail access to the row's true tenant regardless of the FK's name.
+        """
+        if not instance or not group_field:
+            return None
+        obj = instance
+        for part in group_field.split("__"):
+            if obj is None:
+                return None
+            obj = getattr(obj, part, None)
+        return obj

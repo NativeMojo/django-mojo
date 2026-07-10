@@ -41,7 +41,13 @@ GROUPLESS_LIST_ENDPOINTS = [
     "/api/jobs/scheduled_task",
     "/api/account/bouncer/device",
     "/api/account/bouncer/signature",
-    "/api/fileman/rendition",
+    # NOTE: /api/fileman/rendition is intentionally NOT here — FileRendition is
+    # group-scoped through RestMeta.GROUP_FIELD="original_file__group" (it has
+    # no direct `group` FK). Now that the permission layer honors GROUP_FIELD,
+    # a group-scoped key reaches only its OWN group's renditions (on_rest_list
+    # filters original_file__group=key.group), which is correct, not a leak —
+    # so a 200 there is expected. Cross-tenant confinement is asserted in
+    # tests/test_fileman/9_test_rendition_group_field.py.
 ]
 
 

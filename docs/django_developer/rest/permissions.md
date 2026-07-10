@@ -31,7 +31,7 @@ on_rest_request(request, pk)
 | `NO_REST_SAVE` | `False` | Blocks POST/PUT entirely. |
 | `NO_REST` | `False` | Blocks all REST operations. |
 | `OWNER_FIELD` | `"user"` | FK field name pointing to the owning user. Used with `"owner"` perm. |
-| `GROUP_FIELD` | `"group"` | FK field name pointing to the owning group. |
+| `GROUP_FIELD` | `"group"` | FK field name pointing to the owning group. May be a related path (e.g. `"original_file__group"`, `"agent__project"`). Governs detail + list + `?group=` scoping and create-time auto-assign — see [Group-Scoped Permissions](#group-scoped-permissions). |
 | `CREATED_BY_OWNER_FIELD` | `"user"` | FK field auto-stamped with `request.user` on create when the body omits it. Set to `None` to disable auto-stamping entirely. See "Create-time owner stamping" below. |
 | `UPDATED_BY_OWNER_FIELD` | `"modified_by"` | FK field set to `request.user` on every update. Unlike `CREATED_BY_OWNER_FIELD`, the update-path stamp always overwrites — "who last modified" is an actor fact, not a body fact. |
 | `DENY_AI` | `False` | Shorthand — denies all assistant model tools on this model regardless of verb. |
@@ -153,7 +153,7 @@ Tools that honor the flags: `describe_model`, `query_model`, `aggregate_model`, 
 1. Try system-level perm check (e.g., does user have `"view_admin"`?)
 2. If YES → `on_rest_list(request)` with **all** objects (admin sees everything)
 3. If NO and `"owner"` in VIEW_PERMS → `on_rest_list(request, filtered_queryset)` with **owner's objects only**
-4. If NO and model has `group` field → check group-level permissions, filter by groups
+4. If NO and the model is group-scoped (a direct `group` FK **or** a `RestMeta.GROUP_FIELD`) → check group-level permissions, filter by `{GROUP_FIELD}__in=<groups where the user holds the perm>`
 5. Otherwise → 403 or empty list
 
 ### Example: Owner-scoped with admin override
@@ -189,14 +189,58 @@ class UserNote(models.Model, MojoModel):
 
 ## Group-Scoped Permissions
 
-When a model has a `group` FK and the user doesn't have system-level permissions, the framework checks if the user has the required permissions within any group:
+A model is **group-scoped** when it has a direct `group` FK **or** it declares
+`RestMeta.GROUP_FIELD`. When the user lacks system-level permissions, the
+framework checks whether they hold the required permission within any group and
+filters to those tenants:
 
 ```python
 groups_with_perms = request.user.get_groups_with_permission(perms)
-queryset.filter(group__in=groups_with_perms)
+group_field = cls.get_rest_meta_prop("GROUP_FIELD", "group")   # may be a related path
+queryset.filter(**{f"{group_field}__in": groups_with_perms})
 ```
 
-The `request.group` context is set automatically when an instance has a `group` attribute.
+This governs **all three** access paths consistently — the bare-list member
+fallback (above), the `?group=` narrower (`on_rest_list`), and detail
+permission checks. For detail (GET/POST/DELETE on a pk), the framework resolves
+the **instance's** owning group by traversing `GROUP_FIELD` and checks
+membership against that group — so a caller cannot read another tenant's row by
+passing their own `?group=`. `request.group` is set automatically to the
+resolved instance group.
+
+### `GROUP_FIELD` — naming a non-`group` or indirect owning FK
+
+`GROUP_FIELD` defaults to `"group"`. Set it when the owning-group FK has a
+different name, or when the tenant is reached through a related path:
+
+```python
+class FileRendition(models.Model, MojoModel):
+    original_file = models.ForeignKey("fileman.File", ...)   # File has the group FK
+
+    class RestMeta:
+        VIEW_PERMS = ["view_fileman", "manage_files", "files"]
+        GROUP_FIELD = "original_file__group"    # related path — traversed to the Group
+```
+
+```python
+class AgentTask(models.Model, MojoModel):
+    agent = models.ForeignKey("maestro.Agent", ...)          # Agent.project is the tenant Group
+
+    class RestMeta:
+        GROUP_FIELD = "agent__project"          # FK named "project", reached via "agent"
+```
+
+Notes:
+- The path is traversed null-safe hop-by-hop; a null link along the way yields
+  "no group" (fail-closed — the flat user/superuser check still applies).
+- **Create-time auto-assign** stamps a **direct**-FK `GROUP_FIELD` from
+  `request.group` when the body omits it (body wins), mirroring the historical
+  `group` behavior. A **related-path** `GROUP_FIELD` has no local field to
+  stamp — its tenant is derived from the FK the body provides, which is itself
+  gated by the FK-attach VIEW check (attaching a foreign-tenant FK is denied).
+- A model scoped only via `GROUP_FIELD` (no direct `group` attribute) is still
+  correctly confined for `ApiKey` callers; a *truly* groupless model (no `group`
+  FK and no `GROUP_FIELD`) denies keys by default (see `ALLOW_API_KEY_GLOBAL`).
 
 ## Delete Gating
 

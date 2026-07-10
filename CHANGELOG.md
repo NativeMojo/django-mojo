@@ -1,5 +1,44 @@
 ## Unreleased
 
+## v1.2.45 - July 10, 2026
+
+**security** — **`GROUP_FIELD` now scopes detail and list permissions, not just the `?group=` filter — closing cross-tenant reads on group-scoped models without a direct `group` FK.**
+A model can declare `RestMeta.GROUP_FIELD` (optionally a related path, e.g.
+`"original_file__group"` or `"agent__project"`) to name its owning-group FK.
+Previously only `on_rest_list` (the `?group=` narrower) consulted it; the two
+permission seams — detail `_evaluate_permission` and the `on_rest_handle_list`
+member fallback — hard-gated on `hasattr(cls, "group")`. So a model scoped only
+through `GROUP_FIELD` (no direct `group` attribute, e.g. `FileRendition`) fell
+through to a **flat, tenantless** `user.has_permission` check: a holder of the
+model's VIEW perm at the **user** level could read (and with SAVE, write) every
+tenant's rows on the bare list and on detail-by-pk, while a legitimate group
+**member** (perm at the GroupMember level) was denied even their own rows.
+
+Now both seams treat a model as group-scoped when it has a direct `group` FK
+**or** a `GROUP_FIELD`:
+- **Detail** — `_evaluate_permission` resolves the instance's owning group by
+  traversing `GROUP_FIELD` (new `_resolve_group_from_instance`, null-safe over
+  related paths) and checks membership against the **row's** tenant, not a
+  caller-supplied `?group=`.
+- **List** — the member fallback filters `{GROUP_FIELD__in: <caller's groups>}`,
+  so a member sees only their tenants' rows and a bare list never leaks foreign
+  rows. System-level (user-level / superuser) grants still see all — unchanged.
+- **Create** — the create-time group auto-assign generalizes from the hardcoded
+  `group` field to a direct-FK `GROUP_FIELD` (body still wins; related-path
+  `GROUP_FIELD` has no local field to stamp and is derived from the FK the body
+  provides).
+
+The FK-attach VIEW check on assign-by-pk (`on_rest_save_related_field`) inherits
+this, so attaching a foreign-tenant FK (e.g. `{"agent": <other tenant's id>}`)
+is now denied — closing the cross-tenant write/move path too. `ApiKey`
+confinement is unaffected: a group-scoped key reaches only its own group's rows
+(truly groupless models still deny keys via `ALLOW_API_KEY_GLOBAL`).
+**Behavior change**: `FileRendition` (`GROUP_FIELD="original_file__group"`) moves
+from over-denying members / leaking to user-level holders → correctly
+member-scoped; a group-scoped ApiKey now reaches its own group's renditions
+(scoped, not cross-tenant). Regression coverage in
+`tests/test_fileman/9_test_rendition_group_field.py`.
+
 **security** — **A deactivated group can no longer become `request.group` by numeric id.**
 The dispatcher's numeric `group=<id>` resolution now filters `is_active=True`
 (via the new `Group.get_active(pk)` classmethod), matching the `group_uuid`

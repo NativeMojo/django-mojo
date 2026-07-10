@@ -66,7 +66,7 @@ class Book(models.Model, MojoModel):
 | `LOG_META_CHANGES` | bool | `False` | Auto-log key-level changes to all JSONFields via logit |
 | `PROTECTED_JSON_PERMS` | list | `[]` | Permissions required to modify the `"protected"` root key in any JSONField |
 | `OWNER_FIELD` | str | `"user"` | Field name for owner permission check |
-| `GROUP_FIELD` | str | `"group"` | Field name for group scoping |
+| `GROUP_FIELD` | str | `"group"` | Field name (or related path, e.g. `"agent__project"`) for group scoping — governs detail, list, and `?group=` permission checks |
 | `CREATED_BY_OWNER_FIELD` | str or None | `"user"` | Auto-stamped with `request.user` on create **only when the body omits it**. `None` disables. See [REST Permissions — Create-time owner stamping](../rest/permissions.md#create-time-owner-stamping). |
 | `UPDATED_BY_OWNER_FIELD` | str or None | `"modified_by"` | Always set to `request.user` on update (who last modified). See [REST Permissions](../rest/permissions.md). |
 | `ALT_PK_FIELD` | str | `"uuid"` | Field used for non-integer PK lookups |
