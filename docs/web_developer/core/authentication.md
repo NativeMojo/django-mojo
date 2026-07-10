@@ -58,7 +58,7 @@ Some resources are scoped to a group (organization/tenant). Pass the group ID as
 GET /api/myapp/resource?group=7
 ```
 
-When `group` is provided, permission checks are evaluated against the user's membership and permissions within that group.
+When `group` is provided, permission checks are evaluated against the user's membership and permissions within that group. Only **active** groups resolve — a deactivated group's id is treated exactly like an unknown one: the request behaves as if no group was passed (typically a `403` on member-scoped resources).
 
 ## Public Endpoints
 

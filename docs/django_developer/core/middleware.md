@@ -128,7 +128,7 @@ downstream/public endpoint to validate; an empty or 3+-part value is ignored.
 
 **Custom bearer handlers** can be registered via settings to support API keys, service tokens, etc.
 
-**`request.group`** is auto-populated if the request includes a `group` param that matches a group the user belongs to.
+**`request.group`** is auto-populated if the request includes a `group` param that matches a group the user belongs to. Only **active** groups resolve — an inactive group's id (or uuid) behaves exactly like a nonexistent one: `request.group` stays `None`, and nothing (including the group's activity timestamps) is written.
 
 ---
 

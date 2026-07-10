@@ -142,6 +142,7 @@ Bug discipline: tests 1, 4, 5 must FAIL on unfixed code; 2, 3 are controls.
 
 ## Notes
 
+- Baseline (2026-07-09, before first edit): `bin/run_tests --agent` → **GREEN** — total 2382, passed 2326, failed 0, skipped 56 (status "passed", failures []). Anything red after the change is this item's.
 - Recon verdict (2026-07-09): no flow in mojo/ or tests/ relies on numeric `group=` resolving an inactive group — admin lifecycle uses `/api/group/<pk>` + global perms; uuid surfaces are already active-only; `geo/check`/`geo/rules`/`geo/simulate` do their own deliberate inactive handling independent of the dispatcher.
 - Follow-up candidate (NOT this item): `group/<pk>/member` (`mojo/apps/account/rest/group.py:92-100`) resolves a client pk without `is_active` and `touch()`es — post-auth, and inactive-member-listing may be legitimate for admins; needs its own decision.
 - The api_key confinement inside both branches (`is_group_allowed`) is unaffected — it only fires for key-authenticated requests, and both checks are already None-guarded.

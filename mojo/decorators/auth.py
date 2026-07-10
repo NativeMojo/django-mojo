@@ -1,7 +1,6 @@
 from functools import wraps
 import mojo.errors
 from mojo.helpers import logit
-from mojo.helpers import modules
 from mojo.helpers.settings import settings
 
 logger = logit.get_logger("error", "error.log")
@@ -40,8 +39,11 @@ def requires_perms(*required_perms):
             # If user doesn't have permissions, fallback to group-based checking
             if REQUIRES_PERMS_IS_GROUP:
                 if "group" in request.DATA and not request.group:
+                    from mojo.apps.account.models.group import Group
                     try:
-                        request.group = modules.get_model_instance("account", "Group", int(request.DATA.group))
+                        # Active groups only — a member grant in a deactivated
+                        # group must not authorize (mirrors the dispatcher).
+                        request.group = Group.get_active(int(request.DATA.group))
                     except (TypeError, ValueError):
                         # Unusable group param -> no group context (fail closed)
                         request.group = None
@@ -86,8 +88,11 @@ def requires_group_perms(*required_perms):
 
             # If user doesn't have permissions, fallback to group-based checking
             if "group" in request.DATA and not request.group:
+                from mojo.apps.account.models.group import Group
                 try:
-                    request.group = modules.get_model_instance("account", "Group", int(request.DATA.group))
+                    # Active groups only — a member grant in a deactivated
+                    # group must not authorize (mirrors the dispatcher).
+                    request.group = Group.get_active(int(request.DATA.group))
                 except (TypeError, ValueError):
                     # Unusable group param -> no group context (fail closed)
                     request.group = None

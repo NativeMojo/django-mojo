@@ -308,8 +308,8 @@ internals, fail-closed scopes, cache TTL, config source/modified). It reads
 persisted config (settings + `Group.metadata`) like `geo/rules` does — not
 the engine's test-header overlays. A `group`/`group_uuid` param is required:
 members without one 403 at the decorator; global holders get a 400. The
-dispatcher resolves `group_uuid` for **active** groups only — inspecting an
-inactive group stays a `geo/rules` (admin) affordance.
+dispatcher resolves both `group` and `group_uuid` for **active** groups only —
+inspecting an inactive group stays a `geo/rules` (admin) affordance.
 
 **Events — no new mechanics.** `Event.VIEW_PERMS = ["view_security",
 "security"]` plus the framework's group-scoped list fallback

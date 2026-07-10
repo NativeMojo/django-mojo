@@ -119,6 +119,10 @@ def on_admin_reset(request):
 `request.group` when the global check fails (see `REQUIRES_PERMS_IS_GROUP`).
 Correct for endpoints scoped to that group — but a cross-tenant escalation for
 endpoints whose effect is platform-wide. Use `requires_global_perms` for those.
+The fallback resolves **active** groups only (`Group.get_active`): an inactive
+or unusable `group` param yields no group context and the check fails closed
+(`PermissionDeniedException`) — a member grant in a deactivated group never
+authorizes.
 
 ### `@md.requires_group_perms(*perms)`
 Like `requires_perms` but forces group-context permission evaluation.

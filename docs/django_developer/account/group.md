@@ -239,7 +239,7 @@ member.save()
 
 ## request.group
 
-When a request includes `?group=<id>`, `MojoMiddleware` and auth decorators auto-populate `request.group` with the `Group` instance if the user is a member. All permission checks and list queries are then scoped to that group — **except** endpoints gated with `@md.requires_global_perms`, which never consult `request.group` at all (global `User.permissions` or superuser only). See [Global vs Group-Scoped Permission Checks](../core/permissions.md#global-vs-group-scoped-permission-checks).
+When a request includes `?group=<id>`, `MojoMiddleware` and auth decorators auto-populate `request.group` with the `Group` instance if the user is a member. Only **active** groups resolve (`Group.get_active`) — an inactive group's id behaves exactly like a nonexistent one (`request.group` stays `None`, no touch side effect), for both the `group=` and `group_uuid=` params. All permission checks and list queries are then scoped to that group — **except** endpoints gated with `@md.requires_global_perms`, which never consult `request.group` at all (global `User.permissions` or superuser only). See [Global vs Group-Scoped Permission Checks](../core/permissions.md#global-vs-group-scoped-permission-checks).
 
 ```python
 # In a REST handler

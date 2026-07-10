@@ -52,7 +52,7 @@ In `GroupMember.has_permission`, a permission like `sys.manage_users` strips the
 
 ## Group Scoping
 
-Every API key belongs to one group. The key can access that group and any of its descendants. If a request passes `group=<id>` in the request data and that group is not the key's group or a descendant, the dispatcher returns 403.
+Every API key belongs to one group. The key can access that group and any of its descendants. If a request passes `group=<id>` in the request data and that group is not the key's group or a descendant, the dispatcher returns 403. An **inactive** group's id never resolves at all (same as a nonexistent id) — so a key whose own group has been deactivated loses group context and fails closed at model security.
 
 ## Creating Keys
 

@@ -24,7 +24,9 @@ When working with group-scoped resources, pass the group ID as a parameter:
 ?group=<id>
 ```
 
-This scopes all requests to that group.
+This scopes all requests to that group. Only **active** groups resolve — a
+deactivated group's id behaves exactly like an unknown one (no group context;
+member-scoped requests are denied).
 
 ## Get Group
 

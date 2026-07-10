@@ -46,9 +46,9 @@ actually applies to **their** group — nothing platform-wide.
 Query params: `group_uuid` (or numeric `group`) — **required**, and must be
 a group the caller holds a member `view_security`/`security` grant in
 (global holders may read any group). Without a group param members get
-`403` and global holders get `400`. An inactive group's uuid does not
-resolve here — inspecting inactive groups stays a `GET geo/rules` (admin)
-affordance.
+`403` and global holders get `400`. An inactive group's uuid or numeric id
+does not resolve here — inspecting inactive groups stays a `GET geo/rules`
+(admin) affordance.
 
 ```json
 {

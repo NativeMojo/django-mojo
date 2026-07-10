@@ -8,7 +8,6 @@ from django.urls import path, re_path
 # from django.http import JsonResponse
 from mojo.helpers.response import JsonResponse
 from functools import wraps
-from mojo.helpers import modules
 from mojo.models import rest
 from django.http import HttpResponse
 from mojo.apps import metrics
@@ -72,8 +71,12 @@ def dispatcher(request, *args, **kwargs):
     """
     key = kwargs.pop('__mojo_rest_root_key__', None)
     if "group" in request.DATA and request.DATA.group:
+        # SECURITY: active groups only — same contract as the group_uuid
+        # branch below. An inactive id must resolve exactly like a
+        # nonexistent one (no touch side effect, no existence oracle).
+        from mojo.apps.account.models.group import Group
         try:
-            request.group = modules.get_model_instance("account", "Group", int(request.DATA.group))
+            request.group = Group.get_active(int(request.DATA.group))
             if request.group is not None:
                 request.group.touch()
             api_key = getattr(request, "api_key", None)

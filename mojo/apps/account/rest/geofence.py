@@ -101,8 +101,8 @@ def on_geo_policy(request):
 
     Auth: global view_security/security OR a member grant on request.group.
     @requires_perms verifies the member grant against request.group itself
-    (resolved by the dispatcher from group/group_uuid — active groups only
-    for group_uuid), and the response is built solely from request.group, so
+    (resolved by the dispatcher from group/group_uuid — active groups only,
+    both params), and the response is built solely from request.group, so
     a member can never read another group's policy. Requires a group param:
     without one, members 403 at the decorator and global holders get a 400.
     """

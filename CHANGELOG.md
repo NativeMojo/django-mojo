@@ -1,5 +1,20 @@
 ## Unreleased
 
+**security** — **A deactivated group can no longer become `request.group` by numeric id.**
+The dispatcher's numeric `group=<id>` resolution now filters `is_active=True`
+(via the new `Group.get_active(pk)` classmethod), matching the `group_uuid`
+branch's long-documented contract: an inactive group's id resolves exactly
+like a nonexistent one — `request.group` stays `None`, the group is not
+`touch()`ed (previously a full save bumped `last_activity` AND `modified`:
+an anonymous existence oracle), its geofence rules no longer participate in
+decisions, and evidence metrics can't be attributed to it. The
+`requires_perms`/`requires_group_perms` group fallback uses the same
+resolver, so a member-level grant in a deactivated group no longer
+authorizes group-scoped endpoints (fail-closed 403). Admin lifecycle flows
+are unaffected — disable/reactivate go through `/api/group/<pk>` with global
+perms, and `geo/rules`/`geo/simulate`/`geo/check` keep their own deliberate
+inactive-group handling. (ITEM-025)
+
 **api** — **Sending the same key in both the query string and the JSON body no longer 500s.**
 `request.DATA` previously merged a key that arrived from two sources into a
 mixed list (`?group=518` + body `{"group": 518}` → `['518', 518]`), which

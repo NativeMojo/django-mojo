@@ -220,6 +220,17 @@ class Group(MojoSecrets, MojoModel):
             return ms.has_permission(perms)
         return False
 
+    @classmethod
+    def get_active(cls, pk):
+        """Resolve a client-supplied numeric group id to an ACTIVE group, else None.
+
+        The one resolver for ids arriving from request params (dispatcher
+        `group=` and the requires_perms/requires_group_perms fallbacks).
+        An inactive id resolves exactly like a nonexistent one — no touch,
+        no error, no existence oracle — matching the dispatcher's group_uuid
+        branch contract."""
+        return cls.objects.filter(pk=pk, is_active=True).first()
+
     def touch(self):
         # can't subtract offset-naive and offset-aware datetimes
         if self.last_activity and not dates.is_today(self.last_activity, METRICS_TIMEZONE):
