@@ -104,6 +104,10 @@ POST /api/group/member/invite
 }
 ```
 
+Requires authentication — an unauthenticated call returns a clean `403`, never
+a `500`. See [Invite a User](group.md#invite-a-user) for the full permission
+list and error-response detail.
+
 ### Reading Current Permissions
 
 Permissions are returned in the user and group member responses as a JSON object:

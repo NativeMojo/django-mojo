@@ -95,12 +95,15 @@ See [mojo_model.md — POST_SAVE_ACTIONS](mojo_model.md#post_save_actions) for t
 
 ## Authentication Decorators
 
-### `@md.requires_auth`
-Rejects unauthenticated requests with 401.
+### `@md.requires_auth()`
+Rejects unauthenticated requests with a `403` (`PermissionDeniedException`'s
+default) — not `401`. This is a different code path from the RestMeta /
+`uses_model_security` unauthenticated case, which does return `401` (see
+[REST Permissions](../rest/permissions.md)).
 
 ```python
 @md.GET('profile')
-@md.requires_auth
+@md.requires_auth()
 def on_profile(request):
     return request.user.on_rest_get(request)
 ```
@@ -157,6 +160,14 @@ These decorators do not enforce access — they annotate the function in the sec
 | `@md.custom_security()` | Marks endpoint as having custom security logic |
 | `@md.uses_model_security()` | Indicates endpoint uses `RestMeta` permission system |
 | `@md.token_secured()` | Marks endpoint as requiring a token |
+
+**Pair `@md.custom_security()` with an actual gate.** It only annotates — an
+anonymous caller still reaches the function body unless the body itself checks
+`request.user.is_authenticated` or the endpoint also carries
+`@md.requires_auth()` / `@md.requires_perms(...)`. A handler that assumes an
+authenticated `request.user` (e.g. passes it into `group.user_has_permission(...)`)
+needs a real gate, not just the annotation — a missing one let an anonymous
+caller reach such a check and crash instead of being rejected (ITEM-028).
 
 ```python
 @md.GET('status')
