@@ -40,7 +40,11 @@ def requires_perms(*required_perms):
             # If user doesn't have permissions, fallback to group-based checking
             if REQUIRES_PERMS_IS_GROUP:
                 if "group" in request.DATA and not request.group:
-                    request.group = modules.get_model_instance("account", "Group", int(request.DATA.group))
+                    try:
+                        request.group = modules.get_model_instance("account", "Group", int(request.DATA.group))
+                    except (TypeError, ValueError):
+                        # Unusable group param -> no group context (fail closed)
+                        request.group = None
                 if not request.group or not request.group.user_has_permission(request.user, perms, True):
                     logger.error(f"{request.user.username} is missing {perms}")
                     raise mojo.errors.PermissionDeniedException()
@@ -82,7 +86,11 @@ def requires_group_perms(*required_perms):
 
             # If user doesn't have permissions, fallback to group-based checking
             if "group" in request.DATA and not request.group:
-                request.group = modules.get_model_instance("account", "Group", int(request.DATA.group))
+                try:
+                    request.group = modules.get_model_instance("account", "Group", int(request.DATA.group))
+                except (TypeError, ValueError):
+                    # Unusable group param -> no group context (fail closed)
+                    request.group = None
             if not request.group or not request.group.user_has_permission(request.user, perms, True):
                 logger.error(f"{request.user.username} is missing {perms}")
                 raise mojo.errors.PermissionDeniedException()

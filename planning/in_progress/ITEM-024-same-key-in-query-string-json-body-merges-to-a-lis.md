@@ -153,7 +153,7 @@ Bug regression discipline: written first, MUST fail on unfixed code (tests 1, 7,
 - none
 
 ## Notes
-- Baseline (build rule): run `bin/run_tests --agent` before first edit; record here.
+- Baseline (2026-07-09, before first edit): `bin/run_tests --agent` → **GREEN** — total 2373, passed 2317, failed 0, skipped 56 (`var/test_failures.json` status "passed", failures []). No pre-existing failures; anything red after the change is this item's.
 - Follow-up candidates (NOT this item): `on_rest_save_related_field` list-FK silent no-op (`mojo/models/rest.py:1370-1434`); `dispatcher-group-param-is-active-asymmetry` inbox item (same dispatcher block, `is_active` filter asymmetry).
 - Maestro repro context: django-mojo 1.1.20, `POST /api/maestro/thread/<pk>?group=518` + body `{"priority":"high","group":518}` → 500; single-source → 200.
 

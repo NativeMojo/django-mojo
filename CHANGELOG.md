@@ -1,5 +1,20 @@
 ## Unreleased
 
+**api** — **Sending the same key in both the query string and the JSON body no longer 500s.**
+`request.DATA` previously merged a key that arrived from two sources into a
+mixed list (`?group=518` + body `{"group": 518}` → `['518', 518]`), which
+crashed the dispatcher's group resolution (`int()` on a list raises
+`TypeError`, uncaught, *before* the REST error wrapper) into a bare Django
+500 HTML page with no traceback in mojo's logs — a real-traffic pattern for
+web clients that append an active-group query param to JSON form posts.
+Duplicate keys now resolve deterministically: the later source wins, whole —
+**query string < form body < JSON body** (documented in both doc tracks).
+Multi-value keys within one source (`?tag=a&tag=b`, `tags[]=`, JSON lists)
+still produce lists. A genuinely unusable `group` value (list/dict/etc.) now
+returns mojo's JSON 400 `Invalid group ID` from the dispatcher, and the
+`requires_perms`/`requires_group_perms` group fallback treats it as
+no-group-context (fail-closed 403) instead of a coercion crash. (ITEM-024)
+
 **security** — **Geofence-adjacent Settings can no longer be written as garbage; `kind=` coercion is loud and fail-safe.**
 Write-time validation now covers every geofence-consumed Setting (previously
 only rules/allowlist/strict): `GEOFENCE_ENABLED`, `GEOFENCE_FAIL_CLOSED`,

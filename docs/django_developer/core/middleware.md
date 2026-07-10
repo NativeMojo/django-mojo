@@ -178,6 +178,17 @@ request.DATA.user.name  # → "Alice"
 
 **Array notation** (`tags[]` or `tags[0]`) is automatically converted to a list.
 
+**Duplicate keys / precedence** — sources are processed in order (query string,
+then form body, then JSON body) and a later source **replaces** an earlier
+value for the same key, whole:
+
+- `?group=5` + JSON body `{"group": 7}` → `request.DATA.group == 7` (the JSON
+  value, with its JSON type — never a merged list)
+- Nested values replace whole too: `?user.name=John` + `{"user": {"name": "Jane"}}`
+  → `request.DATA.user == {"name": "Jane"}` (no deep-merge)
+- Multi-value keys *within one source* still produce lists: `?tag=a&tag=b` →
+  `["a", "b"]`; a JSON list value arrives intact
+
 ---
 
 ## ACTIVE_REQUEST ContextVar

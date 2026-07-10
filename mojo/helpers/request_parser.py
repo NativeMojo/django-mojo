@@ -8,6 +8,12 @@ class RequestDataParser:
     """
     A robust parser for Django request data that consolidates GET, POST, JSON, and FILES
     into a single objict with support for dotted notation and array handling.
+
+    Duplicate keys across sources resolve by precedence — later sources win
+    (query string < form body < JSON body), replacing the earlier value whole
+    (no list-merge, no deep-merge of nested dicts). Multi-value keys within a
+    single source (?tag=a&tag=b, tags[]=a&tags[]=b, a JSON list) still produce
+    lists.
     """
 
     def __init__(self, use_objict=True):
@@ -171,21 +177,11 @@ class RequestDataParser:
         else:
             final_value = values
 
-        # Handle existing values - merge into arrays if needed
-        if final_key in current:
-            existing = current[final_key]
-            if isinstance(existing, list):
-                if isinstance(final_value, list):
-                    existing.extend(final_value)
-                else:
-                    existing.append(final_value)
-            else:
-                if isinstance(final_value, list):
-                    current[final_key] = [existing] + final_value
-                else:
-                    current[final_key] = [existing, final_value]
-        else:
-            current[final_key] = final_value
+        # Later sources override earlier ones (query < form < JSON) — a key
+        # present in more than one source must not silently become a list.
+        # Multi-value keys within one source (?tag=a&tag=b) arrive here as a
+        # list in a single call, so they are unaffected.
+        current[final_key] = final_value
 
 
 # Convenience functions for backward compatibility

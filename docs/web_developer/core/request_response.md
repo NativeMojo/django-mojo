@@ -8,7 +8,12 @@ All endpoints accept data as:
 - **JSON body** for POST/PUT: `Content-Type: application/json`
 - **Form data** for POST: `Content-Type: application/x-www-form-urlencoded`
 
-All three are merged and treated identically by the server.
+All three are merged into a single payload. If the same key appears in more
+than one source, the later source wins, replacing the value whole: **query
+string < form body < JSON body**. So a JSON body key always beats the same key
+in the query string (e.g. `POST /api/thread/1?group=5` with body
+`{"group": 7}` resolves `group` to `7`). Repeating a key *within* the query
+string (`?tag=a&tag=b`) still produces an array.
 
 ```bash
 # GET with query params

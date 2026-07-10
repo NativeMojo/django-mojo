@@ -79,7 +79,10 @@ def dispatcher(request, *args, **kwargs):
             api_key = getattr(request, "api_key", None)
             if api_key and request.group and not api_key.is_group_allowed(request.group):
                 return JsonResponse({"error": "Group not accessible with this API key", "code": 403}, status=403)
-        except ValueError:
+        except (TypeError, ValueError):
+            # TypeError: int() on a non-scalar (client sent a list/dict/null).
+            # This block runs BEFORE dispatch_error_handler wraps the view, so
+            # anything uncaught here escapes as a bare Django 500.
             if _events_on_errors():
                 rest.MojoModel.class_report_incident(
                     details=f"Permission denied: Invalid group ID -> '{request.DATA.group}'",
