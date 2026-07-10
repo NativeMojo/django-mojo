@@ -139,7 +139,7 @@ Use `?graph=default` for full details including metadata, user, and group.
 
 **POST** `/api/shortlink/link/create`
 
-Requires authentication (`@requires_auth`) and reads input from `request.DATA`.
+Requires authentication (`@md.requires_auth()`) and reads input from `request.DATA`.
 
 Use this endpoint when you want a ready-to-use short URL string in one call.
 

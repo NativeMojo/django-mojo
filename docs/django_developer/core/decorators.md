@@ -218,7 +218,7 @@ All routed view functions should return plain dicts — never construct `JsonRes
 ```python
 # Good — return plain data
 @md.GET('book/stats')
-@md.requires_auth
+@md.requires_auth()
 def on_book_stats(request):
     return {"total": Book.objects.count(), "active": Book.objects.filter(status="active").count()}
 
@@ -234,7 +234,7 @@ def on_publish(request):
 
 # Good — raise for error conditions (auto-converted to 400/403/500)
 @md.POST('book/approve')
-@md.requires_auth
+@md.requires_auth()
 def on_approve(request):
     book = Book.objects.get(pk=request.DATA.book_id)
     if not request.user.has_permission("approve_books"):
@@ -265,7 +265,7 @@ When stacking multiple decorators, routing decorators (`@md.URL`, `@md.GET`, etc
 
 ```python
 @md.POST('resource')
-@md.requires_auth
+@md.requires_auth()
 @md.requires_params("name")
 def on_create(request):
     ...

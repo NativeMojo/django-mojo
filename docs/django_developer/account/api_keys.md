@@ -128,7 +128,7 @@ See [Rate Limiting](../core/rate_limiting.md) for full details.
 
 The CRUD endpoints require `manage_group` or `manage_groups` permission. The
 `me` and `rotate` endpoints require only that the request is authenticated
-**with an API key** (`@requires_auth`) — no management permission (the caller
+**with an API key** (`@md.requires_auth()`) — no management permission (the caller
 already holds the secret).
 
 ### `GET /api/group/apikey/me` — whoami

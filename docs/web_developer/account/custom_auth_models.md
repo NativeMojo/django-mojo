@@ -127,11 +127,11 @@ The `tokens` dict from `generate_jwt()` contains `access_token`, `refresh_token`
 
 ## 4. Protecting Player Endpoints
 
-Use `@md.requires_auth` as normal — it checks that `request.bearer` is set. For player-specific endpoints, check `request.player` yourself:
+Use `@md.requires_auth()` as normal — it checks that `request.bearer` is set. For player-specific endpoints, check `request.player` yourself:
 
 ```python
 @md.GET("game/player/me")
-@md.requires_auth
+@md.requires_auth()
 def on_player_me(request):
     # AuthMiddleware has already verified the player token
     # and set request.player

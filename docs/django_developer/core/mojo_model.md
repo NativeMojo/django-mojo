@@ -289,7 +289,7 @@ ceilings.
 ```python
 # Return just the data — framework wraps it
 @md.GET('book/stats')
-@md.requires_auth
+@md.requires_auth()
 def on_book_stats(request):
     return {"total": Book.objects.count()}
     # client gets: {"status": true, "data": {"total": 42}}
@@ -304,7 +304,7 @@ def on_book(request, pk=None):
 
 # Raise for errors — auto-converted to 400/403
 @md.POST('book/publish')
-@md.requires_auth
+@md.requires_auth()
 def on_publish(request):
     book = Book.objects.get(pk=request.DATA.book_id)
     if not request.user.has_permission("publish_books"):
