@@ -50,24 +50,34 @@ group = Group.resolve_by_auth_domain('auth.clientbrand.com')
 The bouncer calls this automatically on every page request — no setup beyond
 setting `auth_domain` is required.
 
-### Per-group AUTH_* settings
+### Per-group auth config
 
-All `AUTH_*` settings resolve per-group when a group is detected. Set them
-via the `Setting` model with the `group` argument:
+Hosted-auth-page branding and offered methods are configured through the
+structured [auth config](auth_config.md) stored in
+`group.metadata["auth_config"]` (the flat `AUTH_*` settings are retired — see
+the migration table in that doc):
 
 ```python
-from mojo.helpers import settings
 from mojo.apps.account.models import Group
 
 group = Group.objects.get(uuid='...')
-
-settings.set('AUTH_APP_TITLE', 'Client Brand', group=group)
-settings.set('AUTH_LOGO_URL', 'https://cdn.client.com/logo.svg', group=group)
-settings.set('AUTH_SUCCESS_REDIRECT', '/client-dashboard/', group=group)
-settings.set('AUTH_ENABLE_GOOGLE', True, group=group)
+group.metadata = group.metadata or {}
+group.metadata["auth_config"] = {
+    "theme": {
+        "app_title": "Client Brand",
+        "logo_url": "https://cdn.client.com/logo.svg",
+        "success_redirect": "/client-dashboard/",
+    },
+    "login": {"methods": ["password", "google"]},
+}
+group.save(update_fields=["metadata"])
 ```
 
-Settings resolve with parent-chain fallback: group → parent group → global.
+The config resolves per group: code defaults ← the global `AUTH_CONFIG`
+setting ← each ancestor's `metadata["auth_config"]` deep-merged down the
+parent chain (root → leaf; dicts merge key-by-key, lists replace wholesale).
+Invalid configs (unknown method token, bad enum) are rejected at Group save
+time.
 
 ### Challenge page branding (opt-in)
 
@@ -75,6 +85,8 @@ By default, the bouncer challenge page always uses the default branding. To
 override it for a specific group:
 
 ```python
+from mojo.helpers import settings
+
 settings.set('BOUNCER_CHALLENGE_LOGO_URL', 'https://cdn.client.com/logo.svg', group=group)
 settings.set('BOUNCER_CHALLENGE_BRAND', 'CLIENT BRAND', group=group)
 ```

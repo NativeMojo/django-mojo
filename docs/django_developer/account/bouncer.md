@@ -323,15 +323,23 @@ group = Group.objects.get(uuid='...')
 group.auth_domain = 'auth.clientbrand.com'
 group.save()
 
-# Set group-scoped auth settings
-settings.set('AUTH_APP_TITLE', 'Client Brand', group=group)
-settings.set('AUTH_LOGO_URL', 'https://cdn.client.com/logo.svg', group=group)
-settings.set('AUTH_SUCCESS_REDIRECT', '/client-dashboard/', group=group)
-settings.set('AUTH_ENABLE_GOOGLE', True, group=group)
+# Set the group's auth config (branding + offered methods)
+group.metadata = group.metadata or {}
+group.metadata["auth_config"] = {
+    "theme": {
+        "app_title": "Client Brand",
+        "logo_url": "https://cdn.client.com/logo.svg",
+        "success_redirect": "/client-dashboard/",
+    },
+    "login": {"methods": ["password", "google"]},
+}
+group.save(update_fields=["metadata"])
 ```
 
-All `AUTH_*` settings resolve per-group using the parent-chain fallback:
-group → parent group → global.
+The auth config resolves per group: code defaults ← the global `AUTH_CONFIG`
+setting ← `metadata["auth_config"]` deep-merged down the parent chain
+(root → leaf). The flat `AUTH_*` settings are retired — see the migration
+table in [Auth Config](auth_config.md).
 
 ### Challenge page branding
 
