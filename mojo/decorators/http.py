@@ -85,7 +85,7 @@ def dispatcher(request, *args, **kwargs):
             # anything uncaught here escapes as a bare Django 500.
             if _events_on_errors():
                 rest.MojoModel.class_report_incident(
-                    details=f"Permission denied: Invalid group ID -> '{request.DATA.group}'",
+                    details=f"Permission denied: Invalid group ID -> {repr(request.DATA.group)[:200]}",
                     event_type="rest_error",
                     request=request,
                     level=8,
