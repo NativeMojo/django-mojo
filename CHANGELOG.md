@@ -10,10 +10,16 @@ an anonymous existence oracle), its geofence rules no longer participate in
 decisions, and evidence metrics can't be attributed to it. The
 `requires_perms`/`requires_group_perms` group fallback uses the same
 resolver, so a member-level grant in a deactivated group no longer
-authorizes group-scoped endpoints (fail-closed 403). Admin lifecycle flows
-are unaffected — disable/reactivate go through `/api/group/<pk>` with global
-perms, and `geo/rules`/`geo/simulate`/`geo/check` keep their own deliberate
-inactive-group handling. (ITEM-025)
+authorizes **through those decorators** (fail-closed 403). Admin lifecycle
+flows are unaffected — disable/reactivate go through `/api/group/<pk>` with
+global perms, and `geo/rules`/`geo/simulate`/`geo/check` keep their own
+deliberate inactive-group handling. Two adjacent pre-existing gaps are NOT
+closed here and are tracked as follow-up items: RestMeta **list** endpoints
+resolve member grants via `User.get_groups_with_permission`, which does not
+yet filter `Group.is_active`; and an API key whose own group is deactivated
+keeps working unless the request explicitly names that group
+(`ApiKey.validate_token` sets the key's group as request context without an
+`is_active` check — deactivate the key itself to cut access). (ITEM-025)
 
 **api** — **Sending the same key in both the query string and the JSON body no longer 500s.**
 `request.DATA` previously merged a key that arrived from two sources into a

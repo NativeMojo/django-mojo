@@ -189,7 +189,7 @@ Returns the authenticated user's own record using their `pk`.
 2. Bearer type looked up in handler registry
 3. Default handler: `User.validate_jwt(token)` → returns `(user, error)`
 4. `request.user` set to the resolved user (or anonymous)
-5. `request.group` set if `group` param present and user is a member
+5. `request.group` set if `group` param present, the group is active, and user is a member (an inactive group's id resolves to no group, same as a nonexistent one)
 
 **Malformed headers don't error.** If the `Authorization` value isn't exactly `<scheme>
 <token>`, the middleware treats the request as unauthenticated and continues — it does not
