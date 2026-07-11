@@ -321,9 +321,9 @@ None.
 - Final suite: total 2411, passed 2355, failed 0 — green.
 
 ## Resolution
-- closed:
-- branch:
-- files changed:
+- closed: 2026-07-10
+- branch: main
+- files changed: CHANGELOG.md,docs/django_developer/account/api_keys.md,docs/django_developer/account/bouncer.md,docs/django_developer/account/geofence.md,docs/django_developer/account/group.md,docs/django_developer/core/decorators.md,docs/django_developer/core/middleware.md,docs/django_developer/core/mojo_model.md,docs/django_developer/helpers/settings_reference.md,docs/web_developer/account/admin_portal.md,docs/web_developer/account/custom_auth_models.md,docs/web_developer/account/group.md,docs/web_developer/shortlink/README.md,memory.md,mojo/apps/account/rest/group.py,mojo/middleware/mojo.py,mojo/models/rest.py,planning/.next_id,planning/done/ITEM-028-post-api-group-member-invite-returns-a-raw-500-typ.md,planning/done/ITEM-029-add-explicit-auth-gates-to-the-permission-check-si.md,planning/in_progress/ITEM-030-jsonfield-replace-bypasses-protected-json-perms-ma.md,tests/test_account/test_group_invite_anonymous.py,tests/test_account/test_group_protected_metadata.py
 - tests added: tests/test_account/test_group_protected_metadata.py — 7 tests
   (replace-with-protected 403, replace-clobbering-protected 403,
   merge-with-protected clean 403 for ApiKey, non-dict-overwrite 403,
