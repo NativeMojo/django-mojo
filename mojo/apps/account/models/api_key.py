@@ -90,6 +90,10 @@ class ApiKey(MojoSecrets, MojoModel):
         return f"{self.name}@apikey"
 
     @property
+    def is_superuser(self):
+        return False
+
+    @property
     def org(self):
         return self.group
 
