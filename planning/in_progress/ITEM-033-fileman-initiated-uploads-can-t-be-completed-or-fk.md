@@ -219,6 +219,47 @@ its users/files before creating them, per testing rules):
 Maestro-side verification exists and can be ported: the flow is exercised
 end-to-end over HTTP in maestro `apps/tests/test_boards/4_test_attachments.py`.
 
+### Build baseline (2026-07-10, before first edit)
+Default `--agent` suite (var/test_failures.json): total 2417, passed 2361,
+skipped 56, **failed 0**. All-green baseline → any failure after this change is
+mine to fix. (Pre-existing uncommitted change in tree: `api_key.py` adds an
+`is_superuser` property — unrelated to ITEM-033, left untouched, not staged.)
+
+### Build discovery — the FK premise in ## Plan was wrong (corrected in build)
+The plan assumed the generic FK view-gate (`on_rest_save_related_field`) honors
+the owner token for `fileman.File` FK attach. **It does not.** Every File FK
+attach (avatar, note.media, any model) routes through `File.on_rest_related_save`
+(`file.py:817`), which the caller dispatches to at `rest.py:1475` **before** the
+scalar-pk VIEW_PERMS gate — and that method's int branch (`file.py:856-859`) did
+`File.objects.get(id=...)` + `setattr` with **no permission check at all**.
+Empirically proven by the new test pre-fix: owner-attaches-own PASSED (so
+acceptance #2 already worked — the "silent drop" premise was false) and
+non-owner-attaches-foreign FAILED (a plain member attached another user's File by
+id — cross-user/cross-tenant). So the owner token in `VIEW_PERMS` is **inert** on
+the File FK-attach path; it only fixes completion (#1) + list scoping.
+
+Owner ruling (build-time, 2026-07-10): **fix the ungated attach in-scope** (not a
+separate item). Second change added: `on_rest_save_related_field` now runs the
+same VIEW_PERMS gate on the `on_rest_related_save` branch when the value is an
+integer pk (an "attach existing"), honoring `NO_FK_VIEW_CHECK_FIELDS`; string /
+base64 / data-URL payloads are an inline CREATE the caller owns and skip the gate.
+This is what makes acceptance #3 hold, and the File owner token (#1's change) is
+exactly what makes the gate PASS for the file's own uploader. Fixes the hole for
+every model with a custom `on_rest_related_save` (only File today).
+
+Note: maestro's `BoardItemNote.NO_FK_VIEW_CHECK_FIELDS = ["media"]` workaround was
+inert against the *old* code (the exemption is read in the scalar-pk branch, which
+File FKs never reached); with this fix it now genuinely exempts `media`, so their
+own own-upload check keeps enforcing and nothing breaks. They can retire the
+workaround if they want the framework gate instead.
+
+### Post-implementation full suite (2026-07-10)
+Default `--agent` suite: total 2422 (+5 new fileman tests), all green. The lone
+transient failure — `test_assistant.6_test_docs_tools::404_error_no_url_leak` —
+is a flaky external-network test (fetches `raw.githubusercontent.com`); it PASSED
+on immediate re-run and touches no code path this change modifies. Zero
+regressions vs. baseline.
+
 ## Resolution
 - closed: YYYY-MM-DD
 - branch:

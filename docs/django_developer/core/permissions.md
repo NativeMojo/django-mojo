@@ -260,7 +260,7 @@ Use these when you need read-only access or scoped access within a domain:
 | Model | VIEW_PERMS | SAVE_PERMS | Notes |
 |-------|-----------|-----------|-------|
 | FileManager | view_fileman, manage_files, **files** | manage_files, **files** | |
-| File | view_fileman, manage_files, **files** | manage_files, **files** | |
+| File | view_fileman, manage_files, **files**, **owner** | manage_files, **files**, **owner** | `owner` = the initiating uploader (`OWNER_FIELD=user`); `DELETE_PERMS = manage_files, files, owner`. Owner may view/complete/attach/delete own file; list auto-scoped to own rows |
 | FileRendition | view_fileman, manage_files, **files** | manage_files, **files** | |
 | VaultFile | view_vault, manage_vault, **files**, owner | manage_vault, **files**, owner | |
 | VaultData | view_vault, manage_vault, **files**, owner | manage_vault, **files**, owner | |
@@ -305,6 +305,9 @@ GeoLocatedIP now accepts `view_security`/`manage_security` in addition to `manag
 ### 3. ~~File models missing explicit SAVE_PERMS~~ (Fixed)
 
 FileManager, File, and FileRendition now have `SAVE_PERMS = ["manage_files"]`.
+File additionally carries the `"owner"` token in `VIEW_PERMS`/`SAVE_PERMS`/
+`DELETE_PERMS` (ITEM-033) so the member who initiated an upload can complete and
+manage their own file without `manage_files`/`files`.
 
 ## Known Issues
 

@@ -308,6 +308,8 @@ The event carries these metadata fields: `field_name`, `related_model`, `related
 
 This prevents cross-model privilege escalation: a user with SAVE_PERMS on model A but no view access to model B cannot attach B records to A. The same gate has always applied when the value is a dict (which triggers a cascading save and additionally requires SAVE_PERMS on the target).
 
+**Models with a custom `on_rest_related_save`** (e.g. `fileman.File`) are gated the same way: when the assigned value is an **integer pk** (an "attach existing"), the VIEW_PERMS check runs on the target *before* `on_rest_related_save` is dispatched, honoring `NO_FK_VIEW_CHECK_FIELDS` on the parent. A **string / base64 / data-URL** value is an inline *create* (a new record the caller owns), so it skips the gate. Before ITEM-033 these models bypassed the check entirely — any authenticated caller could attach any File by id (cross-user/cross-tenant).
+
 Cases that do **not** require VIEW_PERMS on the target:
 
 | Case | Reason |
@@ -315,6 +317,8 @@ Cases that do **not** require VIEW_PERMS on the target:
 | Self-reference (`a.parent = a.pk`) | Caller already authorized for self |
 | Clear (`group=0` / `None` / `""`) | No target to view |
 | Related model is non-MojoModel (no `rest_check_permission`) | Framework only gates models that opt in |
+| Inline create via `on_rest_related_save` (base64 / data-URL string) | New record the caller owns — a create, not an attach |
+| Field listed in the parent's `NO_FK_VIEW_CHECK_FIELDS` | Model opts the field out (guarded elsewhere) |
 
 ## Batch Save Permissions
 

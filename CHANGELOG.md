@@ -1,5 +1,31 @@
 ## v1.2.45 - July 10, 2026
 
+**bug/security** — **A fileman upload's initiator (owner) can now complete and manage their own File; File FK-attach is no longer ungated.**
+`POST /api/fileman/upload/initiate` is auth-only, so any member can start an
+upload (the File is stamped `user=request.user`), but `File.RestMeta` gated
+completion/save on `SAVE_PERMS = ["manage_files", "files"]` — so a plain member
+who initiated an upload got `403 group_member_permission_denied` on the
+documented `mark_as_completed` step and could never finalize it (bytes landed,
+File stuck `uploading`, renditions never built; hit live on maestromojo.com). The
+`"owner"` token now rides `File.RestMeta.VIEW_PERMS`/`SAVE_PERMS`/`DELETE_PERMS`
+(`OWNER_FIELD=user`), so the initiating uploader may view, complete, FK-attach,
+and delete **their own** File without `manage_files`/`files`; a permissionless
+owner's list auto-scopes to their own rows; non-owners without those perms stay
+fully denied.
+
+Fixing this surfaced a second, broader hole: **every File FK attach**
+(`avatar`, `note.media`, any model) routes through `File.on_rest_related_save`,
+which the FK handler dispatches to **before** the scalar-pk VIEW_PERMS gate — and
+its integer-pk branch attached `File.objects.get(id=...)` with **no permission
+check at all**, letting any authenticated caller attach any File by id
+(cross-user/cross-tenant). `on_rest_save_related_field` now runs the same
+VIEW_PERMS gate on the `on_rest_related_save` branch when the value is an integer
+pk (an "attach existing"), honoring the parent's `NO_FK_VIEW_CHECK_FIELDS`;
+string / base64 / data-URL values are an inline *create* the caller owns and skip
+the gate. Denial is the existing drop-with-audit (`fk_attach_denied` incident,
+save still 200). The owner token above is what lets the file's own uploader clear
+this gate. (ITEM-033)
+
 **bug/security** — **REST batch save now enforces per-row instance permissions.**
 `on_rest_handle_batch` gated once at class level (no instance) and then wrote
 every row via `update_from_dict`/`create_from_dict` with no further check —

@@ -252,8 +252,9 @@ class File(models.Model, MojoModel):
         CAN_CREATE = True
         CAN_DELETE = True
         DEFAULT_SORT = "-created"
-        VIEW_PERMS = ["view_fileman", "manage_files", "files"]
-        SAVE_PERMS = ["manage_files", "files"]
+        VIEW_PERMS = ["view_fileman", "manage_files", "files", "owner"]
+        SAVE_PERMS = ["manage_files", "files", "owner"]
+        DELETE_PERMS = ["manage_files", "files", "owner"]
         SEARCH_FIELDS = ["filename", "content_type"]
         POST_SAVE_ACTIONS = ["action", "regenerate_renditions", "share"]
         SEARCH_TERMS = [

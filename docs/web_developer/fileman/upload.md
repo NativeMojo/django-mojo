@@ -82,6 +82,8 @@ curl -X POST \
 
 The file's `upload_status` becomes `completed` immediately. Renditions (thumbnails, previews, etc.) are generated **asynchronously** in the background — the `renditions` map may be empty `{}` right after this call. Re-fetch the file after a short delay if you need renditions.
 
+**Who may call this:** the user who **initiated** the upload (files are stamped to the calling user on `upload/initiate`), or any user holding `manage_files` / `files` (or a superuser). A member who did not initiate the upload and lacks those permissions gets `403 group_member_permission_denied`. This means the same member who initiated an upload can always finalize it — no elevated permission required.
+
 ### Step 4: Associate with a Model (optional)
 
 If you want to associate the uploaded file with a model instance, set the relevant field to the returned file id after upload completes.
@@ -93,6 +95,8 @@ If you want to associate the uploaded file with a model instance, set the releva
   "avatar": 124
 }
 ```
+
+You may only attach a file you can **see**: one you uploaded (own), or any file if you hold `manage_files` / `files`. Attaching a file id you don't have view access to is silently ignored — the record saves (HTTP 200) but the field stays unchanged. So the normal flow — initiate → upload → complete → attach — works end-to-end for the uploading user with no elevated permissions.
 
 ---
 

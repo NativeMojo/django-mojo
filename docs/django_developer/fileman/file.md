@@ -155,14 +155,17 @@ class Product(models.Model, MojoModel):
     image = models.ForeignKey("fileman.File", null=True, on_delete=models.SET_NULL)
 ```
 
-The framework will automatically handle inline base64 upload when `image` is passed as a data URL in a REST POST.
+The framework will automatically handle inline base64 upload when `image` is passed as a data URL in a REST POST (this creates a **new** File the caller owns). Passing an **integer file id** instead attaches an *existing* File — and is gated: the caller must have `VIEW_PERMS` on that File (own it, hold `manage_files`/`files`, or have group access), or the FK is silently dropped with an `fk_attach_denied` incident. See [FK Assignment During Save](../rest/permissions.md#fk-assignment-during-save).
 
 ## RestMeta
 
 ```python
 class RestMeta:
-    VIEW_PERMS = ["view_fileman", "manage_files"]
+    CAN_CREATE = True
     CAN_DELETE = True
+    VIEW_PERMS = ["view_fileman", "manage_files", "files", "owner"]
+    SAVE_PERMS = ["manage_files", "files", "owner"]
+    DELETE_PERMS = ["manage_files", "files", "owner"]
     GRAPHS = {
         "basic": {"fields": ["id", "filename", "content_type", "category"], "extra": ["url", "thumbnail"]},
         "default": {"extra": ["url", "renditions"]},
@@ -170,6 +173,14 @@ class RestMeta:
         "list": {"extra": ["url", "renditions"], "graphs": {"group": "basic", "user": "basic"}},
     }
 ```
+
+The `"owner"` token (`OWNER_FIELD` defaults to `user`, which `upload/initiate`
+stamps to the calling user) lets the member who **initiated** an upload view,
+complete (`mark_as_completed`), FK-attach, and delete **their own** File without
+holding `manage_files`/`files`. A permissionless owner's `GET /api/fileman/file`
+list is auto-scoped to their own rows; they never see other users' files. Members
+who own neither the file nor `manage_files`/`files` remain fully denied
+(fail-closed).
 
 ## Metadata
 
