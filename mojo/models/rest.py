@@ -1509,10 +1509,11 @@ class MojoModel:
                 incoming_prot = field_value.get("protected")
                 existing_prot = existing_value.get("protected")
                 if isinstance(incoming_prot, (dict, type(None))) and isinstance(existing_prot, (dict, type(None))):
+                    # a replace drops unsent keys; merging an explicit null wipes the whole subtree
+                    wipes_existing = should_replace or ("protected" in field_value and incoming_prot is None)
                     incoming_prot = incoming_prot or {}
                     existing_prot = existing_prot or {}
-                    # merge: only keys the caller sent can change; replace: removed keys change too
-                    keys = set(incoming_prot) | (set(existing_prot) if should_replace else set())
+                    keys = set(incoming_prot) | (set(existing_prot) if wipes_existing else set())
                     changed_keys = sorted(k for k in keys if incoming_prot.get(k) != existing_prot.get(k))
                 else:
                     changed_keys = ["*"]

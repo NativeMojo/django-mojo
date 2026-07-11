@@ -11,7 +11,8 @@ group-confined ApiKey holding only `manage_group` could rewrite
 on every write path and in both directions — an incoming `"protected"` key, or a
 replace/overwrite that would clobber an existing `protected` subtree, requires
 `PROTECTED_JSON_PERMS` (superuser fallback unchanged) and is always audited; on
-a replace the audit's changed-keys include removed keys. Also fixed: the guard
+a replace — or a merge wiping the subtree with an explicit `"protected": null`
+— the audit's changed-keys include the removed keys. Also fixed: the guard
 read `user.is_superuser` directly, which ApiKey callers don't define, so even
 the previously-guarded merge path returned a 500 instead of a clean 403 for
 keys. (ITEM-030)

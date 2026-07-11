@@ -305,12 +305,27 @@ None.
 - Regression tests confirmed failing pre-fix exactly as predicted: replace,
   clobber, non-dict = 200 (bypass); merge = 500; privileged replace = no
   audit row. All six pass post-fix.
+- Post-build security review (agent) found one audit-fidelity regression in
+  the first fix: a privileged MERGE of `{"protected": null}` (which wipes the
+  subtree — merge_dicts drops null-valued keys) audited an EMPTY changed-keys
+  list, where pre-fix code logged `["*"]`. Fixed: an explicit null on merge
+  now unions in the existing keys like a replace does; 7th regression test
+  asserts the audit names the removed keys. Permission gate itself was
+  confirmed sound (no remaining bypass vectors; getattr is_superuser cannot
+  widen access; no fail-open on None/anonymous request).
+- Post-build docs sweep corrected a pre-existing geofence.md claim: nested
+  `{"geofence": {..., "__replace": true}}` was documented but objict's
+  merge_dicts has no nested-__replace handling (the key would persist
+  literally). Doc now shows merge + null deletion, and the
+  PROTECTED_JSON_PERMS interaction for top-level replaces.
+- Final suite: total 2411, passed 2355, failed 0 — green.
 
 ## Resolution
 - closed:
 - branch:
 - files changed:
-- tests added: tests/test_account/test_group_protected_metadata.py — 6 tests
+- tests added: tests/test_account/test_group_protected_metadata.py — 7 tests
   (replace-with-protected 403, replace-clobbering-protected 403,
   merge-with-protected clean 403 for ApiKey, non-dict-overwrite 403,
-  unprotected replace still 200, privileged replace 200 + audit row)
+  unprotected replace still 200, privileged replace 200 + audit row,
+  privileged null-wipe merge audits removed key names)

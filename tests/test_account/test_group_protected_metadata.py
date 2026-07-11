@@ -193,3 +193,42 @@ def test_privileged_replace_allowed_and_audited(opts):
             "no meta:protected_changed audit log was written for the replace"
     finally:
         opts.client.logout()
+
+
+@th.django_unit_test("ITEM-030: privileged merge of protected=null wipes the subtree AND the audit names the removed keys")
+def test_privileged_null_wipe_audit_names_keys(opts):
+    """Merging {"protected": null} removes the whole subtree (merge_dicts drops
+    null-valued keys). The audit row must name what was removed — not log an
+    empty changed-keys list."""
+    from mojo.apps.account.models import Group
+    from mojo.apps.logit.models import Log
+
+    grp = Group.objects.get(pk=opts.grp_id)
+    assert isinstance(grp.metadata.get("protected"), dict) and grp.metadata["protected"], \
+        f"test precondition: group must still carry a protected subtree, got {grp.metadata!r}"
+    removed_keys = sorted(grp.metadata["protected"].keys())
+    last_audit_id = Log.objects.filter(
+        kind="meta:protected_changed",
+        model_name="account.Group",
+        model_id=opts.grp_id).order_by("-id").values_list("id", flat=True).first() or 0
+
+    _key_auth(opts, opts.priv_token)
+    try:
+        resp = opts.client.post(f"/api/group/{opts.grp_id}", {"metadata": {"protected": None}})
+        assert resp.status_code == 200, \
+            f"admin_verify key must be able to wipe protected via null merge, got {resp.status_code}: {opts.client.last_response.body}"
+        grp.refresh_from_db()
+        assert "protected" not in (grp.metadata or {}), \
+            f"null merge did not remove the protected subtree: {grp.metadata!r}"
+        audit = Log.objects.filter(
+            kind="meta:protected_changed",
+            model_name="account.Group",
+            model_id=opts.grp_id,
+            id__gt=last_audit_id).order_by("id").last()
+        assert audit is not None, \
+            "no meta:protected_changed audit log was written for the null wipe"
+        for key in removed_keys:
+            assert key in (audit.log or ""), \
+                f"audit for a protected wipe must name removed key {key!r}, got: {audit.log!r}"
+    finally:
+        opts.client.logout()
