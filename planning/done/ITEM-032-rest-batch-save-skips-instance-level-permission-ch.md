@@ -294,7 +294,8 @@ None — drop-with-audit approved by user 2026-07-10.
   opt-in modules skipped). All green — no pre-existing failures.
 
 ## Resolution
-- closed: YYYY-MM-DD
-- branch:
-- files changed:
-- tests added:
+- closed: 2026-07-10
+- branch: main
+- files changed: CHANGELOG.md,docs/django_developer/account/api_keys.md,docs/django_developer/account/bouncer.md,docs/django_developer/account/geofence.md,docs/django_developer/account/group.md,docs/django_developer/core/decorators.md,docs/django_developer/core/middleware.md,docs/django_developer/core/mojo_model.md,docs/django_developer/helpers/settings.md,docs/django_developer/helpers/settings_reference.md,docs/django_developer/rest/permissions.md,docs/django_developer/testit/Overview.md,docs/web_developer/account/admin_portal.md,docs/web_developer/account/custom_auth_models.md,docs/web_developer/account/group.md,docs/web_developer/shortlink/README.md,memory.md,mojo/apps/account/rest/group.py,mojo/apps/account/services/geofence/engine.py,mojo/helpers/test_mode.py,mojo/middleware/mojo.py,mojo/models/rest.py,planning/.next_id,planning/done/ITEM-028-post-api-group-member-invite-returns-a-raw-500-typ.md,planning/done/ITEM-029-add-explicit-auth-gates-to-the-permission-check-si.md,planning/done/ITEM-030-jsonfield-replace-bypasses-protected-json-perms-ma.md,planning/done/ITEM-031-geofence-test-override-mojo-test-mode-are-db-redis.md,planning/in_progress/ITEM-032-rest-batch-save-skips-instance-level-permission-ch.md,planning/inbox/batch-save-skips-instance-permission-checks.md,planning/inbox/phone-verify-dev-bypass-code-db-settable.md,tests/test_account/test_group_invite_anonymous.py,tests/test_account/test_group_protected_metadata.py,tests/test_geofence/test_override_file_only.py,tests/test_models/batch_row_permissions.py
+- tests added: tests/test_models/batch_row_permissions.py (3 — cross-tenant
+  update denied, mixed batch partial, create-after-denied with no tenant leak)

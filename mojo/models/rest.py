@@ -679,6 +679,11 @@ class MojoModel:
             except Exception as e:
                 errors.append({"index": idx, "error": str(e)})
 
+        # The last row's check may have left its tenant bound on the request;
+        # downstream incident reporting auto-stamps request.group, so restore
+        # the caller's group before anything after the loop can observe it.
+        request.group = original_group
+
         # Serialize results using the same serializer manager used elsewhere
         graph = request.DATA.get("graph", "list")
         manager = get_serializer_manager()

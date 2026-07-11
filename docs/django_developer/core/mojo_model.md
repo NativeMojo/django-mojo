@@ -367,6 +367,7 @@ The REST dispatcher in `mojo/decorators/http.py` is the **single emission site**
 | `group_member_permission_denied` | 403 | Group-scoped perm check failed |
 | `feature_disabled` | 403 | `CAN_UPDATE/CAN_DELETE/CAN_CREATE/CAN_BATCH = False` |
 | `fk_attach_denied` | n/a | FK save silently skipped — field unchanged, no HTTP error |
+| `batch_row_denied` | n/a | Batch row dropped by per-row instance permission check — no HTTP error (see [Batch Operations](#batch-operations)) |
 
 **Recovery paths emit no events.** When a list endpoint returns HTTP 200 with a scoped or empty result (Group list fallback, owner/group-filtered list, `MOJO_REST_LIST_PERM_DENY=False`), no denial event is recorded — the request succeeded.
 

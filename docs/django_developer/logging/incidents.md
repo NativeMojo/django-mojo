@@ -356,10 +356,13 @@ Every permission denial issued by `MojoModel`'s permission system is automatical
 | `group_member_permission_denied` | 403 | Group-scoped perm check failed |
 | `feature_disabled` | 403 | `CAN_UPDATE/CAN_DELETE/CAN_CREATE/CAN_BATCH = False` on the model |
 | `fk_attach_denied` | n/a | FK field silently skipped during save — no HTTP error, parent save still returns 200 |
+| `batch_row_denied` | n/a | Batch row dropped by the per-row instance permission check — no HTTP error, batch response still returns 200 |
 
 **Recovery paths emit no events.** When a list endpoint returns HTTP 200 with a scoped or empty result (Group list fallback, owner/group-filtered list, `MOJO_REST_LIST_PERM_DENY=False` branch), no denial event is recorded.
 
 **`fk_attach_denied` metadata fields:** `field_name`, `related_model`, `related_id`, `branch`. These can be matched by Rules to alert when users attempt to attach records they cannot view.
+
+**`batch_row_denied` metadata fields:** `branch` (`batch_update`/`batch_create`), `index`, `instance_id`, `model_name`, `request_path`. Emitted per dropped row from `on_rest_handle_batch` — see [Batch Save Permissions](../rest/permissions.md#batch-save-permissions).
 
 No extra code required — the dispatcher handles this automatically for all framework 401/403 paths.
 

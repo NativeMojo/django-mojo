@@ -114,6 +114,16 @@ To clear a foreign key:
 {"author": null}
 ```
 
+## Batch Create/Update
+
+Some list endpoints accept a `batched` array to create/update several rows in one POST — check the endpoint's docs for whether it supports this. Each item without an `id`/`pk` is created; each item with one is updated:
+
+```json
+{"batched": [{"title": "New"}, {"id": 5, "title": "Updated"}]}
+```
+
+The response wraps successes under `data.items` (`data.count` = number saved) and any per-row failures — including a row you don't have permission to write — under `data.errors`, e.g. `{"index": 1, "error": "permission denied"}`. A denied or invalid row is skipped, not fatal to the rest of the batch. See the framework reference for the full permission model: [Batch Save Permissions](../../django_developer/rest/permissions.md#batch-save-permissions).
+
 ## Owner Assignment on Create
 
 When creating a record (POST without a pk), the framework automatically stamps the `user` field with the authenticated caller if the body omits it. If you include `user` in the body, that value is used instead — provided you have view access to the target user account. This lets callers with sufficient permissions create records on behalf of another user:
