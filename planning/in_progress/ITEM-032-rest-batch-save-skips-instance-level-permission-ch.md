@@ -289,6 +289,9 @@ None — drop-with-audit approved by user 2026-07-10.
 ## Notes
 - Do NOT enable `CAN_BATCH` on any existing group-scoped model until this is
   fixed — that would arm the latent gap.
+- Baseline (2026-07-10, pre-edit, `bin/run_tests --agent`): status=passed,
+  total=2414, passed=2358, failed=0, skipped=56 (+ test_incident/test_security
+  opt-in modules skipped). All green — no pre-existing failures.
 
 ## Resolution
 - closed: YYYY-MM-DD

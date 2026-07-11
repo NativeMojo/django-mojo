@@ -623,6 +623,13 @@ class MojoModel:
           - If contains 'id' or 'pk', attempts to update that instance via update_from_dict
           - Otherwise creates a new instance via create_from_dict
 
+        Every row is re-checked per instance with the same permission keys as
+        the single-instance paths (owner match, group/GROUP_FIELD tenant
+        binding, check_view/edit_permission hooks). A denied row is dropped
+        with a per-row error entry and a `batch_row_denied` incident — the
+        rest of the batch proceeds (rows are written sequentially with no
+        transaction, so failing the whole batch could not undo earlier rows).
+
         Returns a JSON response with serialized results and optional errors.
         """
         if not cls.get_rest_meta_prop("CAN_BATCH", False):
@@ -641,18 +648,32 @@ class MojoModel:
 
         results = []
         errors = []
+        original_group = getattr(request, "group", None)
         for idx, item in enumerate(batched):
+            # Reset the tenant binding a previous row's permission check may
+            # have left on the request (_evaluate_permission sets request.group
+            # to the row's owning group as a side effect).
+            request.group = original_group
             try:
                 if not isinstance(item, dict):
                     raise ValueError("Batch item must be an object")
                 pk = item.get("id") or item.get("pk")
-                if pk:
-                    instance = cls.objects.filter(pk=pk).first()
-                    if instance:
-                        instance.update_from_dict(item)
-                    else:
-                        instance = cls.create_from_dict(item, request=request)
+                instance = cls.objects.filter(pk=pk).first() if pk else None
+                if instance is not None:
+                    # Same keys + instance as on_rest_handle_save. Boolean
+                    # check (not _or_raise): a raise here would be swallowed
+                    # by the except below and lose the audit event.
+                    if not cls.rest_check_permission(request, ["SAVE_PERMS", "VIEW_PERMS"], instance):
+                        cls._report_batch_row_denied(request, instance, idx, branch="batch_update")
+                        errors.append({"index": idx, "error": "permission denied"})
+                        continue
+                    instance.update_from_dict(item)
                 else:
+                    # Same keys as on_rest_handle_create.
+                    if not cls.rest_check_permission(request, ["CREATE_PERMS", "SAVE_PERMS", "VIEW_PERMS"]):
+                        cls._report_batch_row_denied(request, None, idx, branch="batch_create")
+                        errors.append({"index": idx, "error": "permission denied"})
+                        continue
                     instance = cls.create_from_dict(item, request=request)
                 results.append(instance)
             except Exception as e:
@@ -1382,6 +1403,31 @@ class MojoModel:
         if resp is None:
             return self.on_rest_get(request)
         return JsonResponse(resp)
+
+    @classmethod
+    def _report_batch_row_denied(cls, request, instance, index, branch):
+        """
+        Emit a `batch_row_denied` incident when a batch row is dropped because
+        the requester fails the per-row permission check in
+        on_rest_handle_batch. Mirrors _report_fk_attach_denied: the check
+        itself is the event-free boolean rest_check_permission, so the audit
+        event is emitted here.
+        """
+        try:
+            cls.class_report_incident_for_user(
+                details=f"Batch row denied: index {index} on {cls.__name__}",
+                event_type="batch_row_denied",
+                level=2,
+                request=request,
+                branch=branch,
+                index=index,
+                instance_id=getattr(instance, "pk", None),
+                model_name=cls.__name__,
+                request_path=getattr(request, "path", None),
+            )
+        except Exception:
+            # Audit reporting must never block a save flow.
+            pass
 
     def _report_fk_attach_denied(self, field, related_instance, request, branch):
         """

@@ -1,5 +1,23 @@
 ## v1.2.45 - July 10, 2026
 
+**bug/security** — **REST batch save now enforces per-row instance permissions.**
+`on_rest_handle_batch` gated once at class level (no instance) and then wrote
+every row via `update_from_dict`/`create_from_dict` with no further check —
+skipping the owner match, group/`GROUP_FIELD` tenant binding, and
+`check_view/edit_permission` hooks that the single-instance save path runs per
+row. A caller who cleared the class-level `SAVE_PERMS` gate for one group could
+update rows belonging to other tenants in the same batch. Latent, not live: no
+shipped model sets `CAN_BATCH = True`, but the gap armed the moment any
+group-scoped model (here or downstream) enabled batch. Update rows are now
+re-checked with `["SAVE_PERMS", "VIEW_PERMS"]` + the instance and create rows
+with `["CREATE_PERMS", "SAVE_PERMS", "VIEW_PERMS"]` (adding `CREATE_PERMS`
+parity batch previously ignored); a denied row is dropped with a per-row
+`errors` entry and a `batch_row_denied` incident (drop-with-audit, mirroring
+the FK-attach gate — rows are written sequentially with no transaction, so
+failing the whole batch could not undo earlier rows). `request.group` is
+restored between rows so one row's tenant binding cannot leak into the next
+row's check or save. (ITEM-032)
+
 **bug/security** — **`GEOFENCE_TEST_OVERRIDE` and `MOJO_TEST_MODE` are now read conf-file-only.**
 Both keys were read through the DB/Redis-aware `settings.get(...)`, so a single
 global `Setting` row (writable via the generic `/api/settings` REST with

@@ -16,6 +16,9 @@ on_rest_request(request, pk)
   └─ no pk:
        GET    → on_rest_handle_list(request)             → checks VIEW_PERMS (system-level first, then owner/group fallback)
        POST   → on_rest_handle_create(request)           → checks SAVE_PERMS → VIEW_PERMS
+       POST with `batched` list (CAN_BATCH=True)
+              → on_rest_handle_batch(request)            → class-level SAVE_PERMS → VIEW_PERMS gate, then a per-row
+                                                           instance check (see "Batch Save Permissions" below)
 ```
 
 ## RestMeta Properties
@@ -312,3 +315,29 @@ Cases that do **not** require VIEW_PERMS on the target:
 | Self-reference (`a.parent = a.pk`) | Caller already authorized for self |
 | Clear (`group=0` / `None` / `""`) | No target to view |
 | Related model is non-MojoModel (no `rest_check_permission`) | Framework only gates models that opt in |
+
+## Batch Save Permissions
+
+`on_rest_handle_batch` (`CAN_BATCH = True` + a `batched` list in the payload)
+gates once at class level with `["SAVE_PERMS", "VIEW_PERMS"]` and no instance,
+then re-checks **every row individually** with the same evaluation as the
+single-instance paths:
+
+- **Update rows** (`id`/`pk` resolves to an instance): `rest_check_permission(request, ["SAVE_PERMS", "VIEW_PERMS"], instance)` — the owner match, group/`GROUP_FIELD` tenant binding, and `check_view/edit_permission` hooks all apply per row, exactly as in `on_rest_handle_save`.
+- **Create rows** (no `id`/`pk`, or the pk doesn't resolve): `rest_check_permission(request, ["CREATE_PERMS", "SAVE_PERMS", "VIEW_PERMS"])`, exactly as in `on_rest_handle_create`.
+
+Denial is drop-with-audit, mirroring the FK-attach gate: the row is skipped,
+the response's `errors` list gains `{"index": N, "error": "permission denied"}`,
+and a `batch_row_denied` incident is emitted (level 2, metadata: `branch`
+(`batch_update`/`batch_create`), `index`, `instance_id`, `model_name`,
+`request_path`). It is not a 403 — the batch response is still 200 and the
+remaining rows proceed. Rows are written sequentially with no transaction, so
+failing the whole batch could not undo rows already written.
+
+`request.group` is restored between rows: the per-instance check binds
+`request.group` to each row's owning group (the row's true tenant), and the
+handler resets it to the caller's original group before every row so one row's
+tenant binding cannot leak into the next row's check or save.
+
+Without this per-row gate, a caller who cleared the class-level gate for their
+own group could update rows belonging to other tenants in the same batch.

@@ -535,6 +535,17 @@ Enable with `CAN_BATCH = True` in RestMeta. POST to the list endpoint with a `ba
 
 Items with `id`/`pk` are updated; items without are created.
 
+Every row is permission-checked individually, with the same evaluation as the
+single-instance paths: update rows run `["SAVE_PERMS", "VIEW_PERMS"]` against
+the instance (owner match, group/`GROUP_FIELD` tenant binding,
+`check_view/edit_permission` hooks), create rows run `["CREATE_PERMS",
+"SAVE_PERMS", "VIEW_PERMS"]`. A denied row is dropped — it appears in the
+response `errors` list as `{"index": N, "error": "permission denied"}` and
+emits a `batch_row_denied` incident (level 2, branch `batch_update` or
+`batch_create`) — while the rest of the batch proceeds. Rows are written
+sequentially with no transaction, so a denial never rolls back earlier rows;
+`count` reflects successful rows only.
+
 ## Programmatic (Non-HTTP) Usage
 
 ```python
