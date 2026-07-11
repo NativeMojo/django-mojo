@@ -272,7 +272,31 @@ skipped 56. Green baseline — every post-change failure is mine. (`test_inciden
 modules excluded from the default agent suite — not part of the baseline.)
 
 ## Resolution
-- closed: YYYY-MM-DD
-- branch:
-- files changed:
+- closed: 2026-07-11
+- branch: main
+- files changed: CHANGELOG.md,docs/django_developer/account/bouncer.md,docs/django_developer/account/oauth.md,docs/web_developer/account/auth_pages.md,docs/web_developer/account/oauth.md,mojo/apps/account/rest/oauth.py,mojo/apps/account/static/account/mojo-auth.js,planning/.next_id,planning/in_progress/ITEM-034-oauth-login-drops-the-redirect-param-user-lands-on.md,tests/test_oauth/oauth.py,uv.lock
 - tests added:
+  - `tests/test_oauth/oauth.py::test_oauth_callback_preserves_frontend_query` —
+    genuine regression: callback merges code/state into an existing frontend
+    query with `&` (fails pre-fix on the malformed double-`?` URL, redirect lost)
+  - `tests/test_oauth/oauth.py::test_oauth_begin_preserves_query_in_frontend_uri` —
+    guard: a query-carrying redirect_uri passes the allowlist and is stored
+    verbatim as frontend_uri
+  - `tests/test_oauth/oauth.py::test_oauth_callback_strips_smuggled_params` —
+    security: a smuggled `code`/`state` in frontend_uri's query is stripped so the
+    server-set values are authoritative (prevents first-match shadowing that would
+    sabotage a victim's login); the app's own `?redirect=` still survives
+
+### Post-build agent results
+- **test-runner**: full suite green — 2370 passed / 0 failed / 56 skipped (two
+  `test_jobs` scheduled-task tests flaked on an hour-boundary timing assumption,
+  unrelated to this change — passed on re-run; latent flakiness noted for a future
+  item).
+- **docs-updater**: verified both tracks; additionally updated
+  `docs/django_developer/account/bouncer.md` "OAuth round-trip" section, which
+  still described the pre-fix naive-append behavior.
+- **security-review**: flagged a param-shadowing hole newly reachable once the
+  bounce URL became well-formed — fixed in this item (server-side strip of
+  reserved keys in `on_oauth_callback` + regression test above). Remaining INFO:
+  consuming SPAs must validate any `?redirect=` client-side before navigating
+  (pre-existing for all login methods; noted in docs).
