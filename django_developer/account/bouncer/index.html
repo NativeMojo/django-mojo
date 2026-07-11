@@ -4539,10 +4539,13 @@ for a specific group (opt-in only):</p>
 when a group is resolved. Requests with no group always use the default branding.</p>
 <h3 id="oauth-round-trip">OAuth round-trip<a class="headerlink" href="#oauth-round-trip" title="Permanent link">&para;</a></h3>
 <p><code>group_uuid</code> is embedded in the OAuth state so branding survives the
-provider redirect. The callback reconstructs <code>?group_uuid=&lt;uuid&gt;</code> and appends
-it to the frontend redirect URI before handing back to the auth page (using
-<code>group_uuid</code> rather than <code>group</code> so the framework dispatcher accepts the
-next request through the rest of the flow).</p>
+provider redirect. The callback merges <code>code</code>, <code>state</code>, and <code>group_uuid</code> into
+the frontend redirect URI's query with <code>&amp;</code> — not a naive appended <code>?</code> — so any
+query the frontend URI already carries (e.g. <code>?redirect=</code>) is preserved rather
+than clobbered (using <code>group_uuid</code> rather than <code>group</code> so the framework
+dispatcher accepts the next request through the rest of the flow). See
+<a href="../oauth/#per-request-redirect_uri">OAuth § Per-Request redirect_uri</a> for the
+full merge mechanics.</p>
 <h3 id="nginx-setup-for-custom-auth-domains">Nginx setup for custom auth domains<a class="headerlink" href="#nginx-setup-for-custom-auth-domains" title="Permanent link">&para;</a></h3>
 <p>Each white-label domain needs its own nginx server block pointing at the same
 Django backend. Pass the real hostname so the bouncer can resolve the group:</p>

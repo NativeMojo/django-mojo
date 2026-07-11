@@ -4158,11 +4158,26 @@ auth pages render a button for each enabled provider — see
 <a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="n">group</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
 </code></pre></div>
 <p>The group list is retrieved via <code>get_metadata_value()</code>, which traverses the parent chain. Project-wide and group lists are combined at validation time.</p>
+<p>A <code>redirect_uri</code> may carry its own query string (e.g. an app passing
+<code>?redirect=/workspaces/</code> through the login page). The allowlist is a <strong>prefix</strong>
+match, so an appended query does not affect validation. The full URI — query
+included — is stored as <code>frontend_uri</code> and reproduced when the callback bounces
+the browser back: the callback merges its <code>code</code>/<code>state</code> (and any <code>group_uuid</code>)
+into the existing query with <code>&amp;</code> rather than appending a second <code>?</code>. This is what
+lets a <code>?redirect=</code> target survive the OAuth round-trip. (The bundled
+<code>mojo-auth.js</code> cooperates: when no explicit callback URL is given, its default
+return URL keeps the current page's query string — minus any stale <code>code</code>/<code>state</code>
+— and strips only the hash.)</p>
 <h3 id="security">Security<a class="headerlink" href="#security" title="Permanent link">&para;</a></h3>
 <ul>
 <li>The validated <code>redirect_uri</code> is stored in the Redis state token (single-use, TTL-bound).</li>
 <li>The <code>complete</code> endpoint retrieves it from the state — the client never re-sends it.</li>
 <li>This prevents an attacker from substituting a different <code>redirect_uri</code> in the callback.</li>
+<li>Because the allowlist is a <strong>prefix</strong> match, the query part of a <code>frontend_uri</code>
+  is not validated. So the callback strips any <code>code</code>/<code>state</code>/<code>group_uuid</code> the
+  caller smuggled into that query before appending the server's own — otherwise a
+  duplicate <code>?code=</code> placed first would shadow the real value (<code>URLSearchParams
+  .get()</code> returns the first match) and sabotage the victim's login.</li>
 </ul>
 <hr />
 <h2 id="oauthconnection-model">OAuthConnection Model<a class="headerlink" href="#oauthconnection-model" title="Permanent link">&para;</a></h2>
