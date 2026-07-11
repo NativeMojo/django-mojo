@@ -15,7 +15,8 @@
 
 ## Permissions
 
-- `view_fileman` or `manage_files`
+- `view_fileman` or `manage_files` — full access to list, view, update, and delete any file
+- **Owner** — the user who initiated the upload (`upload/initiate` stamps the file to the calling user) may view, update, and delete their **own** file without either permission above. A permissionless caller's `GET /api/fileman/file` list is auto-scoped to their own files. See [Upload — Step 3](upload.md#step-3-confirm-upload) and [Step 4](upload.md#step-4-associate-with-a-model-optional).
 
 ## URLs are short URLs by default
 

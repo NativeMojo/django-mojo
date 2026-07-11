@@ -260,8 +260,46 @@ is a flaky external-network test (fetches `raw.githubusercontent.com`); it PASSE
 on immediate re-run and touches no code path this change modifies. Zero
 regressions vs. baseline.
 
+### Post-build agents (2026-07-10)
+- **test-runner** — green: 2422 total / 2366 passed / 0 failed / 56 skipped;
+  `test_fileman` 95/95 incl. all 5 new tests. Two transient `test_geofence`
+  failures on its first run were investigated and ruled out as the pre-existing
+  order-dependent `GEOFENCE_SYSTEM_RULES` race (memory ITEM-017), not ITEM-033
+  (which touches nothing geofence/Setting); re-ran geofence isolated 106/106 and
+  the full suite again green.
+- **docs-updater** — found + fixed 3 real gaps this change made stale:
+  `docs/django_developer/fileman/README.md` (owner token + DELETE_PERMS),
+  `docs/web_developer/fileman/files.md` (the REST reference — owner-scoped access,
+  the most consequential), `docs/django_developer/fileman/shortlinks.md` (share
+  action now owner-gated for File). Verified each. Flagged one pre-existing
+  cross-cutting gap (`web_developer/core/request_response.md` generic FK section)
+  as out-of-scope — not introduced by this diff.
+- **security-review** — one WARNING (fixed, commit 3e0c73e): the FK gate ran only
+  for `field_value > 0`, but the guarded branch is `isinstance(int)` with no lower
+  bound, so id 0 / `False` (bool→pk 0) skipped the gate yet still reached the
+  ungated attach — a File at pk ≤ 0 (fixtures/imports only) could be attached by
+  any caller. Gate now keys on `isinstance(int)` alone, matching the branch
+  exactly; regression `test_nonpositive_id_attach_is_gated` added. One INFO (raw
+  `.get()` 500s on a bad id) left as-is — mirrors the pre-existing scalar-pk
+  sibling branch, leaks nothing. Verified: owner token opens no unintended
+  surface (list auto-filter can only return own rows; ApiKey never matches owner —
+  no `is_request_user`; SYSTEM_REQUEST trusted-internal only); no other File FK
+  path ungated (File is the only `on_rest_related_save` impl; gate is generic).
+
 ## Resolution
-- closed: YYYY-MM-DD
-- branch:
-- files changed:
-- tests added:
+- closed: 2026-07-10
+- branch: main
+- files changed: mojo/apps/fileman/models/file.py, mojo/models/rest.py,
+  tests/test_fileman/10_test_owner_upload_complete.py, CHANGELOG.md,
+  docs/django_developer/fileman/file.md, docs/django_developer/fileman/README.md,
+  docs/django_developer/fileman/shortlinks.md,
+  docs/django_developer/core/permissions.md,
+  docs/django_developer/rest/permissions.md,
+  docs/web_developer/fileman/upload.md, docs/web_developer/fileman/files.md
+  (commits ba02d4a + 3e0c73e; the separate ApiKey.is_superuser fix 5639d6f is
+  its own commit, not part of this item)
+- tests added: `tests/test_fileman/10_test_owner_upload_complete.py` (6 tests) —
+  owner completes own upload (200, regression), non-owner completes (403), owner
+  FK-attaches own File (regression), foreign FK-attach dropped, non-positive-id
+  (0/False) attach gated (security-review regression), owner list auto-scoped to
+  own rows.

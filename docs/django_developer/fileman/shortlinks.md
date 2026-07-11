@@ -71,7 +71,7 @@ Response:
 }
 ```
 
-Permissions: the share action is a POST_SAVE_ACTION on `File` / `FileRendition`, so it is gated by `SAVE_PERMS` (`manage_files`, `files`).
+Permissions: the share action is a POST_SAVE_ACTION, so it is gated by the instance's `SAVE_PERMS` like any other save. For `File` that's `manage_files`, `files`, or `owner` — the file's own uploader may mint a share link for their own file without `manage_files`/`files`. `FileRendition` has no owner token, so sharing a rendition requires `manage_files`/`files`.
 
 ### Clamps
 - `expire_days` is clamped to `File.MAX_SHARE_EXPIRE_DAYS = 3650`. Values above that are silently capped.

@@ -97,5 +97,6 @@ See `mojo/apps/fileman/backends/` — each backend inherits `BaseStorageBackend`
 ## Permissions
 
 - `view_fileman`, `manage_files`, `files` — domain category permission model
-- `manage_files` appears in both `VIEW_PERMS` and `SAVE_PERMS` on `File`
-- `FileRendition` follows the same permission set (read-only)
+- `manage_files` appears in `VIEW_PERMS`, `SAVE_PERMS`, and `DELETE_PERMS` on `File`
+- `File` also grants the `owner` token (`OWNER_FIELD=user`, stamped by `upload/initiate`) — the initiating uploader may view, complete, FK-attach, and delete their own file without `manage_files`/`files`; a permissionless owner's list is auto-scoped to their own rows. See [file.md](file.md#restmeta).
+- `FileRendition` follows the `manage_files`/`files` permission set (read-only) — it has no owner token
