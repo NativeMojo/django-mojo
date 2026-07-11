@@ -1,5 +1,19 @@
 ## v1.2.45 - July 10, 2026
 
+**bug/security** — **`GEOFENCE_TEST_OVERRIDE` and `MOJO_TEST_MODE` are now read conf-file-only.**
+Both keys were read through the DB/Redis-aware `settings.get(...)`, so a single
+global `Setting` row (writable via the generic `/api/settings` REST with
+`manage_settings`, or by anyone with Redis write to the settings cache) reached
+into geofence enforcement with no validator, global-only enforcement,
+decision-cache invalidation, or evidence trail. A `MOJO_TEST_MODE` row armed the
+entire `X-Mojo-Test-*` header plane process-wide (gated then only by loopback +
+no-proxy — reachable via SSRF or a co-located caller); a `GEOFENCE_TEST_OVERRIDE`
+row (stored as text, read with no `kind=`) made `dict(...)` raise → an unaudited
+HTTP 400 on every geofenced request. Both now read via `settings.get_static(...)`
+(Django settings file only), matching what the docs already described. The
+legitimate conf-file override still works; only the DB/Redis vector is closed.
+(ITEM-031)
+
 **bug/security** — **JSONField `__replace` (and non-dict overwrites) can no longer bypass `PROTECTED_JSON_PERMS`.**
 `on_rest_update_jsonfield` ran the protected-JSON guard and its
 `meta:protected_changed` audit only on the merge branch, so a payload like

@@ -52,6 +52,12 @@ deposit/redemption), so this bypass is no longer test-plumbing-only.
 
 ## Notes
 
+- Baseline (2026-07-10, pre-edit, `bin/run_tests --agent`): total 2411,
+  passed 2355, failed 0, skipped 56 — green. NOTE: the first full run showed 4
+  transient errors in `test_metrics/fanout.py` (`account_group_pkey` duplicate
+  key, ids 9011-9014) — a shared-DB PK-sequence desync under full-suite
+  ordering, NOT a code fault; the module passes 19/19 in isolation and the
+  full suite passed clean on immediate re-run. Not mine; not in my change area.
 - Found by wmx_api's WMX-API-121 post-build security review (2026-07-09).
 - Sibling of ITEM-023 (`GEOFENCE_FAIL_CLOSED_SCOPES` / `ALLOW_PRIVATE_IPS`
   validation gap) — same "adjacent settings bypass the validated plane"
@@ -276,3 +282,32 @@ with `bin/run_tests --agent -t test_geofence.test_override_file_only`.
   item rather than folded in here. Plan assumes **split** (recommended). If you
   want it in-scope, say so and I'll re-scope to include the `report_block`
   signature change.
+
+## Build log
+
+- Fix applied exactly as planned: `engine.py:278`
+  `settings.get(...)` → `settings.get_static(...)` and `test_mode.py:43`
+  `is_enabled()` → `settings.get_static("MOJO_TEST_MODE", False, kind="bool")`,
+  plus docstring updates on both. No new machinery.
+- Regression tests confirmed failing pre-fix exactly as predicted: DB
+  `GEOFENCE_TEST_OVERRIDE` row → `ValueError('dictionary update sequence
+  element ...')` (the `dict("<json str>")` 400 path); DB `MOJO_TEST_MODE` row →
+  `is_enabled()` True with conf False. Both pass post-fix; the conf-honored
+  guard passed throughout (proves the override still works, read moved not
+  removed).
+- Docs: no change needed to `geofence.md` (it already said "conf-file-only
+  `GEOFENCE_TEST_OVERRIDE`" — the code now matches). Added a clarifying
+  sentence to `testit/Overview.md` security-gate section. `settings_reference.md`
+  left untouched (auto-generated static-scan, names-only). CHANGELOG entry added.
+- Final suite: total 2414 (+3 new tests), passed 2358, failed 0 — green.
+- `report_block` verb sub-finding left OUT of scope (split recommended, per
+  the open question) — no code touched for it.
+
+## Resolution
+- closed:
+- branch:
+- files changed:
+- tests added: tests/test_geofence/test_override_file_only.py — 3 tests
+  (DB GEOFENCE_TEST_OVERRIDE row ignored by engine resolution;
+  conf-file override still honored; DB MOJO_TEST_MODE row does not enable
+  test mode when the conf file says False)

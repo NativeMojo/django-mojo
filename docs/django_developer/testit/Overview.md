@@ -456,6 +456,8 @@ Some of these headers — the dotted-path handler ones in particular — can loa
 
 Production deployments don't set the flag, AND any LB always adds `X-Forwarded-For`. The gate is closed-by-default and survives accidental flag leaks because external traffic can never satisfy #2 + #3.
 
+`MOJO_TEST_MODE` is read **conf-file-only** (`settings.get_static`) — a DB/Redis `Setting` row (writable via the generic `/api/settings` REST or Redis access) can NOT enable it. The same applies to the geofence `GEOFENCE_TEST_OVERRIDE` knob. Both are deploy-time settings-file values by design; the header plane and geo override can never be armed through the remotely-writable settings plane.
+
 ### Enabling for your own project's tests
 
 If you're a consumer of django-mojo writing tests against these endpoints, add ONE line to your test environment settings:

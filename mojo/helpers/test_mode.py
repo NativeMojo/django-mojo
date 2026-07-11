@@ -39,8 +39,13 @@ _WARNED = False
 
 
 def is_enabled():
-    """Module-level: is test-mode enabled in this process at all?"""
-    return settings.get("MOJO_TEST_MODE", False, kind="bool")
+    """Module-level: is test-mode enabled in this process at all?
+
+    Read conf-file-only (get_static): the master switch for the X-Mojo-Test-*
+    header plane must never be flippable via the DB/Redis settings plane, which
+    is remotely writable (generic /api/settings REST, or Redis access) — ITEM-031.
+    """
+    return settings.get_static("MOJO_TEST_MODE", False, kind="bool")
 
 
 def is_test_request(request):

@@ -266,8 +266,8 @@ def _resolve_geo(ip, request=None):
     """Return a geo dict (provider-shaped) for `ip`, or None on lookup failure.
 
     Test-mode header X-Mojo-Test-Geo (JSON dict) wins over everything when
-    the test-mode gate passes. Otherwise GEOFENCE_TEST_OVERRIDE setting wins
-    over real lookups.
+    the test-mode gate passes. Otherwise the conf-file-only GEOFENCE_TEST_OVERRIDE
+    setting (deploy-time; never DB/Redis-settable) wins over real lookups.
     """
     if _tm.is_test_request(request):
         if _header(request, "X-Mojo-Test-Geo") == "fail":
@@ -275,7 +275,10 @@ def _resolve_geo(ip, request=None):
         header_override = _json_header(request, "X-Mojo-Test-Geo")
         if header_override is not None:
             return header_override
-    override = settings.get("GEOFENCE_TEST_OVERRIDE", None)
+    # conf-file-only: a test/dev override must never be settable via the DB/Redis
+    # settings plane (a global Setting row would otherwise steer every decision
+    # with no validator, cache invalidation, or evidence trail — ITEM-031).
+    override = settings.get_static("GEOFENCE_TEST_OVERRIDE", None)
     if override:
         return dict(override)
     try:
