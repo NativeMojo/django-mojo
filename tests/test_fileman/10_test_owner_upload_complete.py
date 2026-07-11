@@ -179,6 +179,37 @@ def test_foreign_fk_attach_dropped(opts):
                 f"got avatar_id={other.avatar_id}")
 
 
+@th.django_unit_test("fileman owner: non-positive id (0 / False) attach is gated, not bypassed")
+def test_nonpositive_id_attach_is_gated(opts):
+    """The FK-attach gate must cover the EXACT values File.on_rest_related_save's
+    int branch attaches. A `> 0` guard on the gate let id 0 / False (bool is an
+    int subclass, coerced to pk 0) skip the check yet still reach the ungated
+    fetch-and-attach. Construct a File at pk 0 owned by OWNER and confirm a
+    non-owner cannot attach it via {"avatar": 0}."""
+    from mojo.apps.fileman.models import File
+    from mojo.apps.account.models import User
+
+    # Clean baseline: OTHER owns no avatar; a File exists at pk 0 owned by OWNER.
+    User.objects.filter(pk=opts.other.pk).update(avatar=None)
+    File.objects.filter(pk=0).delete()
+    f0 = File(id=0, filename="zero.txt", content_type="text/plain",
+              file_size=4, file_manager_id=opts.fm_id, user=opts.owner)
+    f0.save(force_insert=True)
+    try:
+        opts.client.login(OTHER_USER, PWORD)
+        resp = opts.client.post("/api/user/me", {"avatar": 0})
+        assert_eq(resp.status_code, 200,
+                  f"self-save should still be 200, got {resp.status_code}: {resp.response.data}")
+
+        other = User.objects.get(pk=opts.other.pk)
+        assert_true(other.avatar_id is None,
+                    f"non-owner must not attach the pk-0 file — the gate must cover "
+                    f"id 0 / False, not just positive ids; got avatar_id={other.avatar_id}")
+    finally:
+        User.objects.filter(pk=opts.other.pk).update(avatar=None)
+        File.objects.filter(pk=0).delete()
+
+
 # ---------------------------------------------------------------------------
 # List — a permissionless owner sees only their own files.
 # ---------------------------------------------------------------------------

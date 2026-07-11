@@ -1478,11 +1478,16 @@ class MojoModel:
             # target instance, exactly like the scalar-pk branch below. A custom
             # on_rest_related_save (e.g. fileman.File) otherwise attaches ANY
             # record by id with no permission check — a cross-user/cross-tenant
-            # FK-attach hole. Only an integer pk is an "attach existing"; string
-            # payloads (base64 / data URLs) are an inline CREATE the caller
-            # implicitly owns, so they skip this gate. NO_FK_VIEW_CHECK_FIELDS
-            # exempts a field just as it does for the scalar-pk branch below.
-            if isinstance(field_value, int) and field_value > 0:
+            # FK-attach hole. Gate on `isinstance(int)` ALONE, matching the exact
+            # condition of the branch this guards (File.on_rest_related_save's
+            # `elif isinstance(field_value, int)`): a `> 0` guard here would let
+            # id 0 / False (bool is an int subclass, coerced to pk 0) skip the
+            # gate yet still reach that ungated fetch-and-attach. String payloads
+            # (base64 / data URLs) are an inline CREATE the caller implicitly
+            # owns — not an "attach existing" — so they skip this gate.
+            # NO_FK_VIEW_CHECK_FIELDS exempts a field just as for the scalar-pk
+            # branch below.
+            if isinstance(field_value, int):
                 no_fk_check = self.get_rest_meta_prop("NO_FK_VIEW_CHECK_FIELDS", [])
                 if field.name not in no_fk_check and hasattr(field.related_model, "rest_check_permission"):
                     target = field.related_model.objects.get(pk=field_value)
