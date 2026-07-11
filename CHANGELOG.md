@@ -1,4 +1,4 @@
-## Unreleased
+## v1.2.47 - July 11, 2026
 
 **bug** — **OAuth login preserves `?redirect=` across the provider round-trip.**
 Signing in via an OAuth provider (Google/Apple/GitHub) from
