@@ -314,9 +314,9 @@ with `bin/run_tests --agent -t test_geofence.test_override_file_only`.
   (`phone-verify-dev-bypass-code-db-settable.md`, P1) for separate scoping.
 
 ## Resolution
-- closed:
-- branch:
-- files changed:
+- closed: 2026-07-10
+- branch: main
+- files changed: CHANGELOG.md,docs/django_developer/account/api_keys.md,docs/django_developer/account/bouncer.md,docs/django_developer/account/geofence.md,docs/django_developer/account/group.md,docs/django_developer/core/decorators.md,docs/django_developer/core/middleware.md,docs/django_developer/core/mojo_model.md,docs/django_developer/helpers/settings.md,docs/django_developer/helpers/settings_reference.md,docs/django_developer/testit/Overview.md,docs/web_developer/account/admin_portal.md,docs/web_developer/account/custom_auth_models.md,docs/web_developer/account/group.md,docs/web_developer/shortlink/README.md,memory.md,mojo/apps/account/rest/group.py,mojo/apps/account/services/geofence/engine.py,mojo/helpers/test_mode.py,mojo/middleware/mojo.py,mojo/models/rest.py,planning/.next_id,planning/done/ITEM-028-post-api-group-member-invite-returns-a-raw-500-typ.md,planning/done/ITEM-029-add-explicit-auth-gates-to-the-permission-check-si.md,planning/done/ITEM-030-jsonfield-replace-bypasses-protected-json-perms-ma.md,planning/in_progress/ITEM-031-geofence-test-override-mojo-test-mode-are-db-redis.md,planning/inbox/phone-verify-dev-bypass-code-db-settable.md,tests/test_account/test_group_invite_anonymous.py,tests/test_account/test_group_protected_metadata.py,tests/test_geofence/test_override_file_only.py
 - tests added: tests/test_geofence/test_override_file_only.py — 3 tests
   (DB GEOFENCE_TEST_OVERRIDE row ignored by engine resolution;
   conf-file override still honored; DB MOJO_TEST_MODE row does not enable
